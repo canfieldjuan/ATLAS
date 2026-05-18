@@ -1,5 +1,13 @@
-import { useMemo, useRef, useState } from 'react'
-import { ChevronRight, Loader2, Play, RefreshCw, Search, Upload } from 'lucide-react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import {
+  ChevronRight,
+  FileUp,
+  Loader2,
+  Play,
+  RefreshCw,
+  Search,
+  Upload,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
@@ -72,6 +80,12 @@ type IngestionImportState =
   | { kind: 'error'; message: string }
   | { kind: 'success'; response: ContentOpsIngestionImportResponse }
 
+type IngestionFileLoadState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'success'; filename: string; count: number }
+
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
 const DEFAULT_INGESTION_SOURCE = 'manual'
@@ -107,6 +121,8 @@ export default function ContentOpsNewRun() {
   const [ingestionSource, setIngestionSource] = useState(DEFAULT_INGESTION_SOURCE)
   const [ingestionDryRun, setIngestionDryRun] = useState(true)
   const [ingestionReplaceExisting, setIngestionReplaceExisting] = useState(false)
+  const [ingestionFileLoadState, setIngestionFileLoadState] =
+    useState<IngestionFileLoadState>({ kind: 'idle' })
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
   const [executionState, setExecutionState] = useState<ExecutionState>({
@@ -123,6 +139,8 @@ export default function ContentOpsNewRun() {
   const submitRequestIdRef = useRef(0)
   const ingestionInspectRequestIdRef = useRef(0)
   const ingestionImportRequestIdRef = useRef(0)
+  const ingestionFileLoadRequestIdRef = useRef(0)
+  const ingestionFileInputRef = useRef<HTMLInputElement | null>(null)
 
   if (error) {
     return <PageError error={error} onRetry={refresh} />
@@ -156,6 +174,10 @@ export default function ContentOpsNewRun() {
   const markIngestionStale = () => {
     ingestionInspectRequestIdRef.current += 1
     ingestionImportRequestIdRef.current += 1
+    ingestionFileLoadRequestIdRef.current += 1
+    setIngestionFileLoadState((prev) =>
+      prev.kind === 'loading' ? prev : { kind: 'idle' },
+    )
     setIngestionInspectState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
@@ -434,6 +456,40 @@ export default function ContentOpsNewRun() {
     }
   }
 
+  const handleLoadIngestionFile = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+
+    const requestId = ++ingestionFileLoadRequestIdRef.current
+    setIngestionFileLoadState({ kind: 'loading' })
+    try {
+      const text = await file.text()
+      if (requestId !== ingestionFileLoadRequestIdRef.current) return
+      const parsed = parseIngestionFileRows(file.name, text)
+      if (!parsed.ok) {
+        setIngestionFileLoadState({ kind: 'error', message: parsed.message })
+        return
+      }
+      setIngestionRowsJson(JSON.stringify(parsed.rows, null, 2))
+      setIngestionSource(file.name)
+      markIngestionStale()
+      setIngestionFileLoadState({
+        kind: 'success',
+        filename: file.name,
+        count: parsed.rows.length,
+      })
+    } catch (err) {
+      if (requestId !== ingestionFileLoadRequestIdRef.current) return
+      setIngestionFileLoadState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -603,14 +659,34 @@ export default function ContentOpsNewRun() {
                 Ingestion inspector
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Paste customer export rows before running generation.
+                Paste or load customer export rows before running generation.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => ingestionFileInputRef.current?.click()}
+                disabled={ingestionFileLoadState.kind === 'loading'}
+                className="flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-50"
+              >
+                <FileUp className="h-3.5 w-3.5" />
+                Load JSON/JSONL
+              </button>
+              <input
+                ref={ingestionFileInputRef}
+                type="file"
+                accept=".json,.jsonl,.ndjson,application/json,application/x-ndjson"
+                aria-label="Load ingestion JSON or JSONL file"
+                onChange={handleLoadIngestionFile}
+                className="hidden"
+              />
+              <button
+                type="button"
                 onClick={handleInspectIngestion}
-                disabled={ingestionInspectState.kind === 'submitting'}
+                disabled={
+                  ingestionInspectState.kind === 'submitting' ||
+                  ingestionFileLoadState.kind === 'loading'
+                }
                 className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:opacity-50"
               >
                 {ingestionInspectState.kind === 'submitting' ? (
@@ -623,7 +699,10 @@ export default function ContentOpsNewRun() {
               <button
                 type="button"
                 onClick={handleImportIngestion}
-                disabled={ingestionImportState.kind === 'submitting'}
+                disabled={
+                  ingestionImportState.kind === 'submitting' ||
+                  ingestionFileLoadState.kind === 'loading'
+                }
                 className="flex items-center justify-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-50"
               >
                 {ingestionImportState.kind === 'submitting' ? (
@@ -698,6 +777,7 @@ export default function ContentOpsNewRun() {
             className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
             placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
           />
+          <IngestionFileLoadResult state={ingestionFileLoadState} />
           <IngestionInspectResult state={ingestionInspectState} />
           <IngestionImportResult state={ingestionImportState} />
         </section>
@@ -1042,6 +1122,33 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
   )
 }
 
+function IngestionFileLoadResult({ state }: { state: IngestionFileLoadState }) {
+  if (state.kind === 'idle') {
+    return null
+  }
+  if (state.kind === 'loading') {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Loading ingestion file...
+      </div>
+    )
+  }
+  if (state.kind === 'error') {
+    return (
+      <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+        File load failed: {state.message}
+      </div>
+    )
+  }
+  return (
+    <div className="mt-3 rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+      Loaded {state.count} row{state.count === 1 ? '' : 's'} from{' '}
+      <span className="font-mono text-slate-100">{state.filename}</span>.
+    </div>
+  )
+}
+
 function IngestionImportResult({ state }: { state: IngestionImportState }) {
   if (state.kind === 'idle' || state.kind === 'submitting') {
     return null
@@ -1155,6 +1262,30 @@ function parseIngestionRowsJson(value: string): ParsedIngestionRows {
     return { ok: false, message: 'Provide at least one row to inspect.' }
   }
   return rows
+}
+
+function parseIngestionFileRows(
+  filename: string,
+  text: string,
+): ParsedIngestionRows {
+  if (!text.trim()) {
+    return { ok: false, message: 'File is empty.' }
+  }
+  const lowerFilename = filename.toLowerCase()
+  if (lowerFilename.endsWith('.jsonl') || lowerFilename.endsWith('.ndjson')) {
+    const rows: unknown[] = []
+    for (const [index, line] of text.split(/\r?\n/).entries()) {
+      if (!line.trim()) continue
+      try {
+        rows.push(JSON.parse(line))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return { ok: false, message: `Line ${index + 1}: ${message}` }
+      }
+    }
+    return normalizeIngestionRows(rows)
+  }
+  return parseIngestionRowsJson(text)
 }
 
 function extractIngestionRows(value: unknown): ParsedIngestionRows {
