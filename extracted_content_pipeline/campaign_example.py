@@ -120,6 +120,20 @@ class StaticCampaignSkillStore:
         return self.prompt
 
 
+def _opportunity_uses_review_evidence(opportunity: Mapping[str, Any]) -> bool:
+    if str(opportunity.get("source_type") or "").strip().lower() == "review":
+        return True
+    evidence = opportunity.get("evidence")
+    if not isinstance(evidence, Sequence) or isinstance(evidence, (str, bytes, bytearray)):
+        return False
+    for row in evidence:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("source_type") or "").strip().lower() == "review":
+            return True
+    return False
+
+
 class DeterministicCampaignLLM:
     """Offline LLM stand-in that proves the product wiring end-to-end."""
 
@@ -148,11 +162,18 @@ class DeterministicCampaignLLM:
         pains = opportunity.get("pain_points") or []
         pain = str(pains[0]) if pains else "workflow friction"
         subject = f"{company}: {pain}"[:80]
-        body = (
-            f"<p>{company} appears to be weighing {vendor} because of {pain}.</p>"
-            "<p>We can turn that signal into a focused account sequence using "
-            "your own data and approval rules.</p>"
-        )
+        if _opportunity_uses_review_evidence(opportunity):
+            body = (
+                f"<p>Teams evaluating {vendor} are reporting pain around {pain}.</p>"
+                f"<p>{company} can pair that market signal with your own data "
+                "and approval rules for a focused account sequence.</p>"
+            )
+        else:
+            body = (
+                f"<p>{company} appears to be weighing {vendor} because of {pain}.</p>"
+                "<p>We can turn that signal into a focused account sequence using "
+                "your own data and approval rules.</p>"
+            )
         return LLMResponse(
             content=json.dumps(
                 {

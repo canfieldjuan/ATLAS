@@ -296,6 +296,9 @@ def test_campaign_generation_example_cli_generates_from_source_rows() -> None:
     assert source["target_id"] == "review-acme-1"
     assert source["evidence"][0]["source_type"] == "review"
     assert source["contact_email"] == "ops@example.com"
+    body = result["drafts"][0]["body"]
+    assert "Teams evaluating" in body
+    assert "appears to be weighing" not in body
 
 
 def test_campaign_generation_example_cli_applies_source_default_fields(tmp_path) -> None:
@@ -336,6 +339,9 @@ def test_campaign_generation_example_cli_applies_source_default_fields(tmp_path)
     source = json.loads(completed.stdout)["drafts"][0]["metadata"]["source_opportunity"]
     assert source["company_name"] == "Acme Logistics"
     assert source["contact_email"] == "ops@example.com"
+    draft = json.loads(completed.stdout)["drafts"][0]
+    assert "Teams evaluating Slack are reporting pain around" in draft["body"]
+    assert "Acme Logistics appears to be weighing Slack" not in draft["body"]
 
 
 def test_campaign_generation_example_cli_generates_from_source_bundle_json() -> None:
