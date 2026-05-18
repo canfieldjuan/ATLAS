@@ -218,6 +218,9 @@ Customer bundle JSON can group `reviews`, `support_tickets`, `surveys`,
 `calls`, `meetings`, `deals`, `account_notes`, `contracts`, `renewals`, and
 `subscriptions` under shared account metadata; use `--format json` or
 `--source-format json` for that shape.
+For JSONL or CSV source exports that do not carry shared account metadata,
+repeat `--default-field key=value` on the conversion, inspection, smoke,
+generation, or import command. Defaults are fallbacks; row-specific values win.
 Rows with `deal_id` or `opportunity_id` are inferred as CRM deal evidence; rows
 with `note_id` or `activity_id` are inferred as CRM note evidence.
 Rows with `contract_id`, `renewal_id`, or `subscription_id` are inferred as
@@ -455,6 +458,8 @@ python scripts/load_extracted_campaign_opportunities.py \
   g2_review_sources.jsonl \
   --source-rows \
   --source-format jsonl \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
   --target-mode vendor_retention \
   --dry-run
 ```

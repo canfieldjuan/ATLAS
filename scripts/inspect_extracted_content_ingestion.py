@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.ingestion_diagnostics import inspect_ingestion_file  # noqa: E402
+from extracted_content_pipeline.campaign_source_adapters import parse_default_fields_or_exit  # noqa: E402
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -51,6 +52,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=3,
         help="Maximum normalized opportunity samples included in the report.",
     )
+    parser.add_argument(
+        "--default-field",
+        action="append",
+        default=[],
+        help=(
+            "Fallback metadata applied to every source row when --source-rows "
+            "is selected. Repeat as key=value."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit full JSON report.")
     return parser.parse_args(argv)
 
@@ -70,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         target_mode=args.target_mode,
         max_source_text_chars=args.max_source_text_chars,
         sample_limit=args.sample_limit,
+        default_fields=parse_default_fields_or_exit(args.default_field),
     )
     payload = report.as_dict()
     if args.json:

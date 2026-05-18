@@ -68,6 +68,7 @@ def inspect_ingestion_file(
     target_mode: str | None = "vendor_retention",
     max_source_text_chars: int = 1200,
     sample_limit: int = 3,
+    default_fields: Mapping[str, Any] | None = None,
 ) -> IngestionDiagnosticsReport:
     """Inspect a host ingestion file without writing to a database."""
 
@@ -83,6 +84,7 @@ def inspect_ingestion_file(
             file_format=source_format,
             target_mode=target_mode,
             max_text_chars=max_source_text_chars,
+            default_fields=default_fields,
         )
         mode: IngestionMode = "source_rows"
     else:
@@ -109,6 +111,7 @@ def inspect_ingestion_rows(
     target_mode: str | None = "vendor_retention",
     max_source_text_chars: int = 1200,
     sample_limit: int = 3,
+    default_fields: Mapping[str, Any] | None = None,
 ) -> IngestionDiagnosticsReport:
     """Inspect already-loaded host rows without writing to a database."""
 
@@ -122,6 +125,7 @@ def inspect_ingestion_rows(
             rows,
             target_mode=target_mode,
             max_text_chars=max_source_text_chars,
+            default_fields=default_fields,
         )
         mode: IngestionMode = "source_rows"
     else:

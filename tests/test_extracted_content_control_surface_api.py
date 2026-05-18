@@ -532,6 +532,32 @@ async def test_ingestion_inspect_route_reports_source_rows():
 
 
 @pytest.mark.asyncio
+async def test_ingestion_inspect_route_applies_source_default_fields():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    payload = await route.endpoint({
+        "source_rows": True,
+        "source": "fixture",
+        "default_fields": {
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+        "rows": [{
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }],
+    })
+
+    assert payload["ok"] is True
+    assert payload["samples"][0]["company_name"] == "Acme Logistics"
+    assert payload["samples"][0]["contact_email"] == "ops@example.com"
+
+
+@pytest.mark.asyncio
 async def test_ingestion_inspect_route_reports_missing_opportunity_fields():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
@@ -594,6 +620,36 @@ async def test_ingestion_import_route_dry_run_does_not_require_pool_provider():
     assert payload["import"]["inserted"] == 1
     assert payload["import"]["source"] == "operator-upload"
     assert payload["import"]["target_ids"] == ["opp-1"]
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_dry_run_applies_source_default_fields():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/import", "POST")
+    payload = await route.endpoint({
+        "dry_run": True,
+        "source_rows": True,
+        "source": "g2-export",
+        "default_fields": {
+            "company_name": "Acme Logistics",
+            "contact_email": "ops@example.com",
+        },
+        "rows": [{
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }],
+    })
+
+    sample = payload["diagnostics"]["samples"][0]
+    assert payload["diagnostics"]["ok"] is True
+    assert sample["company_name"] == "Acme Logistics"
+    assert sample["contact_email"] == "ops@example.com"
+    assert payload["import"]["inserted"] == 1
+    assert payload["import"]["target_ids"] == ["g2-review-1"]
 
 
 @pytest.mark.asyncio

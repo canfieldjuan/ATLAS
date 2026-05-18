@@ -24,6 +24,7 @@ from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
+    parse_default_fields_or_exit,
 )
 
 
@@ -62,6 +63,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1200,
         help="Maximum source text characters copied into each evidence row.",
+    )
+    parser.add_argument(
+        "--default-field",
+        action="append",
+        default=[],
+        help=(
+            "Fallback metadata applied to every source row when --source-rows "
+            "is selected. Repeat as key=value."
+        ),
     )
     parser.add_argument(
         "--target-mode",
@@ -116,6 +126,7 @@ async def _main() -> int:
             file_format=args.source_format,
             target_mode=args.target_mode,
             max_text_chars=args.max_source_text_chars,
+            default_fields=parse_default_fields_or_exit(args.default_field),
         )
     else:
         loaded = load_campaign_opportunities_from_file(

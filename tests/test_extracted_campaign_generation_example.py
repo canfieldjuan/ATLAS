@@ -298,6 +298,46 @@ def test_campaign_generation_example_cli_generates_from_source_rows() -> None:
     assert source["contact_email"] == "ops@example.com"
 
 
+def test_campaign_generation_example_cli_applies_source_default_fields(tmp_path) -> None:
+    source_path = tmp_path / "g2_sources.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source_path),
+            "--source-rows",
+            "--source-format",
+            "jsonl",
+            "--default-field",
+            "company_name=Acme Logistics",
+            "--default-field",
+            "contact_email=ops@example.com",
+            "--channels",
+            "email_cold",
+            "--limit",
+            "1",
+            "--llm",
+            "offline",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    source = json.loads(completed.stdout)["drafts"][0]["metadata"]["source_opportunity"]
+    assert source["company_name"] == "Acme Logistics"
+    assert source["contact_email"] == "ops@example.com"
+
+
 def test_campaign_generation_example_cli_generates_from_source_bundle_json() -> None:
     completed = subprocess.run(
         [
