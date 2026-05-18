@@ -670,7 +670,7 @@ export default function ContentOpsNewRun() {
                 className="flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-50"
               >
                 <FileUp className="h-3.5 w-3.5" />
-                Load JSON/CSV
+                Load JSON/JSONL/CSV
               </button>
               <input
                 ref={ingestionFileInputRef}
@@ -1319,6 +1319,9 @@ function parseIngestionCsvRows(text: string): ParsedIngestionRows {
       }
       return out
     })
+  if (rows.length === 0) {
+    return { ok: false, message: 'Provide at least one row to inspect.' }
+  }
   return normalizeIngestionRows(rows)
 }
 
