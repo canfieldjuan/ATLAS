@@ -198,11 +198,15 @@ def test_build_review_source_summary_query_counts_quote_grade_rows() -> None:
 
     assert "lower(r.source) = ANY($1::text[])" in query
     assert "count(*) AS total_rows" in query
+    assert "COALESCE(NULLIF(BTRIM(r.source_review_id), ''), r.id::text)" in query
+    assert "count(DISTINCT" in query
     assert "AS export_candidate_rows" in query
     assert "AS quote_grade_rows" in query
     assert "jsonb_array_elements" in query
+    assert "jsonb_typeof(r.enrichment->'phrase_metadata') = 'array'" in query
     assert "lower(BTRIM(pm->>'subject')) = 'subject_vendor'" in query
     assert "pm->'verbatim' = 'true'::jsonb" in query
+    assert "lower(BTRIM(pm->>'polarity')) = ANY($3::text[])" in query
     assert "BTRIM(pm->>'field') = ANY($4::text[])" in query
     assert "NULLIF(BTRIM(r.source_url), '') IS NOT NULL" in query
     assert args == [

@@ -273,14 +273,22 @@ def build_review_source_summary_query(
         AND length(r.review_text) >= $2
         {source_url_filter}
     """
+    source_id_expr = "COALESCE(NULLIF(BTRIM(r.source_review_id), ''), r.id::text)"
+    phrase_metadata_expr = """
+        CASE
+            WHEN jsonb_typeof(r.enrichment->'phrase_metadata') = 'array'
+            THEN r.enrichment->'phrase_metadata'
+            ELSE '[]'::jsonb
+        END
+    """
     quote_grade_filter = f"""
         {export_candidate_filter}
         AND EXISTS (
             SELECT 1
-            FROM jsonb_array_elements(COALESCE(r.enrichment->'phrase_metadata', '[]'::jsonb)) pm
+            FROM jsonb_array_elements({phrase_metadata_expr}) pm
             WHERE lower(BTRIM(pm->>'subject')) = 'subject_vendor'
               AND pm->'verbatim' = 'true'::jsonb
-              AND (cardinality($3::text[]) = 0 OR lower(pm->>'polarity') = ANY($3::text[]))
+              AND (cardinality($3::text[]) = 0 OR lower(BTRIM(pm->>'polarity')) = ANY($3::text[]))
               AND (cardinality($4::text[]) = 0 OR BTRIM(pm->>'field') = ANY($4::text[]))
         )
     """
@@ -293,8 +301,8 @@ def build_review_source_summary_query(
                      AND r.enrichment_status = 'enriched'
                      AND r.enrichment IS NOT NULL
                ) AS enriched_rows,
-               count(*) FILTER (WHERE {export_candidate_filter}) AS export_candidate_rows,
-               count(*) FILTER (WHERE {quote_grade_filter}) AS quote_grade_rows
+               count(DISTINCT {source_id_expr}) FILTER (WHERE {export_candidate_filter}) AS export_candidate_rows,
+               count(DISTINCT {source_id_expr}) FILTER (WHERE {quote_grade_filter}) AS quote_grade_rows
         FROM b2b_reviews r
         WHERE lower(r.source) = ANY($1::text[])
         GROUP BY lower(r.source)
