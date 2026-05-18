@@ -149,11 +149,24 @@ subscription, complaint, support-ticket, conversation, case, survey, NPS, CSAT,
 and document source rows can be converted into the same opportunity payload
 first. Source rows can be JSON, JSONL, or CSV:
 
+If Atlas already has scraped B2B review rows, export one reliable source as
+Content Ops source rows before generation. The G2 path is read-only, keeps only
+canonical enriched reviews, and exports the negative/mixed quote-grade phrase
+lane as `text` while preserving the full review for audit:
+
+```bash
+python scripts/export_content_ops_review_sources.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 50 \
+  --output g2_review_sources.jsonl
+```
+
 Before converting or importing a customer export, inspect ingestion readiness:
 
 ```bash
 python scripts/inspect_extracted_content_ingestion.py \
-  extracted_content_pipeline/examples/campaign_source_rows.jsonl \
+  g2_review_sources.jsonl \
   --source-rows \
   --source-format jsonl \
   --json
