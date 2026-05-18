@@ -182,6 +182,22 @@ python scripts/smoke_content_ops_review_source_generation.py \
   --json
 ```
 
+To prove the same source can run through the Postgres-backed path, use the
+database smoke. It imports source rows into `campaign_opportunities` under the
+provided account id, replaces matching imported opportunities by default, and
+persists offline generated drafts:
+
+```bash
+python scripts/smoke_content_ops_review_source_postgres.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 1 \
+  --account-id acct_123 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
 Before converting or importing a customer export, inspect ingestion readiness:
 
 ```bash
