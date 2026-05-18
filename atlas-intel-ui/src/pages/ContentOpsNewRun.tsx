@@ -670,13 +670,13 @@ export default function ContentOpsNewRun() {
                 className="flex items-center justify-center gap-2 rounded-md border border-slate-600 bg-slate-800/70 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-50"
               >
                 <FileUp className="h-3.5 w-3.5" />
-                Load JSON/JSONL
+                Load JSON/CSV
               </button>
               <input
                 ref={ingestionFileInputRef}
                 type="file"
-                accept=".json,.jsonl,.ndjson,application/json,application/x-ndjson"
-                aria-label="Load ingestion JSON or JSONL file"
+                accept=".json,.jsonl,.ndjson,.csv,application/json,application/x-ndjson,text/csv"
+                aria-label="Load ingestion JSON, JSONL, or CSV file"
                 onChange={handleLoadIngestionFile}
                 className="hidden"
               />
@@ -1285,7 +1285,84 @@ function parseIngestionFileRows(
     }
     return normalizeIngestionRows(rows)
   }
+  if (lowerFilename.endsWith('.csv')) {
+    return parseIngestionCsvRows(text)
+  }
   return parseIngestionRowsJson(text)
+}
+
+function parseIngestionCsvRows(text: string): ParsedIngestionRows {
+  const parsed = parseCsv(text)
+  if (!parsed.ok) return parsed
+  const [header, ...bodyRows] = parsed.rows
+  if (!header || header.length === 0) {
+    return { ok: false, message: 'CSV must include a header row.' }
+  }
+  const columns = header.map((value) => value.trim())
+  const seenColumns = new Set<string>()
+  for (const [index, column] of columns.entries()) {
+    if (!column) {
+      return { ok: false, message: `CSV header ${index + 1} is empty.` }
+    }
+    if (seenColumns.has(column)) {
+      return { ok: false, message: `CSV header "${column}" is duplicated.` }
+    }
+    seenColumns.add(column)
+  }
+
+  const rows = bodyRows
+    .filter((row) => row.some((value) => value.trim()))
+    .map((row) => {
+      const out: Record<string, unknown> = {}
+      for (const [index, column] of columns.entries()) {
+        out[column] = row[index] ?? ''
+      }
+      return out
+    })
+  return normalizeIngestionRows(rows)
+}
+
+function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; message: string } {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let inQuotes = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const nextChar = text[index + 1]
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        field += '"'
+        index += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+    if (char === ',' && !inQuotes) {
+      row.push(field)
+      field = ''
+      continue
+    }
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      row.push(field)
+      rows.push(row)
+      row = []
+      field = ''
+      if (char === '\r' && nextChar === '\n') {
+        index += 1
+      }
+      continue
+    }
+    field += char
+  }
+  if (inQuotes) {
+    return { ok: false, message: 'CSV contains an unterminated quoted field.' }
+  }
+  row.push(field)
+  rows.push(row)
+  return { ok: true, rows }
 }
 
 function extractIngestionRows(value: unknown): ParsedIngestionRows {

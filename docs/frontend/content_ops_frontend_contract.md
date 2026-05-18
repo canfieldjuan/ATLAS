@@ -539,7 +539,7 @@ Dumb components only. No fetch, no business rules.
      options (`limit`, `maxCostUsd`, `requireQualityGates`,
      `allowUnimplementedOutputs`, `ingestionProfile`).
    - Supports an ingestion inspector/importer that calls
-     `POST /content-ops/ingestion/inspect` for pasted or loaded JSON/JSONL rows and
+     `POST /content-ops/ingestion/inspect` for pasted or loaded JSON/JSONL/CSV rows and
      `POST /content-ops/ingestion/import` for dry-run or write import.
      When import returns `reason="ingestion_not_ready"`, render the
      returned diagnostics instead of collapsing the response into a generic
