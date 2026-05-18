@@ -59,6 +59,6 @@ textarea, then the existing inspect/import API calls continue unchanged.
 
 | Area | Estimated LOC |
 |---|---:|
-| New Run CSV file loader parsing and labels | ~85 |
+| New Run CSV file loader parsing and labels | ~100 |
 | Docs/coordination/plan | ~60 |
-| **Total** | ~145 |
+| **Total** | ~160 |

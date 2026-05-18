@@ -1310,19 +1310,25 @@ function parseIngestionCsvRows(text: string): ParsedIngestionRows {
     seenColumns.add(column)
   }
 
-  const rows = bodyRows
-    .filter((row) => row.some((value) => value.trim()))
-    .map((row) => {
-      const out: Record<string, unknown> = {}
-      for (const [index, column] of columns.entries()) {
-        out[column] = row[index] ?? ''
+  const normalizedRows: Array<Record<string, unknown>> = []
+  for (const [index, row] of bodyRows.entries()) {
+    if (!row.some((value) => value.trim())) continue
+    if (row.length > columns.length) {
+      return {
+        ok: false,
+        message: `CSV row ${index + 2} has ${row.length} fields but only ${columns.length} headers.`,
       }
-      return out
-    })
-  if (rows.length === 0) {
+    }
+    const out: Record<string, unknown> = {}
+    for (const [index, column] of columns.entries()) {
+      out[column] = row[index] ?? ''
+    }
+    normalizedRows.push(out)
+  }
+  if (normalizedRows.length === 0) {
     return { ok: false, message: 'Provide at least one row to inspect.' }
   }
-  return normalizeIngestionRows(rows)
+  return normalizeIngestionRows(normalizedRows)
 }
 
 function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; message: string } {
@@ -1330,6 +1336,7 @@ function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; m
   let row: string[] = []
   let field = ''
   let inQuotes = false
+  let justClosedQuote = false
 
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index]
@@ -1338,14 +1345,20 @@ function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; m
       if (inQuotes && nextChar === '"') {
         field += '"'
         index += 1
+      } else if (inQuotes) {
+        inQuotes = false
+        justClosedQuote = true
+      } else if (!field) {
+        inQuotes = true
       } else {
-        inQuotes = !inQuotes
+        return { ok: false, message: `Unexpected quote at character ${index + 1}.` }
       }
       continue
     }
     if (char === ',' && !inQuotes) {
       row.push(field)
       field = ''
+      justClosedQuote = false
       continue
     }
     if ((char === '\n' || char === '\r') && !inQuotes) {
@@ -1353,18 +1366,24 @@ function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; m
       rows.push(row)
       row = []
       field = ''
+      justClosedQuote = false
       if (char === '\r' && nextChar === '\n') {
         index += 1
       }
       continue
+    }
+    if (justClosedQuote) {
+      return { ok: false, message: `Unexpected character after closing quote at character ${index + 1}.` }
     }
     field += char
   }
   if (inQuotes) {
     return { ok: false, message: 'CSV contains an unterminated quoted field.' }
   }
-  row.push(field)
-  rows.push(row)
+  if (field || row.length > 0 || justClosedQuote) {
+    row.push(field)
+    rows.push(row)
+  }
   return { ok: true, rows }
 }
 
