@@ -26,6 +26,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import TenantScope
+from ..campaign_postgres_import import import_campaign_opportunities
 from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -68,6 +69,7 @@ ReasoningStatusProvider = Callable[
     Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
 ]
 LLMProvider = Callable[[], Any | Awaitable[Any]]
+PoolProvider = Callable[[], Any | Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +199,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_falsification_rules: Sequence[Mapping[str, Any]] = ()
     structured_reasoning_falsification_conservative: bool = True
     structured_reasoning_drop_falsified: bool = False
+    ingestion_opportunity_table: str = "campaign_opportunities"
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
@@ -260,6 +263,8 @@ class ContentOpsControlSurfaceApiConfig:
                 raise ValueError(
                     "structured_reasoning_falsification_rules entries must be mappings"
                 )
+        if not str(self.ingestion_opportunity_table or "").strip():
+            raise ValueError("ingestion_opportunity_table is required")
 
 
 @dataclass(frozen=True)
@@ -379,9 +384,16 @@ if BaseModel is not None:
                 _validate_input_shape(row, depth=0)
             return value
 
+    class ContentOpsIngestionImportModel(ContentOpsIngestionInspectModel):
+        """Bounded API request body for hosted opportunity import."""
+
+        replace_existing: bool = False
+        dry_run: bool = False
+
 else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsRequestModel = Any
     ContentOpsIngestionInspectModel = Any
+    ContentOpsIngestionImportModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -392,6 +404,7 @@ def create_content_ops_control_surface_router(
     reasoning_context_provider: ReasoningContextProvider | None = None,
     reasoning_status_provider: ReasoningStatusProvider | None = None,
     llm_provider: LLMProvider | None = None,
+    opportunity_import_pool_provider: PoolProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -467,6 +480,53 @@ def create_content_ops_control_surface_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return report.as_dict()
+
+    @router.post("/ingestion/import")
+    async def import_ingestion(
+        payload: ContentOpsIngestionImportModel = Body(...),
+    ) -> dict[str, Any]:
+        data = _ingestion_import_payload_to_mapping(payload)
+        target_mode = _clean(data.get("target_mode")) or "vendor_retention"
+        try:
+            report = inspect_ingestion_rows(
+                data["rows"],
+                source_rows=bool(data.get("source_rows")),
+                source=_clean(data.get("source")) or "api",
+                target_mode=target_mode,
+                max_source_text_chars=int(data.get("max_source_text_chars") or 1200),
+                sample_limit=int(data.get("sample_limit") or 0),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        diagnostics = report.as_dict()
+        if not report.ok:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "ingestion_not_ready",
+                    "diagnostics": diagnostics,
+                },
+            )
+        dry_run = bool(data.get("dry_run"))
+        if dry_run:
+            pool = object()
+        else:
+            pool = await _resolve_import_pool(opportunity_import_pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        result = await _import_campaign_opportunities_for_route(
+            pool,
+            report.opportunities,
+            scope=scope,
+            target_mode=target_mode,
+            opportunity_table=resolved_config.ingestion_opportunity_table,
+            replace_existing=bool(data.get("replace_existing")),
+            dry_run=dry_run,
+            source=report.source,
+        )
+        return {
+            "diagnostics": diagnostics,
+            "import": result.as_dict(),
+        }
 
     @router.post("/execute")
     async def execute_generation(
@@ -833,6 +893,153 @@ async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:
     return _scope_from_value(value)
 
 
+async def _resolve_import_pool(provider: PoolProvider | None) -> Any:
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import database is not configured.",
+        )
+    try:
+        pool = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops ingestion import pool provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import database is unavailable.",
+        ) from exc
+    if pool is None or getattr(pool, "is_initialized", True) is False:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import database is unavailable.",
+        )
+    return pool
+
+
+async def _import_campaign_opportunities_for_route(
+    db: Any,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    scope: TenantScope | None,
+    target_mode: str,
+    opportunity_table: str,
+    replace_existing: bool,
+    dry_run: bool,
+    source: str | None,
+) -> Any:
+    try:
+        return await _import_campaign_opportunities_atomic(
+            db,
+            rows,
+            scope=scope,
+            target_mode=target_mode,
+            opportunity_table=opportunity_table,
+            replace_existing=replace_existing,
+            dry_run=dry_run,
+            source=source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning(
+            "Content Ops ingestion import failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import failed.",
+        ) from exc
+
+
+async def _import_campaign_opportunities_atomic(
+    db: Any,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    scope: TenantScope | None,
+    target_mode: str,
+    opportunity_table: str,
+    replace_existing: bool,
+    dry_run: bool,
+    source: str | None,
+) -> Any:
+    acquire = getattr(db, "acquire", None)
+    if callable(acquire):
+        async with acquire() as connection:
+            transaction = getattr(connection, "transaction", None)
+            if callable(transaction):
+                async with transaction():
+                    return await _import_campaign_opportunities_direct(
+                        connection,
+                        rows,
+                        scope=scope,
+                        target_mode=target_mode,
+                        opportunity_table=opportunity_table,
+                        replace_existing=replace_existing,
+                        dry_run=dry_run,
+                        source=source,
+                    )
+            return await _import_campaign_opportunities_direct(
+                connection,
+                rows,
+                scope=scope,
+                target_mode=target_mode,
+                opportunity_table=opportunity_table,
+                replace_existing=replace_existing,
+                dry_run=dry_run,
+                source=source,
+            )
+
+    transaction = getattr(db, "transaction", None)
+    if callable(transaction):
+        async with transaction():
+            return await _import_campaign_opportunities_direct(
+                db,
+                rows,
+                scope=scope,
+                target_mode=target_mode,
+                opportunity_table=opportunity_table,
+                replace_existing=replace_existing,
+                dry_run=dry_run,
+                source=source,
+            )
+    return await _import_campaign_opportunities_direct(
+        db,
+        rows,
+        scope=scope,
+        target_mode=target_mode,
+        opportunity_table=opportunity_table,
+        replace_existing=replace_existing,
+        dry_run=dry_run,
+        source=source,
+    )
+
+
+async def _import_campaign_opportunities_direct(
+    db: Any,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    scope: TenantScope | None,
+    target_mode: str,
+    opportunity_table: str,
+    replace_existing: bool,
+    dry_run: bool,
+    source: str | None,
+) -> Any:
+    return await import_campaign_opportunities(
+        db,
+        rows,
+        scope=scope,
+        target_mode=target_mode,
+        opportunity_table=opportunity_table,
+        replace_existing=replace_existing,
+        dry_run=dry_run,
+        normalize=False,
+        source=source,
+    )
+
+
 async def _resolve_provider(provider: Callable[[], Any] | None) -> Any:
     if provider is None:
         return None
@@ -885,6 +1092,15 @@ def _ingestion_payload_to_mapping(payload: Any) -> dict[str, Any]:
         return payload.model_dump()
     try:
         return ContentOpsIngestionInspectModel.model_validate(payload).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
+def _ingestion_import_payload_to_mapping(payload: Any) -> dict[str, Any]:
+    if BaseModel is not None and isinstance(payload, ContentOpsIngestionImportModel):
+        return payload.model_dump()
+    try:
+        return ContentOpsIngestionImportModel.model_validate(payload).model_dump()
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
@@ -952,6 +1168,7 @@ def _validation_detail(exc: ValidationError) -> list[dict[str, Any]]:
 
 __all__ = [
     "ContentOpsControlSurfaceApiConfig",
+    "ContentOpsIngestionImportModel",
     "ContentOpsRequestModel",
     "create_content_ops_control_surface_router",
 ]

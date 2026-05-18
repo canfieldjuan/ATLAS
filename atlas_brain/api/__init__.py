@@ -196,6 +196,7 @@ try:
         scope_provider=build_content_ops_scope,
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
+        opportunity_import_pool_provider=get_db_pool,
     )
     router.include_router(content_ops_router)
     content_assets_router = create_generated_asset_router(
