@@ -168,6 +168,20 @@ python scripts/export_content_ops_review_sources.py \
   --output g2_review_sources.jsonl
 ```
 
+To prove the full review-source path in one command, run the operator smoke.
+It checks readiness, exports quote-grade rows, validates source-row ingestion,
+and generates offline drafts without a live LLM:
+
+```bash
+python scripts/smoke_content_ops_review_source_generation.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 2 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
 Before converting or importing a customer export, inspect ingestion readiness:
 
 ```bash

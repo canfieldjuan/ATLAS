@@ -460,7 +460,27 @@ python scripts/export_content_ops_review_sources.py \
   --vendor Slack \
   --limit 50 \
   --output g2_review_sources.jsonl
+```
 
+For a single end-to-end smoke before import, use the review-source generation
+smoke. It keeps generation offline while exercising readiness, export,
+ingestion inspection, and draft shape:
+
+```bash
+python scripts/smoke_content_ops_review_source_generation.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 2 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
+If the smoke reports ingestion warnings, bind the anonymous review evidence to
+the target account/contact with additional `--default-field` values before
+importing.
+
+```bash
 python scripts/load_extracted_campaign_opportunities.py \
   g2_review_sources.jsonl \
   --source-rows \
