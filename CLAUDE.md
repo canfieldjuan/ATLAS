@@ -389,7 +389,7 @@ service required.
 ## MCP Servers
 
 Ten MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
-All share `ATLAS_MCP_TRANSPORT` (stdio/sse) and `ATLAS_MCP_HOST`; HTTP deployments should set `ATLAS_MCP_AUTH_TOKEN`, and the read-only invoicing HTTP server refuses to start without it because it exposes customer financial data.
+All share `ATLAS_MCP_TRANSPORT` (stdio/sse) and `ATLAS_MCP_HOST`; HTTP deployments should set `ATLAS_MCP_AUTH_TOKEN`, and the read-only invoicing HTTP server refuses to start without a non-placeholder token of at least 24 characters because it exposes customer financial data.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
 ### CRM MCP Server (10 tools)
@@ -511,6 +511,11 @@ python -m atlas_brain.mcp.invoicing_readonly_server
 
 # SSE HTTP mode (port 8065, requires ATLAS_MCP_AUTH_TOKEN)
 ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.invoicing_readonly_server --sse
+
+# connector boundary smoke (auth + exact read-only tool list; no invoice reads)
+python scripts/check_invoicing_readonly_mcp_connector.py \
+  --url http://127.0.0.1:8065/mcp \
+  --token "$ATLAS_MCP_AUTH_TOKEN"
 ```
 
 Tools: `get_invoice`, `list_invoices`, `search_invoices`,
@@ -522,6 +527,11 @@ read tools should be available. It deliberately omits
 create/update/approve/send/payment/void/PDF-export and service mutation tools,
 but it still requires bearer auth in HTTP mode because the remaining tools
 expose customer financial data.
+
+Do not use placeholder or session-local tokens such as `test-token` or
+`test-readonly-token` for public HTTP exposure. Generate a long random token,
+start the server with that value, then run the connector boundary smoke above
+before attaching a ChatGPT-style connector.
 
 ### Intelligence MCP Server (33 tools)
 ```bash

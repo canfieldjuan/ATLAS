@@ -76,8 +76,23 @@ def test_invoicing_readonly_http_requires_bearer_token(monkeypatch):
 
 
 def test_invoicing_readonly_http_wraps_with_bearer_auth(monkeypatch):
-    monkeypatch.setenv("ATLAS_MCP_AUTH_TOKEN", "test-token")
+    monkeypatch.setenv("ATLAS_MCP_AUTH_TOKEN", "test-token-with-enough-entropy")
 
     app = readonly._streamable_http_app()
 
     assert isinstance(app, BearerAuthMiddleware)
+
+
+@pytest.mark.parametrize("token", ["<token>", "token", "test-token", "test-readonly-token"])
+def test_invoicing_readonly_http_rejects_placeholder_tokens(monkeypatch, token):
+    monkeypatch.setenv("ATLAS_MCP_AUTH_TOKEN", token)
+
+    with pytest.raises(RuntimeError, match="must not be a placeholder"):
+        readonly._streamable_http_app()
+
+
+def test_invoicing_readonly_http_rejects_short_tokens(monkeypatch):
+    monkeypatch.setenv("ATLAS_MCP_AUTH_TOKEN", "short-token-value")
+
+    with pytest.raises(RuntimeError, match="at least 24 characters"):
+        readonly._streamable_http_app()

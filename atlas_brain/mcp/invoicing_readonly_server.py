@@ -25,6 +25,18 @@ from ..config_defaults import DEFAULT_INVOICING_READONLY_PORT, DEFAULT_MCP_HOST
 
 logger = logging.getLogger("atlas.mcp.invoicing.readonly")
 
+_MIN_HTTP_AUTH_TOKEN_LENGTH = 24
+_PLACEHOLDER_HTTP_AUTH_TOKENS = {
+    "<token>",
+    "changeme",
+    "change-me",
+    "password",
+    "secret",
+    "test-readonly-token",
+    "test-token",
+    "token",
+}
+
 
 @asynccontextmanager
 async def _lifespan(server):
@@ -146,12 +158,29 @@ def _streamable_http_app():
     """Build the authenticated streamable HTTP app for read-only tools."""
     from .auth import apply_auth_middleware
 
-    if not os.environ.get("ATLAS_MCP_AUTH_TOKEN", "").strip():
+    _require_http_auth_token()
+    return apply_auth_middleware(mcp.streamable_http_app())
+
+
+def _require_http_auth_token() -> str:
+    """Return a production-shaped auth token or fail before serving HTTP."""
+    token = os.environ.get("ATLAS_MCP_AUTH_TOKEN", "").strip()
+    if not token:
         raise RuntimeError(
             "ATLAS_MCP_AUTH_TOKEN is required for read-only invoicing HTTP mode; "
             "these tools expose customer financial data."
         )
-    return apply_auth_middleware(mcp.streamable_http_app())
+    if token.lower() in _PLACEHOLDER_HTTP_AUTH_TOKENS or token.startswith("<"):
+        raise RuntimeError(
+            "ATLAS_MCP_AUTH_TOKEN must not be a placeholder value for read-only "
+            "invoicing HTTP mode."
+        )
+    if len(token) < _MIN_HTTP_AUTH_TOKEN_LENGTH:
+        raise RuntimeError(
+            "ATLAS_MCP_AUTH_TOKEN must be at least "
+            f"{_MIN_HTTP_AUTH_TOKEN_LENGTH} characters for read-only invoicing HTTP mode."
+        )
+    return token
 
 
 if __name__ == "__main__":
