@@ -439,6 +439,26 @@ entry per saved row after successful writes. `--validate-opportunities` checks
 each row against active `campaign_opportunities` before saving, which catches
 typoed selectors during larger host imports.
 
+Atlas review rows can seed source-row ingestion when a host wants to test with
+scraped review evidence before wiring its own export. Start with one reliable
+source such as G2 so the generated output does not mix review-site tone with
+community sources:
+
+```bash
+python scripts/export_content_ops_review_sources.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 50 \
+  --output g2_review_sources.jsonl
+
+python scripts/load_extracted_campaign_opportunities.py \
+  g2_review_sources.jsonl \
+  --source-rows \
+  --source-format jsonl \
+  --target-mode vendor_retention \
+  --dry-run
+```
+
 Source-row bundles can also include sales-call and meeting exports under
 `calls`, `call_transcripts`, `meetings`, or `meeting_transcripts`. Use
 `call_id`, `meeting_id`, or `recording_id` as the source identifier and provide
