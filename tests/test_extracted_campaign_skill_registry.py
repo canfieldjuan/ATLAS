@@ -18,6 +18,24 @@ def test_local_skill_registry_reads_packaged_campaign_prompt() -> None:
     assert registry.get_prompt("digest/b2b_campaign_generation") == skill.content
 
 
+def test_packaged_report_prompt_frames_review_evidence_as_market_signal() -> None:
+    prompt = get_skill_registry().get_prompt("digest/report_generation")
+
+    assert prompt is not None
+    assert 'source_type: "review"' in prompt
+    assert "third-party market evidence" in prompt
+    assert "Do not say the target account itself" in prompt
+
+
+def test_packaged_sales_brief_prompt_frames_review_evidence_as_market_signal() -> None:
+    prompt = get_skill_registry().get_prompt("digest/sales_brief_generation")
+
+    assert prompt is not None
+    assert 'source_type: "review"' in prompt
+    assert "third-party market evidence" in prompt
+    assert "Do not say the target account itself" in prompt
+
+
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:
     skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
     skill_path.parent.mkdir()

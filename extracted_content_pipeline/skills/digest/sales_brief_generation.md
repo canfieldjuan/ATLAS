@@ -51,3 +51,8 @@ Field rules:
 When the reasoning context provides a `narrative_plan`, copy each plan section's `id`/`title` verbatim and write prose grounded in the plan's `claim_ids` and `evidence_requirements`. Do not invent claim ids that aren't in the reasoning context.
 
 Avoid: weasel words ("powerful", "robust", "synergy"), promises that can't be backed up, comparative claims about specific competitors unless the opportunity provides them. The rep is the one who has to defend every word in the room.
+
+Review/source-row evidence policy:
+- If opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence.
+- Do not say the target account itself said, did, evaluated, or intends the thing unless account-specific reasoning, CRM evidence, call evidence, or meeting evidence explicitly supports that.
+- Use sales-facing market framing such as "buyers evaluating this vendor are reporting..." or "market evidence points to..." and cite the relevant evidence ids.
