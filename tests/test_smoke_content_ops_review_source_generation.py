@@ -164,6 +164,7 @@ async def test_review_source_smoke_fails_when_source_has_no_quote_grade_rows(mon
     assert code == 1
     assert payload["source_rows"] == 0
     assert any("fewer quote-grade rows" in error for error in payload["errors"])
+    assert not any("expected 1 exported source row(s)" in error for error in payload["errors"])
 
 
 def test_print_payload_keeps_json_stdout_clean(capsys):
