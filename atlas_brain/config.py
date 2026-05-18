@@ -10,6 +10,8 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .config_defaults import DEFAULT_INVOICING_READONLY_PORT
+
 ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
@@ -5063,6 +5065,14 @@ class MCPConfig(BaseSettings):
     twilio_port: int = Field(default=8058, description="Port for Twilio MCP server (SSE transport)")
     calendar_port: int = Field(default=8059, description="Port for Calendar MCP server (SSE transport)")
     invoicing_port: int = Field(default=8060, description="Port for Invoicing MCP server (SSE transport)")
+    invoicing_readonly_enabled: bool = Field(default=True, description="Enable read-only Invoicing MCP server")
+    invoicing_readonly_port: int = Field(
+        default=DEFAULT_INVOICING_READONLY_PORT,
+        description=(
+            "Port for authenticated read-only Invoicing MCP server for "
+            "ChatGPT connector review; paired with ATLAS_MCP_INVOICING_READONLY_ENABLED"
+        ),
+    )
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
     scraper_enabled: bool = Field(default=True, description="Enable Universal Scraper MCP server")

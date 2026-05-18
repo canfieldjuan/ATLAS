@@ -204,7 +204,7 @@ atlas_brain/
 ├── escalation/                  # Security event classification + LLM synthesis
 ├── events/                      # System event broadcast (real-time UI feed)
 ├── jobs/                        # Background jobs (e.g. NightlyMemorySync)
-├── mcp/                         # 9 MCP servers (see "MCP Servers" below)
+├── mcp/                         # 10 MCP servers (see "MCP Servers" below)
 │   └── b2b/                     # B2B-churn server module split
 ├── memory/                      # MemoryService, RAG client, token budgeting
 ├── modes/                       # Operating modes (tool groupings, model prefs)
@@ -230,7 +230,7 @@ atlas_brain/
 └── voice/                       # Local voice-to-voice (wake word, VAD, capture, playback)
 ```
 
-### `atlas_brain/mcp/` MCP servers (9)
+### `atlas_brain/mcp/` MCP servers (10)
 
 | Server                  | Port | Tools | Module                                |
 |-------------------------|------|-------|---------------------------------------|
@@ -239,6 +239,7 @@ atlas_brain/
 | Twilio                  | 8058 | 10    | `atlas_brain.mcp.twilio_server`       |
 | Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
 | Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
+| Invoicing Readonly      | 8065 | 8     | `atlas_brain.mcp.invoicing_readonly_server` |
 | Intelligence            | 8061 | 33    | `atlas_brain.mcp.intelligence_server` |
 | B2B Churn Intelligence  | 8062 | 83    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
 | Universal Scraper       | 8063 | 5     | `atlas_brain.mcp.scraper_server`      |
@@ -336,12 +337,13 @@ ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 # Default transport is stdio. Set ATLAS_MCP_TRANSPORT=sse to expose as HTTP.
 ATLAS_MCP_TRANSPORT=stdio            # stdio (Claude Desktop/Cursor) or sse (HTTP)
 ATLAS_MCP_HOST=0.0.0.0              # Bind host for SSE mode
-ATLAS_MCP_AUTH_TOKEN=                # Bearer token for SSE mode (optional)
+ATLAS_MCP_AUTH_TOKEN=                # Bearer token for SSE mode; required for invoicing-readonly HTTP
 ATLAS_MCP_CRM_ENABLED=true          # Enable/disable individual servers
 ATLAS_MCP_EMAIL_ENABLED=true
 ATLAS_MCP_TWILIO_ENABLED=true
 ATLAS_MCP_CALENDAR_ENABLED=true
 ATLAS_MCP_INVOICING_ENABLED=true
+ATLAS_MCP_INVOICING_READONLY_ENABLED=true
 ATLAS_MCP_INTELLIGENCE_ENABLED=true
 ATLAS_MCP_B2B_CHURN_ENABLED=true
 ATLAS_MCP_CRM_PORT=8056
@@ -349,6 +351,7 @@ ATLAS_MCP_EMAIL_PORT=8057
 ATLAS_MCP_TWILIO_PORT=8058
 ATLAS_MCP_CALENDAR_PORT=8059
 ATLAS_MCP_INVOICING_PORT=8060
+ATLAS_MCP_INVOICING_READONLY_PORT=8065
 ATLAS_MCP_INTELLIGENCE_PORT=8061
 ATLAS_MCP_B2B_CHURN_PORT=8062
 
@@ -385,8 +388,8 @@ service required.
 
 ## MCP Servers
 
-Nine MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
-All share `ATLAS_MCP_TRANSPORT` (stdio/sse), `ATLAS_MCP_HOST`, and `ATLAS_MCP_AUTH_TOKEN` config.
+Ten MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
+All share `ATLAS_MCP_TRANSPORT` (stdio/sse) and `ATLAS_MCP_HOST`; HTTP deployments should set `ATLAS_MCP_AUTH_TOKEN`, and the read-only invoicing HTTP server refuses to start without it because it exposes customer financial data.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
 ### CRM MCP Server (10 tools)
@@ -500,6 +503,25 @@ Tools: `create_invoice`, `get_invoice`, `list_invoices`, `update_invoice`,
 `payment_history`, `create_service`, `list_services`, `get_service`,
 `update_service`, `set_service_status`, `search_invoices`,
 `list_pending_drafts`, `approve_and_send`, `export_invoice_pdf`
+
+### Invoicing Readonly MCP Server (8 tools)
+```bash
+# stdio mode (read-only tools only)
+python -m atlas_brain.mcp.invoicing_readonly_server
+
+# SSE HTTP mode (port 8065, requires ATLAS_MCP_AUTH_TOKEN)
+ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.invoicing_readonly_server --sse
+```
+
+Tools: `get_invoice`, `list_invoices`, `search_invoices`,
+`list_pending_drafts`, `customer_balance`, `payment_history`,
+`list_services`, `get_service`
+
+This surface is for authenticated ChatGPT-style connector review when only
+read tools should be available. It deliberately omits
+create/update/approve/send/payment/void/PDF-export and service mutation tools,
+but it still requires bearer auth in HTTP mode because the remaining tools
+expose customer financial data.
 
 ### Intelligence MCP Server (33 tools)
 ```bash
@@ -674,6 +696,11 @@ The wrapper service is started with `start-graphiti.sh` (compose file
     "atlas-invoicing": {
       "command": "python",
       "args": ["-m", "atlas_brain.mcp.invoicing_server"],
+      "cwd": "/path/to/ATLAS"
+    },
+    "atlas-invoicing-readonly": {
+      "command": "python",
+      "args": ["-m", "atlas_brain.mcp.invoicing_readonly_server"],
       "cwd": "/path/to/ATLAS"
     },
     "atlas-intelligence": {
