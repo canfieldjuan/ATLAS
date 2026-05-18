@@ -5,10 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
     parse_default_fields,
+    parse_default_fields_or_exit,
     source_row_to_campaign_opportunity,
     source_rows_to_campaign_opportunities,
 )
@@ -162,9 +165,24 @@ def test_source_rows_apply_default_fields_without_overriding_row_values() -> Non
             },
             {
                 "id": "review-2",
-                "company_name": "Row Company",
+                "company_name": "",
+                "contact_email": None,
                 "vendor": "HubSpot",
                 "review_text": "Reporting exports are blocked.",
+            },
+            {
+                "id": "review-3",
+                "company_name": "Row Company",
+                "contact_email": "row@example.com",
+                "vendor": "HubSpot",
+                "review_text": "Notifications are noisy.",
+            },
+            {
+                "id": "review-4",
+                "company": "Alias Company",
+                "email": "alias@example.com",
+                "vendor": "HubSpot",
+                "review_text": "Admin controls are confusing.",
             },
         ],
         default_fields={
@@ -176,8 +194,34 @@ def test_source_rows_apply_default_fields_without_overriding_row_values() -> Non
     assert loaded.warnings == ()
     assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
     assert loaded.opportunities[0]["contact_email"] == "ops@example.com"
-    assert loaded.opportunities[1]["company_name"] == "Row Company"
+    assert loaded.opportunities[1]["company_name"] == "Acme Logistics"
     assert loaded.opportunities[1]["contact_email"] == "ops@example.com"
+    assert loaded.opportunities[2]["company_name"] == "Row Company"
+    assert loaded.opportunities[2]["contact_email"] == "row@example.com"
+    assert loaded.opportunities[3]["company_name"] == "Alias Company"
+    assert loaded.opportunities[3]["contact_email"] == "alias@example.com"
+
+
+def test_source_rows_row_aliases_override_default_aliases() -> None:
+    loaded = source_rows_to_campaign_opportunities(
+        [
+            {
+                "id": "review-1",
+                "account_name": "Row Company",
+                "recipient_email": "row@example.com",
+                "vendor": "HubSpot",
+                "review_text": "The renewal flow is hard to manage.",
+            },
+        ],
+        default_fields={
+            "company": "Default Company",
+            "email": "default@example.com",
+        },
+    )
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["company_name"] == "Row Company"
+    assert loaded.opportunities[0]["contact_email"] == "row@example.com"
 
 
 def test_parse_default_fields_rejects_invalid_values() -> None:
@@ -186,12 +230,13 @@ def test_parse_default_fields_rejects_invalid_values() -> None:
         "contact_email": "ops@example.com",
     }
 
-    try:
+    with pytest.raises(ValueError, match="key=value"):
         parse_default_fields(["company_name"])
-    except ValueError as exc:
-        assert "key=value" in str(exc)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("expected invalid default field to fail")
+
+
+def test_parse_default_fields_or_exit_raises_clean_system_exit() -> None:
+    with pytest.raises(SystemExit, match="key=value"):
+        parse_default_fields_or_exit(["company_name"])
 
 
 def test_source_document_title_does_not_become_buyer_fields() -> None:
@@ -1247,3 +1292,33 @@ def test_source_adapter_cli_rejects_non_positive_text_limit(tmp_path: Path) -> N
 
     assert completed.returncode == 1
     assert "--max-text-chars must be positive" in completed.stderr
+
+
+def test_source_adapter_cli_rejects_invalid_default_field_cleanly(tmp_path: Path) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        json.dumps({
+            "id": "review-1",
+            "vendor": "HubSpot",
+            "review_text": "Pricing is a problem.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--format",
+            "jsonl",
+            "--default-field",
+            "company_name",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "--default-field values must use key=value" in completed.stderr
+    assert "Traceback" not in completed.stderr

@@ -6,7 +6,14 @@ PR #588 made clean G2 review evidence available to AI Content Ops as source-row 
 
 This slice adds a small target-binding seam for source-row ingestion. Operators can keep the exported review/source rows untouched and provide shared fallback account metadata at conversion, inspection, smoke, generation, import, or hosted API time.
 
+The estimated diff exceeds the repository's 400 LOC target because the seam must stay consistent across the shared adapter, hosted inspect/import API, five CLI entry points, tests, docs, and coordination files. Splitting the plumbing would create temporarily inconsistent host paths where one source-row command supports target defaults and another rejects or ignores them.
+
 ## Scope (this PR)
+
+1. Add source-row fallback target metadata without changing exported source files.
+2. Wire the same defaults through conversion, inspection, import, smoke, generation, and hosted API paths.
+3. Preserve row-specific values, including supported aliases, over shared defaults.
+4. Document the operational G2 review JSONL plus target-default workflow.
 
 ### Files touched
 
@@ -50,17 +57,18 @@ This slice adds a small target-binding seam for source-row ingestion. Operators 
 
 ## Verification
 
-- Run focused source adapter, import, generation example, host smoke, ingestion diagnostics, and control-surface API tests.
-- Compile the touched scripts and modules.
-- Run the extracted pipeline local PR review.
-- Run git diff whitespace validation.
+- python -m pytest tests/test_extracted_campaign_source_adapters.py tests/test_extracted_campaign_generation_example.py tests/test_extracted_content_ingestion_diagnostics.py tests/test_extracted_content_control_surface_api.py tests/test_extracted_content_host_smoke.py -q -> 163 passed.
+- python -m py_compile extracted_content_pipeline/campaign_source_adapters.py extracted_content_pipeline/ingestion_diagnostics.py extracted_content_pipeline/api/control_surfaces.py scripts/build_extracted_campaign_opportunities_from_sources.py scripts/inspect_extracted_content_ingestion.py scripts/load_extracted_campaign_opportunities.py scripts/run_extracted_campaign_generation_example.py scripts/smoke_extracted_content_pipeline_host.py -> passed.
+- Live G2 export, ingestion inspect with default fields, and offline generation with default fields -> passed.
+- bash scripts/local_pr_review.sh -> passed.
+- git diff --check -> passed.
 
 ## Estimated diff size
 
 | Area | Estimated LOC |
 |---|---:|
-| Source-row default-field plumbing | ~95 |
-| CLI/API wiring | ~95 |
-| Tests | ~150 |
-| Docs and coordination | ~35 |
-| Total | ~375 |
+| Source-row default-field plumbing | ~120 |
+| CLI/API wiring | ~110 |
+| Tests | ~210 |
+| Docs and coordination | ~40 |
+| Total | ~480 |

@@ -23,7 +23,7 @@ from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
-    parse_default_fields,
+    parse_default_fields_or_exit,
 )
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
     load_reasoning_provider_port,
@@ -329,7 +329,7 @@ async def _main() -> int:
         source_rows=bool(args.source_rows),
         source_format=args.source_format,
         max_source_text_chars=int(args.max_source_text_chars),
-        default_fields=parse_default_fields(args.default_field),
+        default_fields=parse_default_fields_or_exit(args.default_field),
     )
     if args.target_mode:
         payload["target_mode"] = args.target_mode

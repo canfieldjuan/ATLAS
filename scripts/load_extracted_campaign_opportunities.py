@@ -24,7 +24,7 @@ from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
-    parse_default_fields,
+    parse_default_fields_or_exit,
 )
 
 
@@ -126,7 +126,7 @@ async def _main() -> int:
             file_format=args.source_format,
             target_mode=args.target_mode,
             max_text_chars=args.max_source_text_chars,
-            default_fields=parse_default_fields(args.default_field),
+            default_fields=parse_default_fields_or_exit(args.default_field),
         )
     else:
         loaded = load_campaign_opportunities_from_file(

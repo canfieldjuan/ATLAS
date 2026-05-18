@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
-    parse_default_fields,
+    parse_default_fields_or_exit,
 )
 
 
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         file_format=args.format,
         target_mode=args.target_mode,
         max_text_chars=args.max_text_chars,
-        default_fields=parse_default_fields(args.default_field),
+        default_fields=parse_default_fields_or_exit(args.default_field),
     )
     payload = loaded.as_payload(
         target_mode=args.target_mode,
