@@ -34,19 +34,51 @@ def _normalize_name(name: str) -> str:
     return name.lower().replace("-", "_").strip("_")
 
 
-def _field_default_int(node: ast.AST | None) -> int | None:
+def _literal_int_constants(tree: ast.Module, config_path: Path | None = None) -> dict[str, int]:
+    constants: dict[str, int] = {}
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+            continue
+        if isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, int):
+            constants[statement.targets[0].id] = statement.value.value
+    if config_path is not None:
+        for statement in tree.body:
+            if not isinstance(statement, ast.ImportFrom):
+                continue
+            if statement.module != "config_defaults":
+                continue
+            defaults_path = config_path.parent / "config_defaults.py"
+            if not defaults_path.exists():
+                continue
+            defaults_tree = ast.parse(defaults_path.read_text(encoding="utf-8"))
+            imported = {alias.asname or alias.name for alias in statement.names}
+            for name, value in _literal_int_constants(defaults_tree).items():
+                if name in imported:
+                    constants[name] = value
+    return constants
+
+
+def _field_default_int(node: ast.AST | None, constants: dict[str, int] | None = None) -> int | None:
+    constants = constants or {}
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Field":
         for keyword in node.keywords:
             if keyword.arg == "default" and isinstance(keyword.value, ast.Constant):
                 if isinstance(keyword.value.value, int):
                     return keyword.value.value
+            if keyword.arg == "default" and isinstance(keyword.value, ast.Name):
+                return constants.get(keyword.value.id)
     if isinstance(node, ast.Constant) and isinstance(node.value, int):
         return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
     return None
 
 
-def mcp_config_ports(config_text: str) -> dict[str, int]:
+def mcp_config_ports(config_text: str, config_path: Path | None = None) -> dict[str, int]:
     tree = ast.parse(config_text)
+    constants = _literal_int_constants(tree, config_path=config_path)
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == "MCPConfig":
             ports: dict[str, int] = {}
@@ -58,7 +90,7 @@ def mcp_config_ports(config_text: str) -> dict[str, int]:
                 field_name = statement.target.id
                 if not field_name.endswith("_port"):
                     continue
-                default = _field_default_int(statement.value)
+                default = _field_default_int(statement.value, constants)
                 if default is not None:
                     ports[field_name.removesuffix("_port")] = default
             return ports
@@ -134,7 +166,10 @@ def main() -> int:
         return 2
 
     try:
-        config_ports = mcp_config_ports(config_path.read_text(encoding="utf-8"))
+        config_ports = mcp_config_ports(
+            config_path.read_text(encoding="utf-8"),
+            config_path=config_path,
+        )
     except (SyntaxError, ValueError) as exc:
         print(f"failed to parse MCPConfig: {exc}", file=sys.stderr)
         return 2

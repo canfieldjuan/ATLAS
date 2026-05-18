@@ -17,6 +17,7 @@ HEADER_TO_FILE = {
     "Twilio": "twilio_server.py",
     "Calendar": "calendar_server.py",
     "Invoicing": "invoicing_server.py",
+    "Invoicing Readonly": "invoicing_readonly_server.py",
     "Intelligence": "intelligence_server.py",
     "Universal Scraper": "scraper_server.py",
     "Memory": "memory_server.py",

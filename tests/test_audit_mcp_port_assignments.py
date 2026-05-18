@@ -52,6 +52,46 @@ def test_mcp_config_ports_extracts_field_defaults():
     }
 
 
+def test_mcp_config_ports_extracts_named_constant_defaults():
+    auditor = load_auditor()
+    config = textwrap.dedent(
+        """\
+        from pydantic import Field
+
+        DEFAULT_INVOICING_READONLY_PORT = 8065
+
+        class MCPConfig:
+            invoicing_readonly_port: int = Field(default=DEFAULT_INVOICING_READONLY_PORT)
+        """
+    )
+
+    assert auditor.mcp_config_ports(config) == {
+        "invoicing_readonly": 8065,
+    }
+
+
+def test_mcp_config_ports_extracts_imported_constant_defaults(tmp_path):
+    auditor = load_auditor()
+    defaults = tmp_path / "config_defaults.py"
+    defaults.write_text("DEFAULT_INVOICING_READONLY_PORT = 8065\n", encoding="utf-8")
+    config = tmp_path / "config.py"
+    config_text = textwrap.dedent(
+        """\
+        from pydantic import Field
+
+        from .config_defaults import DEFAULT_INVOICING_READONLY_PORT
+
+        class MCPConfig:
+            invoicing_readonly_port: int = Field(default=DEFAULT_INVOICING_READONLY_PORT)
+        """
+    )
+    config.write_text(config_text, encoding="utf-8")
+
+    assert auditor.mcp_config_ports(config_text, config_path=config) == {
+        "invoicing_readonly": 8065,
+    }
+
+
 def test_documented_port_claims_parse_env_and_sse_examples():
     auditor = load_auditor()
     doc = textwrap.dedent(

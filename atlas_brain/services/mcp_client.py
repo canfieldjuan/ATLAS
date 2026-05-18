@@ -211,6 +211,7 @@ class MCPToolProvider:
             ("calendar", settings.mcp.calendar_enabled, "atlas_brain.mcp.calendar_server"),
             ("twilio", settings.mcp.twilio_enabled, "atlas_brain.mcp.twilio_server"),
             ("invoicing", settings.mcp.invoicing_enabled, "atlas_brain.mcp.invoicing_server"),
+            ("invoicing_readonly", settings.mcp.invoicing_readonly_enabled, "atlas_brain.mcp.invoicing_readonly_server"),
             ("intelligence", settings.mcp.intelligence_enabled, "atlas_brain.mcp.intelligence_server"),
             ("b2b_churn", settings.mcp.b2b_churn_enabled, "atlas_brain.mcp.b2b_churn_server"),
             ("memory", settings.mcp.memory_enabled, "atlas_brain.mcp.memory_server"),
