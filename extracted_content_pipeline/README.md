@@ -156,6 +156,12 @@ lane as `text` while preserving the full review for audit:
 
 ```bash
 python scripts/export_content_ops_review_sources.py \
+  --source-summary \
+  --summary-sources g2,capterra,trustradius,trustpilot
+```
+
+```bash
+python scripts/export_content_ops_review_sources.py \
   --source g2 \
   --vendor Slack \
   --limit 50 \

@@ -24,6 +24,7 @@ except ImportError:  # pragma: no cover - host dependency
 
 
 DEFAULT_SOURCE = "g2"
+DEFAULT_SUMMARY_SOURCES = ("g2", "capterra", "trustradius", "trustpilot")
 DEFAULT_POLARITIES = ("negative", "mixed")
 DEFAULT_PHRASE_FIELDS = (
     "specific_complaints",
@@ -253,6 +254,60 @@ def build_review_source_query(
     return query, args
 
 
+def build_review_source_summary_query(
+    *,
+    sources: Sequence[str],
+    min_review_text_chars: int,
+    allowed_polarities: Sequence[str],
+    allowed_fields: Sequence[str],
+    require_review_url: bool,
+) -> tuple[str, list[Any]]:
+    """Build a read-only readiness query for review-source exportability."""
+
+    source_url_filter = "AND NULLIF(BTRIM(r.source_url), '') IS NOT NULL" if require_review_url else ""
+    export_candidate_filter = f"""
+        r.duplicate_of_review_id IS NULL
+        AND r.enrichment_status = 'enriched'
+        AND r.enrichment IS NOT NULL
+        AND NULLIF(BTRIM(r.review_text), '') IS NOT NULL
+        AND length(r.review_text) >= $2
+        {source_url_filter}
+    """
+    quote_grade_filter = f"""
+        {export_candidate_filter}
+        AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(r.enrichment->'phrase_metadata', '[]'::jsonb)) pm
+            WHERE lower(BTRIM(pm->>'subject')) = 'subject_vendor'
+              AND pm->'verbatim' = 'true'::jsonb
+              AND (cardinality($3::text[]) = 0 OR lower(pm->>'polarity') = ANY($3::text[]))
+              AND (cardinality($4::text[]) = 0 OR BTRIM(pm->>'field') = ANY($4::text[]))
+        )
+    """
+    query = f"""
+        SELECT lower(r.source) AS source,
+               count(*) AS total_rows,
+               count(*) FILTER (WHERE r.duplicate_of_review_id IS NULL) AS canonical_rows,
+               count(*) FILTER (
+                   WHERE r.duplicate_of_review_id IS NULL
+                     AND r.enrichment_status = 'enriched'
+                     AND r.enrichment IS NOT NULL
+               ) AS enriched_rows,
+               count(*) FILTER (WHERE {export_candidate_filter}) AS export_candidate_rows,
+               count(*) FILTER (WHERE {quote_grade_filter}) AS quote_grade_rows
+        FROM b2b_reviews r
+        WHERE lower(r.source) = ANY($1::text[])
+        GROUP BY lower(r.source)
+        ORDER BY lower(r.source)
+    """
+    return query, [
+        [source.strip().lower() for source in sources if source.strip()],
+        min_review_text_chars,
+        [polarity.strip().lower() for polarity in allowed_polarities if polarity.strip()],
+        [field.strip() for field in allowed_fields if field.strip()],
+    ]
+
+
 async def fetch_review_source_rows(
     pool: Any,
     *,
@@ -309,6 +364,45 @@ async def fetch_review_source_rows(
     return rows
 
 
+async def fetch_review_source_summary(
+    pool: Any,
+    *,
+    sources: Sequence[str] = DEFAULT_SUMMARY_SOURCES,
+    min_review_text_chars: int = 80,
+    allowed_polarities: Sequence[str] = DEFAULT_POLARITIES,
+    allowed_fields: Sequence[str] = DEFAULT_PHRASE_FIELDS,
+    require_review_url: bool = True,
+) -> list[dict[str, Any]]:
+    """Return export-readiness counts for canonical Atlas review sources."""
+
+    requested_sources = [source.strip().lower() for source in sources if source.strip()]
+    if not requested_sources:
+        return []
+    query, args = build_review_source_summary_query(
+        sources=requested_sources,
+        min_review_text_chars=min_review_text_chars,
+        allowed_polarities=allowed_polarities,
+        allowed_fields=allowed_fields,
+        require_review_url=require_review_url,
+    )
+    rows_by_source: dict[str, dict[str, Any]] = {}
+    for raw in await pool.fetch(query, *args):
+        row = dict(raw)
+        rows_by_source[_clean_text(row.get("source")).lower()] = row
+    out: list[dict[str, Any]] = []
+    for source in requested_sources:
+        row = rows_by_source.get(source, {})
+        out.append({
+            "source": source,
+            "total_rows": int(row.get("total_rows") or 0),
+            "canonical_rows": int(row.get("canonical_rows") or 0),
+            "enriched_rows": int(row.get("enriched_rows") or 0),
+            "export_candidate_rows": int(row.get("export_candidate_rows") or 0),
+            "quote_grade_rows": int(row.get("quote_grade_rows") or 0),
+        })
+    return out
+
+
 def render_jsonl(rows: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(json.dumps(dict(row), sort_keys=True, default=str) for row in rows)
 
@@ -346,6 +440,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--polarities", default=",".join(DEFAULT_POLARITIES))
     parser.add_argument("--phrase-fields", default=",".join(DEFAULT_PHRASE_FIELDS))
     parser.add_argument("--allow-missing-source-url", action="store_true")
+    parser.add_argument(
+        "--source-summary",
+        action="store_true",
+        help="Print JSON readiness counts for review sources instead of exporting JSONL rows.",
+    )
+    parser.add_argument(
+        "--summary-sources",
+        default=",".join(DEFAULT_SUMMARY_SOURCES),
+        help="Comma-separated sources for --source-summary.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--database-url",
@@ -377,17 +481,27 @@ async def _main(argv: list[str] | None = None) -> int:
 
     pool = await _create_pool(args.database_url)
     try:
-        rows = await fetch_review_source_rows(
-            pool,
-            source=args.source,
-            vendor_name=args.vendor,
-            limit=args.limit,
-            min_review_text_chars=args.min_review_text_chars,
-            phrase_limit=args.phrase_limit,
-            allowed_polarities=_parse_csv_list(args.polarities),
-            allowed_fields=_parse_csv_list(args.phrase_fields),
-            require_review_url=not args.allow_missing_source_url,
-        )
+        if args.source_summary:
+            rows = await fetch_review_source_summary(
+                pool,
+                sources=_parse_csv_list(args.summary_sources),
+                min_review_text_chars=args.min_review_text_chars,
+                allowed_polarities=_parse_csv_list(args.polarities),
+                allowed_fields=_parse_csv_list(args.phrase_fields),
+                require_review_url=not args.allow_missing_source_url,
+            )
+        else:
+            rows = await fetch_review_source_rows(
+                pool,
+                source=args.source,
+                vendor_name=args.vendor,
+                limit=args.limit,
+                min_review_text_chars=args.min_review_text_chars,
+                phrase_limit=args.phrase_limit,
+                allowed_polarities=_parse_csv_list(args.polarities),
+                allowed_fields=_parse_csv_list(args.phrase_fields),
+                require_review_url=not args.allow_missing_source_url,
+            )
     finally:
         close = getattr(pool, "close", None)
         if close is not None:
@@ -395,11 +509,12 @@ async def _main(argv: list[str] | None = None) -> int:
             if hasattr(maybe_awaitable, "__await__"):
                 await maybe_awaitable
 
-    payload = render_jsonl(rows)
+    payload = json.dumps(rows, indent=2, sort_keys=True, default=str) if args.source_summary else render_jsonl(rows)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(payload + ("\n" if payload else ""), encoding="utf-8")
-        print(f"exported {len(rows)} source row(s) to {args.output}")
+        noun = "source summary row" if args.source_summary else "source row"
+        print(f"exported {len(rows)} {noun}(s) to {args.output}")
     else:
         if payload:
             print(payload)

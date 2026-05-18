@@ -187,6 +187,32 @@ def test_build_review_source_query_filters_canonical_enriched_g2_rows() -> None:
     assert args == ["g2", 120, "HubSpot", 0, 0]
 
 
+def test_build_review_source_summary_query_counts_quote_grade_rows() -> None:
+    query, args = mod.build_review_source_summary_query(
+        sources=("g2", "trustpilot"),
+        min_review_text_chars=120,
+        allowed_polarities=("negative", "mixed"),
+        allowed_fields=("pricing_phrases",),
+        require_review_url=True,
+    )
+
+    assert "lower(r.source) = ANY($1::text[])" in query
+    assert "count(*) AS total_rows" in query
+    assert "AS export_candidate_rows" in query
+    assert "AS quote_grade_rows" in query
+    assert "jsonb_array_elements" in query
+    assert "lower(BTRIM(pm->>'subject')) = 'subject_vendor'" in query
+    assert "pm->'verbatim' = 'true'::jsonb" in query
+    assert "BTRIM(pm->>'field') = ANY($4::text[])" in query
+    assert "NULLIF(BTRIM(r.source_url), '') IS NOT NULL" in query
+    assert args == [
+        ["g2", "trustpilot"],
+        120,
+        ["negative", "mixed"],
+        ["pricing_phrases"],
+    ]
+
+
 @pytest.mark.asyncio
 async def test_fetch_review_source_rows_dedupes_and_filters_after_fetch() -> None:
     pool = _Pool([
@@ -205,6 +231,49 @@ async def test_fetch_review_source_rows_dedupes_and_filters_after_fetch() -> Non
     assert args[-2:] == (6, 0)
 
 
+@pytest.mark.asyncio
+async def test_fetch_review_source_summary_returns_requested_sources_with_zero_fill() -> None:
+    pool = _Pool([
+        {
+            "source": "g2",
+            "total_rows": 10,
+            "canonical_rows": 9,
+            "enriched_rows": 8,
+            "export_candidate_rows": 7,
+            "quote_grade_rows": 6,
+        }
+    ])
+
+    rows = await mod.fetch_review_source_summary(
+        pool,
+        sources=("g2", "trustpilot"),
+        min_review_text_chars=100,
+    )
+
+    assert rows == [
+        {
+            "source": "g2",
+            "total_rows": 10,
+            "canonical_rows": 9,
+            "enriched_rows": 8,
+            "export_candidate_rows": 7,
+            "quote_grade_rows": 6,
+        },
+        {
+            "source": "trustpilot",
+            "total_rows": 0,
+            "canonical_rows": 0,
+            "enriched_rows": 0,
+            "export_candidate_rows": 0,
+            "quote_grade_rows": 0,
+        },
+    ]
+    query, args = pool.fetch_calls[0]
+    assert "FROM b2b_reviews r" in query
+    assert args[0] == ["g2", "trustpilot"]
+    assert args[1] == 100
+
+
 def test_render_jsonl_outputs_one_json_object_per_line() -> None:
     text = mod.render_jsonl([
         {"source_id": "a", "text": "one"},
@@ -221,3 +290,12 @@ def test_parse_args_defaults_to_database_url_from_helper(monkeypatch) -> None:
     args = mod._parse_args([])
 
     assert args.database_url == "postgres://example/db"
+
+
+def test_parse_args_accepts_source_summary_sources(monkeypatch) -> None:
+    monkeypatch.setattr(mod, "_default_database_url", lambda: "postgres://example/db")
+
+    args = mod._parse_args(["--source-summary", "--summary-sources", "g2,trustpilot"])
+
+    assert args.source_summary is True
+    assert args.summary_sources == "g2,trustpilot"
