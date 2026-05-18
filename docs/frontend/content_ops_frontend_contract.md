@@ -541,6 +541,9 @@ Dumb components only. No fetch, no business rules.
    - Supports an ingestion inspector/importer that calls
      `POST /content-ops/ingestion/inspect` for pasted rows and
      `POST /content-ops/ingestion/import` for dry-run or write import.
+     When import returns `reason="ingestion_not_ready"`, render the
+     returned diagnostics instead of collapsing the response into a generic
+     API error.
    - On submit: `POST /content-ops/preview`, render
      `ControlSurfacePreview`.
 

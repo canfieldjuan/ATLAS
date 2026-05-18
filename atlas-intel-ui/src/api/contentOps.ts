@@ -157,6 +157,13 @@ export interface ContentOpsIngestionImportResponse {
   import: ContentOpsIngestionImportResultResponse
 }
 
+export type ContentOpsIngestionImportOutcome =
+  | { kind: 'success'; response: ContentOpsIngestionImportResponse }
+  | { kind: 'not_ready'; diagnostics: ContentOpsIngestionDiagnosticsResponse }
+  | { kind: 'request_invalid'; detail: string }
+  | { kind: 'validation_error'; detail: unknown }
+  | { kind: 'services_unavailable'; detail: string }
+
 // POST /content-ops/preview response
 
 export interface ContentOpsPreviewResponse {
@@ -543,10 +550,62 @@ export function inspectContentOpsIngestion(
 }
 
 /** POST /content-ops/ingestion/import -- import inspected opportunity/source rows. */
-export function importContentOpsIngestion(
+export async function importContentOpsIngestion(
   body: ContentOpsIngestionImportRequest,
-): Promise<ContentOpsIngestionImportResponse> {
-  return postJson<ContentOpsIngestionImportResponse>('/ingestion/import', body)
+): Promise<ContentOpsIngestionImportOutcome> {
+  const url = `${BASE}/ingestion/import`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    })
+  const res = await withRefreshOn401(doFetch)
+
+  if (res.status === 200) {
+    return {
+      kind: 'success',
+      response: await rawJson<ContentOpsIngestionImportResponse>(res),
+    }
+  }
+  if (res.status === 400) {
+    const text = await rawText(res)
+    try {
+      const detail = (JSON.parse(text) as { detail?: unknown })?.detail
+      if (isIngestionNotReadyDetail(detail)) {
+        return { kind: 'not_ready', diagnostics: detail.diagnostics }
+      }
+      return {
+        kind: 'request_invalid',
+        detail: typeof detail === 'string' ? detail : text,
+      }
+    } catch {
+      return { kind: 'request_invalid', detail: text || res.statusText }
+    }
+  }
+  if (res.status === 422) {
+    const text = await rawText(res)
+    let detail: unknown = text
+    try {
+      detail = (JSON.parse(text) as { detail?: unknown })?.detail ?? text
+    } catch {
+      // keep raw text
+    }
+    return { kind: 'validation_error', detail }
+  }
+  if (res.status === 503) {
+    const text = await rawText(res)
+    let detail = text || res.statusText
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown }
+      if (typeof parsed?.detail === 'string') detail = parsed.detail
+    } catch {
+      // keep raw text
+    }
+    return { kind: 'services_unavailable', detail }
+  }
+  const text = await rawText(res)
+  throw new Error(`API ${res.status}: ${text || res.statusText}`)
 }
 
 /**
@@ -646,4 +705,22 @@ function unwrapDetail<T>(payload: T | { detail: T }): T {
     return (payload as { detail: T }).detail
   }
   return payload as T
+}
+
+function isIngestionNotReadyDetail(
+  value: unknown,
+): value is {
+  reason: 'ingestion_not_ready'
+  diagnostics: ContentOpsIngestionDiagnosticsResponse
+} {
+  if (!value || typeof value !== 'object') return false
+  const detail = value as Record<string, unknown>
+  const diagnostics = detail.diagnostics
+  return (
+    detail.reason === 'ingestion_not_ready' &&
+    !!diagnostics &&
+    typeof diagnostics === 'object' &&
+    'ok' in diagnostics &&
+    'warnings' in diagnostics
+  )
 }
