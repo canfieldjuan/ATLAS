@@ -97,6 +97,12 @@ export interface ContentOpsIngestionInspectRequest {
   sampleLimit: number
 }
 
+export interface ContentOpsIngestionImportRequest
+  extends ContentOpsIngestionInspectRequest {
+  replaceExisting: boolean
+  dryRun: boolean
+}
+
 export interface ContentOpsIngestionWarning {
   code: string
   message: string
@@ -115,6 +121,21 @@ export interface ContentOpsIngestionDiagnostics {
   sourceTypeCounts: Record<string, number>
   samples: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+}
+
+export interface ContentOpsIngestionImportResult {
+  inserted: number
+  skipped: number
+  dryRun: boolean
+  replaceExisting: boolean
+  targetIds: string[]
+  warnings: ContentOpsIngestionWarning[]
+  source?: string | null
+}
+
+export interface ContentOpsIngestionImportResponse {
+  diagnostics: ContentOpsIngestionDiagnostics
+  importResult: ContentOpsIngestionImportResult
 }
 
 // ---------------------------------------------------------------------------

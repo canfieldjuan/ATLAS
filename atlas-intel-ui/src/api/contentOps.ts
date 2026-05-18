@@ -8,6 +8,7 @@
  *   POST /content-ops/preview
  *   POST /content-ops/plan
  *   POST /content-ops/ingestion/inspect
+ *   POST /content-ops/ingestion/import
  *   POST /content-ops/execute
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
@@ -115,6 +116,12 @@ export interface ContentOpsIngestionInspectRequest {
   sample_limit?: number                             // 0..25
 }
 
+export interface ContentOpsIngestionImportRequest
+  extends ContentOpsIngestionInspectRequest {
+  replace_existing?: boolean                         // default false
+  dry_run?: boolean                                  // default false
+}
+
 export interface ContentOpsIngestionWarning {
   code: string
   message: string
@@ -133,6 +140,21 @@ export interface ContentOpsIngestionDiagnosticsResponse {
   source_type_counts: Record<string, number>
   samples: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
+}
+
+export interface ContentOpsIngestionImportResultResponse {
+  inserted: number
+  skipped: number
+  dry_run: boolean
+  replace_existing: boolean
+  target_ids: string[]
+  warnings: ContentOpsIngestionWarning[]
+  source?: string | null
+}
+
+export interface ContentOpsIngestionImportResponse {
+  diagnostics: ContentOpsIngestionDiagnosticsResponse
+  import: ContentOpsIngestionImportResultResponse
 }
 
 // POST /content-ops/preview response
@@ -518,6 +540,13 @@ export function inspectContentOpsIngestion(
   body: ContentOpsIngestionInspectRequest,
 ): Promise<ContentOpsIngestionDiagnosticsResponse> {
   return postJson<ContentOpsIngestionDiagnosticsResponse>('/ingestion/inspect', body)
+}
+
+/** POST /content-ops/ingestion/import -- import inspected opportunity/source rows. */
+export function importContentOpsIngestion(
+  body: ContentOpsIngestionImportRequest,
+): Promise<ContentOpsIngestionImportResponse> {
+  return postJson<ContentOpsIngestionImportResponse>('/ingestion/import', body)
 }
 
 /**
