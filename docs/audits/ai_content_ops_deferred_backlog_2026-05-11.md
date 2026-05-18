@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-16
+Last updated: 2026-05-18
 
 ## Purpose
 
@@ -50,6 +50,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - Source-adapter cumulative audit and decision rules.
 - Source-type precedence consolidation.
 - Source-row field lookup cache for provider-style aliases.
+- Review-source readiness summary for scraped review sources.
 - Host-facing reasoning policy audit for falsification, narrative planning,
   validation, and per-content-type depth.
 - Reasoning preset catalog for host-facing depth choices.
@@ -114,6 +115,13 @@ Remaining work:
 No export appeared before the reasoning-policy parity pass closed. Keep this as
 roadmap work, not an active slice, until a real host export fixture exists.
 
+**Review-source readiness update:** PR #591 shipped a source summary mode for
+the review-source exporter. A live Atlas check reported quote-grade rows for
+G2 (364), Capterra (154), and TrustRadius (31). Trustpilot reported 0
+quote-grade rows, so it should not be used for Content Ops export until those
+reviews are re-enriched with v4 phrase metadata. This closes the "which scraped
+review source is usable now?" uncertainty without adding a new ingestion slice.
+
 ## Current Pick Recommendation
 
 The host-facing AI Content Ops reasoning-policy arc is complete for the current
@@ -141,3 +149,8 @@ highest-leverage code should come from either a real source export fixture
 (item 2) or the separate `extracted_reasoning_core` productization track. If a
 future slice touches reasoning policy, it should name the concrete trigger from
 the list above in its plan doc.
+
+The review-source readiness closeout from PR #591 does not create a new active
+Content Ops implementation backlog. G2, Capterra, and TrustRadius can use the
+existing exporter path. Trustpilot is blocked on data quality, not extractor
+code.
