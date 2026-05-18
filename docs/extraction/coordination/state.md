@@ -1,6 +1,6 @@
 # Per-Product State
 
-Last updated: 2026-05-18T21:38Z by codex-2026-05-18
+Last updated: 2026-05-18T21:42Z by codex-2026-05-18
 
 Cross-product state-of-the-world for the extraction effort. Update when a PR merges or a product's phase advances. See [`../COORDINATION.md`](../COORDINATION.md) for the protocol that governs edits to this file.
 
@@ -8,7 +8,7 @@ Cross-product state-of-the-world for the extraction effort. Update when a PR mer
 |---|---|---|---|---|---|
 | `extracted_llm_infrastructure` | 3 (runtime-decoupled + 100% standalone-operational; no OSS publish — internal refactor only) | #171 | — | Extraction effort terminal. PR-A6a #169 carved `ProviderCostSubConfig` into `_standalone/config.py`; PR-A6b #171 ported `SkillRegistry` substrate. Customer-facing API/SaaS work tracks under product roadmap (P1/P5/P6), not this scaffold. | none |
 | `extracted_competitive_intelligence` | 2 in progress (standalone toggle surfaces landing) | #160 | — | Continue Phase 2 ownership of standalone-ready product surfaces | none |
-| `extracted_content_pipeline` | 2 in progress (host-operational productization seams) | #591 | — | Review-source readiness is shipped. G2, Capterra, and TrustRadius currently have quote-grade review rows; Trustpilot needs v4 phrase metadata before export. No active Content Ops code slice is claimed. | none |
+| `extracted_content_pipeline` | 2 in progress (host-operational productization seams) | #592 | pending | Fix review-source campaign copy framing so third-party review evidence is treated as market evidence, not direct target-account intent. | `extracted_content_pipeline/campaign_example.py`, `atlas_brain/skills/digest/b2b_campaign_generation.md`, `extracted_content_pipeline/skills/digest/b2b_campaign_generation.md` |
 | `extracted_reasoning_core` | 2 in progress (public API, semantic-cache keys, pack registry, graph/state ports, manifest, standalone smoke, and partial product wrappers landed) | #577 | — | Reasoning-core checks now have a product-specific runner. Next work should come from a concrete product runtime need, not the old graph checklist. | none |
 | `extracted_quality_gate` | 1 (scaffold + 7 deterministic packs landed: product_claim core #85; safety-gate split #114; blog quality pack #118; campaign quality pack #120; witness specificity pack #125; evidence coverage gate #130; source-quality pack #132) | #154 | — | Decoupling work effectively complete; no OSS publish. Future quality-gate features land here as new packs when needed. | none |
 

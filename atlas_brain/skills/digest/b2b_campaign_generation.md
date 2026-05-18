@@ -96,7 +96,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 1. **Personalize to their pain**: Reference their specific pain points (pricing, features, reliability, support) naturally. Do NOT be generic.
 
-2. **Never reveal the source**: Never mention reviews, G2, Capterra, scraping, or monitoring. Frame all knowledge as "industry research", "market trends", or "we work with companies in your space".
+2. **Never reveal the source**: Never mention reviews, G2, Capterra, scraping, or monitoring. Frame all knowledge as "industry research", "market trends", or "we work with companies in your space". When the opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence. Do not say the target company itself said, did, evaluated, or intends the thing unless account-specific reasoning or CRM evidence explicitly supports that.
 
 3. **Match tone to role_type**:
    - `economic_buyer` / `decision_maker`: Executive tone, focus on ROI, TCO, strategic value
@@ -155,6 +155,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 24. **CTA is separate**: The `cta` field is a standalone call-to-action string. The body should end naturally leading into the CTA. Include the affiliate/booking URL as an `<a>` tag at the end of the body, not in the `cta` field.
 
 25. **Quote framing is mandatory**: Never drop a bare quote or number into the email as an unframed fact. Wrap evidence with analyst language such as "Buyers are reporting...", "Teams evaluating alternatives are saying...", or "Across the accounts we analyzed..." before the quote or number.
+   For public review/source-row evidence, prefer market framing such as "Teams evaluating [vendor] are reporting..." instead of target-account framing such as "[Company] is evaluating...".
 
 26. **Reasoning-aware messaging**: When `reasoning_context` is present, tailor messaging to the wedge type. Use `reasoning_context.summary` and `reasoning_context.key_signals` for specifics rather than generic wedge language:
    - `price_squeeze`: Lead with cost savings, ROI, value restoration. Reference price increases or billing frustration.
