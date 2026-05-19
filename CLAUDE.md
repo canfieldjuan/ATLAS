@@ -396,6 +396,12 @@ Ten MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cur
 All share `ATLAS_MCP_TRANSPORT` (stdio/sse) and `ATLAS_MCP_HOST`; HTTP deployments should set `ATLAS_MCP_AUTH_TOKEN`, and the read-only invoicing HTTP server refuses to start without a non-placeholder token of at least 24 characters because it exposes customer financial data.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
+For ChatGPT online connector rollout, use
+`docs/MCP_CHATGPT_OAUTH_ROLLOUT_RUNBOOK.md`. It captures the proven
+read-only invoicing OAuth pattern, Tailscale well-known route shape, discovery
+and e2e smoke requirements, and operator launcher checklist for future MCP
+servers.
+
 ### CRM MCP Server (10 tools)
 ```bash
 # stdio mode (Claude Desktop / Cursor)
