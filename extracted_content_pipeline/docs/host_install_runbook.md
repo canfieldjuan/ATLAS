@@ -499,6 +499,34 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --json
 ```
 
+CFPB complaint narratives are the public support-ticket-like smoke path. Use
+them when the host needs a non-review source before wiring CRM notes, call
+transcripts, support tickets, or case exports. The exporter keeps only rows
+with complaint narratives and writes Content Ops source-row JSONL:
+
+```bash
+python scripts/export_content_ops_cfpb_sources.py \
+  --company "Example Bank" \
+  --search-term fees \
+  --limit 25 \
+  --output cfpb_sources.jsonl
+```
+
+The DB smoke fetches CFPB rows, inspects source-row ingestion, imports them
+under the provided account id, and persists offline generated drafts through
+the Postgres runner:
+
+```bash
+python scripts/smoke_content_ops_cfpb_source_postgres.py \
+  --company "Example Bank" \
+  --search-term fees \
+  --limit 1 \
+  --account-id acct_123 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
 ```bash
 python scripts/load_extracted_campaign_opportunities.py \
   g2_review_sources.jsonl \
