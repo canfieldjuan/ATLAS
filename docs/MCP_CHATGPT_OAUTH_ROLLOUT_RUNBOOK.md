@@ -371,8 +371,17 @@ Run with the repo virtualenv:
 
 ### ChatGPT works until restart, then fails
 
-The current OAuth provider is in-memory. If this becomes a real operational
-problem, the next slice is durable OAuth client/token persistence.
+Set the server-specific OAuth state file env var before startup:
+
+```bash
+ATLAS_MCP_INVOICING_READONLY_OAUTH_STATE_FILE=.secrets/invoicing-readonly-oauth-state.json
+ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_STATE_FILE=.secrets/invoicing-draft-writer-oauth-state.json
+```
+
+The state file persists registered OAuth clients and refresh tokens only. It is
+local operator secret material and should stay under `.secrets/`. Pending
+approval requests, one-time authorization codes, and access tokens remain
+process-local.
 
 ## What to defer until after read-only works
 

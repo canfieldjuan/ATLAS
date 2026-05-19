@@ -229,6 +229,7 @@ def _configure_oauth_auth() -> InvoicingReadonlyOAuthProvider:
     issuer_url = os.environ.get("ATLAS_MCP_INVOICING_READONLY_OAUTH_ISSUER_URL", "").strip()
     resource_url = os.environ.get("ATLAS_MCP_INVOICING_READONLY_OAUTH_RESOURCE_URL", "").strip()
     approval_token = os.environ.get("ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN", "").strip()
+    state_file = os.environ.get("ATLAS_MCP_INVOICING_READONLY_OAUTH_STATE_FILE", "").strip() or None
     validate_oauth_settings(
         issuer_url=issuer_url,
         resource_server_url=resource_url,
@@ -239,6 +240,7 @@ def _configure_oauth_auth() -> InvoicingReadonlyOAuthProvider:
         issuer_url=issuer_url,
         approval_token=approval_token,
         scopes=[DEFAULT_READONLY_SCOPE],
+        state_file=state_file,
     )
     mcp.settings.auth = AuthSettings(
         issuer_url=as_any_http_url(issuer_url),
