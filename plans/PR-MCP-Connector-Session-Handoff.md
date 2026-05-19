@@ -10,7 +10,7 @@ which server is running, which smokes are authoritative, or which risks remain.
 This docs-only slice records the current operational state and the next-step
 queue for MCP connector work.
 
-## Scope
+## Scope (this PR)
 
 1. Add a current-state handoff section to the ChatGPT OAuth rollout runbook.
 2. Add a concrete draft-writer operational-state section to the invoicing write
@@ -47,8 +47,10 @@ section focused on the live draft-writer connector and its local state files.
 
 ## Verification
 
-- Git whitespace check: passed.
-- Local PR review bundle in advisory dirty mode: passed.
+Commands run:
+
+    git diff --check
+    bash scripts/local_pr_review.sh
 
 ## Estimated diff size
 
