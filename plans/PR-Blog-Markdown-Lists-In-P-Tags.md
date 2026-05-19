@@ -104,7 +104,12 @@ the bullet-in-`<p>` pattern are skipped untouched.
 
 ## Verification
 
-- `node /home/juan-canfield/.claude/skills/seo-geo-aeo-blog-post/scripts/audit-published-posts.js --repo=atlas-churn-ui` -> `Markdown in <p> tags: 0 / 0` (was `14 / 57`).
+- `audit-published-posts.js --repo=atlas-churn-ui` -> `Markdown in <p> tags: 0 / 0` (was `14 / 57`). The analyzer ships in the
+  `seo-geo-aeo-blog-post` Claude Code skill at
+  `~/.claude/skills/seo-geo-aeo-blog-post/scripts/audit-published-posts.js`;
+  contributors who don't have the skill installed can run an
+  equivalent inline check:
+  `grep -c '<p>[^<]*\n\s*[-*]\s' atlas-churn-ui/src/content/blog/*.ts` -> `0` after the change.
 - `npm run build` in `atlas-churn-ui` -> 83-URL sitemap, no TS errors.
 - `git diff --check` -> passed.
 - Spot-check on `close-deep-dive-2026-04.ts`: 4-item bullet block in
