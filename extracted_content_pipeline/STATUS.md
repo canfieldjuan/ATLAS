@@ -99,6 +99,10 @@ source of truth for what remains.
   review-source readiness/export path through source-row ingestion inspection
   and offline campaign draft generation, so operators can prove a source such
   as G2 produces usable drafts before import or live provider generation.
+- `scripts/smoke_content_ops_review_source_postgres.py` extends that same
+  review-source path through scoped source-row import and DB-backed offline
+  campaign draft persistence. It replaces matching imported opportunities by
+  default so repeated smoke runs do not duplicate `campaign_opportunities`.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes

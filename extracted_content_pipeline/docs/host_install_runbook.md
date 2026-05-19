@@ -480,6 +480,22 @@ If the smoke reports ingestion warnings, bind the anonymous review evidence to
 the target account/contact with additional `--default-field` values before
 importing.
 
+For a DB-backed smoke, use the Postgres variant. It imports the exported
+source rows into `campaign_opportunities`, replaces matching imported
+opportunities by default, runs offline draft generation through the product
+Postgres runner, and reports persisted campaign ids:
+
+```bash
+python scripts/smoke_content_ops_review_source_postgres.py \
+  --source g2 \
+  --vendor Slack \
+  --limit 1 \
+  --account-id acct_123 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
 ```bash
 python scripts/load_extracted_campaign_opportunities.py \
   g2_review_sources.jsonl \
