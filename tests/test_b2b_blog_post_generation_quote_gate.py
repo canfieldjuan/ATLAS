@@ -544,7 +544,11 @@ def test_orphan_disclaimer_alone_stripped_when_no_intro():
         "That quote is from a payment platform discussion, not a CRM review.\n"
     )
     out, removed = _remove_unmatched_quote_lines(markdown, source)
-    assert "a quote" not in out or ">" not in out  # blockquote line gone
+    # The blockquote line `> a quote` is gone (assertion was previously
+    # `"a quote" not in out OR ">" not in out` which would pass even when
+    # the blockquote remained as long as "a quote" appeared elsewhere --
+    # tightened per Copilot review on PR #638).
+    assert "> a quote" not in out
     assert "That quote is from a payment platform discussion" not in out
     # The 'normal prose' line doesn't end with ':' so it's preserved.
     assert "Some normal prose without a colon ending." in out
@@ -597,6 +601,39 @@ def test_orphan_intro_not_stripped_when_too_long():
     # The block (1 line) is stripped; the long intro is preserved.
     assert "some fabricated quote" not in out
     assert long_intro in out
+
+
+def test_adjacent_blocks_disclaimer_shaped_second_block_not_absorbed():
+    """Codex P1 on PR #638: with two adjacent blockquotes, if the
+    second block starts with text matching the disclaimer regex
+    (e.g. `> "That quote is from a different review..."`), the first
+    stripped block's forward span must NOT widen into the second
+    block. Otherwise a grounded second block can be silently deleted.
+
+    The fix lives in ``_looks_like_orphan_disclaimer``: it now refuses
+    to classify blockquote-, heading-, or list-prefixed lines as
+    orphan disclaimer prose, so the forward-span widening stops at
+    structural boundaries.
+    """
+    source = ["that quote is from a real source about pricing pressure"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> a fabricated quote\n"
+        "\n"
+        "> that quote is from a real source about pricing pressure\n"
+        "\n"
+        "Final prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    # First block (fabricated) -- stripped.
+    assert "a fabricated quote" not in out
+    # Second block matches the source pool AND happens to start with
+    # disclaimer-shaped text -- must be preserved, NOT absorbed into
+    # the first block's strip span.
+    assert "that quote is from a real source about pricing pressure" in out
+    # Final prose unaffected.
+    assert "Final prose." in out
 
 
 # ---------------------------------------------------------------------------

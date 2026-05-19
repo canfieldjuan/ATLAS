@@ -1599,8 +1599,26 @@ def _looks_like_orphan_disclaimer(line: str) -> bool:
     """True if ``line`` matches one of the acknowledged-misattribution
     disclaimer patterns. When a stripped blockquote is followed by a
     disclaimer apologising for it, the disclaimer is also orphaned and
-    should be removed."""
+    should be removed.
+
+    Guards against markdown structural lines: a fresh blockquote
+    starting with ``> "That quote is from a ..."``, a heading like
+    ``# That review was on a forum``, or a list item like
+    ``- That reviewer is on a different platform`` would technically
+    match the regex set but represent legitimate document structure
+    (and may be grounded content the caller intends to keep). Codex
+    flagged this on #638: adjacent blockquotes where the second
+    block's first line itself looks like a disclaimer could have the
+    forward span widen INTO the second block, deleting grounded
+    content. Skip any line whose stripped form starts with the
+    blockquote, heading, or list-marker tokens.
+    """
     if not line or not line.strip():
+        return False
+    stripped = line.lstrip()
+    if stripped.startswith((">", "#", "-", "*", "+")):
+        return False
+    if re.match(r"^\d+\.\s", stripped):  # ordered list item
         return False
     return any(p.search(line) for p in _ORPHAN_DISCLAIMER_RES)
 
