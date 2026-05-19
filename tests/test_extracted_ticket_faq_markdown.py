@@ -10,7 +10,11 @@ import pytest
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
 )
-from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
+from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.ticket_faq_markdown import (
+    TicketFAQMarkdownService,
+    build_ticket_faq_markdown,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +40,100 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "condensed": True,
         "has_action_items": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_generates_from_inline_source_material() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "subject": "Login email change",
+                    "source_type": "ticket",
+                    "message": "How do I change my email address?",
+                    "pain_category": "login",
+                }
+            ]
+        },
+        max_items=2,
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert "How do I change my email address?" in result.markdown
+    assert "`ticket-1` - Login email change" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_preserves_explicit_empty_source_type_filter() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material=[{
+            "source_id": "review-1",
+            "source_type": "review",
+            "text": "Export settings are hard to find.",
+            "pain_category": "exports",
+        }],
+        source_types=(),
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert "Export settings are hard to find." in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_exposes_source_normalization_warnings() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material=[
+            {
+                "ticket_id": "ticket-1",
+                "source_type": "ticket",
+                "subject": "Export issue",
+                "message": "The export keeps timing out.",
+            },
+            {
+                "ticket_id": "ticket-2",
+                "source_type": "ticket",
+                "subject": "Missing body",
+            },
+        ],
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert result.as_dict()["warnings"][0]["code"] == "missing_source_text"
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_skips_empty_source_material_containers() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [],
+            "rows": [{
+                "ticket_id": "ticket-1",
+                "source_type": "ticket",
+                "message": "The dashboard export is not working.",
+                "pain_category": "exports",
+            }],
+        },
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert "The dashboard export is not working." in result.markdown
 
 
 def test_build_ticket_faq_markdown_uses_nested_ticket_thread_text() -> None:

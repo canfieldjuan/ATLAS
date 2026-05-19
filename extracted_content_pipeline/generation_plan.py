@@ -29,6 +29,7 @@ from .reasoning_policy import (
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
+from .ticket_faq_markdown import TicketFAQMarkdownConfig
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,24 @@ def _signal_extraction_config_for_request(
     )
 
 
+def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMarkdownConfig:
+    defaults = TicketFAQMarkdownConfig()
+    return TicketFAQMarkdownConfig(
+        title=_text_input(request.inputs, "faq_title") or defaults.title,
+        max_items=request.limit,
+        max_evidence_per_item=(
+            _positive_int_input(request.inputs, "faq_max_evidence_per_item")
+            or defaults.max_evidence_per_item
+        ),
+        source_types=_text_sequence_input(request.inputs, "faq_source_types")
+        or defaults.source_types,
+        max_text_chars=(
+            _positive_int_input(request.inputs, "source_max_text_chars")
+            or defaults.max_text_chars
+        ),
+    )
+
+
 def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
     raw = inputs.get(key)
     if raw is None:
@@ -214,6 +233,24 @@ def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
     if value < 1:
         raise ValueError(f"{key} must be at least 1; got {value}")
     return value
+
+
+def _text_input(inputs: Mapping[str, Any], key: str) -> str | None:
+    value = str(inputs.get(key) or "").strip()
+    return value or None
+
+
+def _text_sequence_input(inputs: Mapping[str, Any], key: str) -> tuple[str, ...] | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        items = tuple(item.strip() for item in raw.split(",") if item.strip())
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        items = tuple(str(item).strip() for item in raw if str(item).strip())
+    else:
+        return None
+    return items or None
 
 
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
@@ -314,6 +351,20 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             status="runnable",
             config={
                 "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
+            },
+        )
+    if output == "faq_markdown":
+        config = _faq_markdown_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="TicketFAQMarkdownService.generate",
+            status="runnable",
+            config={
+                "title": config.title,
+                "max_items": config.max_items,
+                "max_evidence_per_item": config.max_evidence_per_item,
+                "source_types": list(config.source_types),
                 "max_text_chars": config.max_text_chars,
             },
         )

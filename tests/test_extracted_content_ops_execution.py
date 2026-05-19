@@ -13,6 +13,7 @@ from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
 
 @dataclass(frozen=True)
@@ -487,6 +488,36 @@ async def test_execute_runs_signal_extraction_service_from_source_material() -> 
     assert opportunity["target_id"] == "review-1"
     assert opportunity["evidence"][0]["text"] == "Pricing"
     assert step["result"]["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "limit": 2,
+            "inputs": {
+                "faq_title": "Support FAQ",
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "subject": "Profile email change",
+                        "message": "How do I change my email address?",
+                        "pain_category": "login",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(faq_markdown=TicketFAQMarkdownService()),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["result"]["generated"] == 1
+    assert step["result"]["markdown"].startswith("# Support FAQ")
+    assert "How do I change my email address?" in step["result"]["markdown"]
 
 
 @pytest.mark.asyncio

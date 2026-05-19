@@ -19,11 +19,12 @@ Currently wired:
   `PostgresIntelligenceRepository` (campaign opportunities)
   plus the per-output Postgres repo + LLM/Skill adapters.
   All three slots stay `None` when LLM or pool is absent.
-- `blog_post` (E4, this slice): plugs the
+- `blog_post` (E4): plugs the
   `PostgresBlogBlueprintRepository` (PR #458) +
   `PostgresBlogPostRepository` + LLM/Skill adapters. Slot
-  stays `None` when LLM or pool is absent. After E4 the
-  bundle advertises 6 of 6 outputs.
+  stays `None` when LLM or pool is absent.
+- `faq_markdown`: deterministic ticket FAQ builder with no LLM or
+  database dependency, wired by default.
 
 See `plans/PR-Content-Ops-Execution-Services-Wire-4.md`.
 """
@@ -77,11 +78,15 @@ from extracted_content_pipeline.sales_brief_postgres import (
 from extracted_content_pipeline.signal_extraction import (
     SignalExtractionService,
 )
+from extracted_content_pipeline.ticket_faq_markdown import (
+    TicketFAQMarkdownService,
+)
 
 
 # Module-level singleton: SignalExtractionService is stateless, so
 # re-creating it per request would just churn allocations.
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
+_FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
 
 
 def _build_landing_page_service(
@@ -300,6 +305,7 @@ def build_content_ops_execution_services(
         report=report,
         sales_brief=sales_brief,
         blog_post=blog_post,
+        faq_markdown=_FAQ_MARKDOWN_SERVICE,
     )
 
 

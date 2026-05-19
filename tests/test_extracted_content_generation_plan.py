@@ -401,6 +401,33 @@ def test_plan_maps_signal_extraction_to_signal_extraction_service():
     }
 
 
+def test_plan_maps_faq_markdown_to_ticket_faq_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "limit": 4,
+            "inputs": {
+                "source_material": [{"source_type": "ticket", "text": "How do I change my email?"}],
+                "faq_title": "Support FAQ",
+                "faq_max_evidence_per_item": 2,
+                "faq_source_types": "ticket, support-ticket",
+                "source_max_text_chars": 80,
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "title": "Support FAQ",
+        "max_items": 4,
+        "max_evidence_per_item": 2,
+        "source_types": ["ticket", "support-ticket"],
+        "max_text_chars": 80,
+    }
+
+
 def test_plan_threads_signal_extraction_source_text_cap():
     plan = build_generation_plan_from_mapping(
         {
