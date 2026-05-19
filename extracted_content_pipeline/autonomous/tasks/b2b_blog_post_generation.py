@@ -1555,31 +1555,86 @@ def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
 
 
 def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
-    """Strip LLM-generated blockquote lines that do not ground in a
+    """Strip LLM-generated blockquote BLOCKS that do not ground in a
     quote-grade source pool.
 
-    Fails closed: when ``source_quotes`` is empty, ALL blockquote lines
-    are removed. The absence of a source pool is treated as 'no quote
-    material is grounded', not as 'everything passes' -- the latter was
+    A "block" is a maximal run of contiguous ``>``-prefixed lines (and the
+    blank-prefixed continuation ``>`` lines that some renderers emit
+    between paragraphs of a single blockquote). The block is kept iff
+    at least one line in the block has a quote body that matches the
+    source pool; otherwise the entire block (including any attribution
+    line like ``> -- reviewer on G2``) is removed.
+
+    Fails closed: when ``source_quotes`` is empty, ALL blockquote blocks
+    are removed. The absence of a source pool is treated as "no quote
+    material is grounded", not as "everything passes" -- the latter was
     the prior backdoor that allowed paraphrased LLM quotes to ship when
     the producer hadn't supplied verbatim phrases.
+
+    Why block-level (not line-level): the prior implementation iterated
+    line-by-line. A multi-line markdown blockquote like::
+
+        > "Some quote text"
+        > -- Attribution Person
+
+    would have its quote line stripped (quote body fails source match)
+    but the attribution line would be PRESERVED, because
+    ``_extract_quote_body`` returns an empty string for an attribution-
+    only line, falsifying the ``if quote and ...`` removal condition.
+    The result was orphan ``<blockquote><p>-- Attribution</p></blockquote>``
+    in the rendered HTML (44 of 79 published posts at the time of fix).
+    Block-level processing removes the entire block atomically.
+
+    The returned ``removed`` count is the number of LINES stripped (for
+    backwards compatibility with the prior contract), not the number of
+    blocks.
     """
-    removed = 0
+    text = str(markdown or "")
+    if not text:
+        return text, 0
+
+    lines = text.splitlines(keepends=False)
     output: list[str] = []
-    for line in str(markdown or "").splitlines():
-        match = _BLOCKQUOTE_RE.match(line)
-        if not match:
-            output.append(line)
+    removed_lines = 0
+    i = 0
+    n = len(lines)
+    while i < n:
+        if not _BLOCKQUOTE_RE.match(lines[i]):
+            output.append(lines[i])
+            i += 1
             continue
+
+        # Collect the contiguous blockquote block starting at i.
+        block_start = i
+        while i < n and _BLOCKQUOTE_RE.match(lines[i]):
+            i += 1
+        block_lines = lines[block_start:i]
+
+        # Decide: keep the block, or strip it.
         if not source_quotes:
-            removed += 1
+            removed_lines += len(block_lines)
             continue
-        quote = _extract_quote_body(match.group(1))
-        if quote and not _quote_matches_source(quote, source_quotes):
-            removed += 1
-            continue
-        output.append(line)
-    return "\n".join(output), removed
+
+        block_has_matched_quote = False
+        for line in block_lines:
+            m = _BLOCKQUOTE_RE.match(line)
+            if not m:
+                continue
+            quote = _extract_quote_body(m.group(1))
+            if quote and _quote_matches_source(quote, source_quotes):
+                block_has_matched_quote = True
+                break
+
+        if block_has_matched_quote:
+            output.extend(block_lines)
+        else:
+            removed_lines += len(block_lines)
+
+    # Preserve trailing newline if the original text had one.
+    result = "\n".join(output)
+    if text.endswith("\n"):
+        result += "\n"
+    return result, removed_lines
 
 
 def _sanitize_blog_markdown(markdown: str) -> tuple[str, dict[str, int]]:

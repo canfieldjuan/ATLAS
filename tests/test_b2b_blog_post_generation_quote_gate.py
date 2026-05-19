@@ -300,26 +300,27 @@ def test_validator_handles_markdown_without_blockquotes():
 
 
 # ---------------------------------------------------------------------------
-# Regression: multi-line blockquote orphan-attribution bug
+# Block-level blockquote stripper -- formerly the orphan-attribution bug
 #
-# These tests document the CURRENT line-by-line stripping behavior. They
-# capture the failure mode that produces empty <blockquote><p>-- attribution
-# </p></blockquote> elements in 44 of 80 published posts. When the stripper
-# is fixed to operate on contiguous blockquote BLOCKS, these tests will
-# need to be inverted (asserting full block removal + no orphan attribution).
+# These tests originally documented a regression: the line-level stripper
+# produced empty <blockquote><p>-- attribution</p></blockquote> elements in
+# 44 of 80 published posts because it removed the quote line but kept the
+# attribution line. The stripper is now block-level: it identifies a
+# contiguous run of `>` lines, decides keep-or-strip based on whether ANY
+# line in the block matches the source pool, and acts atomically on the
+# whole block.
+#
+# The tests below assert the NEW correct behavior. The third test
+# (introductory_prose) still documents a separate gap that block-level
+# stripping doesn't address -- orphan introductory prose and disclaimer
+# prose adjacent to stripped blocks. That gap is deferred to a future
+# fix that detects and removes such prose.
 # ---------------------------------------------------------------------------
 
 
-def test_regression_full_block_stripped_when_pool_empty():
-    """REGRESSION baseline: with empty source_quotes, the fail-closed
-    path correctly strips both lines of a multi-line blockquote.
-
-    This works because empty source_quotes short-circuits before
-    _extract_quote_body is called -- every line matching _BLOCKQUOTE_RE
-    is removed regardless of content. The bug only manifests when the
-    pool is populated AND a specific quote line doesn't match. See the
-    next test.
-    """
+def test_full_block_stripped_when_pool_empty():
+    """Baseline: with empty source_quotes, the fail-closed path strips
+    every blockquote block atomically."""
     markdown = (
         "## Section\n"
         "\n"
@@ -336,28 +337,14 @@ def test_regression_full_block_stripped_when_pool_empty():
     assert "Group Director" not in out
 
 
-def test_regression_orphan_attribution_left_when_pool_populated_no_match():
-    """REGRESSION: the orphan-attribution bug surfaces when
-    source_quotes is populated and the quote-line doesn't match.
+def test_full_block_stripped_when_pool_populated_no_match():
+    """The fixed behavior: with a populated source pool, if NO line in
+    the block has a quote body matching the pool, the WHOLE block is
+    stripped -- including the attribution-only line that previously
+    survived because _extract_quote_body returns empty for it.
 
-    Per b2b_blog_post_generation.py lines 1567-1582, the stripper goes
-    line-by-line:
-      * Quote line: _extract_quote_body() returns the quote text, fails
-        _quote_matches_source, line is stripped.
-      * Attribution line: _extract_quote_body() splits on '--' and takes
-        the part BEFORE, returning empty string for an attribution-only
-        line. The conditional `if quote and not _quote_matches_source(...)`
-        is FALSY because `quote` is empty -- the attribution line is
-        PRESERVED.
-
-    Result: an orphan `> -- Attribution` line in markdown, which renders
-    as `<blockquote><p>-- Attribution</p></blockquote>` in the final
-    HTML. Confirmed in 44 of 80 published posts at the time of writing.
-
-    The fix is to operate on contiguous blockquote BLOCKS instead of
-    individual lines. When that fix lands, this test should be inverted:
-    `removed == 2` and `"Group Director" not in out`.
-    """
+    This is the test that was previously the bug-documenting regression
+    (removed == 1, attribution remained). Now both lines removed."""
     source = ["something else entirely that won't match"]
     markdown = (
         "## Section\n"
@@ -368,46 +355,102 @@ def test_regression_orphan_attribution_left_when_pool_populated_no_match():
         "More prose.\n"
     )
     out, removed = _remove_unmatched_quote_lines(markdown, source)
-    # CURRENT (buggy) behavior: only the quote line is stripped.
-    # The attribution line passes through because _extract_quote_body
-    # returns empty string for it, falsifying the removal condition.
-    assert removed == 1, (
-        "Orphan-attribution bug: only the quote line is removed. "
-        "The attribution line `> -- Group Director...` is preserved "
-        "because _extract_quote_body returns an empty string for an "
-        "attribution-only line, falsifying the removal condition."
-    )
-    # The attribution line survives -- this is the visible bug:
-    assert "-- Group Director, verified reviewer on TrustRadius" in out
-    # And the made-up quote was correctly removed:
+    # Both lines of the block removed atomically.
+    assert removed == 2
     assert "made up" not in out
+    assert "-- Group Director" not in out
+    # Surrounding prose preserved.
+    assert "## Section" in out
+    assert "More prose." in out
+
+
+def test_block_kept_when_any_line_matches():
+    """If at least one quote line in the block matches the source pool,
+    the entire block is kept -- including its attribution line."""
+    source = ["it costs too much money for what you get"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> \"it costs too much money for what you get\"\n"
+        "> -- Customer Reviewer on G2\n"
+        "\n"
+        "More prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 0
+    assert "costs too much money" in out
+    assert "Customer Reviewer on G2" in out
+
+
+def test_block_with_attribution_first_then_quote():
+    """Some renderers emit attribution before the quote inside a single
+    block. The block-level matcher should find the quote regardless of
+    position within the block and keep the entire block."""
+    source = ["it costs too much money for what you get"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> -- Customer Reviewer on G2\n"
+        "> \"it costs too much money for what you get\"\n"
+        "\n"
+        "More prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 0
+    assert "Customer Reviewer on G2" in out
+    assert "costs too much money" in out
+
+
+def test_multiple_blocks_independent_decisions():
+    """Two separate blockquote blocks separated by prose. One should be
+    kept (matched), one should be stripped (unmatched). The stripper
+    treats them independently."""
+    source = ["a real quote that matches"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> \"a real quote that matches\"\n"
+        "> -- Real Reviewer on G2\n"
+        "\n"
+        "Some prose between blocks.\n"
+        "\n"
+        "> \"a fabricated quote that does not match\"\n"
+        "> -- Fabricated Person on Nowhere\n"
+        "\n"
+        "Final prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 2  # only the second block's two lines
+    # First block kept entirely
+    assert "real quote that matches" in out
+    assert "Real Reviewer on G2" in out
+    # Second block fully stripped
+    assert "fabricated quote that does not match" not in out
+    assert "Fabricated Person on Nowhere" not in out
+    # Prose preserved
+    assert "Some prose between blocks." in out
+    assert "Final prose." in out
 
 
 def test_regression_introductory_prose_orphaned_when_quote_stripped():
-    """REGRESSION: prose introducing a blockquote is not cleaned up
-    when the blockquote itself gets stripped.
+    """KNOWN GAP (deferred): prose introducing a blockquote is not
+    cleaned up when the blockquote itself gets stripped.
 
-    Even if the multi-line blockquote bug were fixed (full block
-    removal), this orphan would remain:
+    With block-level stripping now in place, the blockquote is removed
+    atomically, but the orphan introduction ("One reviewer noted:") and
+    any acknowledged-misattribution disclaimer ("That quote is from a
+    compensation discussion, not a CRM review") still survive because
+    they aren't blockquote-prefixed lines. They reference content that
+    no longer exists.
 
-        One reviewer on Reddit noted:
+    A complete fix would also detect and remove orphan introductory and
+    disclaimer prose adjacent to stripped blocks. The seo-geo-aeo-blog-
+    post skill v1.4.0 added regex patterns that catch the disclaimer
+    pattern in audit mode; upstream detection in the generator should
+    mirror them.
 
-        [blockquote was here, now gone]
-
-        That quote is from a compensation discussion, not a CRM review,
-        but it surfaced in the same complaint pattern analysis.
-
-    Both the introduction ("One reviewer noted:") and the disclaimer
-    ("That quote is from a...") survive stripping because they aren't
-    blockquote-prefixed lines. They reference content that no longer
-    exists, producing dangling prose readers see as broken.
-
-    This documents the gap. A complete fix needs to also detect and
-    remove orphan introductory/disclaimer prose adjacent to stripped
-    blocks. The seo-geo-aeo-blog-post skill v1.4.0 added regex patterns
-    that catch the disclaimer pattern in audit mode; upstream detection
-    in the generator should mirror them.
-    """
+    For now: this test documents the gap. When the orphan-prose work
+    lands, update the assertions."""
     source: list[str] = []  # fail-closed: all blockquotes stripped
     markdown = (
         "## Section\n"
@@ -421,10 +464,8 @@ def test_regression_introductory_prose_orphaned_when_quote_stripped():
     out, removed = _remove_unmatched_quote_lines(markdown, source)
     assert removed == 1
     assert "gets stripped" not in out
-    # CURRENT BUG: both the intro and the disclaimer prose are kept.
-    # In a fixed implementation, both should be removed (or the post
-    # should be flagged for review, since the disclaimer pattern itself
-    # signals data-pipeline trouble per the v1.4.0 skill regex).
+    # KNOWN GAP: the orphan intro and disclaimer prose survive.
+    # When the orphan-prose fix lands, change these to `not in out`.
     assert "One reviewer on Reddit noted:" in out
     assert "That quote is from a compensation discussion" in out
 
