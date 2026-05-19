@@ -25,6 +25,86 @@ The working implementation landed through:
 
 Use those PRs as concrete references.
 
+## Current handoff: 2026-05-19
+
+The invoicing connector rollout now has two proven ChatGPT-facing surfaces:
+
+| Surface | Public MCP URL | Port | Status |
+|---|---|---:|---|
+| Read-only invoicing | `https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly/mcp` | 8065 | Proven earlier; read-only pattern source |
+| Draft-writer invoicing | `https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp` | 8066 | Proven live with blocked-draft write smoke |
+
+Recent MCP connector PRs that matter for the next session:
+
+- `#623` added the read-only Tailscale Funnel route checker for the
+  draft-writer path and connector-specific protected-resource metadata route.
+- `#626` allowed the configured public Tailscale host in draft-writer OAuth
+  transport security while keeping DNS-rebinding protection enabled.
+- `#629` fixed invoice-number readback by making repository invoice-number
+  lookup case-insensitive. This closed the live bug where
+  `INV-2026-May-0185` could be created but not fetched by number.
+- `#632` added `scripts/check_invoicing_draft_writer_live_write.py`, the
+  explicit blocked-draft write smoke.
+- `#633` added optional OAuth state-file persistence for invoicing MCP clients
+  and refresh tokens.
+
+Current local draft-writer runtime state after restart:
+
+- Server command: `.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py --approval-token-file .secrets/invoicing-draft-writer-approval-token`
+- Required env for restart durability:
+  `ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_STATE_FILE=.secrets/invoicing-draft-writer-oauth-state.json`
+- Public URL: `https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp`
+- Listening port: `8066`
+- State file: `.secrets/invoicing-draft-writer-oauth-state.json`
+- Approval token file: `.secrets/invoicing-draft-writer-approval-token`
+- The state file stores registered OAuth clients and refresh tokens only. It
+  does not store pending approvals, authorization codes, or access tokens.
+
+Post-restart verification that passed on 2026-05-19:
+
+```bash
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_e2e.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+
+.venv/bin/python scripts/check_invoicing_draft_writer_live_write.py \
+  --create-blocked-draft \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+Expected live-write result: action `reused`, invoice
+`INV-2026-May-0185`, blocker `no_email`, warnings `subtotal_zero` and
+`no_contact_id`. That draft is intentionally blocked and should not be sent.
+
+Known limits to carry forward:
+
+- The server is not daemonized. It runs in a foreground/persistent session; a
+  systemd user-service or other process manager is a future operational slice.
+- ChatGPT may need one reconnect after enabling a new state file so the file can
+  be seeded with its client and refresh token.
+- Dynamic OAuth registration is public by design, but persisted client state is
+  capped. Do not remove that cap without replacing it with a better abuse
+  boundary.
+- Copilot errored on recent PR reviews and Codex review hit usage limits, so
+  local `scripts/local_pr_review.sh` plus focused tests were the real review
+  gate for `#633`.
+
+Recommended next MCP connector slices:
+
+1. Add a process-manager/operator service for draft-writer OAuth if the server
+   needs to survive terminal/session closure.
+2. Repeat the same read-only-first OAuth pattern for the next MCP domain
+   instead of exposing a full write server.
+3. Only add more invoicing write tools after a separate guardrail document and
+   allowlist smoke exist for that exact tool surface.
+
 ## Fast path for the next server
 
 Do not start by debugging ChatGPT. Build and verify the server in this order:
