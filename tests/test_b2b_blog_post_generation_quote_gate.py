@@ -298,6 +298,136 @@ def test_validator_handles_markdown_without_blockquotes():
 
 
 # ---------------------------------------------------------------------------
+# Regression: multi-line blockquote orphan-attribution bug
+#
+# These tests document the CURRENT line-by-line stripping behavior. They
+# capture the failure mode that produces empty <blockquote><p>-- attribution
+# </p></blockquote> elements in 44 of 80 published posts. When the stripper
+# is fixed to operate on contiguous blockquote BLOCKS, these tests will
+# need to be inverted (asserting full block removal + no orphan attribution).
+# ---------------------------------------------------------------------------
+
+
+def test_regression_full_block_stripped_when_pool_empty():
+    """REGRESSION baseline: with empty source_quotes, the fail-closed
+    path correctly strips both lines of a multi-line blockquote.
+
+    This works because empty source_quotes short-circuits before
+    _extract_quote_body is called -- every line matching _BLOCKQUOTE_RE
+    is removed regardless of content. The bug only manifests when the
+    pool is populated AND a specific quote line doesn't match. See the
+    next test.
+    """
+    markdown = (
+        "## Section\n"
+        "\n"
+        "One reviewer noted:\n"
+        "\n"
+        "> \"A fabricated quote that won't match the source pool\"\n"
+        "> -- Group Director, verified reviewer on TrustRadius\n"
+        "\n"
+        "More prose continues here.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, [])
+    assert removed == 2
+    assert "fabricated quote" not in out
+    assert "Group Director" not in out
+
+
+def test_regression_orphan_attribution_left_when_pool_populated_no_match():
+    """REGRESSION: the orphan-attribution bug surfaces when
+    source_quotes is populated and the quote-line doesn't match.
+
+    Per b2b_blog_post_generation.py lines 1567-1582, the stripper goes
+    line-by-line:
+      * Quote line: _extract_quote_body() returns the quote text, fails
+        _quote_matches_source, line is stripped.
+      * Attribution line: _extract_quote_body() splits on '--' and takes
+        the part BEFORE, returning empty string for an attribution-only
+        line. The conditional `if quote and not _quote_matches_source(...)`
+        is FALSY because `quote` is empty -- the attribution line is
+        PRESERVED.
+
+    Result: an orphan `> -- Attribution` line in markdown, which renders
+    as `<blockquote><p>-- Attribution</p></blockquote>` in the final
+    HTML. Confirmed in 44 of 80 published posts at the time of writing.
+
+    The fix is to operate on contiguous blockquote BLOCKS instead of
+    individual lines. When that fix lands, this test should be inverted:
+    `removed == 2` and `"Group Director" not in out`.
+    """
+    source = ["something else entirely that won't match"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> \"A quote the LLM made up\"\n"
+        "> -- Group Director, verified reviewer on TrustRadius\n"
+        "\n"
+        "More prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    # CURRENT (buggy) behavior: only the quote line is stripped.
+    # The attribution line passes through because _extract_quote_body
+    # returns empty string for it, falsifying the removal condition.
+    assert removed == 1, (
+        "Orphan-attribution bug: only the quote line is removed. "
+        "The attribution line `> -- Group Director...` is preserved "
+        "because _extract_quote_body returns an empty string for an "
+        "attribution-only line, falsifying the removal condition."
+    )
+    # The attribution line survives -- this is the visible bug:
+    assert "-- Group Director, verified reviewer on TrustRadius" in out
+    # And the made-up quote was correctly removed:
+    assert "made up" not in out
+
+
+def test_regression_introductory_prose_orphaned_when_quote_stripped():
+    """REGRESSION: prose introducing a blockquote is not cleaned up
+    when the blockquote itself gets stripped.
+
+    Even if the multi-line blockquote bug were fixed (full block
+    removal), this orphan would remain:
+
+        One reviewer on Reddit noted:
+
+        [blockquote was here, now gone]
+
+        That quote is from a compensation discussion, not a CRM review,
+        but it surfaced in the same complaint pattern analysis.
+
+    Both the introduction ("One reviewer noted:") and the disclaimer
+    ("That quote is from a...") survive stripping because they aren't
+    blockquote-prefixed lines. They reference content that no longer
+    exists, producing dangling prose readers see as broken.
+
+    This documents the gap. A complete fix needs to also detect and
+    remove orphan introductory/disclaimer prose adjacent to stripped
+    blocks. The seo-geo-aeo-blog-post skill v1.4.0 added regex patterns
+    that catch the disclaimer pattern in audit mode; upstream detection
+    in the generator should mirror them.
+    """
+    source: list[str] = []  # fail-closed: all blockquotes stripped
+    markdown = (
+        "## Section\n"
+        "\n"
+        "One reviewer on Reddit noted:\n"
+        "\n"
+        "> a quote that gets stripped because source pool is empty\n"
+        "\n"
+        "That quote is from a compensation discussion, not a CRM review, but it surfaced in the same complaint pattern analysis.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 1
+    assert "gets stripped" not in out
+    # CURRENT BUG: both the intro and the disclaimer prose are kept.
+    # In a fixed implementation, both should be removed (or the post
+    # should be flagged for review, since the disclaimer pattern itself
+    # signals data-pipeline trouble per the v1.4.0 skill regex).
+    assert "One reviewer on Reddit noted:" in out
+    assert "That quote is from a compensation discussion" in out
+
+
+# ---------------------------------------------------------------------------
 # _blueprint_pricing_reality_check pilot integration
 # ---------------------------------------------------------------------------
 
