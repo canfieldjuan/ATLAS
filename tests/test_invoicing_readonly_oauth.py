@@ -11,6 +11,7 @@ from atlas_brain.mcp import invoicing_readonly_server as readonly
 from atlas_brain.mcp.invoicing_readonly_oauth import (
     DEFAULT_READONLY_SCOPE,
     InvoicingReadonlyOAuthProvider,
+    PendingAuthorization,
     validate_oauth_settings,
 )
 from mcp.server.auth.provider import AuthorizationParams, TokenError
@@ -235,7 +236,7 @@ def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(mo
         assert "resource_metadata=" in response.headers["www-authenticate"]
 
 
-def test_approval_page_uses_current_request_path_for_prefixed_mount(monkeypatch):
+def test_approval_page_omits_absolute_form_action_for_prefixed_mount(monkeypatch):
     monkeypatch.setenv("ATLAS_MCP_INVOICING_READONLY_AUTH_MODE", "oauth")
     monkeypatch.setenv(
         "ATLAS_MCP_INVOICING_READONLY_OAUTH_ISSUER_URL",
@@ -253,22 +254,21 @@ def test_approval_page_uses_current_request_path_for_prefixed_mount(monkeypatch)
     app = readonly._streamable_http_app()
     provider = readonly._oauth_provider
     assert provider is not None
-    pending = type(
-        "Pending",
-        (),
-        {
-            "client_id": "client-1",
-            "scopes": [DEFAULT_READONLY_SCOPE],
-            "expires_at": 9999999999,
-        },
-    )()
-    provider._pending["request-1"] = pending  # type: ignore[assignment]
+    provider._pending["request-1"] = PendingAuthorization(
+        request_id="request-1",
+        client_id="client-1",
+        params=_params(),
+        scopes=[DEFAULT_READONLY_SCOPE],
+        expires_at=9999999999,
+    )
 
     with TestClient(app, root_path="/invoicing-readonly") as client:
         response = client.get("/oauth/approve?request_id=request-1")
 
     assert response.status_code == 200
-    assert 'action="/invoicing-readonly/oauth/approve"' in response.text
+    assert '<form method="post">' in response.text
+    assert 'action="/oauth/approve"' not in response.text
+    assert 'action="/invoicing-readonly/oauth/approve"' not in response.text
 
 
 def test_streamable_http_app_rejects_invalid_auth_mode(monkeypatch):
