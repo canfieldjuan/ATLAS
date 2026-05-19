@@ -13,10 +13,18 @@ from atlas_brain.services.blog_quality_backfill import (
 
 
 def test_derive_blog_quality_patch_backfills_latest_audit():
+    # Content includes the specific anchor terms ($200k/year, Q2 renewal,
+    # BigCommerce) naturally in the prose so the witness_specificity
+    # quality check passes on its own. Auto-injection of an "Evidence
+    # anchor:" prose line is disabled (see _apply_specificity_anchor_repair
+    # in atlas_brain.autonomous.tasks.b2b_blog_post_generation), so the
+    # post must satisfy specificity on the content itself, not via
+    # generator-side prose injection.
     filler = (
         "This analysis reflects self-selected feedback from public software reviews. "
-        "Shopify migration signals show broad urgency, pricing pressure, and evaluation activity "
-        "across public review sources. "
+        "Shopify migration signals show broad urgency, $200k/year pricing pressure at the "
+        "Q2 renewal window, and evaluation activity that flags BigCommerce as the "
+        "competitive alternative across public review sources. "
     ) * 140
     patch = derive_blog_quality_patch(
         {
@@ -61,8 +69,13 @@ def test_derive_blog_quality_patch_backfills_latest_audit():
     assert audit["status"] == "pass"
     assert audit["min_words_required"] == 1500
     assert audit["target_words"] == 2100
-    assert "Evidence anchor:" in patch["resolved_content"]["content"]
-    assert "added_witness_anchor_note" in audit["fixes_applied"]
+    # Auto-injection of "Evidence anchor:" is disabled -- the post passes
+    # specificity because the prose itself contains the anchor terms.
+    # Since content is unchanged by the audit pass, `resolved_content`
+    # may not be present on `patch` (the patch only contains delta keys).
+    if "resolved_content" in patch:
+        assert "Evidence anchor:" not in patch["resolved_content"]["content"]
+    assert "added_witness_anchor_note" not in audit["fixes_applied"]
     assert patch["failure_step"] is None
 
 
@@ -299,7 +312,24 @@ async def test_apply_blog_quality_backfill_updates_recent_rows():
                 "description": "desc",
                 "topic_type": "migration_guide",
                 "tags": ["shopify", "migration"],
-                "content": "<p>" + ("Generic market pressure is rising. " * 120) + "</p>",
+                # Content includes the specific anchor terms in prose so the
+                # post passes specificity without needing the (disabled)
+                # auto-injection. Methodology disclaimer is also included
+                # so the post passes ALL quality checks naturally.
+                # See _apply_specificity_anchor_repair.
+                "content": (
+                    "<p><em>Methodology note: This analysis reflects self-selected "
+                    "feedback from public software reviews collected between 2025-06 "
+                    "and 2026-03. It captures reviewer perception, not a census of "
+                    "all users.</em></p>"
+                    "<p>"
+                    + (
+                        "Shopify migration signals show $200k/year pricing pressure at "
+                        "the Q2 renewal window while BigCommerce keeps surfacing as the "
+                        "competitive alternative. "
+                    ) * 120
+                    + "</p>"
+                ),
                 "charts": [],
                 "data_context": {
                     "reasoning_anchor_examples": {
@@ -366,7 +396,12 @@ async def test_apply_blog_quality_backfill_updates_recent_rows():
     assert result["changed"] == 1
     assert result["applied"] == 1
     assert len(pool.executed) == 1
-    updated_context = json.loads(pool.executed[0][1][10])
+    # The SQL update places data_context at $2 (i.e. args[1]). The
+    # earlier hardcoded args[10] read happened to work when the post
+    # failed in a specific way during the auto-injection era; with
+    # injection disabled the post passes on its own and args[10] is
+    # the rejection_reason slot (None). Read the canonical position.
+    updated_context = json.loads(pool.executed[0][1][1])
     assert updated_context["latest_quality_audit"]["boundary"] == "backfill"
 
 

@@ -28,6 +28,7 @@ sys.modules.setdefault("asyncpg", _asyncpg_mock)
 sys.modules.setdefault("asyncpg.exceptions", _asyncpg_exceptions)
 
 from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E402
+    _apply_specificity_anchor_repair,
     _blog_quote_highlights,
     _blueprint_best_fit_guide,
     _blueprint_market_landscape,
@@ -1258,3 +1259,106 @@ def test_best_fit_guide_blueprint_routes_quotes_through_contract_gate():
     assert quote["review_id"] == "bf-review-1"
     assert quote["source"] == "g2"
     assert quote["field"] == "specific_complaints"
+
+
+# ---------------------------------------------------------------------------
+# Evidence-anchor auto-injection disable
+#
+# Auto-injection of "Evidence anchor: ..." prose was disabled (see
+# _apply_specificity_anchor_repair). The function is now cleanup-only:
+# it removes any existing "Evidence anchor:" line from the body so a
+# refreshed post doesn't carry over the legacy jargon, but it does NOT
+# inject a new line on specificity failures. The specificity issues
+# stay in the report so the post is held for human review.
+#
+# These tests cover the disable directly, independent of the broader
+# deterministic-repairs flow that's tested in test_b2b_blog_post_generation.
+# ---------------------------------------------------------------------------
+
+
+def test_specificity_anchor_repair_does_not_inject_when_specificity_fails():
+    """Even with ``witness_specificity`` entries in the report's
+    ``blocking_issues``, the disabled repair does NOT inject an
+    "Evidence anchor:" prose line into the body."""
+    from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
+    blueprint = PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="x-deep-dive-2026-04",
+        suggested_title="X Deep Dive",
+        tags=["test"],
+        data_context={"vendor": "X", "review_period": "2025-06 to 2026-03"},
+        sections=[],
+        charts=[],
+    )
+    content = {"content": "# X\n\nGeneric prose with no specific anchor.\n"}
+    report = {
+        "blocking_issues": ["witness_specificity:missing_timing_or_numeric"],
+        "warnings": [],
+        "fixes_applied": [],
+    }
+    repaired, repaired_report, did_repair = _apply_specificity_anchor_repair(
+        blueprint, content, report,
+    )
+    assert "Evidence anchor:" not in repaired["content"]
+    assert did_repair is False
+    # The specificity issue remains in the report so the gate fails the post.
+    assert any(
+        issue.startswith("witness_specificity:")
+        for issue in repaired_report["blocking_issues"]
+    )
+
+
+def test_specificity_anchor_repair_removes_existing_legacy_anchor():
+    """When a post body has a legacy 'Evidence anchor:' line from a prior
+    generation, the cleanup branch strips it so subsequent passes don't
+    ship stale jargon."""
+    from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
+    blueprint = PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="x-deep-dive-2026-04",
+        suggested_title="X Deep Dive",
+        tags=["test"],
+        data_context={"vendor": "X", "review_period": "2025-06 to 2026-03"},
+        sections=[],
+        charts=[],
+    )
+    content = {
+        "content": (
+            "# X Deep Dive\n\n"
+            "Evidence anchor: month-end is the live timing trigger, "
+            "$200k is the concrete spend anchor.\n\n"
+            "More prose continues.\n"
+        ),
+    }
+    report = {
+        "blocking_issues": [],
+        "warnings": [],
+        "fixes_applied": [],
+    }
+    repaired, repaired_report, did_repair = _apply_specificity_anchor_repair(
+        blueprint, content, report,
+    )
+    assert "Evidence anchor:" not in repaired["content"]
+    assert did_repair is True
+    assert "removed_disabled_witness_anchor_note" in repaired_report["fixes_applied"]
+
+
+def test_specificity_anchor_repair_no_op_when_no_anchor_and_no_issues():
+    """No existing anchor + no specificity issues = nothing to do."""
+    from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
+    blueprint = PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="x-deep-dive-2026-04",
+        suggested_title="X Deep Dive",
+        tags=["test"],
+        data_context={"vendor": "X", "review_period": "2025-06 to 2026-03"},
+        sections=[],
+        charts=[],
+    )
+    content = {"content": "# X Deep Dive\n\nClean prose, no anchor line.\n"}
+    report = {"blocking_issues": [], "warnings": [], "fixes_applied": []}
+    repaired, repaired_report, did_repair = _apply_specificity_anchor_repair(
+        blueprint, content, report,
+    )
+    assert did_repair is False
+    assert repaired["content"] == content["content"]

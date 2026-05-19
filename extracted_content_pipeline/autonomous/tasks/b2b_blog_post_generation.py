@@ -2145,152 +2145,52 @@ def _needs_timing_or_numeric_anchor(report: dict[str, Any]) -> bool:
     )
 
 
-def _select_specificity_anchor_terms(
-    blueprint: PostBlueprint,
-    report: dict[str, Any],
-) -> dict[str, str]:
-    specificity = _blog_specificity_context(blueprint)
-    rows = _specificity_rows(blueprint)
-    if not rows:
-        return {}
-
-    needs_timing_numeric = _needs_timing_or_numeric_anchor(report)
-    timing_anchor = _first_term_from_rows(rows, lambda row: row.get("time_anchor"))
-    numeric_anchor = _first_term_from_rows(rows, _first_numeric_literal)
-    competitor = _first_term_from_rows(rows, lambda row: row.get("competitor"))
-    pain = _first_term_from_rows(rows, _meaningful_pain_label)
-    workflow = _first_term_from_rows(rows, _meaningful_workflow_label)
-
-    signal_terms = specificity_signal_terms(
-        anchor_examples=specificity.get("anchor_examples"),
-        witness_highlights=specificity.get("witness_highlights"),
-        allow_company_names=False,
-    )
-    if not timing_anchor:
-        timing_anchor = _preferred_signal_term(signal_terms.get("timing_terms"))
-    if not numeric_anchor:
-        numeric_anchor = _preferred_signal_term(
-            signal_terms.get("numeric_terms"),
-            predicate=_is_meaningful_numeric_anchor,
-        )
-    if not competitor:
-        competitor = _preferred_signal_term(signal_terms.get("competitor_terms"))
-    if not pain:
-        pain = _preferred_signal_term(
-            signal_terms.get("pain_terms"),
-            skip={
-                "recommendation",
-                "unknown",
-                "none",
-                *(_blog_low_signal_anchor_labels()),
-            },
-        )
-        if pain and not _is_meaningful_blog_anchor_label(pain):
-            pain = ""
-        else:
-            pain = _humanize_blog_anchor_label(pain)
-    if not workflow:
-        workflow = _preferred_signal_term(
-            signal_terms.get("workflow_terms"),
-            skip={"unknown", "none"},
-        )
-        if workflow and not _is_meaningful_blog_anchor_label(workflow):
-            workflow = ""
-        else:
-            workflow = _humanize_blog_anchor_label(workflow)
-
-    if needs_timing_numeric and not (timing_anchor or numeric_anchor):
-        return {}
-
-    return {
-        "time_anchor": timing_anchor,
-        "numeric_anchor": numeric_anchor,
-        "competitor": competitor,
-        "pain": pain,
-        "workflow": workflow,
-    }
-
-
-def _build_specificity_anchor_note(
-    blueprint: PostBlueprint,
-    report: dict[str, Any],
-) -> str:
-    terms = _select_specificity_anchor_terms(blueprint, report)
-    if not terms:
-        return ""
-
-    detail_bits: list[str] = []
-    time_anchor = terms["time_anchor"]
-    numeric_anchor = terms["numeric_anchor"]
-    competitor = terms["competitor"]
-    pain = terms["pain"]
-    workflow = terms["workflow"]
-
-    if time_anchor:
-        detail_bits.append(f"{time_anchor} is the live timing trigger")
-    if numeric_anchor:
-        detail_bits.append(f"{numeric_anchor} is the concrete spend anchor")
-    if competitor:
-        detail_bits.append(f"{competitor} is the competitive alternative in the witness-backed record")
-    if pain:
-        detail_bits.append(f"the core pressure showing up in the evidence is {pain}")
-    if workflow:
-        detail_bits.append(f"the workflow shift in play is {workflow}")
-
-    if not detail_bits:
-        return ""
-
-    note = "Evidence anchor: " + ", ".join(detail_bits[:-1])
-    if len(detail_bits) > 1:
-        note += f", and {detail_bits[-1]}."
-    else:
-        note += f"{detail_bits[-1]}."
-    if len(detail_bits) == 1:
-        note = "Evidence anchor: " + detail_bits[0] + "."
-    return note
-
-
-def _has_specificity_issues(report: dict[str, Any]) -> bool:
-    blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
-    warnings = [str(warning) for warning in (report.get("warnings") or [])]
-    return any(issue.startswith("witness_specificity:") for issue in blockers + warnings)
-
-
 def _apply_specificity_anchor_repair(
     blueprint: PostBlueprint,
     content: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Cleanup-only repair for the legacy "Evidence anchor:" injection.
+
+    HISTORY: This function previously INJECTED an ``Evidence anchor:``
+    prose line into the post body whenever a ``witness_specificity``
+    quality check failed. The injected text used internal-pipeline
+    jargon ("Evidence anchor:", "live timing trigger", "concrete spend
+    anchor", "core pressure", "workflow shift in play"). Readers saw
+    this as broken/draft content -- 19 of 79 published posts shipped
+    with the jargon visible (measured in PR #612's baseline analyzer).
+
+    CURRENT BEHAVIOR (PR #632+): the injection path is disabled.
+    Specificity failures stay in the report so the quality gate
+    surfaces them as quality issues, holding the post for human review
+    instead of papering over with jargon. The REMOVAL path is preserved:
+    if a post body already contains an ``Evidence anchor:`` line (from
+    a prior generation, or copy-pasted from a stale template), it's
+    stripped so subsequent passes don't ship the stale prose.
+
+    """
     updated = dict(content or {})
     body = str(updated.get("content") or "")
     has_existing_note = _has_blog_note(body, marker="Evidence anchor:")
-    if not _has_specificity_issues(report) and not has_existing_note:
+
+    if not has_existing_note:
+        # Nothing to clean up. Specificity issues (if any) remain in
+        # the report so the quality gate fails the post for human
+        # review rather than silently auto-papering over the issue.
         return updated, report, False
 
-    note = _build_specificity_anchor_note(blueprint, report)
-    if not note:
-        if not has_existing_note:
-            return updated, report, False
-        repaired_body = _remove_blog_note(body, marker="Evidence anchor:")
-        if repaired_body == body:
-            return updated, report, False
-        updated["content"] = repaired_body
-        updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
-        repaired_report = dict(repaired_report)
-        fixes = list(repaired_report.get("fixes_applied", []) or [])
-        fixes.append("removed_low_signal_witness_anchor_note")
-        repaired_report["fixes_applied"] = fixes
-        return updated, repaired_report, True
-
-    repaired_body = _insert_blog_note(body, note, marker="Evidence anchor:")
+    # Existing "Evidence anchor:" line present. Strip it. Anchor
+    # injection produced reader-hostile prose; legacy anchors should
+    # be removed on every quality pass so a refreshed post doesn't
+    # carry over jargon from the prior generation.
+    repaired_body = _remove_blog_note(body, marker="Evidence anchor:")
     if repaired_body == body:
         return updated, report, False
-
     updated["content"] = repaired_body
     updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
     repaired_report = dict(repaired_report)
     fixes = list(repaired_report.get("fixes_applied", []) or [])
-    fixes.append("added_witness_anchor_note")
+    fixes.append("removed_disabled_witness_anchor_note")
     repaired_report["fixes_applied"] = fixes
     return updated, repaired_report, True
 

@@ -1577,7 +1577,7 @@ async def test_fetch_category_topic_stats_reads_vendor_mentions():
     assert "COUNT(DISTINCT vm.vendor_name)" in sql
 
 
-def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():
+def test_apply_blog_deterministic_repairs_does_not_inject_witness_anchor_note():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_alternative",
         slug="zendesk-alternatives-2026-03",
@@ -1605,18 +1605,19 @@ def test_apply_blog_deterministic_repairs_adds_witness_anchor_note():
         report,
     )
 
-    assert "Evidence anchor:" in repaired["content"]
-    assert "Q2 renewal" in repaired["content"]
-    assert "$200k/year" in repaired["content"]
-    assert "Freshdesk" in repaired["content"]
-    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
-    assert not any(
+    # Auto-injection of "Evidence anchor: ..." prose is disabled
+    # (see _apply_specificity_anchor_repair). Specificity failures stay
+    # in the report so the quality gate fails the post for human review
+    # instead of papering over with internal-pipeline jargon.
+    assert "Evidence anchor:" not in repaired["content"]
+    assert "added_witness_anchor_note" not in repaired_report.get("fixes_applied", [])
+    assert any(
         issue.startswith("witness_specificity:")
         for issue in repaired_report["blocking_issues"]
     )
 
 
-def test_apply_blog_deterministic_repairs_prefers_timing_or_numeric_anchor_when_required():
+def test_apply_blog_deterministic_repairs_specificity_failure_persists_when_anchor_terms_available():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_deep_dive",
         slug="metabase-deep-dive-2026-04",
@@ -1672,17 +1673,22 @@ def test_apply_blog_deterministic_repairs_prefers_timing_or_numeric_anchor_when_
         report,
     )
 
-    assert "after one year" in repaired["content"]
-    assert "$10k" in repaired["content"]
-    assert "Looker" in repaired["content"]
-    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
-    assert not any(
+    # Even when rich anchor terms (time, numeric, competitor) are
+    # available in data_context, the disabled injection does NOT add
+    # them to the content. The specificity failure surfaces in the
+    # report so a human reviewer can write the anchor terms in
+    # naturally instead of receiving auto-generated jargon prose.
+    assert "after one year" not in repaired["content"]
+    assert "$10k" not in repaired["content"]
+    assert "Looker" not in repaired["content"]
+    assert "added_witness_anchor_note" not in repaired_report.get("fixes_applied", [])
+    assert any(
         issue.startswith("witness_specificity:")
         for issue in repaired_report["blocking_issues"]
     )
 
 
-def test_apply_blog_deterministic_repairs_replaces_stale_evidence_anchor_note():
+def test_apply_blog_deterministic_repairs_removes_stale_evidence_anchor_note():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_deep_dive",
         slug="metabase-deep-dive-2026-04",
@@ -1731,16 +1737,20 @@ def test_apply_blog_deterministic_repairs_replaces_stale_evidence_anchor_note():
         report,
     )
 
-    assert repaired["content"].count("Evidence anchor:") == 1
-    assert "after one year" in repaired["content"]
-    assert "$10k" in repaired["content"]
-    assert not any(
+    # With auto-injection disabled, a stale "Evidence anchor:" line in
+    # an existing body is REMOVED (cleanup branch of the repair). No
+    # new anchor is injected to replace it. The specificity failure
+    # remains in the report so the post is held for human review.
+    assert "Evidence anchor:" not in repaired["content"]
+    assert "removed_disabled_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert "added_witness_anchor_note" not in repaired_report["fixes_applied"]
+    assert any(
         issue.startswith("witness_specificity:")
         for issue in repaired_report["blocking_issues"]
     )
 
 
-def test_apply_blog_deterministic_repairs_refreshes_legacy_evidence_note_without_active_specificity_issue():
+def test_apply_blog_deterministic_repairs_removes_legacy_evidence_note_when_specificity_passes():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_deep_dive",
         slug="metabase-deep-dive-2026-04",
@@ -1788,14 +1798,21 @@ def test_apply_blog_deterministic_repairs_refreshes_legacy_evidence_note_without
         report,
     )
 
-    assert repaired["content"].count("Evidence anchor:") == 1
+    # Legacy "Evidence anchor:" line is removed (cleanup branch). No
+    # new injection happens, even when richer anchor terms are available
+    # in data_context -- the cleanup-only behavior is consistent across
+    # specificity-passing and specificity-failing cases.
+    #
+    # Note: "$10k", "Looker", etc. legitimately appear in the prose
+    # body of this fixture, so we only assert that the "Evidence anchor:"
+    # prose line itself is gone, not that the underlying terms are.
+    assert "Evidence anchor:" not in repaired["content"]
     assert "8.3 is the concrete spend anchor" not in repaired["content"]
-    assert "$10k" in repaired["content"]
-    assert "Looker" in repaired["content"]
-    assert "added_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert "removed_disabled_witness_anchor_note" in repaired_report["fixes_applied"]
+    assert "added_witness_anchor_note" not in repaired_report["fixes_applied"]
 
 
-def test_apply_blog_deterministic_repairs_uses_excerpt_derived_numeric_anchor():
+def test_apply_blog_deterministic_repairs_does_not_inject_excerpt_derived_numeric_anchor():
     blueprint = blog_mod.PostBlueprint(
         topic_type="vendor_deep_dive",
         slug="palo-alto-networks-deep-dive-2026-04",
@@ -1833,10 +1850,14 @@ def test_apply_blog_deterministic_repairs_uses_excerpt_derived_numeric_anchor():
         report,
     )
 
-    assert "10 b" in repaired["content"].lower()
-    assert "pricing" in repaired["content"].lower()
-    assert "bundled suite consolidation" in repaired["content"]
-    assert not any(
+    # Auto-injection is disabled. Even when excerpt_text contains a
+    # numeric anchor that the old behavior would have extracted and
+    # injected, the disabled repair does NOT add it. Specificity
+    # failure persists for human review.
+    assert "Evidence anchor:" not in repaired["content"]
+    assert "10 b" not in repaired["content"].lower()
+    assert "bundled suite consolidation" not in repaired["content"]
+    assert any(
         issue.startswith("witness_specificity:")
         for issue in repaired_report["blocking_issues"]
     )
@@ -1933,7 +1954,9 @@ def test_apply_blog_deterministic_repairs_removes_low_signal_existing_evidence_n
     )
 
     assert "Evidence anchor:" not in repaired["content"]
-    assert "removed_low_signal_witness_anchor_note" in repaired_report["fixes_applied"]
+    # Cleanup fix label was renamed when auto-injection was disabled;
+    # both removal cases (low-signal, disabled) now share the same label.
+    assert "removed_disabled_witness_anchor_note" in repaired_report["fixes_applied"]
     assert any(
         issue.startswith("witness_specificity:")
         for issue in repaired_report["blocking_issues"]
