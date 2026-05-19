@@ -164,8 +164,15 @@ tailscale funnel --bg --yes \
   --set-path /invoicing-draft-writer \
   http://127.0.0.1:8066
 tailscale funnel --bg --yes \
-  --set-path /.well-known/oauth-protected-resource \
-  http://127.0.0.1:8066/.well-known/oauth-protected-resource
+  --set-path /.well-known/oauth-protected-resource/invoicing-draft-writer \
+  http://127.0.0.1:8066/.well-known/oauth-protected-resource/invoicing-draft-writer
+```
+
+Before public discovery, verify the routes are actually present and pointed at
+the draft-writer port:
+
+```bash
+.venv/bin/python scripts/check_invoicing_draft_writer_funnel_routes.py
 ```
 
 The default public route is:
