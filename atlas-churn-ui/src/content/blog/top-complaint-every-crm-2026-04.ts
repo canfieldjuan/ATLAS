@@ -71,12 +71,6 @@ const post: BlogPost = {
   }
 ],
   data_context: {
-  "affiliate_url": "https://hubspot.com/?ref=atlas",
-  "affiliate_partner": {
-    "name": "HubSpot Partner",
-    "product_name": "HubSpot",
-    "slug": "hubspot"
-  },
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'Top CRM Complaints 2026: 8 Vendors, 1202 Reviews Analyzed',
