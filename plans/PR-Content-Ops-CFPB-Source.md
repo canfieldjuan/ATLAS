@@ -69,7 +69,7 @@ account/contact fields continue to come from `--default-field`, not CFPB data.
 
 ## Verification
 
-- `pytest tests/test_export_content_ops_cfpb_sources.py tests/test_smoke_content_ops_cfpb_source_postgres.py tests/test_extracted_campaign_source_adapters.py -q` -> 66 passed.
+- `pytest tests/test_export_content_ops_cfpb_sources.py tests/test_smoke_content_ops_cfpb_source_postgres.py tests/test_extracted_campaign_source_adapters.py -q` -> 68 passed.
 - `python -m py_compile scripts/export_content_ops_cfpb_sources.py scripts/smoke_content_ops_cfpb_source_postgres.py tests/test_export_content_ops_cfpb_sources.py tests/test_smoke_content_ops_cfpb_source_postgres.py` -> passed.
 - `bash scripts/check_ascii_python.sh` -> passed.
 - `grep -nP '[^\x00-\x7F]' <edited files>` -> no matches.
@@ -80,8 +80,8 @@ account/contact fields continue to come from `--default-field`, not CFPB data.
 
 | Area | Estimated LOC |
 |---|---:|
-| CFPB exporter | ~265 |
-| CFPB Postgres smoke | ~475 |
-| Tests | ~420 |
+| CFPB exporter | ~275 |
+| CFPB Postgres smoke | ~505 |
+| Tests | ~485 |
 | CI runner + docs + coordination | ~160 |
-| **Total** | **~1320** |
+| **Total** | **~1425** |

@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
@@ -63,22 +65,23 @@ async def _return_pool(pool):
 
 def _source_row():
     return {
-        "id": "cfpb-1",
-        "source_id": "cfpb-1",
+        "id": "cfpb:1",
+        "source_id": "cfpb:1",
         "source": "cfpb",
         "source_system": "cfpb",
         "source_type": "support_ticket",
+        "complaint_id": "1",
         "vendor_name": "Example Bank",
         "text": "The bank kept charging fees after I closed the account.",
         "pain_category": "Fees",
         "source_title": "Checking account - Fees",
-        "source_url": "https://example.test/cfpb/cfpb-1",
+        "source_url": "https://example.test/cfpb/1",
     }
 
 
 def _opportunity_row():
     return {
-        "target_id": "cfpb-1",
+        "target_id": "cfpb:1",
         "company_name": "Acme Logistics",
         "vendor_name": "Example Bank",
         "contact_email": "ops@example.com",
@@ -86,13 +89,13 @@ def _opportunity_row():
         "pain_points": ["Fees"],
         "evidence": [
             {
-                "source_id": "cfpb-1",
+                "source_id": "cfpb:1",
                 "source_type": "support_ticket",
                 "text": "The bank kept charging fees after I closed the account.",
             }
         ],
         "raw_payload": {
-            "target_id": "cfpb-1",
+            "target_id": "cfpb:1",
             "company_name": "Acme Logistics",
             "vendor_name": "Example Bank",
             "contact_email": "ops@example.com",
@@ -109,9 +112,9 @@ def _saved_draft_row(*, body=None):
         "target_mode": "vendor_retention",
         "channel": "email_cold",
         "metadata": {
-            "target_id": "cfpb-1",
+            "target_id": "cfpb:1",
             "source_opportunity": {
-                "target_id": "cfpb-1",
+                "target_id": "cfpb:1",
             },
         },
     }
@@ -181,14 +184,14 @@ async def test_cfpb_source_postgres_smoke_imports_and_persists(monkeypatch, tmp_
     assert payload["import"]["inserted"] == 1
     assert payload["import"]["replace_existing"] is True
     assert payload["drafts"]["generated"] == 1
-    assert payload["saved_drafts"][0]["target_id"] == "cfpb-1"
+    assert payload["saved_drafts"][0]["target_id"] == "cfpb:1"
     assert pool.closed is True
     assert fetch_calls[0]["api_url"] == "https://example.test/cfpb"
     assert fetch_calls[0]["timeout"] == 3.5
     assert fetch_calls[0]["source_type"] == "support_ticket"
     assert "DELETE FROM \"campaign_opportunities\"" in pool.execute_calls[0]["query"]
     assert any("INSERT INTO b2b_campaigns" in call["query"] for call in pool.fetchval_calls)
-    assert pool.fetch_calls[0]["args"] == ("vendor_retention", "acct-smoke", "cfpb-1", 1)
+    assert pool.fetch_calls[0]["args"] == ("vendor_retention", "acct-smoke", "cfpb:1", 1)
 
 
 @pytest.mark.asyncio
@@ -201,7 +204,7 @@ async def test_cfpb_source_postgres_smoke_fails_before_import_when_schema_missin
     monkeypatch.setattr(smoke, "fetch_cfpb_source_rows", lambda **_kwargs: [_source_row()])
 
     code, payload = await smoke.run_cfpb_source_postgres_smoke(
-        _args(),
+        _args(forbidden_phrase=["appears to be weighing"]),
         source_rows_path=tmp_path / "cfpb_sources.jsonl",
     )
 
@@ -266,9 +269,56 @@ async def test_cfpb_source_postgres_smoke_fails_on_forbidden_persisted_body(
     monkeypatch.setattr(smoke, "fetch_cfpb_source_rows", lambda **_kwargs: [_source_row()])
 
     code, payload = await smoke.run_cfpb_source_postgres_smoke(
-        _args(),
+        _args(forbidden_phrase=["appears to be weighing"]),
         source_rows_path=tmp_path / "cfpb_sources.jsonl",
     )
 
     assert code == 1
     assert any("forbidden phrase" in error for error in payload["errors"])
+
+
+def test_default_database_url_falls_back_to_atlas_settings(monkeypatch):
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    fake_config = types.SimpleNamespace(
+        db_settings=types.SimpleNamespace(dsn="postgres://settings")
+    )
+    monkeypatch.setitem(sys.modules, "atlas_brain.storage.config", fake_config)
+
+    assert smoke._default_database_url() == "postgres://settings"
+
+
+@pytest.mark.asyncio
+async def test_main_loads_dotenv_before_database_url_default(monkeypatch, tmp_path, capsys):
+    pool = _Pool(
+        opportunity_rows=[_opportunity_row()],
+        saved_draft_rows=[_saved_draft_row()],
+    )
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+    monkeypatch.setattr(smoke, "fetch_cfpb_source_rows", lambda **_kwargs: [_source_row()])
+
+    def fake_load_dotenv(path, override=False):
+        if path.name == ".env.local":
+            monkeypatch.setenv("EXTRACTED_DATABASE_URL", "postgres://dotenv")
+        return True
+
+    monkeypatch.setattr(smoke, "load_dotenv", fake_load_dotenv)
+
+    code = await smoke._main([
+        "--account-id",
+        "acct-smoke",
+        "--default-field",
+        "company_name=Acme Logistics",
+        "--default-field",
+        "contact_email=ops@example.com",
+        "--output-source-rows",
+        str(tmp_path / "cfpb_sources.jsonl"),
+        "--channels",
+        "email_cold",
+        "--json",
+    ])
+
+    assert code == 0
+    assert capsys.readouterr().out

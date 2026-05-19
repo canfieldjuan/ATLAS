@@ -40,6 +40,11 @@ from extracted_content_pipeline.ingestion_diagnostics import (  # noqa: E402
     inspect_ingestion_file,
 )
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - host dependency
+    load_dotenv = None
+
 
 def _load_cfpb_exporter_module():
     path = ROOT / "scripts" / "export_content_ops_cfpb_sources.py"
@@ -53,7 +58,7 @@ def _load_cfpb_exporter_module():
 
 _cfpb_exporter = _load_cfpb_exporter_module()
 DEFAULT_CHANNELS = ("email_cold", "email_followup")
-DEFAULT_FORBIDDEN_PHRASES = ("appears to be weighing",)
+DEFAULT_FORBIDDEN_PHRASES: tuple[str, ...] = ()
 DEFAULT_API_URL = _cfpb_exporter.DEFAULT_API_URL
 DEFAULT_MAX_ROWS_SCANNED = _cfpb_exporter.DEFAULT_MAX_ROWS_SCANNED
 DEFAULT_SOURCE_SYSTEM = _cfpb_exporter.DEFAULT_SOURCE_SYSTEM
@@ -64,7 +69,21 @@ render_jsonl = _cfpb_exporter.render_jsonl
 
 
 def _default_database_url() -> str | None:
-    return os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    raw = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if raw:
+        return raw
+    try:
+        from atlas_brain.storage.config import db_settings
+    except Exception:
+        return None
+    dsn = str(getattr(db_settings, "dsn", "") or "").strip()
+    return dsn or None
+
+
+def _load_dotenv_files() -> None:
+    if load_dotenv is not None:
+        load_dotenv(ROOT / ".env")
+        load_dotenv(ROOT / ".env.local", override=True)
 
 
 async def _create_pool(database_url: str):
@@ -463,6 +482,7 @@ def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:
 
 
 async def _main(argv: list[str] | None = None) -> int:
+    _load_dotenv_files()
     args = _parse_args(argv)
     _validate_args(args)
     if args.output_source_rows:

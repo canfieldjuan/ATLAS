@@ -72,15 +72,17 @@ def cfpb_row_to_source_row(
     if not narrative or not complaint_id:
         return {}
 
+    namespaced_id = f"{source_system}:{complaint_id}"
     product = _clean_text(row.get(FIELD_PRODUCT))
     issue = _clean_text(row.get(FIELD_ISSUE))
     source_title = " - ".join(part for part in (product, issue) if part)
     out: dict[str, Any] = {
-        "id": complaint_id,
-        "source_id": complaint_id,
+        "id": namespaced_id,
+        "source_id": namespaced_id,
         "source": source_system,
         "source_system": source_system,
         "source_type": source_type,
+        "complaint_id": complaint_id,
         "vendor_name": _clean_text(row.get(FIELD_COMPANY)),
         "text": narrative,
         "pain_category": issue,

@@ -43,11 +43,12 @@ def _cfpb_row(**overrides):
 def test_cfpb_row_to_source_row_maps_public_complaint_fields():
     source_row = exporter.cfpb_row_to_source_row(_cfpb_row())
 
-    assert source_row["id"] == "12345"
-    assert source_row["source_id"] == "12345"
+    assert source_row["id"] == "cfpb:12345"
+    assert source_row["source_id"] == "cfpb:12345"
     assert source_row["source"] == "cfpb"
     assert source_row["source_system"] == "cfpb"
     assert source_row["source_type"] == "support_ticket"
+    assert source_row["complaint_id"] == "12345"
     assert source_row["vendor_name"] == "Example Bank"
     assert source_row["text"].startswith("The bank kept charging fees")
     assert source_row["pain_category"] == "Managing an account"
@@ -127,7 +128,7 @@ def test_fetch_cfpb_source_rows_streams_until_limit(monkeypatch):
         timeout=7.5,
     )
 
-    assert [row["id"] for row in rows] == ["2", "3"]
+    assert [row["id"] for row in rows] == ["cfpb:2", "cfpb:3"]
     assert calls[0]["timeout"] == 7.5
     assert "company=Example+Bank" in calls[0]["url"]
     assert "search_term=fees" in calls[0]["url"]
