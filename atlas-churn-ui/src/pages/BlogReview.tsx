@@ -20,7 +20,7 @@ import { resolveBlogArticleCta } from '../lib/blogCta'
 import BlogFailureExplanation from '../components/BlogFailureExplanation'
 import type { Column } from '../components/DataTable'
 import type { BlogDraftSummary, BlogDraft, BlogEvidence } from '../types'
-import { loadPostsBySlugs } from '../content/blog'
+import { coerceTopicType, loadPostsBySlugs } from '../content/blog'
 import type { BlogPost as BlogPostType } from '../content/blog'
 import {
   fetchBlogDrafts,
@@ -132,7 +132,7 @@ function derivePreviewPost(draft: BlogDraft): BlogPostType {
     tags: draft.tags || [],
     content: draft.content || '',
     charts: Array.isArray(draft.charts) ? draft.charts as BlogPostType['charts'] : [],
-    topic_type: draft.topic_type,
+    topic_type: coerceTopicType(draft.topic_type),
     data_context: draft.data_context || {},
     seo_title: draft.seo_title || draft.title,
     seo_description: draft.seo_description || draft.description || '',
