@@ -1555,31 +1555,114 @@ def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
 
 
 def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
-    """Strip LLM-generated blockquote lines that do not ground in a
+    """Strip LLM-generated blockquote BLOCKS that do not ground in a
     quote-grade source pool.
 
-    Fails closed: when ``source_quotes`` is empty, ALL blockquote lines
-    are removed. The absence of a source pool is treated as 'no quote
-    material is grounded', not as 'everything passes' -- the latter was
+    A "block" is a maximal run of contiguous ``>``-prefixed lines. The
+    block is kept iff EVERY quote-bearing line in it matches the source
+    pool. A block with at least one ungrounded quote line is stripped
+    in its entirety (including matched quote lines and attribution
+    lines) -- the block is the unit of trust.
+
+    A line is "quote-bearing" if ``_extract_quote_body`` returns
+    non-empty text for it; attribution-only lines like ``> -- reviewer
+    on G2`` return empty and don't independently require grounding,
+    but they're stripped along with the block when any quote-bearing
+    sibling fails.
+
+    Fails closed: when ``source_quotes`` is empty, ALL blockquote blocks
+    are removed. The absence of a source pool is treated as "no quote
+    material is grounded", not as "everything passes" -- the latter was
     the prior backdoor that allowed paraphrased LLM quotes to ship when
     the producer hadn't supplied verbatim phrases.
+
+    Why block-level (not line-level): the prior implementation iterated
+    line-by-line. A multi-line markdown blockquote like::
+
+        > "Some quote text"
+        > -- Attribution Person
+
+    would have its quote line stripped (quote body fails source match)
+    but the attribution line would be PRESERVED, because
+    ``_extract_quote_body`` returns an empty string for an attribution-
+    only line, falsifying the ``if quote and ...`` removal condition.
+    The result was orphan ``<blockquote><p>-- Attribution</p></blockquote>``
+    in the rendered HTML (44 of 79 published posts at the time of fix).
+    Block-level processing removes the entire block atomically.
+
+    The returned ``removed`` count is the number of LINES stripped (for
+    backwards compatibility with the prior contract), not the number of
+    blocks.
     """
-    removed = 0
+    text = str(markdown or "")
+    if not text:
+        return text, 0
+
+    lines = text.splitlines(keepends=False)
     output: list[str] = []
-    for line in str(markdown or "").splitlines():
-        match = _BLOCKQUOTE_RE.match(line)
-        if not match:
-            output.append(line)
+    removed_lines = 0
+    i = 0
+    n = len(lines)
+    while i < n:
+        if not _BLOCKQUOTE_RE.match(lines[i]):
+            output.append(lines[i])
+            i += 1
             continue
+
+        # Collect the contiguous blockquote block starting at i.
+        block_start = i
+        while i < n and _BLOCKQUOTE_RE.match(lines[i]):
+            i += 1
+        block_lines = lines[block_start:i]
+
+        # Decide: keep the block, or strip it.
+        #
+        # Contract: no ungrounded quote text ships. A block is the unit
+        # of trust -- if any quote-bearing line in the block fails to
+        # match the source pool, the entire block is contaminated and
+        # stripped (including attribution lines, which can't stand on
+        # their own).
+        #
+        # Implementation:
+        #   1. Collect quote-bearing lines (where _extract_quote_body
+        #      returns non-empty content).
+        #   2. If there are no quote-bearing lines, the block is
+        #      orphan attribution -- strip.
+        #   3. If EVERY quote-bearing line matches the source pool,
+        #      keep the whole block (attribution included).
+        #   4. Otherwise (at least one quote-bearing line ungrounded),
+        #      strip the whole block.
         if not source_quotes:
-            removed += 1
+            removed_lines += len(block_lines)
             continue
-        quote = _extract_quote_body(match.group(1))
-        if quote and not _quote_matches_source(quote, source_quotes):
-            removed += 1
+
+        quote_bearing: list[str] = []
+        for line in block_lines:
+            m = _BLOCKQUOTE_RE.match(line)
+            if not m:
+                continue
+            quote = _extract_quote_body(m.group(1))
+            if quote:
+                quote_bearing.append(quote)
+
+        if not quote_bearing:
+            # Orphan attribution / non-quote content. Nothing to ground on.
+            removed_lines += len(block_lines)
             continue
-        output.append(line)
-    return "\n".join(output), removed
+
+        all_quotes_grounded = all(
+            _quote_matches_source(q, source_quotes) for q in quote_bearing
+        )
+        if all_quotes_grounded:
+            output.extend(block_lines)
+        else:
+            removed_lines += len(block_lines)
+
+    # Preserve trailing newline if the original text had one.
+    result = "\n".join(output)
+    if text.endswith("\n"):
+        result += "\n"
+    return result, removed_lines
 
 
 def _sanitize_blog_markdown(markdown: str) -> tuple[str, dict[str, int]]:
