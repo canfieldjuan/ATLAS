@@ -338,6 +338,10 @@ ATLAS_TOOLS_CALENDAR_REFRESH_TOKEN=your_refresh_token
 ATLAS_MCP_TRANSPORT=stdio            # stdio (Claude Desktop/Cursor) or sse (HTTP)
 ATLAS_MCP_HOST=0.0.0.0              # Bind host for SSE mode
 ATLAS_MCP_AUTH_TOKEN=                # Bearer token for SSE mode; required for invoicing-readonly HTTP
+ATLAS_MCP_INVOICING_READONLY_AUTH_MODE=bearer  # bearer (direct clients) or oauth (ChatGPT)
+ATLAS_MCP_INVOICING_READONLY_OAUTH_ISSUER_URL=
+ATLAS_MCP_INVOICING_READONLY_OAUTH_RESOURCE_URL=
+ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN=
 ATLAS_MCP_CRM_ENABLED=true          # Enable/disable individual servers
 ATLAS_MCP_EMAIL_ENABLED=true
 ATLAS_MCP_TWILIO_ENABLED=true
@@ -512,6 +516,13 @@ python -m atlas_brain.mcp.invoicing_readonly_server
 # SSE HTTP mode (port 8065, requires ATLAS_MCP_AUTH_TOKEN)
 ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.invoicing_readonly_server --sse
 
+# ChatGPT-compatible OAuth mode
+ATLAS_MCP_INVOICING_READONLY_AUTH_MODE=oauth \
+ATLAS_MCP_INVOICING_READONLY_OAUTH_ISSUER_URL=https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly \
+ATLAS_MCP_INVOICING_READONLY_OAUTH_RESOURCE_URL=https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly/mcp \
+ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN=<long-operator-token> \
+python -m atlas_brain.mcp.invoicing_readonly_server --sse
+
 # connector boundary smoke (auth + exact read-only tool list; no invoice reads)
 python scripts/check_invoicing_readonly_mcp_connector.py \
   --url http://127.0.0.1:8065/mcp \
@@ -532,6 +543,15 @@ Do not use placeholder or session-local tokens such as `test-token` or
 `test-readonly-token` for public HTTP exposure. Generate a long random token,
 start the server with that value, then run the connector boundary smoke above
 before attaching a ChatGPT-style connector.
+
+ChatGPT online should use OAuth mode, not raw bearer mode. OAuth mode adds MCP
+authorization-server metadata, protected-resource metadata, dynamic client
+registration, and an operator approval page at `/oauth/approve`. The approval
+page requires `ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN`, so the
+connector is not silently auto-approved. Because the current public URL is
+path-prefixed under `/invoicing-readonly`, the OAuth `/.well-known/...`
+metadata routes may require an additional Tailscale serve route or a dedicated
+hostname before ChatGPT can discover the OAuth server.
 
 ### Intelligence MCP Server (33 tools)
 ```bash
