@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+from fastapi.testclient import TestClient
+
+from atlas_brain.mcp import invoicing_draft_writer_server as draft_writer
+from atlas_brain.mcp.invoicing_draft_writer_oauth import (
+    DEFAULT_DRAFT_WRITE_SCOPE,
+    InvoicingDraftWriterOAuthProvider,
+    PendingAuthorization,
+    validate_oauth_settings,
+)
+from mcp.server.auth.provider import AuthorizationParams, TokenError
+from mcp.shared.auth import OAuthClientInformationFull
+
+
+def _client() -> OAuthClientInformationFull:
+    return OAuthClientInformationFull(
+        client_id="client-1",
+        client_secret="secret-1",
+        redirect_uris=["https://chat.openai.com/aip/callback"],
+        token_endpoint_auth_method="client_secret_post",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        scope=DEFAULT_DRAFT_WRITE_SCOPE,
+    )
+
+
+def _other_client() -> OAuthClientInformationFull:
+    return OAuthClientInformationFull(
+        client_id="client-2",
+        client_secret="secret-2",
+        redirect_uris=["https://chat.openai.com/aip/callback"],
+        token_endpoint_auth_method="client_secret_post",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        scope=DEFAULT_DRAFT_WRITE_SCOPE,
+    )
+
+
+def _params() -> AuthorizationParams:
+    return AuthorizationParams(
+        state="state-1",
+        scopes=None,
+        code_challenge=_challenge("verifier-1"),
+        redirect_uri="https://chat.openai.com/aip/callback",
+        redirect_uri_provided_explicitly=True,
+        resource="https://atlas.example.com/invoicing-draft-writer/mcp",
+    )
+
+
+def _challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def _reset_draft_writer_auth_state() -> None:
+    draft_writer._oauth_provider = None
+    draft_writer.mcp.settings.auth = None
+    draft_writer.mcp._auth_server_provider = None
+    draft_writer.mcp._token_verifier = None
+    draft_writer.mcp._session_manager = None
+
+
+@pytest.fixture(autouse=True)
+def reset_draft_writer_auth_state():
+    _reset_draft_writer_auth_state()
+    yield
+    _reset_draft_writer_auth_state()
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_requires_operator_approval_before_token_exchange():
+    provider = InvoicingDraftWriterOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-draft-writer",
+        approval_token="approval-token-with-enough-entropy",
+    )
+    client = _client()
+    await provider.register_client(client)
+
+    approval_url = await provider.authorize(client, _params())
+    request_id = parse_qs(urlparse(approval_url).query)["request_id"][0]
+
+    with pytest.raises(PermissionError):
+        provider.approve_pending_authorization(
+            request_id=request_id,
+            approval_token="wrong-token",
+        )
+
+    redirect_uri = provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = parse_qs(urlparse(redirect_uri).query)["code"][0]
+
+    auth_code = await provider.load_authorization_code(client, code)
+    assert auth_code is not None
+    token = await provider.exchange_authorization_code(client, auth_code)
+
+    assert token.token_type == "Bearer"
+    assert token.scope == DEFAULT_DRAFT_WRITE_SCOPE
+    access = await provider.load_access_token(token.access_token)
+    assert access is not None
+    assert access.scopes == [DEFAULT_DRAFT_WRITE_SCOPE]
+    assert access.resource == "https://atlas.example.com/invoicing-draft-writer/mcp"
+    assert await provider.load_authorization_code(client, code) is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_binds_authorization_codes_to_client():
+    provider = InvoicingDraftWriterOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-draft-writer",
+        approval_token="approval-token-with-enough-entropy",
+    )
+    client = _client()
+    other_client = _other_client()
+    await provider.register_client(client)
+    await provider.register_client(other_client)
+    approval_url = await provider.authorize(client, _params())
+    request_id = parse_qs(urlparse(approval_url).query)["request_id"][0]
+    redirect_uri = provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = parse_qs(urlparse(redirect_uri).query)["code"][0]
+
+    assert await provider.load_authorization_code(other_client, code) is None
+    assert await provider.load_authorization_code(client, code) is not None
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_refresh_token_issues_new_access_token():
+    provider = InvoicingDraftWriterOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-draft-writer",
+        approval_token="approval-token-with-enough-entropy",
+    )
+    client = _client()
+    await provider.register_client(client)
+    approval_url = await provider.authorize(client, _params())
+    request_id = parse_qs(urlparse(approval_url).query)["request_id"][0]
+    redirect_uri = provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = parse_qs(urlparse(redirect_uri).query)["code"][0]
+    auth_code = await provider.load_authorization_code(client, code)
+    assert auth_code is not None
+    first_token = await provider.exchange_authorization_code(client, auth_code)
+    assert first_token.refresh_token is not None
+
+    refresh = await provider.load_refresh_token(client, first_token.refresh_token)
+    assert refresh is not None
+    second_token = await provider.exchange_refresh_token(client, refresh, [DEFAULT_DRAFT_WRITE_SCOPE])
+
+    assert second_token.access_token != first_token.access_token
+    assert second_token.refresh_token == first_token.refresh_token
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_binds_refresh_tokens_to_client():
+    provider = InvoicingDraftWriterOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-draft-writer",
+        approval_token="approval-token-with-enough-entropy",
+    )
+    client = _client()
+    other_client = _other_client()
+    await provider.register_client(client)
+    await provider.register_client(other_client)
+    approval_url = await provider.authorize(client, _params())
+    request_id = parse_qs(urlparse(approval_url).query)["request_id"][0]
+    redirect_uri = provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = parse_qs(urlparse(redirect_uri).query)["code"][0]
+    auth_code = await provider.load_authorization_code(client, code)
+    assert auth_code is not None
+    token = await provider.exchange_authorization_code(client, auth_code)
+    assert token.refresh_token is not None
+
+    assert await provider.load_refresh_token(other_client, token.refresh_token) is None
+    refresh = await provider.load_refresh_token(client, token.refresh_token)
+    assert refresh is not None
+
+    with pytest.raises(TokenError, match="refresh token does not belong to client"):
+        await provider.exchange_refresh_token(other_client, refresh, [DEFAULT_DRAFT_WRITE_SCOPE])
+
+
+def test_validate_oauth_settings_requires_approval_token():
+    with pytest.raises(RuntimeError, match="OAUTH_APPROVAL_TOKEN"):
+        validate_oauth_settings(
+            issuer_url="https://atlas.example.com/invoicing-draft-writer",
+            resource_server_url="https://atlas.example.com/invoicing-draft-writer/mcp",
+            approval_token="short",
+        )
+
+
+def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(monkeypatch):
+    monkeypatch.setenv("ATLAS_MCP_INVOICING_DRAFT_WRITER_AUTH_MODE", "oauth")
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL",
+        "https://atlas.example.com/invoicing-draft-writer",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL",
+        "https://atlas.example.com/invoicing-draft-writer/mcp",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN",
+        "approval-token-with-enough-entropy",
+    )
+
+    app = draft_writer._streamable_http_app()
+
+    with TestClient(app) as client:
+        auth_metadata = client.get("/.well-known/oauth-authorization-server")
+        assert auth_metadata.status_code == 200
+        assert auth_metadata.json()["registration_endpoint"] == (
+            "https://atlas.example.com/invoicing-draft-writer/register"
+        )
+
+        resource_metadata = client.get(
+            "/.well-known/oauth-protected-resource/invoicing-draft-writer/mcp"
+        )
+        assert resource_metadata.status_code == 200
+        assert resource_metadata.json()["resource"] == (
+            "https://atlas.example.com/invoicing-draft-writer/mcp"
+        )
+
+        response = client.get("/mcp")
+        assert response.status_code == 401
+        assert "resource_metadata=" in response.headers["www-authenticate"]
+
+
+def test_approval_page_omits_absolute_form_action_for_prefixed_mount(monkeypatch):
+    monkeypatch.setenv("ATLAS_MCP_INVOICING_DRAFT_WRITER_AUTH_MODE", "oauth")
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL",
+        "https://atlas.example.com/invoicing-draft-writer",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL",
+        "https://atlas.example.com/invoicing-draft-writer/mcp",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN",
+        "approval-token-with-enough-entropy",
+    )
+
+    app = draft_writer._streamable_http_app()
+    provider = draft_writer._oauth_provider
+    assert provider is not None
+    provider._pending["request-1"] = PendingAuthorization(
+        request_id="request-1",
+        client_id="client-1",
+        params=_params(),
+        scopes=[DEFAULT_DRAFT_WRITE_SCOPE],
+        expires_at=9999999999,
+    )
+
+    with TestClient(app, root_path="/invoicing-draft-writer") as client:
+        response = client.get("/oauth/approve?request_id=request-1")
+
+    assert response.status_code == 200
+    assert '<form method="post">' in response.text
+    assert 'action="/oauth/approve"' not in response.text
+    assert 'action="/invoicing-draft-writer/oauth/approve"' not in response.text
+
+
+def test_streamable_http_app_rejects_invalid_auth_mode(monkeypatch):
+    monkeypatch.setenv("ATLAS_MCP_INVOICING_DRAFT_WRITER_AUTH_MODE", "open")
+
+    with pytest.raises(RuntimeError, match="AUTH_MODE"):
+        draft_writer._streamable_http_app()

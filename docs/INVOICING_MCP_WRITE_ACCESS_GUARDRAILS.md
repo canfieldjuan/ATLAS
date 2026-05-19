@@ -131,6 +131,39 @@ The approval page copy must say draft-write access, not read-only access.
 The connector must not share the read-only approval token. Separate scopes and
 separate approval tokens make accidental privilege expansion easier to detect.
 
+## Draft-writer rollout commands
+
+Start the draft-writer OAuth server through the operator launcher:
+
+```bash
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py --dry-run
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py
+```
+
+The default public route is:
+
+```text
+https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+Verify public discovery before connecting ChatGPT:
+
+```bash
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+Then verify OAuth token exchange and the exact four-tool surface:
+
+```bash
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_e2e.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+The e2e smoke lists tools only. It must not create or update invoices.
+
 ## Required implementation tests
 
 The server PR must include tests that prove:
