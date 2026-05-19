@@ -212,6 +212,8 @@ def build_review_source_query(
     vendor_name: str | None,
     min_review_text_chars: int,
     require_review_url: bool,
+    allowed_polarities: Sequence[str] = DEFAULT_POLARITIES,
+    allowed_fields: Sequence[str] = DEFAULT_PHRASE_FIELDS,
 ) -> tuple[str, list[Any]]:
     """Build the read-only Atlas review query and parameter list."""
 
@@ -229,6 +231,35 @@ def build_review_source_query(
         where.append(f"LOWER(r.vendor_name) = LOWER(${len(args)})")
     if require_review_url:
         where.append("NULLIF(BTRIM(r.source_url), '') IS NOT NULL")
+    args.append([polarity.strip().lower() for polarity in allowed_polarities if polarity.strip()])
+    polarity_placeholder = f"${len(args)}"
+    args.append([field.strip() for field in allowed_fields if field.strip()])
+    field_placeholder = f"${len(args)}"
+    phrase_metadata_expr = """
+        CASE
+            WHEN jsonb_typeof(r.enrichment->'phrase_metadata') = 'array'
+            THEN r.enrichment->'phrase_metadata'
+            ELSE '[]'::jsonb
+        END
+    """
+    where.append(
+        f"""
+        EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements({phrase_metadata_expr}) pm
+            WHERE lower(BTRIM(pm->>'subject')) = 'subject_vendor'
+              AND pm->'verbatim' = 'true'::jsonb
+              AND (
+                  cardinality({polarity_placeholder}::text[]) = 0
+                  OR lower(BTRIM(pm->>'polarity')) = ANY({polarity_placeholder}::text[])
+              )
+              AND (
+                  cardinality({field_placeholder}::text[]) = 0
+                  OR BTRIM(pm->>'field') = ANY({field_placeholder}::text[])
+              )
+        )
+        """
+    )
     args.extend([0, 0])
     limit_placeholder = f"${len(args) - 1}"
     offset_placeholder = f"${len(args)}"
@@ -335,6 +366,8 @@ async def fetch_review_source_rows(
         vendor_name=vendor_name,
         min_review_text_chars=min_review_text_chars,
         require_review_url=require_review_url,
+        allowed_polarities=allowed_polarities,
+        allowed_fields=allowed_fields,
     )
     fetch_limit_index = len(args) - 2
     fetch_offset_index = len(args) - 1
