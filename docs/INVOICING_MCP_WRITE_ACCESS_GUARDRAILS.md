@@ -123,6 +123,7 @@ ATLAS_MCP_INVOICING_DRAFT_WRITER_AUTH_MODE=oauth
 ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL=https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer
 ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL=https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN=<long-random-token>
+ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_STATE_FILE=.secrets/invoicing-draft-writer-oauth-state.json
 ATLAS_MCP_INVOICING_DRAFT_WRITER_PORT=<dedicated-port>
 ```
 
@@ -139,6 +140,11 @@ print(secrets.token_urlsafe(32))
 PY
 chmod 600 .secrets/invoicing-draft-writer-approval-token
 ```
+
+The optional OAuth state file stores ChatGPT client registrations and refresh
+tokens so the connector survives local MCP server restarts. Keep it under
+`.secrets/`; the provider writes it with owner-only permissions. It does not
+store pending approval requests, one-time authorization codes, or access tokens.
 
 The approval page copy must say draft-write access, not read-only access.
 

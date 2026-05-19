@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from html import escape
+from pathlib import Path
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
@@ -30,6 +31,7 @@ class InvoicingDraftWriterOAuthProvider(InvoicingReadonlyOAuthProvider):
         scopes: list[str] | None = None,
         authorization_ttl_seconds: int = 300,
         access_token_ttl_seconds: int = 3600,
+        state_file: str | Path | None = None,
     ) -> None:
         super().__init__(
             issuer_url=issuer_url,
@@ -37,6 +39,7 @@ class InvoicingDraftWriterOAuthProvider(InvoicingReadonlyOAuthProvider):
             scopes=scopes or [DEFAULT_DRAFT_WRITE_SCOPE],
             authorization_ttl_seconds=authorization_ttl_seconds,
             access_token_ttl_seconds=access_token_ttl_seconds,
+            state_file=state_file,
         )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import stat
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -161,6 +162,67 @@ async def test_oauth_provider_refresh_token_issues_new_access_token():
 
 
 @pytest.mark.asyncio
+async def test_oauth_provider_state_file_survives_restart(tmp_path):
+    state_file = tmp_path / "readonly-oauth-state.json"
+    provider = InvoicingReadonlyOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-readonly",
+        approval_token="approval-token-with-enough-entropy",
+        state_file=state_file,
+    )
+    client = _client()
+    await provider.register_client(client)
+    approval_url = await provider.authorize(client, _params())
+    request_id = parse_qs(urlparse(approval_url).query)["request_id"][0]
+    redirect_uri = provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = parse_qs(urlparse(redirect_uri).query)["code"][0]
+    auth_code = await provider.load_authorization_code(client, code)
+    assert auth_code is not None
+    first_token = await provider.exchange_authorization_code(client, auth_code)
+    assert first_token.refresh_token is not None
+
+    restarted = InvoicingReadonlyOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-readonly",
+        approval_token="approval-token-with-enough-entropy",
+        state_file=state_file,
+    )
+    loaded_client = await restarted.get_client(client.client_id)
+    assert loaded_client is not None
+    assert loaded_client.client_secret == "secret-1"
+    refresh = await restarted.load_refresh_token(loaded_client, first_token.refresh_token)
+    assert refresh is not None
+
+    second_token = await restarted.exchange_refresh_token(
+        loaded_client,
+        refresh,
+        [DEFAULT_READONLY_SCOPE],
+    )
+
+    assert second_token.refresh_token == first_token.refresh_token
+    assert second_token.access_token != first_token.access_token
+    assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
+
+
+@pytest.mark.asyncio
+async def test_oauth_provider_state_file_caps_persisted_client_registrations(tmp_path):
+    provider = InvoicingReadonlyOAuthProvider(
+        issuer_url="https://atlas.example.com/invoicing-readonly",
+        approval_token="approval-token-with-enough-entropy",
+        state_file=tmp_path / "readonly-oauth-state.json",
+        max_persisted_clients=1,
+    )
+    await provider.register_client(_client())
+
+    with pytest.raises(RuntimeError, match="registration limit"):
+        await provider.register_client(_other_client())
+
+    assert await provider.get_client("client-1") is not None
+    assert await provider.get_client("client-2") is None
+
+
+@pytest.mark.asyncio
 async def test_oauth_provider_binds_refresh_tokens_to_client():
     provider = InvoicingReadonlyOAuthProvider(
         issuer_url="https://atlas.example.com/invoicing-readonly",
@@ -199,7 +261,10 @@ def test_validate_oauth_settings_requires_approval_token():
         )
 
 
-def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(monkeypatch):
+def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(
+    monkeypatch,
+    tmp_path,
+):
     monkeypatch.setenv("ATLAS_MCP_INVOICING_READONLY_AUTH_MODE", "oauth")
     monkeypatch.setenv(
         "ATLAS_MCP_INVOICING_READONLY_OAUTH_ISSUER_URL",
@@ -213,8 +278,12 @@ def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(mo
         "ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN",
         "approval-token-with-enough-entropy",
     )
+    state_file = tmp_path / "readonly-state.json"
+    monkeypatch.setenv("ATLAS_MCP_INVOICING_READONLY_OAUTH_STATE_FILE", str(state_file))
 
     app = readonly._streamable_http_app()
+    assert readonly._oauth_provider is not None
+    assert readonly._oauth_provider.state_file == state_file
 
     with TestClient(app) as client:
         auth_metadata = client.get("/.well-known/oauth-authorization-server")

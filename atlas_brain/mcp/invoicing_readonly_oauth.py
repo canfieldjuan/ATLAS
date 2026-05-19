@@ -7,10 +7,13 @@ flow without exposing mutating invoice tools or accepting anonymous access.
 
 from __future__ import annotations
 
+import json
+import os
 import secrets
 import time
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
 from typing import Any
 
 from mcp.server.auth.provider import (
@@ -31,6 +34,8 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 
 DEFAULT_READONLY_SCOPE = "invoices.read"
+DEFAULT_MAX_PERSISTED_CLIENTS = 25
+DEFAULT_MAX_PERSISTED_REFRESH_TOKENS = 100
 
 
 @dataclass(frozen=True)
@@ -55,18 +60,25 @@ class InvoicingReadonlyOAuthProvider(
         scopes: list[str] | None = None,
         authorization_ttl_seconds: int = 300,
         access_token_ttl_seconds: int = 3600,
+        state_file: str | Path | None = None,
+        max_persisted_clients: int = DEFAULT_MAX_PERSISTED_CLIENTS,
+        max_persisted_refresh_tokens: int = DEFAULT_MAX_PERSISTED_REFRESH_TOKENS,
     ) -> None:
         self.issuer_url = issuer_url.rstrip("/")
         self.approval_token = approval_token
         self.scopes = scopes or [DEFAULT_READONLY_SCOPE]
         self.authorization_ttl_seconds = authorization_ttl_seconds
         self.access_token_ttl_seconds = access_token_ttl_seconds
+        self.state_file = Path(state_file) if state_file else None
+        self.max_persisted_clients = max_persisted_clients
+        self.max_persisted_refresh_tokens = max_persisted_refresh_tokens
 
         self._clients: dict[str, OAuthClientInformationFull] = {}
         self._pending: dict[str, PendingAuthorization] = {}
         self._authorization_codes: dict[str, AuthorizationCode] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
         self._access_tokens: dict[str, AccessToken] = {}
+        self._load_state()
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
@@ -74,7 +86,13 @@ class InvoicingReadonlyOAuthProvider(
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id:  # pragma: no cover - registration handler sets this
             client_info.client_id = secrets.token_urlsafe(24)
+        if (
+            client_info.client_id not in self._clients
+            and len(self._clients) >= self.max_persisted_clients
+        ):
+            raise RuntimeError("OAuth client registration limit reached")
         self._clients[client_info.client_id] = client_info
+        self._save_state()
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         if not client.client_id:
@@ -130,6 +148,8 @@ class InvoicingReadonlyOAuthProvider(
             client_id=client.client_id,
             scopes=authorization_code.scopes,
         )
+        self._trim_refresh_tokens()
+        self._save_state()
         return OAuthToken(
             access_token=access_token,
             refresh_token=refresh_token,
@@ -183,6 +203,7 @@ class InvoicingReadonlyOAuthProvider(
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         self._access_tokens.pop(token.token, None)
         self._refresh_tokens.pop(token.token, None)
+        self._save_state()
 
     def approve_pending_authorization(self, *, request_id: str, approval_token: str) -> str:
         """Approve a pending authorization request and return the redirect URI."""
@@ -210,6 +231,72 @@ class InvoicingReadonlyOAuthProvider(
 
     def pending_authorization(self, request_id: str) -> PendingAuthorization | None:
         return self._pending.get(request_id)
+
+    def _load_state(self) -> None:
+        if self.state_file is None or not self.state_file.exists():
+            return
+        try:
+            data = json.loads(self.state_file.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"could not load OAuth state file {self.state_file}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"OAuth state file {self.state_file} must contain a JSON object")
+
+        clients = data.get("clients", {})
+        if not isinstance(clients, dict):
+            raise RuntimeError("OAuth state clients must be a JSON object")
+        for client_id, payload in clients.items():
+            if not isinstance(client_id, str) or not isinstance(payload, dict):
+                raise RuntimeError("OAuth state clients must map IDs to JSON objects")
+            client = OAuthClientInformationFull(**payload)
+            if client.client_id != client_id:
+                raise RuntimeError("OAuth state client_id mismatch")
+            self._clients[client_id] = client
+
+        refresh_tokens = data.get("refresh_tokens", {})
+        if not isinstance(refresh_tokens, dict):
+            raise RuntimeError("OAuth state refresh_tokens must be a JSON object")
+        for token, payload in refresh_tokens.items():
+            if not isinstance(token, str) or not isinstance(payload, dict):
+                raise RuntimeError("OAuth state refresh_tokens must map tokens to JSON objects")
+            refresh = RefreshToken(**payload)
+            if refresh.token != token:
+                raise RuntimeError("OAuth state refresh token mismatch")
+            self._refresh_tokens[token] = refresh
+
+    def _save_state(self) -> None:
+        if self.state_file is None:
+            return
+        self.state_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        data = {
+            "clients": {
+                client_id: client.model_dump(mode="json")
+                for client_id, client in sorted(self._clients.items())
+            },
+            "refresh_tokens": {
+                token: refresh.model_dump(mode="json")
+                for token, refresh in sorted(self._refresh_tokens.items())
+            },
+        }
+        tmp_path = self.state_file.with_name(f"{self.state_file.name}.tmp")
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(data, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except Exception:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+        os.replace(tmp_path, self.state_file)
+        os.chmod(self.state_file, 0o600)
+
+    def _trim_refresh_tokens(self) -> None:
+        while len(self._refresh_tokens) > self.max_persisted_refresh_tokens:
+            oldest = next(iter(self._refresh_tokens))
+            self._refresh_tokens.pop(oldest, None)
 
 
 def approval_page(
