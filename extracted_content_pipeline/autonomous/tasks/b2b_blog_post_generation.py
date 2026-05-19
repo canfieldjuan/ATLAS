@@ -179,6 +179,32 @@ _BLOG_BATCH_SELECTION_MIN_ATTEMPTS = 8
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>\s*(.+?)\s*$")
 _ANSWER_PREFIX_RE = re.compile(r"(?im)^(\s*)answer:\s*")
+
+# AI engines (ChatGPT, Perplexity, Google AI Overviews) skip sections whose
+# heading doesn't predict the content underneath. Generic boilerplate H2s
+# like "Introduction" / "Conclusion" / "Overview" / "Summary" are
+# extraction-hostile -- the section's actual hook/methodology content
+# should lead instead. The blueprint functions currently default to
+# `heading="Introduction"` for the first section; the LLM follows that
+# hint and emits `<h2 id="introduction">Introduction</h2>`. This regex
+# strips those literal anti-pattern lines from rendered content before
+# publishing so the prose underneath becomes the post's visible opening.
+# The audit at ~/.claude/skills/seo-geo-aeo-blog-post/scripts/audit-published-posts.js
+# carries the same detection on its `Generic <h2>Introduction</h2>` check.
+_GENERIC_HEADING_LABELS = (
+    "Introduction",
+    "Conclusion",
+    "Overview",
+    "Summary",
+    "Background",
+    "TL;DR",
+)
+_GENERIC_SECTION_HEADING_RE = re.compile(
+    r"^\s*<h2(?:\s+[^>]*)?>\s*(?:"
+    + "|".join(re.escape(label) for label in _GENERIC_HEADING_LABELS)
+    + r")\s*</h2>\s*\n?",
+    re.IGNORECASE | re.MULTILINE,
+)
 _CRITICAL_BLOG_WARNINGS = {
     "review_period_not_explicitly_mentioned",
     "methodology_disclaimer_missing_self_selected",
@@ -1763,7 +1789,13 @@ def _sanitize_blog_markdown(markdown: str) -> tuple[str, dict[str, int]]:
     answer_hits = len(_ANSWER_PREFIX_RE.findall(text))
     if answer_hits:
         text = _ANSWER_PREFIX_RE.sub(r"\1", text)
-    return text, {"answer_prefix_removed": answer_hits}
+    generic_heading_hits = len(_GENERIC_SECTION_HEADING_RE.findall(text))
+    if generic_heading_hits:
+        text = _GENERIC_SECTION_HEADING_RE.sub("", text)
+    return text, {
+        "answer_prefix_removed": answer_hits,
+        "generic_section_heading_removed": generic_heading_hits,
+    }
 
 
 def _required_vendor_mentions(blueprint: PostBlueprint, content_text: str) -> list[str]:
@@ -1820,6 +1852,10 @@ def _apply_blog_quality_gate(
     fixes_applied: list[str] = []
     if sanitize_counts.get("answer_prefix_removed", 0) > 0:
         fixes_applied.append(f"removed_answer_prefix:{sanitize_counts['answer_prefix_removed']}")
+    if sanitize_counts.get("generic_section_heading_removed", 0) > 0:
+        fixes_applied.append(
+            f"removed_generic_section_heading:{sanitize_counts['generic_section_heading_removed']}"
+        )
     if removed_quotes > 0:
         fixes_applied.append(f"removed_unmatched_quotes:{removed_quotes}")
 
