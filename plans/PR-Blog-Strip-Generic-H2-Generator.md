@@ -119,11 +119,11 @@ already are.
   their fixture-content blockquotes separated into independent
   paragraphs to satisfy the all-quote-lines-must-ground contract
   introduced in PR #625; the assertions are unchanged.
-- `scripts/local_pr_review.sh` -> `all checks passed / local
-  PR review passed`. Covers plan-shape, plan files-touched match,
-  plan diff-size drift (308 actual vs 270 estimated = 14.1%, within
-  the script's tolerance), plan/code consistency (5/5 path claims
-  resolve, 0/0 function claims), ASCII Python policy, and
+- `scripts/local_pr_review.sh` -> `all checks passed / local PR
+  review passed`. Covers plan-shape, plan files-touched match, plan
+  diff-size drift (within the script's tolerance against the
+  Estimated diff size table below), plan/code consistency (5/5 path
+  claims resolve, 0/0 function claims), ASCII Python policy, and
   `git diff --check`.
 - `extracted_content_pipeline` re-synced via
   `extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline`.
@@ -135,5 +135,5 @@ already are.
 | `b2b_blog_post_generation.py` (constant + regex + sanitizer call) | ~35 |
 | `extracted_content_pipeline` mirror of same change | ~35 |
 | `test_b2b_blog_quality_gate.py` (2 new tests + 2 fixture tweaks) | ~75 |
-| Plan doc | ~125 |
-| **Total** | **~270** |
+| Plan doc | ~170 |
+| **Total** | **~315** |
