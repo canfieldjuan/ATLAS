@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-18
+Last updated: 2026-05-19
 
 ## Purpose
 
@@ -47,6 +47,7 @@ The following items appear in older plan docs but are no longer active backlog:
 - DB reasoning context admin visibility events.
 - Campaign operations status reasoning-provider capability check.
 - Source-adapter field alias support for common provider-style exports.
+- Atlas Intel ingestion default-fields entry for source-row imports.
 - Source-adapter cumulative audit and decision rules.
 - Source-type precedence consolidation.
 - Source-row field lookup cache for provider-style aliases.
@@ -169,3 +170,12 @@ the first urgency/date scan window. The row exporter now applies the same
 quote-grade predicate in SQL before ordering/paging, and a live TrustRadius
 run imported 1 BambooHR review source row and persisted 2 offline deterministic
 drafts. Trustpilot is blocked on data quality, not extractor code.
+
+**Support-ticket/source UI update:** PR #620 added common help desk export
+aliases such as ticket/case numbers, requester/customer contact fields,
+organization names, issue descriptions, latest comments, and ticket/case
+titles. PR #621 exposed the existing backend `default_fields` contract in
+Atlas Intel so operators can bind fallback account/contact/vendor metadata
+without editing each source row. These close the known generic source-row
+ingestion friction. Further source breadth should still wait for a real host
+export fixture.
