@@ -91,6 +91,12 @@ chmod 600 .secrets/invoicing-draft-writer-approval-token
 .venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py \
   --approval-token-file .secrets/invoicing-draft-writer-approval-token \
   --dry-run
+tailscale funnel --bg --yes \
+  --set-path /invoicing-draft-writer \
+  http://127.0.0.1:8066
+tailscale funnel --bg --yes \
+  --set-path /.well-known/oauth-protected-resource \
+  http://127.0.0.1:8066/.well-known/oauth-protected-resource
 .venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp

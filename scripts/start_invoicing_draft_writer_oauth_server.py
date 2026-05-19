@@ -10,6 +10,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 DEFAULT_HOST = "0.0.0.0"
@@ -212,14 +213,30 @@ def _server_command(config: LaunchConfig) -> list[str]:
     ]
 
 
+def _funnel_app_path(resource_url: str) -> str:
+    path = urlparse(resource_url.strip()).path.rstrip("/")
+    if path.endswith("/mcp"):
+        path = path[: -len("/mcp")]
+    return path or "/"
+
+
 def _print_operator_guidance(config: LaunchConfig) -> None:
     issuer_url = config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL"]
     resource_url = config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL"]
+    app_path = _funnel_app_path(resource_url)
     print("Draft-writer invoicing OAuth launch configuration:")
     for line in _masked_env_report(config.env):
         print(f"- {line}")
     print(f"- ATLAS_MCP_HOST={config.host}")
     print(f"- ATLAS_MCP_INVOICING_DRAFT_WRITER_PORT={config.port}")
+    print()
+    print("Required Funnel route for the draft-writer connector path:")
+    print("tailscale funnel --bg --yes \\")
+    if app_path == "/":
+        print(f"  http://127.0.0.1:{config.port}")
+    else:
+        print(f"  --set-path {app_path} \\")
+        print(f"  http://127.0.0.1:{config.port}")
     print()
     print("Required Funnel route for protected-resource metadata:")
     print("tailscale funnel --bg --yes \\")

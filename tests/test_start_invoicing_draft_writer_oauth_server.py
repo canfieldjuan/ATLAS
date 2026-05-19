@@ -185,6 +185,15 @@ def test_server_command_uses_current_config_python() -> None:
     ]
 
 
+def test_funnel_app_path_derives_parent_path_for_mcp_resource() -> None:
+    module = _load_script_module()
+
+    assert module._funnel_app_path("https://atlas.example.com/invoicing-draft-writer/mcp") == (
+        "/invoicing-draft-writer"
+    )
+    assert module._funnel_app_path("http://127.0.0.1:8066/mcp") == "/"
+
+
 def test_guidance_masks_secrets_and_uses_configured_port(capsys) -> None:
     module = _load_script_module()
     env = _valid_env()
@@ -203,9 +212,31 @@ def test_guidance_masks_secrets_and_uses_configured_port(capsys) -> None:
     assert "SET len=34" in captured.out
     assert "approval-token-with-enough-entropy" not in captured.out
     assert "bearer-token-value-that-must-not-print" not in captured.out
+    assert "--set-path /invoicing-draft-writer" in captured.out
+    assert "http://127.0.0.1:9000" in captured.out
     assert "http://127.0.0.1:9000/.well-known/oauth-protected-resource" in captured.out
     assert "http://127.0.0.1:8065/.well-known/oauth-protected-resource" not in captured.out
     assert "check_invoicing_draft_writer_oauth_e2e.py" in captured.out
+
+
+def test_guidance_prints_root_funnel_route_for_root_resource(capsys) -> None:
+    module = _load_script_module()
+    env = _valid_env()
+    env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL"] = "http://127.0.0.1:8066/mcp"
+    config = module.LaunchConfig(
+        env=env,
+        python="/venv/bin/python",
+        host="127.0.0.1",
+        port="8066",
+        dry_run=True,
+    )
+
+    module._print_operator_guidance(config)
+
+    captured = capsys.readouterr()
+    assert "Required Funnel route for the draft-writer connector path:" in captured.out
+    assert "  http://127.0.0.1:8066\n" in captured.out
+    assert "--set-path /\n" not in captured.out
 
 
 def test_main_dry_run_does_not_start_subprocess(monkeypatch, tmp_path, capsys) -> None:

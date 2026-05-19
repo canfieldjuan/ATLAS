@@ -157,6 +157,17 @@ Start the draft-writer OAuth server through the operator launcher:
   --approval-token-file .secrets/invoicing-draft-writer-approval-token
 ```
 
+The path-prefixed public URL requires both Funnel routes:
+
+```bash
+tailscale funnel --bg --yes \
+  --set-path /invoicing-draft-writer \
+  http://127.0.0.1:8066
+tailscale funnel --bg --yes \
+  --set-path /.well-known/oauth-protected-resource \
+  http://127.0.0.1:8066/.well-known/oauth-protected-resource
+```
+
 The default public route is:
 
 ```text
