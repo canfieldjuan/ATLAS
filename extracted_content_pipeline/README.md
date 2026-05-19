@@ -241,6 +241,19 @@ python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --json
 ```
 
+For customer-owned source files such as the packaged support-ticket CSV, use
+the generic source-file Postgres smoke. It imports the file into
+`campaign_opportunities`, runs offline draft generation through the Postgres
+runner, and checks persisted draft target metadata:
+
+```bash
+python scripts/smoke_content_ops_source_file_postgres.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --account-id acct_123 \
+  --json
+```
+
 Before converting or importing a customer export, inspect ingestion readiness:
 
 ```bash
