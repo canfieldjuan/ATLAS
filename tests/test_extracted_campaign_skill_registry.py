@@ -27,6 +27,24 @@ def test_packaged_report_prompt_frames_review_evidence_as_market_signal() -> Non
     assert "Do not say the target account itself" in prompt
 
 
+def test_packaged_campaign_prompt_frames_support_tickets_as_service_evidence() -> None:
+    prompt = get_skill_registry().get_prompt("digest/b2b_campaign_generation")
+
+    assert prompt is not None
+    assert 'source_type: "support_ticket"' in prompt
+    assert "service evidence, not buying-intent evidence" in prompt
+    assert "is buying, is switching, is considering" in prompt
+
+
+def test_packaged_report_prompt_frames_support_tickets_as_service_evidence() -> None:
+    prompt = get_skill_registry().get_prompt("digest/report_generation")
+
+    assert prompt is not None
+    assert 'source_type: "support_ticket"' in prompt
+    assert "service evidence, not buying-intent evidence" in prompt
+    assert "complaint narratives describe" in prompt
+
+
 def test_packaged_sales_brief_prompt_frames_review_evidence_as_market_signal() -> None:
     prompt = get_skill_registry().get_prompt("digest/sales_brief_generation")
 
@@ -34,6 +52,24 @@ def test_packaged_sales_brief_prompt_frames_review_evidence_as_market_signal() -
     assert 'source_type: "review"' in prompt
     assert "third-party market evidence" in prompt
     assert "Do not say the target account itself" in prompt
+
+
+def test_packaged_sales_brief_prompt_frames_support_tickets_as_service_evidence() -> None:
+    prompt = get_skill_registry().get_prompt("digest/sales_brief_generation")
+
+    assert prompt is not None
+    assert 'source_type: "support_ticket"' in prompt
+    assert "service evidence, not buying-intent evidence" in prompt
+    assert "rep-safe framing" in prompt
+
+
+def test_packaged_landing_page_prompt_frames_support_tickets_as_service_evidence() -> None:
+    prompt = get_skill_registry().get_prompt("digest/landing_page_generation")
+
+    assert prompt is not None
+    assert 'source_type: "support_ticket"' in prompt
+    assert "service evidence, not buying-intent evidence" in prompt
+    assert "evaluating, buying, switching, or considering" in prompt
 
 
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:

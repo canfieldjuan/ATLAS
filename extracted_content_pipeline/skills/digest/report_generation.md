@@ -35,3 +35,4 @@ Review/source-row evidence policy:
 - If opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence.
 - Do not say the target account itself said, did, evaluated, or intends the thing unless account-specific reasoning, CRM evidence, call evidence, or meeting evidence explicitly supports that.
 - Use market framing such as "teams evaluating this vendor are reporting..." or "review evidence points to..." and cite the relevant evidence ids.
+- If opportunity evidence has `source_type: "support_ticket"`, `source_type: "complaint"`, `source_type: "case"`, or `source_type: "conversation"`, treat it as service evidence, not buying-intent evidence. Use service framing such as "support evidence points to..." or "complaint narratives describe..." and do not claim the target account is evaluating, buying, switching, or considering a vendor unless account-specific evidence supports it.
