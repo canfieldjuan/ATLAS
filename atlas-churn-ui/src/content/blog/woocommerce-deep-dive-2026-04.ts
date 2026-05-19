@@ -231,11 +231,13 @@ const post: BlogPost = {
 <p><strong>Confidence note:</strong> Timing intelligence is based on limited evidence. The patterns described reflect observable signals, not comprehensive coverage of the WooCommerce user base.</p>
 <h2 id="where-woocommerce-pressure-shows-up-in-accounts">Where WooCommerce Pressure Shows Up in Accounts</h2>
 <p>No account-level intent data is available in this analysis. The review sample does not include named-account tracking, ABM signals, or enterprise buying committee visibility.</p>
-<p>This means the analysis cannot assess:
-- Which specific companies are evaluating WooCommerce alternatives
-- Whether pressure is concentrated in specific industries or company sizes
-- How many active evaluations are in progress at the market level
-- Whether churn risk is accelerating in any measurable segment</p>
+<p>This means the analysis cannot assess:</p>
+<ul>
+<li>Which specific companies are evaluating WooCommerce alternatives</li>
+<li>Whether pressure is concentrated in specific industries or company sizes</li>
+<li>How many active evaluations are in progress at the market level</li>
+<li>Whether churn risk is accelerating in any measurable segment</li>
+</ul>
 <p>One reviewer mentioned working at Webhouse, a 9-employee information technology and services company in Australia, with 3 years of eCommerce experience. This single named reference does not constitute account-level pressure evidence.</p>
 <p>The absence of account data does not invalidate the pain patterns, sentiment signals, or competitive pressure observed in public reviews. It simply means this analysis cannot connect those patterns to specific buying committees or validate market-level urgency.</p>
 <p>For organizations seeking account-level WooCommerce churn intelligence, this review analysis provides context and pattern evidence but not actionable account lists.</p>
@@ -256,18 +258,24 @@ const post: BlogPost = {
 <p>The market regime analysis suggests a stable eCommerce platform category with no clear disruption signals, but with incremental competitive pressure on WooCommerce from all-in-one alternatives.</p>
 <p>Evidence suggests WooCommerce faces pricing pressure but retains customers through strong overall satisfaction, pricing flexibility perception, and user experience quality. The contradiction between weakness and strength evidence across multiple dimensions suggests a market in equilibrium rather than transition.</p>
 <p>Three vendor snapshots illustrate the competitive landscape:</p>
-<p><strong>Shopify:</strong>
-- Strengths: integration simplicity, feature completeness
-- Weaknesses: security concerns, technical debt accumulation
-- Position: all-in-one alternative capturing WooCommerce switchers seeking simplicity</p>
-<p><strong>Magento:</strong>
-- Strengths: support quality, feature depth
-- Weaknesses: performance complexity, reliability concerns
-- Position: enterprise alternative for high-complexity deployments</p>
-<p><strong>WooCommerce:</strong>
-- Strengths: performance (when optimized), user experience quality
-- Weaknesses: integration complexity, contract lock-in perception
-- Position: flexible WordPress-native solution with cumulative cost pressure</p>
+<p><strong>Shopify:</strong></p>
+<ul>
+<li>Strengths: integration simplicity, feature completeness</li>
+<li>Weaknesses: security concerns, technical debt accumulation</li>
+<li>Position: all-in-one alternative capturing WooCommerce switchers seeking simplicity</li>
+</ul>
+<p><strong>Magento:</strong></p>
+<ul>
+<li>Strengths: support quality, feature depth</li>
+<li>Weaknesses: performance complexity, reliability concerns</li>
+<li>Position: enterprise alternative for high-complexity deployments</li>
+</ul>
+<p><strong>WooCommerce:</strong></p>
+<ul>
+<li>Strengths: performance (when optimized), user experience quality</li>
+<li>Weaknesses: integration complexity, contract lock-in perception</li>
+<li>Position: flexible WordPress-native solution with cumulative cost pressure</li>
+</ul>
 <p>The market dynamics reflect a mature category with established alternatives rather than emerging disruption. WooCommerce's open-source foundation and WordPress integration create switching friction that limits churn velocity, even as pricing frustration builds.</p>
 <p>No category-wide regime shift is evident in this data. The competitive pressure on WooCommerce appears incremental and segment-specific rather than existential.</p>
 <p><strong>Confidence note:</strong> Category reasoning is based on limited evidence. The stable regime assessment reflects observable patterns, not comprehensive market coverage.</p>

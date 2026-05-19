@@ -157,24 +157,30 @@ const post: BlogPost = {
 <p>Reviewers report that non-technical team members adapt to Shopify faster than to WooCommerce or custom-built solutions. The admin interface is consistently described as intuitive for basic tasks (product uploads, order management, basic theme customization). However, reviewers with technical backgrounds report frustration with Shopify's "walled garden" approach—less access to underlying code means less ability to customize beyond what themes and apps offer.</p>
 <p>One reviewer describes switching after "10 years using Shopify," suggesting that while onboarding is smooth, long-term users eventually encounter limitations that prompt re-evaluation. The data does not reveal what specific limitations triggered this reviewer's exit, but the pattern of long tenure followed by switching intent appears multiple times in the dataset.</p>
 <h3 id="what-reviewers-miss-after-switching">What Reviewers Miss After Switching</h3>
-<p>Reviewers who switched from WooCommerce mention missing:
-- <strong>Technical SEO control</strong>: Open-source platforms allow direct manipulation of site structure, URL patterns, and meta tags. Shopify offers less granular control, which some reviewers cite as a limitation for SEO-focused brands.
-- <strong>Open-source flexibility</strong>: The ability to modify core code or build custom functionality without relying on third-party apps. Reviewers describe this as a trade-off—less flexibility, but also less maintenance burden.</p>
+<p>Reviewers who switched from WooCommerce mention missing:</p>
+<ul>
+<li><strong>Technical SEO control</strong>: Open-source platforms allow direct manipulation of site structure, URL patterns, and meta tags. Shopify offers less granular control, which some reviewers cite as a limitation for SEO-focused brands.</li>
+<li><strong>Open-source flexibility</strong>: The ability to modify core code or build custom functionality without relying on third-party apps. Reviewers describe this as a trade-off—less flexibility, but also less maintenance burden.</li>
+</ul>
 <p>Reviewers who switched from simpler platforms (like commentsold) report no major losses—Shopify offers more features across the board. The pain points in this segment cluster around cost rather than capability.</p>
 <h3 id="what-reviewers-gain">What Reviewers Gain</h3>
 <blockquote>
 <p>"Shopify helps brands create high converting ecommerce websites" -- software reviewer</p>
 </blockquote>
-<p>Reviewers consistently cite:
-- <strong>Operational simplicity</strong>: Less time spent on maintenance, updates, and troubleshooting. One reviewer describes relief at no longer needing developer resources for routine tasks.
-- <strong>App ecosystem breadth</strong>: While app costs are a complaint, reviewers acknowledge that the ecosystem solves problems faster than custom development.
-- <strong>Brand-building tools</strong>: Reviewers praise Shopify's theme quality, checkout customization, and marketing integrations (especially Klaviyo and Meta).</p>
+<p>Reviewers consistently cite:</p>
+<ul>
+<li><strong>Operational simplicity</strong>: Less time spent on maintenance, updates, and troubleshooting. One reviewer describes relief at no longer needing developer resources for routine tasks.</li>
+<li><strong>App ecosystem breadth</strong>: While app costs are a complaint, reviewers acknowledge that the ecosystem solves problems faster than custom development.</li>
+<li><strong>Brand-building tools</strong>: Reviewers praise Shopify's theme quality, checkout customization, and marketing integrations (especially Klaviyo and Meta).</li>
+</ul>
 <p>For teams considering migration from other platforms, our guide on <a href="https://churnsignals.co/blog/switch-to-clickup-2026-03">switching to ClickUp</a> offers a parallel case study in migration decision-making, though in a different software category.</p>
 <h3 id="migration-timeline">Migration Timeline</h3>
-<p>Reviewers report varying timelines:
-- <strong>Simple stores (under 100 products, no custom code)</strong>: 1-2 weeks from start to launch, including theme setup and product import.
-- <strong>Mid-complexity stores (100-1000 products, multiple integrations)</strong>: 4-6 weeks, with the bulk of time spent on data migration, app configuration, and team training.
-- <strong>Complex stores (custom functionality, multi-location, high SKU count)</strong>: 2-3 months, often with phased rollout (e.g., online first, then POS integration).</p>
+<p>Reviewers report varying timelines:</p>
+<ul>
+<li><strong>Simple stores (under 100 products, no custom code)</strong>: 1-2 weeks from start to launch, including theme setup and product import.</li>
+<li><strong>Mid-complexity stores (100-1000 products, multiple integrations)</strong>: 4-6 weeks, with the bulk of time spent on data migration, app configuration, and team training.</li>
+<li><strong>Complex stores (custom functionality, multi-location, high SKU count)</strong>: 2-3 months, often with phased rollout (e.g., online first, then POS integration).</li>
+</ul>
 <p>Reviewers recommend running a pilot phase—importing a subset of products, testing checkout flow, and verifying integrations before full cutover. Multiple reviewers cite parallel usage (old platform + Shopify) as the most effective transition approach, particularly for retailers who cannot afford downtime.</p>
 <h2 id="key-takeaways">Key Takeaways</h2>
 <p>Based on 1,503 enriched reviews and 93 switching signals, the migration pattern to Shopify reflects deliberate platform re-evaluation rather than sudden dissatisfaction. The data suggests the following:</p>
@@ -185,11 +191,13 @@ const post: BlogPost = {
 <p><strong>Decision-maker churn rate is modest but real.</strong> At 8%, one in twelve decision-makers who review Shopify express switching intent. This is not a crisis-level churn signal, but it indicates that the platform is not universally loved. The market regime classification of "stable" suggests this is normal category churn, not a Shopify-specific problem.</p>
 <p><strong>Integration ecosystem is a double-edged sword.</strong> Reviewers praise the breadth of available apps (Klaviyo, Stripe, Meta, Instagram are most mentioned), but app costs accumulate quickly. Teams switching from open-source platforms report sticker shock at monthly recurring app fees compared to one-time plugin costs.</p>
 <p><strong>The right fit depends on buyer priorities.</strong> Reviewers who prioritize operational simplicity, brand-building tools, and ease of use report high satisfaction. Reviewers who prioritize technical control, SEO flexibility, and cost predictability report frustration. The data does not suggest Shopify is "better" or "worse" than alternatives—it suggests different platforms serve different priorities.</p>
-<p>For teams evaluating Shopify, the data suggests asking:
-- How much technical control do we need versus operational simplicity?
-- What is our total cost of ownership, including apps and transaction fees?
-- Do we have the internal capacity to manage a more technical platform, or do we need a managed solution?
-- Are we in a growth phase where ease of scaling matters more than cost optimization?</p>
+<p>For teams evaluating Shopify, the data suggests asking:</p>
+<ul>
+<li>How much technical control do we need versus operational simplicity?</li>
+<li>What is our total cost of ownership, including apps and transaction fees?</li>
+<li>Do we have the internal capacity to manage a more technical platform, or do we need a managed solution?</li>
+<li>Are we in a growth phase where ease of scaling matters more than cost optimization?</li>
+</ul>
 <p>The migration pattern is real, but it is not one-way. Shopify attracts users frustrated with complexity and scalability limits elsewhere, but it also loses users who outgrow its constraints or find the cost structure unsustainable. The data suggests that the "right" platform depends on where a team is in their growth trajectory and what trade-offs they are willing to accept.</p>
 <p>For authoritative guidance on e-commerce platform capabilities, see <a href="https://www.shopify.com/">Shopify's official product page</a>.</p>`,
 }

@@ -152,10 +152,12 @@ const post: BlogPost = {
 <p>The migration sources suggest ClickUp occupies a middle ground: more capable than lightweight task tools, more flexible than rigid enterprise systems, but also more complex than either.</p>
 <h3 id="migration-patterns-by-replacement-mode">Migration Patterns by Replacement Mode</h3>
 <p>The dataset includes signals tagged with <code>bundled_suite_consolidation</code> as the replacement mode. This indicates teams are not just switching from one tool to another—they are collapsing multiple tools into ClickUp.</p>
-<p>For example, a team might migrate from:
-- Trello for task management
-- Notion for documentation
-- Zapier for workflow automation</p>
+<p>For example, a team might migrate from:</p>
+<ul>
+<li>Trello for task management</li>
+<li>Notion for documentation</li>
+<li>Zapier for workflow automation</li>
+</ul>
 <p>...into ClickUp's unified environment. The consolidation creates efficiency gains but also introduces coordination complexity. One common pattern witness noted:</p>
 <blockquote>
 <p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
@@ -169,10 +171,12 @@ const post: BlogPost = {
 <p>{{chart:pain-bar}}</p>
 <p>UX complaints are the most common trigger, followed by pricing friction, feature gaps, performance issues, overall dissatisfaction, and onboarding challenges. However, these categories reflect dissatisfaction with <em>previous</em> tools, not necessarily ClickUp's strengths.</p>
 <h3 id="ux-regression-in-legacy-tools">UX Regression in Legacy Tools</h3>
-<p>Reviewers leaving Trello, Asana, and Jira frequently cite UX regression. The complaints cluster around:
-- Navigation complexity as project count grows
-- View limitations (lack of Gantt, Calendar, or Timeline views)
-- Inflexible hierarchy structures</p>
+<p>Reviewers leaving Trello, Asana, and Jira frequently cite UX regression. The complaints cluster around:</p>
+<ul>
+<li>Navigation complexity as project count grows</li>
+<li>View limitations (lack of Gantt, Calendar, or Timeline views)</li>
+<li>Inflexible hierarchy structures</li>
+</ul>
 <p>ClickUp addresses these gaps with multiple view modes and customizable hierarchies. But the data also shows that ClickUp's flexibility introduces its own UX complexity. One counterevidence witness from TrustRadius noted:</p>
 <blockquote>
 <p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
@@ -186,28 +190,36 @@ const post: BlogPost = {
 <p>This 222% increase triggered explicit pricing backlash. While this is an outlier case, it highlights pricing volatility as a migration risk. Teams switching to ClickUp should validate current pricing and lock in contract terms before committing.</p>
 <p>The data does not support a claim that ClickUp is universally cheaper than competitors. Pricing complaints appear in 437 enriched reviews, but the rate is not quantified in the blueprint.</p>
 <h3 id="feature-gaps-and-integration-needs">Feature Gaps and Integration Needs</h3>
-<p>Teams leaving Notion and Airtable cite feature gaps around:
-- Advanced automation
-- Native time tracking
-- Resource capacity planning</p>
-<p>ClickUp addresses some of these gaps with built-in features. However, integration depth varies. The most frequently mentioned integrations in the dataset are:
-- Zapier (15 mentions)
-- GitHub (7 mentions)
-- Jira (5 mentions)
-- Notion (5 mentions)
-- HubSpot (4 mentions)</p>
+<p>Teams leaving Notion and Airtable cite feature gaps around:</p>
+<ul>
+<li>Advanced automation</li>
+<li>Native time tracking</li>
+<li>Resource capacity planning</li>
+</ul>
+<p>ClickUp addresses some of these gaps with built-in features. However, integration depth varies. The most frequently mentioned integrations in the dataset are:</p>
+<ul>
+<li>Zapier (15 mentions)</li>
+<li>GitHub (7 mentions)</li>
+<li>Jira (5 mentions)</li>
+<li>Notion (5 mentions)</li>
+<li>HubSpot (4 mentions)</li>
+</ul>
 <p>These integration signals suggest teams rely on connectors to bridge ClickUp with existing toolchains. Native integration quality is not quantified in the data.</p>
 <h3 id="performance-and-reliability">Performance and Reliability</h3>
-<p>Performance issues rank fourth among migration triggers. Reviewers leaving Notion and Airtable report:
-- Slow load times as database size grows
-- Sync delays in collaborative editing
-- Mobile app performance degradation</p>
+<p>Performance issues rank fourth among migration triggers. Reviewers leaving Notion and Airtable report:</p>
+<ul>
+<li>Slow load times as database size grows</li>
+<li>Sync delays in collaborative editing</li>
+<li>Mobile app performance degradation</li>
+</ul>
 <p>ClickUp reviewers do not report widespread performance complaints in the dataset. However, the sample size for performance-specific signals is limited, so this should be treated as absence of evidence rather than evidence of absence.</p>
 <h3 id="onboarding-challenges">Onboarding Challenges</h3>
-<p>Onboarding friction appears in both outbound signals (teams leaving rigid tools like Jira) and inbound caution (teams learning ClickUp's hierarchy). The data does not include quantified onboarding timelines, but qualitative signals suggest:
-- Admin setup takes longer than simpler tools like Trello
-- End-user adoption requires training on folder/list/task structure
-- Notification defaults may need tuning to avoid overload</p>
+<p>Onboarding friction appears in both outbound signals (teams leaving rigid tools like Jira) and inbound caution (teams learning ClickUp's hierarchy). The data does not include quantified onboarding timelines, but qualitative signals suggest:</p>
+<ul>
+<li>Admin setup takes longer than simpler tools like Trello</li>
+<li>End-user adoption requires training on folder/list/task structure</li>
+<li>Notification defaults may need tuning to avoid overload</li>
+</ul>
 <p>One Reddit reviewer noted:</p>
 <blockquote>
 <p>"I run a screen printing shop"<br />
@@ -221,10 +233,12 @@ const post: BlogPost = {
 <h2 id="making-the-switch-what-to-expect">Making the Switch: What to Expect</h2>
 <p>Migrating to ClickUp involves three practical phases: data migration, workflow reconfiguration, and team adoption. The dataset does not include quantified migration timelines, but reviewer signals suggest each phase has distinct friction points.</p>
 <h3 id="data-migration-and-integration-setup">Data Migration and Integration Setup</h3>
-<p>ClickUp supports CSV imports and native connectors for Trello, Asana, Jira, and other platforms. However, reviewers report:
-- Custom field mappings require manual configuration
-- Attachment migration is incomplete for some platforms
-- Historical comments may not transfer cleanly</p>
+<p>ClickUp supports CSV imports and native connectors for Trello, Asana, Jira, and other platforms. However, reviewers report:</p>
+<ul>
+<li>Custom field mappings require manual configuration</li>
+<li>Attachment migration is incomplete for some platforms</li>
+<li>Historical comments may not transfer cleanly</li>
+</ul>
 <p>One verified reviewer on G2 noted:</p>
 <blockquote>
 <p>"What do you like best about ClickUp"<br />
@@ -237,10 +251,12 @@ const post: BlogPost = {
 <blockquote>
 <p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
 </blockquote>
-<p>This suggests teams should invest time in hierarchy planning before migration. Common patterns include:
-- Folders for departments or clients
-- Lists for projects or workflows
-- Tasks for individual deliverables</p>
+<p>This suggests teams should invest time in hierarchy planning before migration. Common patterns include:</p>
+<ul>
+<li>Folders for departments or clients</li>
+<li>Lists for projects or workflows</li>
+<li>Tasks for individual deliverables</li>
+</ul>
 <p>However, ClickUp also supports spaces, goals, and docs, which add additional hierarchy layers. Teams consolidating multiple tools should map workflows to ClickUp's structure before migrating data.</p>
 <h3 id="team-adoption-and-notification-management">Team Adoption and Notification Management</h3>
 <p>End-user adoption is the third migration phase. Reviewers report notification overload as a common friction point, particularly for teams consolidating workflows from multiple tools.</p>
@@ -257,10 +273,12 @@ const post: BlogPost = {
 <h3 id="learning-curve-and-productivity-delta">Learning Curve and Productivity Delta</h3>
 <p>The reasoning context includes a <code>productivity_delta_claim</code> of "more_productive" for bundled suite consolidation cases. However, this claim is based on reviewer self-report, not measured productivity data.</p>
 <p>The counterevidence section notes that "customers remain anchored by overall satisfaction (252 mentions), UX strengths (89 mentions), and feature breadth (64 mentions)." This suggests retained users find value despite complexity trade-offs.</p>
-<p>Teams should expect:
-- Initial productivity dip during the learning phase
-- Gradual productivity recovery as workflows stabilize
-- Long-term efficiency gains from consolidation, if workflows are well-configured</p>
+<p>Teams should expect:</p>
+<ul>
+<li>Initial productivity dip during the learning phase</li>
+<li>Gradual productivity recovery as workflows stabilize</li>
+<li>Long-term efficiency gains from consolidation, if workflows are well-configured</li>
+</ul>
 <p>The data does not support a universal claim that ClickUp makes teams more productive. The productivity delta depends on how well the team configures workflows and manages the learning curve.</p>
 <h3 id="migration-checklist">Migration Checklist</h3>
 <p>Based on reviewer signals, teams should:
@@ -283,26 +301,32 @@ const post: BlogPost = {
 </ul>
 <p>Despite these friction points, the counterevidence shows that customers remain anchored by overall satisfaction (252 mentions), UX strengths (89 mentions), and feature breadth (64 mentions). This suggests ClickUp delivers value that outweighs navigation frustration for retained users.</p>
 <h3 id="who-should-migrate-to-clickup">Who Should Migrate to ClickUp?</h3>
-<p>The data supports migration for:
-- Teams outgrowing simpler tools like Trello or Todoist
-- Teams consolidating multiple point solutions into a unified platform
-- Teams needing flexible view modes (Gantt, Timeline, Calendar)
-- Teams willing to invest time learning hierarchy and notification configuration</p>
+<p>The data supports migration for:</p>
+<ul>
+<li>Teams outgrowing simpler tools like Trello or Todoist</li>
+<li>Teams consolidating multiple point solutions into a unified platform</li>
+<li>Teams needing flexible view modes (Gantt, Timeline, Calendar)</li>
+<li>Teams willing to invest time learning hierarchy and notification configuration</li>
+</ul>
 <h3 id="who-should-proceed-with-caution">Who Should Proceed with Caution?</h3>
-<p>The data flags caution for:
-- Teams expecting plug-and-play simplicity
-- Teams with limited admin capacity for workflow configuration
-- Teams sensitive to pricing volatility
-- Teams requiring built-in resource capacity planning without manual configuration</p>
+<p>The data flags caution for:</p>
+<ul>
+<li>Teams expecting plug-and-play simplicity</li>
+<li>Teams with limited admin capacity for workflow configuration</li>
+<li>Teams sensitive to pricing volatility</li>
+<li>Teams requiring built-in resource capacity planning without manual configuration</li>
+</ul>
 <h3 id="market-context">Market Context</h3>
 <p>The reasoning context flags a stable market regime with no widespread vendor displacement wave. This suggests ClickUp's growth is driven by incremental dissatisfaction with existing tools rather than systemic category failure.</p>
 <p>Teams evaluating ClickUp should compare it to <a href="/blog/microsoft-teams-vs-notion-2026-04">Microsoft Teams</a>, Notion, Asana, and other collaboration platforms based on their specific workflow needs, not on generic claims about productivity or cost savings.</p>
 <h3 id="confidence-and-limitations">Confidence and Limitations</h3>
 <p>This analysis is based on 437 enriched reviews from verified platforms (G2, Gartner Peer Insights, PeerSpot, TrustRadius) and 381 community platform signals (Reddit). The sample is self-selected and reflects reviewer perception, not universal product capability.</p>
-<p>The reasoning context flags low confidence for timing intelligence, migration proof, and category reasoning. This means:
-- Timing signals are based on limited evidence
-- Migration success rates are not quantified
-- Category-wide trends are not conclusively established</p>
+<p>The reasoning context flags low confidence for timing intelligence, migration proof, and category reasoning. This means:</p>
+<ul>
+<li>Timing signals are based on limited evidence</li>
+<li>Migration success rates are not quantified</li>
+<li>Category-wide trends are not conclusively established</li>
+</ul>
 <p>Teams should treat this guide as directional insight, not as definitive proof of migration outcomes.</p>
 <h3 id="next-steps">Next Steps</h3>
 <p>For teams considering migration, the practical next steps are:

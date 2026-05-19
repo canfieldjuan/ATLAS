@@ -139,18 +139,24 @@ const post: BlogPost = {
 <p>If infrastructure ownership is the driver, open-source alternatives like Mattermost and Rocket.Chat are viable. But self-hosting has real costs: server management, security patches, backup management, and uptime responsibility. Only switch to self-hosted if you have the internal capacity to run infrastructure.</p>
 <p>If you are on Slack's free tier and hitting history retention limits, you have three options: upgrade to paid, switch to a platform with better free-tier history, or accept the limitation and treat Slack as ephemeral communication only.</p>
 <p>The verdict: most teams should not do a full Slack replacement. Most teams should migrate specific workflows to async tools while keeping Slack for real-time coordination.</p>
-<p>Full replacement makes sense when:
-- Cost pressure is severe and Microsoft 365 is already deployed
-- Infrastructure ownership is a strategic priority and internal capacity exists
-- The entire team culture has shifted to async-first and real-time chat is now the exception</p>
-<p>Workflow migration makes sense when:
-- Specific workflows (design reviews, project documentation, decision records) are suffering from real-time chat culture
-- The team wants to preserve async communication without losing real-time coordination capability
-- Integration and onboarding benefits of Slack still matter for other use cases</p>
-<p>Stay on Slack when:
-- Real-time coordination is genuinely critical to your workflows
-- Integration ecosystem is deeply embedded in your operations
-- Cost is not a constraint and workflow culture is healthy</p>
+<p>Full replacement makes sense when:</p>
+<ul>
+<li>Cost pressure is severe and Microsoft 365 is already deployed</li>
+<li>Infrastructure ownership is a strategic priority and internal capacity exists</li>
+<li>The entire team culture has shifted to async-first and real-time chat is now the exception</li>
+</ul>
+<p>Workflow migration makes sense when:</p>
+<ul>
+<li>Specific workflows (design reviews, project documentation, decision records) are suffering from real-time chat culture</li>
+<li>The team wants to preserve async communication without losing real-time coordination capability</li>
+<li>Integration and onboarding benefits of Slack still matter for other use cases</li>
+</ul>
+<p>Stay on Slack when:</p>
+<ul>
+<li>Real-time coordination is genuinely critical to your workflows</li>
+<li>Integration ecosystem is deeply embedded in your operations</li>
+<li>Cost is not a constraint and workflow culture is healthy</li>
+</ul>
 <p>The data shows teams are actively evaluating alternatives now. Two accounts show active evaluation signals during the March-April 2026 window. If you are considering a switch, you are not alone. But most switching stories describe workflow migration, not platform abandonment. That is probably the right pattern for most teams.</p>`,
 }
 

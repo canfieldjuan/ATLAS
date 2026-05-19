@@ -193,23 +193,29 @@ const post: BlogPost = {
 <p>{{chart:pain-radar}}</p>
 <p>Pain signals cluster around six key areas:</p>
 <h3 id="pricing-primary-pain-point">Pricing (Primary Pain Point)</h3>
-<p>Pricing complaints dominate the recent review window. Reviewers report:
-- Escalating costs as contact volume grows past 25,000
-- Professional plan pricing ($449/month) perceived as unjustified relative to feature set
-- Bundled pricing structures that force upgrades for single-feature needs
-- Competitor consolidation strategies (e.g., moving to HubSpot or ActiveCampaign for bundled CRM + email)</p>
+<p>Pricing complaints dominate the recent review window. Reviewers report:</p>
+<ul>
+<li>Escalating costs as contact volume grows past 25,000</li>
+<li>Professional plan pricing ($449/month) perceived as unjustified relative to feature set</li>
+<li>Bundled pricing structures that force upgrades for single-feature needs</li>
+<li>Competitor consolidation strategies (e.g., moving to HubSpot or ActiveCampaign for bundled CRM + email)</li>
+</ul>
 <p>The pricing pain is not about absolute cost but perceived value loss. Reviewers who stay under 10,000 contacts report satisfaction; those scaling report frustration.</p>
 <h3 id="competitive-inferiority">Competitive Inferiority</h3>
-<p>Reviewers frequently position Brevo as a "good starter tool" that loses ground to specialized platforms:
-- <strong>SMS &amp; messaging:</strong> Klaviyo and Twilio offer deeper SMS automation
-- <strong>CRM integration:</strong> ActiveCampaign and HubSpot provide tighter native CRM workflows
-- <strong>Advanced segmentation:</strong> MailerLite and Klaviyo offer more granular behavioral segmentation</p>
+<p>Reviewers frequently position Brevo as a "good starter tool" that loses ground to specialized platforms:</p>
+<ul>
+<li><strong>SMS &amp; messaging:</strong> Klaviyo and Twilio offer deeper SMS automation</li>
+<li><strong>CRM integration:</strong> ActiveCampaign and HubSpot provide tighter native CRM workflows</li>
+<li><strong>Advanced segmentation:</strong> MailerLite and Klaviyo offer more granular behavioral segmentation</li>
+</ul>
 <p>Brevo is perceived as a "jack of all trades, master of none" in the mid-market segment.</p>
 <h3 id="contract-lock-in-and-feature-restrictions">Contract Lock-In and Feature Restrictions</h3>
-<p>Reviewers report friction around:
-- Difficulty downgrading plans mid-cycle
-- Feature availability tied to plan tier rather than usage
-- Limited transparency on what triggers tier escalation</p>
+<p>Reviewers report friction around:</p>
+<ul>
+<li>Difficulty downgrading plans mid-cycle</li>
+<li>Feature availability tied to plan tier rather than usage</li>
+<li>Limited transparency on what triggers tier escalation</li>
+</ul>
 <h3 id="performance-and-reliability">Performance and Reliability</h3>
 <p>While not the loudest complaint, delivery speed and uptime concerns surface in a minority of reviews, particularly around bulk send performance and API rate limits.</p>
 <h3 id="security-and-data-privacy">Security and Data Privacy</h3>
@@ -218,15 +224,17 @@ const post: BlogPost = {
 <h2 id="the-brevo-ecosystem-integrations-use-cases">The Brevo Ecosystem: Integrations &amp; Use Cases</h2>
 <p>Brevo's deployment footprint spans email-first and CRM-adjacent workflows:</p>
 <h3 id="primary-integrations">Primary Integrations</h3>
-<p>Reviewers mention 8 core integrations:
-- <strong>ClickUp</strong> (project management)
-- <strong>Canva</strong> (design templates)
-- <strong>Elastic</strong> (analytics)
-- <strong>Evernote</strong> (note-taking)
-- <strong>ADN Email</strong> (legacy email systems)
-- <strong>Doppler Email Marketing</strong> (email ops)
-- <strong>Agency AutomationTEAM</strong> (agency workflows)
-- <strong>API</strong> (custom workflows)</p>
+<p>Reviewers mention 8 core integrations:</p>
+<ul>
+<li><strong>ClickUp</strong> (project management)</li>
+<li><strong>Canva</strong> (design templates)</li>
+<li><strong>Elastic</strong> (analytics)</li>
+<li><strong>Evernote</strong> (note-taking)</li>
+<li><strong>ADN Email</strong> (legacy email systems)</li>
+<li><strong>Doppler Email Marketing</strong> (email ops)</li>
+<li><strong>Agency AutomationTEAM</strong> (agency workflows)</li>
+<li><strong>API</strong> (custom workflows)</li>
+</ul>
 <p>The integration list skews toward productivity and design tools rather than deep CRM or data warehouse connections. This reflects Brevo's positioning as an email-first platform with extension capabilities.</p>
 <h3 id="primary-use-cases">Primary Use Cases</h3>
 <p>Reviewers deploy Brevo for:
@@ -304,24 +312,30 @@ const post: BlogPost = {
 <h3 id="contact-volume-scaling-pain">Contact Volume Scaling Pain</h3>
 <p>Reviewers report that Professional plan pricing doesn't scale linearly with contact growth. A team with 50,000 contacts pays the same as a team with 500,000 contacts. This inverts the typical SaaS model and creates buyer resentment when contact growth outpaces revenue growth.</p>
 <h3 id="missing-mid-market-tier">Missing Mid-Market Tier</h3>
-<p>Reviewers explicitly ask for a $100–200/month tier with:
-- 25,000–50,000 contact limits
-- Basic automation (not full suite)
-- Standard support (not premium)</p>
+<p>Reviewers explicitly ask for a $100–200/month tier with:</p>
+<ul>
+<li>25,000–50,000 contact limits</li>
+<li>Basic automation (not full suite)</li>
+<li>Standard support (not premium)</li>
+</ul>
 <p>This gap drives evaluators toward MailerLite, which offers graduated pricing, or Mailchimp, which has stronger feature parity at mid-market price points.</p>
 <hr />
 <h2 id="churn-signals-and-switching-intent">Churn Signals and Switching Intent</h2>
 <p>Analysis identified <strong>5 explicit switching signals</strong> across the 38 reviews:</p>
 <h3 id="active-evaluation-window">Active Evaluation Window</h3>
-<p>Reviewers posted switching questions and alternative requests <strong>within the past few weeks</strong> (March 2026). Timing anchors include:
-- "Help Needed: Switching from Brevo (SendinBlue) for Newsletter Emails – Need Suggestions for a Cheaper Alternative" (Reddit)
-- "Has anyone switched away from Brevo?" (Reddit)
-- "Just starting out with email marketing [looking at alternatives]" (Reddit)</p>
+<p>Reviewers posted switching questions and alternative requests <strong>within the past few weeks</strong> (March 2026). Timing anchors include:</p>
+<ul>
+<li>"Help Needed: Switching from Brevo (SendinBlue) for Newsletter Emails – Need Suggestions for a Cheaper Alternative" (Reddit)</li>
+<li>"Has anyone switched away from Brevo?" (Reddit)</li>
+<li>"Just starting out with email marketing [looking at alternatives]" (Reddit)</li>
+</ul>
 <p>These are active, not dormant, evaluation signals. Reviewers are in the consideration phase and soliciting peer input.</p>
 <h3 id="budget-driven-switching">Budget-Driven Switching</h3>
-<p>Reviewers cite explicit dollar thresholds:
-- "Budget is flexible but ideally staying under $300/month to start"
-- "Looking for something cheaper than Brevo's Professional plan"</p>
+<p>Reviewers cite explicit dollar thresholds:</p>
+<ul>
+<li>"Budget is flexible but ideally staying under $300/month to start"</li>
+<li>"Looking for something cheaper than Brevo's Professional plan"</li>
+</ul>
 <p>This signals price-elastic demand. At $450+/month, Brevo loses buyers to MailerLite ($50–300/month), Mailchimp ($20–350/month), and open-source alternatives.</p>
 <h3 id="bundled-suite-consolidation">Bundled Suite Consolidation</h3>
 <p>One reviewer noted the appeal of consolidating email + CRM into a single vendor (e.g., HubSpot) to reduce contract management and integration overhead. This is a strategic churn vector: Brevo loses not because of product failure but because of buyer simplification.</p>
@@ -340,18 +354,22 @@ const post: BlogPost = {
 <hr />
 <h2 id="the-bottom-line-on-brevo">The Bottom Line on Brevo</h2>
 <h3 id="who-should-consider-brevo">Who Should Consider Brevo</h3>
-<p><strong>Best fit:</strong>
-- Startups and small teams (under 10,000 contacts) with email-first workflows
-- Agencies managing multiple client campaigns with minimal customization
-- Non-technical marketers who prioritize ease of use over advanced automation
-- Teams with tight budgets ($8–100/month) seeking a low-risk entry point</p>
+<p><strong>Best fit:</strong></p>
+<ul>
+<li>Startups and small teams (under 10,000 contacts) with email-first workflows</li>
+<li>Agencies managing multiple client campaigns with minimal customization</li>
+<li>Non-technical marketers who prioritize ease of use over advanced automation</li>
+<li>Teams with tight budgets ($8–100/month) seeking a low-risk entry point</li>
+</ul>
 <p><strong>Why:</strong> Brevo's Starter plan offers exceptional value for early-stage teams. The interface is intuitive, integrations are adequate, and support is responsive for basic use cases.</p>
 <h3 id="who-should-look-elsewhere">Who Should Look Elsewhere</h3>
-<p><strong>Poor fit:</strong>
-- Mid-market teams (25,000+ contacts) facing Professional plan pricing shock
-- Buyers needing advanced SMS, segmentation, or CRM-native automation
-- Teams seeking vendor consolidation (HubSpot, Salesforce bundles offer better ROI)
-- Enterprises requiring guaranteed SLAs and dedicated support</p>
+<p><strong>Poor fit:</strong></p>
+<ul>
+<li>Mid-market teams (25,000+ contacts) facing Professional plan pricing shock</li>
+<li>Buyers needing advanced SMS, segmentation, or CRM-native automation</li>
+<li>Teams seeking vendor consolidation (HubSpot, Salesforce bundles offer better ROI)</li>
+<li>Enterprises requiring guaranteed SLAs and dedicated support</li>
+</ul>
 <p><strong>Why:</strong> Brevo's pricing model punishes scale. Its feature set plateaus at mid-market complexity. Competitors offer better value at $300–500/month spend levels.</p>
 <h3 id="active-evaluation-signals">Active Evaluation Signals</h3>
 <p>As of March 2026, <strong>evaluators are actively shopping alternatives.</strong> Pricing complaints surfaced within the past few weeks. Budget thresholds ($300/month) and competitor mentions (ActiveCampaign, Klaviyo, MailerLite) indicate real switching momentum.</p>
@@ -386,11 +404,13 @@ const post: BlogPost = {
 <p><strong>Sources:</strong> G2 (3 reviews), Gartner Peer Insights (4 reviews), TrustRadius (1 review), Reddit (30 reviews).</p>
 <p><strong>Time window:</strong> March 3–28, 2026.</p>
 <p><strong>Confidence level:</strong> Moderate. Sample size is sufficient for pattern identification but limited for statistical generalization. Community reviews (Reddit) are self-selected and may skew toward pain-point venting.</p>
-<p><strong>Limitations:</strong>
-- No account-level intent data available; unable to validate switching momentum at portfolio scale.
-- Support quality assessment relies on anecdotal reports; no systematic SLA or response-time data.
-- Pricing analysis reflects reviewer perception, not official Brevo pricing documentation.
-- Results reflect reviewer perception, not product capability.</p>
+<p><strong>Limitations:</strong></p>
+<ul>
+<li>No account-level intent data available; unable to validate switching momentum at portfolio scale.</li>
+<li>Support quality assessment relies on anecdotal reports; no systematic SLA or response-time data.</li>
+<li>Pricing analysis reflects reviewer perception, not official Brevo pricing documentation.</li>
+<li>Results reflect reviewer perception, not product capability.</li>
+</ul>
 <p><strong>Data source:</strong> Public B2B software review platforms and community forums. Analysis conducted April 7, 2026.</p>`,
 }
 

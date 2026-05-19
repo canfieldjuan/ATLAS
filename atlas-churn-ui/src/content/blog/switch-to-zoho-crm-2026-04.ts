@@ -205,11 +205,13 @@ const post: BlogPost = {
 <p>If your team relies heavily on complex contact segmentation or account-based filtering, allocate extra time to configure workarounds or evaluate whether Zoho CRM's filtering capabilities match your needs.</p>
 <h3 id="data-migration-complexity">Data migration complexity</h3>
 <p>Data migration appears as a pain category in the review data, though with lower frequency than pricing and UX concerns. This suggests most teams successfully migrate data, but some encounter friction.</p>
-<p>Common data migration challenges include:
-- Field mapping between your current CRM and Zoho CRM's schema
-- Custom field recreation and validation
-- Historical activity data preservation
-- Attachment and document migration</p>
+<p>Common data migration challenges include:</p>
+<ul>
+<li>Field mapping between your current CRM and Zoho CRM's schema</li>
+<li>Custom field recreation and validation</li>
+<li>Historical activity data preservation</li>
+<li>Attachment and document migration</li>
+</ul>
 <p>If you're migrating from Salesforce, expect to map custom objects and fields manually. Salesforce's flexibility creates migration complexity when moving to any platform, including Zoho CRM.</p>
 <p>For teams migrating from Slack or other non-CRM tools, the data migration burden is lighter but requires careful mapping of conversation history and customer context into CRM records.</p>
 <h3 id="support-expectations-during-migration">Support expectations during migration</h3>
@@ -226,12 +228,14 @@ const post: BlogPost = {
 <li><strong>Week 9+</strong>: Full cutover, old CRM decommissioning</li>
 </ol>
 <p>This timeline assumes a small-to-midsize team (under 50 users) with standard integrations. Larger teams or complex custom workflows may require 12-16 weeks.</p>
-<p>For teams considering whether to migrate, the review data suggests Zoho CRM works best when:
-- You're consolidating multiple tools into one platform
-- Your team is small-to-midsize (under 50 users)
-- You can test workflows on the free tier before upgrading
-- You don't require complex contact segmentation or account-based filtering
-- You have internal resources to configure Zapier workflows if needed</p>
+<p>For teams considering whether to migrate, the review data suggests Zoho CRM works best when:</p>
+<ul>
+<li>You're consolidating multiple tools into one platform</li>
+<li>Your team is small-to-midsize (under 50 users)</li>
+<li>You can test workflows on the free tier before upgrading</li>
+<li>You don't require complex contact segmentation or account-based filtering</li>
+<li>You have internal resources to configure Zapier workflows if needed</li>
+</ul>
 <p>If you're evaluating <a href="/blog/pipedrive-deep-dive-2026-04">Pipedrive</a>, <a href="/blog/insightly-deep-dive-2026-04">Insightly</a>, or <a href="/blog/freshsales-deep-dive-2026-04">Freshsales</a> as alternatives, compare integration ecosystems and support models against the patterns documented here.</p>
 <h2 id="key-takeaways">Key Takeaways</h2>
 <p>Zoho CRM attracts users from 4 documented competitor platforms, with pricing and UX concerns driving most migration decisions. The review data, spanning 963 total reviews and 271 enriched signals, reveals specific patterns that matter for teams evaluating a switch.</p>
@@ -247,25 +251,31 @@ const post: BlogPost = {
 <p>If your current CRM integrates with tools that Zoho CRM doesn't support natively, evaluate whether Zapier bridges the gap or whether you need a platform with direct integrations.</p>
 <h3 id="consolidation-opportunity-for-small-teams">Consolidation opportunity for small teams</h3>
 <p>One documented case shows a team reducing monthly spend from $540 to a lower consolidated cost by switching to Zoho CRM. This pattern aligns with small business use cases where teams consolidate lead tracking, customer follow-up, and communication tools into one platform.</p>
-<p>The consolidation opportunity is strongest when:
-- You're currently paying for multiple tools that Zoho CRM can replace
-- Your team is under 50 users
-- You don't require enterprise-grade support SLAs</p>
+<p>The consolidation opportunity is strongest when:</p>
+<ul>
+<li>You're currently paying for multiple tools that Zoho CRM can replace</li>
+<li>Your team is under 50 users</li>
+<li>You don't require enterprise-grade support SLAs</li>
+</ul>
 <h3 id="data-limitations-and-confidence">Data limitations and confidence</h3>
 <p>The sample includes 4 explicit switching mentions, which is a small base for ranking competitor migration volume. The pain category data (pricing, UX, overall dissatisfaction, contract lock-in, data migration, performance) provides stronger confidence because it draws from a larger review set.</p>
 <p>The support experience pattern is based on multiple reviews but still reflects a self-selected sample. Not all paying customers experience bot-mediated support friction, and the free tier remains functional for teams with minimal support needs.</p>
 <h3 id="when-zoho-crm-fits">When Zoho CRM fits</h3>
-<p>Reviewer experience suggests Zoho CRM works best for:
-- Small-to-midsize teams (under 50 users)
-- Teams consolidating multiple tools
-- Workflows centered on lead tracking and customer follow-up
-- Teams comfortable with Zapier for integration gaps
-- Teams that can validate workflows on the free tier before upgrading</p>
-<p>Zoho CRM may not fit if:
-- You require complex contact segmentation or account-based filtering
-- You need enterprise-grade support SLAs
-- Your current CRM has integrations that Zoho CRM doesn't support (and Zapier can't bridge)
-- You're migrating from Salesforce with heavy custom object dependencies</p>
+<p>Reviewer experience suggests Zoho CRM works best for:</p>
+<ul>
+<li>Small-to-midsize teams (under 50 users)</li>
+<li>Teams consolidating multiple tools</li>
+<li>Workflows centered on lead tracking and customer follow-up</li>
+<li>Teams comfortable with Zapier for integration gaps</li>
+<li>Teams that can validate workflows on the free tier before upgrading</li>
+</ul>
+<p>Zoho CRM may not fit if:</p>
+<ul>
+<li>You require complex contact segmentation or account-based filtering</li>
+<li>You need enterprise-grade support SLAs</li>
+<li>Your current CRM has integrations that Zoho CRM doesn't support (and Zapier can't bridge)</li>
+<li>You're migrating from Salesforce with heavy custom object dependencies</li>
+</ul>
 <h3 id="next-steps">Next steps</h3>
 <p>If you're evaluating Zoho CRM as a migration target:</p>
 <ol>

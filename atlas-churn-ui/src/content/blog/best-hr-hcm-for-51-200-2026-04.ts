@@ -165,15 +165,19 @@ const post: BlogPost = {
 <h2 id="bamboohr-best-for-51200-2011000-teams">BambooHR: Best For 51–200, 201–1000 Teams</h2>
 <p><strong>Rating:</strong> 4.3 | <strong>Reviews analyzed:</strong> 42</p>
 <p><strong>Best for:</strong> Single-country, stable-headcount teams that prioritize simplicity and onboarding ease.</p>
-<p><strong>Strengths:</strong>
-- Integration capabilities
-- Onboarding experience (for most users)
-- Feature set for core HR workflows</p>
-<p><strong>Weaknesses:</strong>
-- Pricing and add-on costs
-- UX and interface design
-- Payroll and international tax limitations
-- Contract lock-in</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Integration capabilities</li>
+<li>Onboarding experience (for most users)</li>
+<li>Feature set for core HR workflows</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing and add-on costs</li>
+<li>UX and interface design</li>
+<li>Payroll and international tax limitations</li>
+<li>Contract lock-in</li>
+</ul>
 <h3 id="the-bamboohr-story">The BambooHR Story</h3>
 <p>BambooHR works well until it doesn't. Reviewers praise the initial onboarding and straightforward HR core features. But when teams scale, expand internationally, or need payroll depth, the cracks show.</p>
 <p>The most consistent complaint is <strong>pricing.</strong> Reviewers report that BambooHR's base cost is expensive, and critical features require add-ons:</p>
@@ -188,29 +192,37 @@ const post: BlogPost = {
 </blockquote>
 <p>These aren't catastrophic failures, but they create friction during high-volume hiring periods.</p>
 <h3 id="should-you-choose-bamboohr">Should You Choose BambooHR?</h3>
-<p>Yes, if:
-- You're a US-only company with stable headcount (under 300)
-- You want straightforward HR workflows without payroll complexity
-- You value integration and feature breadth over lowest cost
-- You have a dedicated HR person who can manage the platform</p>
-<p>No, if:
-- You're planning international expansion
-- You need advanced payroll, tax, or benefits administration
-- You want to consolidate payroll and HR in one tool
-- You're cost-sensitive and want to avoid add-on fees</p>
+<p>Yes, if:</p>
+<ul>
+<li>You're a US-only company with stable headcount (under 300)</li>
+<li>You want straightforward HR workflows without payroll complexity</li>
+<li>You value integration and feature breadth over lowest cost</li>
+<li>You have a dedicated HR person who can manage the platform</li>
+</ul>
+<p>No, if:</p>
+<ul>
+<li>You're planning international expansion</li>
+<li>You need advanced payroll, tax, or benefits administration</li>
+<li>You want to consolidate payroll and HR in one tool</li>
+<li>You're cost-sensitive and want to avoid add-on fees</li>
+</ul>
 <hr />
 <h2 id="gusto-best-for-51200-2011000-teams">Gusto: Best For 51–200, 201–1000 Teams</h2>
 <p><strong>Rating:</strong> 4.6 | <strong>Reviews analyzed:</strong> 61</p>
 <p><strong>Best for:</strong> Teams that prioritize payroll accuracy, compliance, and ease of use over deep integrations.</p>
-<p><strong>Strengths:</strong>
-- Security and data protection
-- Performance and system reliability
-- Integration with payroll and tax compliance</p>
-<p><strong>Weaknesses:</strong>
-- UX and interface design
-- Contract lock-in and switching costs
-- Support responsiveness
-- Data migration complexity</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Security and data protection</li>
+<li>Performance and system reliability</li>
+<li>Integration with payroll and tax compliance</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>UX and interface design</li>
+<li>Contract lock-in and switching costs</li>
+<li>Support responsiveness</li>
+<li>Data migration complexity</li>
+</ul>
 <h3 id="the-gusto-story">The Gusto Story</h3>
 <p>Gusto has the highest review volume in this comparison (61 reviews), and the 4.6 rating reflects broad satisfaction. Reviewers consistently praise the payroll and compliance side—Gusto handles tax filings, benefits, and multi-state compliance better than BambooHR.</p>
 <p>But Gusto is not without friction. The most vocal complaints center on <strong>UX and contract lock-in:</strong></p>
@@ -221,29 +233,37 @@ const post: BlogPost = {
 <p>This quote, paired with the high rating, suggests that Gusto's payroll strength outweighs UX frustration for many teams. They tolerate the interface because the payroll side works.</p>
 <p>The <strong>contract lock-in</strong> complaint is significant. Once you commit to Gusto, migrating away (especially if you've used their payroll for years) is expensive and risky.</p>
 <h3 id="should-you-choose-gusto">Should You Choose Gusto?</h3>
-<p>Yes, if:
-- Payroll accuracy and tax compliance are your top priority
-- You want a single platform for HR, payroll, and benefits
-- You're willing to tolerate a less polished interface for payroll reliability
-- You plan to stay with one vendor for 3+ years</p>
-<p>No, if:
-- You need a highly customizable, modern interface
-- You want to keep payroll and HR separate
-- You're evaluating multiple vendors and want flexibility to switch
-- You need deep integrations with specialized tools</p>
+<p>Yes, if:</p>
+<ul>
+<li>Payroll accuracy and tax compliance are your top priority</li>
+<li>You want a single platform for HR, payroll, and benefits</li>
+<li>You're willing to tolerate a less polished interface for payroll reliability</li>
+<li>You plan to stay with one vendor for 3+ years</li>
+</ul>
+<p>No, if:</p>
+<ul>
+<li>You need a highly customizable, modern interface</li>
+<li>You want to keep payroll and HR separate</li>
+<li>You're evaluating multiple vendors and want flexibility to switch</li>
+<li>You need deep integrations with specialized tools</li>
+</ul>
 <hr />
 <h2 id="rippling-best-for-51200-2011000-teams">Rippling: Best For 51–200, 201–1000 Teams</h2>
 <p><strong>Rating:</strong> 4.6 | <strong>Reviews analyzed:</strong> 44</p>
 <p><strong>Best for:</strong> Growing teams that want a unified platform for HR, IT, and payroll with strong integrations.</p>
-<p><strong>Strengths:</strong>
-- Integration ecosystem
-- Feature breadth and innovation
-- Overall satisfaction (for many segments)</p>
-<p><strong>Weaknesses:</strong>
-- UX and interface complexity
-- Support quality and responsiveness
-- Onboarding friction
-- Performance issues under load</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Integration ecosystem</li>
+<li>Feature breadth and innovation</li>
+<li>Overall satisfaction (for many segments)</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>UX and interface complexity</li>
+<li>Support quality and responsiveness</li>
+<li>Onboarding friction</li>
+<li>Performance issues under load</li>
+</ul>
 <h3 id="the-rippling-story">The Rippling Story</h3>
 <p>Rippling is the modern, feature-rich alternative. Reviewers praise the integration capabilities and breadth of features—you can manage HR, IT, payroll, and benefits in one platform. The 4.6 rating matches Gusto's, but for different reasons.</p>
 <p>Where Rippling stumbles is <strong>UX and support.</strong> Reviewers report that the interface is powerful but overwhelming, and support doesn't always keep up:</p>
@@ -253,29 +273,37 @@ const post: BlogPost = {
 </blockquote>
 <p>This positive note is tempered by the reality that many reviewers struggle with onboarding and ongoing support. The platform does a lot, but learning curve is steep.</p>
 <h3 id="should-you-choose-rippling">Should You Choose Rippling?</h3>
-<p>Yes, if:
-- You want a single platform for HR, payroll, and IT management
-- Your team has strong technical skills or dedicated admin resources
-- You value feature breadth and integration depth
-- You're willing to invest in onboarding and training</p>
-<p>No, if:
-- You want a simple, easy-to-use interface
-- You need immediate, responsive support
-- You're a small team without dedicated HR admin
-- You prioritize ease of use over feature completeness</p>
+<p>Yes, if:</p>
+<ul>
+<li>You want a single platform for HR, payroll, and IT management</li>
+<li>Your team has strong technical skills or dedicated admin resources</li>
+<li>You value feature breadth and integration depth</li>
+<li>You're willing to invest in onboarding and training</li>
+</ul>
+<p>No, if:</p>
+<ul>
+<li>You want a simple, easy-to-use interface</li>
+<li>You need immediate, responsive support</li>
+<li>You're a small team without dedicated HR admin</li>
+<li>You prioritize ease of use over feature completeness</li>
+</ul>
 <hr />
 <h2 id="workday-best-for-1000-2011000-teams">Workday: Best For 1000+, 201–1000 Teams</h2>
 <p><strong>Rating:</strong> 4.2 | <strong>Reviews analyzed:</strong> 37</p>
 <p><strong>Best for:</strong> Large enterprises with complex global operations, multiple business units, and dedicated HCM teams.</p>
-<p><strong>Strengths:</strong>
-- Integration and extensibility
-- Feature depth for enterprise workflows
-- Compliance and audit capabilities</p>
-<p><strong>Weaknesses:</strong>
-- Support and implementation complexity
-- Overall user satisfaction (for smaller teams)
-- UX and system performance
-- Contract lock-in and switching costs</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Integration and extensibility</li>
+<li>Feature depth for enterprise workflows</li>
+<li>Compliance and audit capabilities</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Support and implementation complexity</li>
+<li>Overall user satisfaction (for smaller teams)</li>
+<li>UX and system performance</li>
+<li>Contract lock-in and switching costs</li>
+</ul>
 <h3 id="the-workday-story">The Workday Story</h3>
 <p>Workday is built for large enterprises, and the 4.2 rating reflects that. Teams with 1000+ employees and dedicated HCM staff rate it higher than smaller teams. The platform is powerful but complex.</p>
 <p>Reviewers note challenges with support and user experience:</p>
@@ -285,16 +313,20 @@ const post: BlogPost = {
 </blockquote>
 <p>This fragmented feedback suggests that Workday experiences vary widely by implementation and team expertise.</p>
 <h3 id="should-you-choose-workday">Should You Choose Workday?</h3>
-<p>Yes, if:
-- You have 1000+ employees across multiple countries
-- You need advanced reporting, analytics, and compliance features
-- You have a dedicated HCM and IT team
-- You're willing to invest in a multi-year implementation</p>
-<p>No, if:
-- You're a 51–200 person team
-- You want quick time-to-value
-- You need responsive, hands-on support
-- You're cost-conscious (Workday is the most expensive option)</p>
+<p>Yes, if:</p>
+<ul>
+<li>You have 1000+ employees across multiple countries</li>
+<li>You need advanced reporting, analytics, and compliance features</li>
+<li>You have a dedicated HCM and IT team</li>
+<li>You're willing to invest in a multi-year implementation</li>
+</ul>
+<p>No, if:</p>
+<ul>
+<li>You're a 51–200 person team</li>
+<li>You want quick time-to-value</li>
+<li>You need responsive, hands-on support</li>
+<li>You're cost-conscious (Workday is the most expensive option)</li>
+</ul>
 <hr />
 <h2 id="how-to-actually-choose">How to Actually Choose</h2>
 <p>Ratings and feature lists won't make this decision for you. Here's a framework:</p>
@@ -344,15 +376,19 @@ const post: BlogPost = {
 <li><strong>Workday:</strong> Highest cost, but justified for large enterprises</li>
 </ul>
 <h3 id="4-assess-support-capacity">4. Assess Support Capacity</h3>
-<p>Both Gusto and Rippling face support complaints. If you need responsive support:
-- Budget for a dedicated HR admin or choose a simpler tool
-- Ask for SLA guarantees during the sales process
-- Check support availability in your time zone</p>
+<p>Both Gusto and Rippling face support complaints. If you need responsive support:</p>
+<ul>
+<li>Budget for a dedicated HR admin or choose a simpler tool</li>
+<li>Ask for SLA guarantees during the sales process</li>
+<li>Check support availability in your time zone</li>
+</ul>
 <h3 id="5-plan-for-switching-costs">5. Plan for Switching Costs</h3>
-<p>All four vendors have contract lock-in. Before you sign:
-- Understand data export and migration capabilities
-- Negotiate an exit clause or month-to-month option if possible
-- Plan for at least 2–3 months of dual-system overlap</p>
+<p>All four vendors have contract lock-in. Before you sign:</p>
+<ul>
+<li>Understand data export and migration capabilities</li>
+<li>Negotiate an exit clause or month-to-month option if possible</li>
+<li>Plan for at least 2–3 months of dual-system overlap</li>
+</ul>
 <hr />
 <h2 id="what-reviewers-actually-say-in-hr-hcm">What Reviewers Actually Say in HR / HCM</h2>
 <p>Beyond ratings, here's what real users are experiencing:</p>
