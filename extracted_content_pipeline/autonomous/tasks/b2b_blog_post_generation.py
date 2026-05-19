@@ -1558,12 +1558,17 @@ def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tu
     """Strip LLM-generated blockquote BLOCKS that do not ground in a
     quote-grade source pool.
 
-    A "block" is a maximal run of contiguous ``>``-prefixed lines (and the
-    blank-prefixed continuation ``>`` lines that some renderers emit
-    between paragraphs of a single blockquote). The block is kept iff
-    at least one line in the block has a quote body that matches the
-    source pool; otherwise the entire block (including any attribution
-    line like ``> -- reviewer on G2``) is removed.
+    A "block" is a maximal run of contiguous ``>``-prefixed lines. The
+    block is kept iff EVERY quote-bearing line in it matches the source
+    pool. A block with at least one ungrounded quote line is stripped
+    in its entirety (including matched quote lines and attribution
+    lines) -- the block is the unit of trust.
+
+    A line is "quote-bearing" if ``_extract_quote_body`` returns
+    non-empty text for it; attribution-only lines like ``> -- reviewer
+    on G2`` return empty and don't independently require grounding,
+    but they're stripped along with the block when any quote-bearing
+    sibling fails.
 
     Fails closed: when ``source_quotes`` is empty, ALL blockquote blocks
     are removed. The absence of a source pool is treated as "no quote
@@ -1611,21 +1616,44 @@ def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tu
         block_lines = lines[block_start:i]
 
         # Decide: keep the block, or strip it.
+        #
+        # Contract: no ungrounded quote text ships. A block is the unit
+        # of trust -- if any quote-bearing line in the block fails to
+        # match the source pool, the entire block is contaminated and
+        # stripped (including attribution lines, which can't stand on
+        # their own).
+        #
+        # Implementation:
+        #   1. Collect quote-bearing lines (where _extract_quote_body
+        #      returns non-empty content).
+        #   2. If there are no quote-bearing lines, the block is
+        #      orphan attribution -- strip.
+        #   3. If EVERY quote-bearing line matches the source pool,
+        #      keep the whole block (attribution included).
+        #   4. Otherwise (at least one quote-bearing line ungrounded),
+        #      strip the whole block.
         if not source_quotes:
             removed_lines += len(block_lines)
             continue
 
-        block_has_matched_quote = False
+        quote_bearing: list[str] = []
         for line in block_lines:
             m = _BLOCKQUOTE_RE.match(line)
             if not m:
                 continue
             quote = _extract_quote_body(m.group(1))
-            if quote and _quote_matches_source(quote, source_quotes):
-                block_has_matched_quote = True
-                break
+            if quote:
+                quote_bearing.append(quote)
 
-        if block_has_matched_quote:
+        if not quote_bearing:
+            # Orphan attribution / non-quote content. Nothing to ground on.
+            removed_lines += len(block_lines)
+            continue
+
+        all_quotes_grounded = all(
+            _quote_matches_source(q, source_quotes) for q in quote_bearing
+        )
+        if all_quotes_grounded:
             output.extend(block_lines)
         else:
             removed_lines += len(block_lines)

@@ -401,6 +401,39 @@ def test_block_with_attribution_first_then_quote():
     assert "costs too much money" in out
 
 
+def test_block_with_mixed_grounded_and_ungrounded_quotes_strips_block():
+    """The block is the unit of trust. If ANY quote-bearing line is
+    ungrounded, the entire block is stripped -- even if other lines
+    in the same block are grounded.
+
+    This catches the case Codex flagged on PR #625: a grounded quote
+    followed by an LLM-added fabricated sentence in the same `>` run
+    should NOT ship either line. The contract is "no ungrounded quote
+    text ever ships", and per-line stripping inside a block would
+    reintroduce orphan-attribution bugs anyway.
+    """
+    source = ["it costs too much money for what you get"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> \"it costs too much money for what you get\"\n"
+        "> \"and the support team never responded to my emails\"\n"
+        "> -- Customer Reviewer on G2\n"
+        "\n"
+        "More prose.\n"
+    )
+    # The first quote matches the source pool; the second does not.
+    # Even though one line is grounded, the whole block ships nothing.
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 3  # all three lines of the block
+    assert "costs too much money" not in out
+    assert "support team never responded" not in out
+    assert "Customer Reviewer on G2" not in out
+    # Surrounding prose preserved.
+    assert "## Section" in out
+    assert "More prose." in out
+
+
 def test_multiple_blocks_independent_decisions():
     """Two separate blockquote blocks separated by prose. One should be
     kept (matched), one should be stripped (unmatched). The stripper
