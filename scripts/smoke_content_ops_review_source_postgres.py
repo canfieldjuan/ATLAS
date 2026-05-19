@@ -423,8 +423,12 @@ def _saved_draft_target_errors(
     imported = {str(target_id) for target_id in imported_target_ids}
     errors: list[str] = []
     for draft in saved_drafts:
+        draft_id = str(draft.get("id") or "")
         target_id = str(draft.get("target_id") or "")
-        if target_id and target_id not in imported:
+        if not target_id:
+            errors.append(f"persisted draft missing target_id metadata: {draft_id or '<unknown>'}")
+            continue
+        if target_id not in imported:
             errors.append(f"persisted draft target_id was not imported: {target_id}")
     return errors
 

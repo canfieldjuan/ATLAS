@@ -356,3 +356,27 @@ async def test_review_source_postgres_smoke_fails_on_wrong_persisted_target(
 
     assert code == 1
     assert any("persisted draft target_id was not imported" in error for error in payload["errors"])
+
+
+@pytest.mark.asyncio
+async def test_review_source_postgres_smoke_fails_on_missing_persisted_target(
+    monkeypatch,
+    tmp_path,
+):
+    row = _saved_draft_row()
+    row["metadata"] = {}
+    pool = _Pool(
+        summary_rows=[_summary_row()],
+        source_rows=[_source_row()],
+        opportunity_rows=[_opportunity_row()],
+        saved_draft_rows=[row],
+    )
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+
+    code, payload = await smoke.run_review_source_postgres_smoke(
+        _args(),
+        source_rows_path=tmp_path / "g2_sources.jsonl",
+    )
+
+    assert code == 1
+    assert any("persisted draft missing target_id metadata" in error for error in payload["errors"])
