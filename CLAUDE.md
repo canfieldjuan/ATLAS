@@ -529,7 +529,12 @@ python scripts/check_invoicing_readonly_mcp_connector.py \
   --token "$ATLAS_MCP_AUTH_TOKEN"
 
 # OAuth public-discovery smoke (metadata + 401 challenge; no invoice reads)
-python scripts/check_invoicing_readonly_oauth_discovery.py \
+.venv/bin/python scripts/check_invoicing_readonly_oauth_discovery.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly/mcp
+
+# OAuth e2e smoke (registration + approval + token + list_tools; no invoice reads)
+.venv/bin/python scripts/check_invoicing_readonly_oauth_e2e.py \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly/mcp
 ```
@@ -562,6 +567,23 @@ issuer/resource URLs before attaching ChatGPT. The current public URL is
 path-prefixed under `/invoicing-readonly`; if the smoke cannot reach the OAuth
 `/.well-known/...` routes, add the missing Tailscale serve route or use a
 dedicated hostname before retrying the connector.
+
+For the current Tailscale Funnel shape, the protected-resource metadata route
+must preserve the backend path:
+
+```bash
+tailscale funnel --bg --yes \
+  --set-path /.well-known/oauth-protected-resource \
+  http://127.0.0.1:8065/.well-known/oauth-protected-resource
+```
+
+After discovery passes, run
+`scripts/check_invoicing_readonly_oauth_e2e.py`. It dynamically registers a
+temporary OAuth client, approves it with
+`ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN`, exchanges the authorization
+code for a bearer token, and lists the MCP tools. It must report exactly the
+eight read-only tools above and does not call invoice/service/balance/payment
+tools.
 
 ### Intelligence MCP Server (33 tools)
 ```bash
