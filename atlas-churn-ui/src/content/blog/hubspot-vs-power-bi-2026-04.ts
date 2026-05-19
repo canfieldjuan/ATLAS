@@ -91,12 +91,6 @@ const post: BlogPost = {
   }
 ],
   data_context: {
-  "affiliate_url": "https://example.com/atlas-live-test-partner",
-  "affiliate_partner": {
-    "name": "Atlas Live Test Partner",
-    "product_name": "Atlas B2B Software Partner",
-    "slug": "atlas-b2b-software-partner"
-  },
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'HubSpot vs Power BI: 91 Reviewer Complaints Compared',

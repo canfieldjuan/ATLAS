@@ -111,12 +111,6 @@ const post: BlogPost = {
   }
 ],
   data_context: {
-  "affiliate_url": "https://example.com/atlas-live-test-partner",
-  "affiliate_partner": {
-    "name": "Atlas Live Test Partner",
-    "product_name": "Atlas B2B Software Partner",
-    "slug": "atlas-b2b-software-partner"
-  },
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'Magento Reviews 2026: Analysis of 1047 User Experiences',
