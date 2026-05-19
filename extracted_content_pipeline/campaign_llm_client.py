@@ -6,6 +6,7 @@ import inspect
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from .campaign_ports import LLMMessage, LLMResponse
@@ -141,7 +142,7 @@ class PipelineLLMClient:
     ) -> Any:
         if hasattr(llm, "chat"):
             return llm.chat(
-                messages,
+                _to_chat_messages(messages),
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
@@ -191,6 +192,18 @@ def _messages_to_prompt(messages: Sequence[LLMMessage]) -> tuple[str | None, str
         else:
             prompt_parts.append(content)
     return "\n\n".join(system_parts) or None, "\n\n".join(prompt_parts)
+
+
+def _to_chat_messages(messages: Sequence[LLMMessage]) -> list[Any]:
+    return [
+        SimpleNamespace(
+            role=str(getattr(message, "role", "") or ""),
+            content=str(getattr(message, "content", "") or ""),
+            tool_calls=getattr(message, "tool_calls", None),
+            tool_call_id=getattr(message, "tool_call_id", None),
+        )
+        for message in messages
+    ]
 
 
 def _to_response(result: Any, *, llm: Any) -> LLMResponse:

@@ -87,6 +87,24 @@ async def test_pipeline_llm_client_resolves_and_normalizes_chat_response():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_llm_client_chat_messages_include_tool_fields():
+    llm = _ChatLLM()
+    client = PipelineLLMClient(resolver=lambda **_: llm)
+
+    await client.complete(
+        [LLMMessage(role="user", content="Write the email")],
+        max_tokens=200,
+        temperature=0.2,
+    )
+
+    message = llm.calls[0]["messages"][0]
+    assert message.role == "user"
+    assert message.content == "Write the email"
+    assert message.tool_calls is None
+    assert message.tool_call_id is None
+
+
+@pytest.mark.asyncio
 async def test_pipeline_llm_client_accepts_async_chat_result():
     client = PipelineLLMClient(resolver=lambda **_: _AsyncChatLLM())
 
