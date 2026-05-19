@@ -10,24 +10,14 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from extracted_content_pipeline.campaign_example import (  # noqa: E402
-    DeterministicCampaignLLM,
-    StaticCampaignSkillStore,
-)
-from extracted_content_pipeline.campaign_generation import (  # noqa: E402
-    CampaignGenerationConfig,
-)
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
-from extracted_content_pipeline.campaign_postgres_generation import (  # noqa: E402
-    generate_campaign_drafts_from_postgres,
-)
 from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
     import_campaign_opportunities,
 )
@@ -39,7 +29,6 @@ from extracted_content_pipeline.ingestion_diagnostics import (  # noqa: E402
     inspect_ingestion_file,
 )
 
-
 def _load_script_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
@@ -49,6 +38,10 @@ def _load_script_module(name: str, path: Path):
     return module
 
 
+_source_postgres_helpers = _load_script_module(
+    "content_ops_source_postgres_smoke_helpers",
+    ROOT / "scripts" / "content_ops_source_postgres_smoke_helpers.py",
+)
 _source_smoke = _load_script_module(
     "content_ops_review_source_generation_smoke",
     ROOT / "scripts" / "smoke_content_ops_review_source_generation.py",
@@ -62,12 +55,17 @@ DEFAULT_SUMMARY_SOURCES = _source_smoke.DEFAULT_SUMMARY_SOURCES
 _create_pool = _source_smoke._create_pool
 _csv_list = _source_smoke._csv_list
 _default_database_url = _source_smoke._default_database_url
-_draft_errors = _source_smoke._draft_errors
 _load_dotenv_files = _source_smoke._load_dotenv_files
 _row_for_source = _source_smoke._row_for_source
 _write_jsonl = _source_smoke._write_jsonl
 fetch_review_source_rows = _source_smoke.fetch_review_source_rows
 fetch_review_source_summary = _source_smoke.fetch_review_source_summary
+draft_errors = _source_postgres_helpers.draft_errors
+fetch_saved_drafts = _source_postgres_helpers.fetch_saved_drafts
+generate_imported_target_drafts = _source_postgres_helpers.generate_imported_target_drafts
+generation_errors = _source_postgres_helpers.generation_errors
+saved_draft_target_errors = _source_postgres_helpers.saved_draft_target_errors
+schema_readiness_errors = _source_postgres_helpers.schema_readiness_errors
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -237,7 +235,12 @@ async def run_review_source_postgres_smoke(
                     )
 
             if not errors:
-                errors.extend(await _schema_readiness_errors(pool, args))
+                errors.extend(
+                    await schema_readiness_errors(
+                        pool,
+                        opportunity_table=str(args.opportunity_table),
+                    )
+                )
 
             if not errors:
                 loaded = load_source_campaign_opportunities_from_file(
@@ -268,21 +271,19 @@ async def run_review_source_postgres_smoke(
                     )
 
             if not errors:
-                drafts_result = await _generate_imported_target_drafts(
+                drafts_result = await generate_imported_target_drafts(
                     pool=pool,
-                    args=args,
+                    account_id=str(args.account_id),
+                    user_id=args.user_id,
+                    target_mode=str(args.target_mode),
                     channels=channels,
                     target_ids=imported_target_ids,
+                    opportunity_table=str(args.opportunity_table),
                 )
-                saved_drafts = await _fetch_saved_drafts(pool, drafts_result.get("saved_ids") or [])
-                if drafts_result.get("errors"):
-                    errors.append(
-                        f"generation reported {len(drafts_result.get('errors') or [])} error(s)"
-                    )
-                if int(drafts_result.get("skipped") or 0):
-                    errors.append(f"generation skipped {drafts_result.get('skipped')} draft(s)")
+                saved_drafts = await fetch_saved_drafts(pool, drafts_result.get("saved_ids") or [])
+                errors.extend(generation_errors(drafts_result))
                 errors.extend(
-                    _draft_errors(
+                    draft_errors(
                         {"drafts": saved_drafts},
                         min_drafts=min_drafts,
                         forbidden_phrases=args.forbidden_phrase,
@@ -293,7 +294,7 @@ async def run_review_source_postgres_smoke(
                         f"expected at least {min_drafts} persisted draft(s), "
                         f"got {drafts_result.get('generated', 0)}"
                     )
-                errors.extend(_saved_draft_target_errors(saved_drafts, imported_target_ids))
+                errors.extend(saved_draft_target_errors(saved_drafts, imported_target_ids))
         except Exception as exc:  # pragma: no cover - exercised by live host DBs
             errors.append(f"{type(exc).__name__}: {exc}")
     finally:
@@ -323,147 +324,6 @@ async def run_review_source_postgres_smoke(
             encoding="utf-8",
         )
     return (0 if not errors else 1), payload
-
-
-async def _generate_imported_target_drafts(
-    *,
-    pool: Any,
-    args: argparse.Namespace,
-    channels: Sequence[str],
-    target_ids: Sequence[str],
-) -> dict[str, Any]:
-    saved_ids: list[str] = []
-    errors: list[Mapping[str, Any]] = []
-    requested = 0
-    generated = 0
-    skipped = 0
-    reasoning_contexts_used = 0
-    for target_id in target_ids:
-        result = await generate_campaign_drafts_from_postgres(
-            pool,
-            scope={"account_id": args.account_id, "user_id": args.user_id},
-            target_mode=str(args.target_mode),
-            channel=channels[0],
-            channels=tuple(channels),
-            limit=1,
-            filters={"target_id": target_id},
-            llm=DeterministicCampaignLLM(),
-            skills=StaticCampaignSkillStore(),
-            config=CampaignGenerationConfig(channels=tuple(channels), limit=1),
-            opportunity_table=str(args.opportunity_table),
-        )
-        data = result.as_dict()
-        requested += int(data.get("requested") or 0)
-        generated += int(data.get("generated") or 0)
-        skipped += int(data.get("skipped") or 0)
-        reasoning_contexts_used += int(data.get("reasoning_contexts_used") or 0)
-        saved_ids.extend(str(item) for item in data.get("saved_ids") or ())
-        errors.extend(error for error in data.get("errors") or () if isinstance(error, Mapping))
-    return {
-        "requested": requested,
-        "generated": generated,
-        "skipped": skipped,
-        "reasoning_contexts_used": reasoning_contexts_used,
-        "saved_ids": saved_ids,
-        "errors": [dict(error) for error in errors],
-    }
-
-
-async def _schema_readiness_errors(pool: Any, args: argparse.Namespace) -> list[str]:
-    required_tables = (
-        str(args.opportunity_table),
-        "b2b_campaigns",
-    )
-    missing: list[str] = []
-    for table_name in required_tables:
-        exists = await _relation_exists(pool, table_name)
-        if not exists:
-            missing.append(table_name)
-    if not missing:
-        return []
-    command = (
-        "python scripts/run_extracted_content_pipeline_migrations.py "
-        "--database-url \"$EXTRACTED_DATABASE_URL\""
-    )
-    return [
-        "required Content Ops table(s) missing: "
-        f"{', '.join(missing)}. Run {command} before this smoke."
-    ]
-
-
-async def _relation_exists(pool: Any, table_name: str) -> bool:
-    value = await pool.fetchval("SELECT to_regclass($1)::text", table_name)
-    return bool(value)
-
-
-async def _fetch_saved_drafts(pool: Any, saved_ids: Sequence[Any]) -> list[dict[str, Any]]:
-    if not isinstance(saved_ids, Sequence) or isinstance(saved_ids, (str, bytes)):
-        return []
-    ids = [str(item) for item in saved_ids if str(item or "").strip()]
-    if not ids:
-        return []
-    rows = await pool.fetch(
-        """
-        SELECT id, subject, body, target_mode, channel, metadata
-          FROM b2b_campaigns
-         WHERE id::text = ANY($1::text[])
-        """,
-        ids,
-    )
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        metadata = _metadata_object(_row_value(row, "metadata"))
-        source_opportunity = metadata.get("source_opportunity")
-        if not isinstance(source_opportunity, Mapping):
-            source_opportunity = {}
-        target_id = metadata.get("target_id") or source_opportunity.get("target_id")
-        out.append({
-            "id": str(_row_value(row, "id") or ""),
-            "target_id": str(target_id or ""),
-            "subject": _row_value(row, "subject"),
-            "body": _row_value(row, "body"),
-            "target_mode": _row_value(row, "target_mode"),
-            "channel": _row_value(row, "channel"),
-        })
-    return out
-
-
-def _row_value(row: Any, key: str) -> Any:
-    if isinstance(row, Mapping):
-        return row.get(key)
-    return row[key]
-
-
-def _metadata_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return dict(parsed) if isinstance(parsed, Mapping) else {}
-    return {}
-
-
-def _saved_draft_target_errors(
-    saved_drafts: Sequence[Mapping[str, Any]],
-    imported_target_ids: Sequence[str],
-) -> list[str]:
-    imported = {str(target_id) for target_id in imported_target_ids}
-    errors: list[str] = []
-    for draft in saved_drafts:
-        draft_id_value = draft.get("id")
-        draft_id = str(draft_id_value) if draft_id_value is not None else ""
-        target_id_value = draft.get("target_id")
-        target_id = str(target_id_value) if target_id_value is not None else ""
-        if not target_id:
-            errors.append(f"persisted draft missing target_id metadata: {draft_id or '<unknown>'}")
-            continue
-        if target_id not in imported:
-            errors.append(f"persisted draft target_id was not imported: {target_id}")
-    return errors
-
 
 def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:
     if as_json:

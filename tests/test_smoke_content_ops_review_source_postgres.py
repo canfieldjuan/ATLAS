@@ -155,14 +155,6 @@ def _saved_draft_row(*, body=None):
     }
 
 
-class _GenerationResult:
-    def __init__(self, data):
-        self._data = dict(data)
-
-    def as_dict(self):
-        return dict(self._data)
-
-
 def _args(**overrides):
     values = {
         "source": "g2",
@@ -346,17 +338,17 @@ async def test_review_source_postgres_smoke_fails_on_generation_errors_and_skips
     )
     monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
 
-    async def generate_with_error(*_args, **_kwargs):
-        return _GenerationResult({
+    async def generate_with_error(**_kwargs):
+        return {
             "requested": 1,
             "generated": 1,
             "skipped": 1,
             "reasoning_contexts_used": 0,
             "saved_ids": ["campaign-1"],
             "errors": [{"target_id": "review-1", "reason": "bad"}],
-        })
+        }
 
-    monkeypatch.setattr(smoke, "generate_campaign_drafts_from_postgres", generate_with_error)
+    monkeypatch.setattr(smoke, "generate_imported_target_drafts", generate_with_error)
 
     code, payload = await smoke.run_review_source_postgres_smoke(
         _args(min_drafts=1),
