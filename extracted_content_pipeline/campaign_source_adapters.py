@@ -379,6 +379,26 @@ def parse_default_fields_or_exit(values: Sequence[str] | None) -> dict[str, str]
         raise SystemExit(str(exc)) from exc
 
 
+def parse_default_fields_with_booking_url_or_exit(
+    values: Sequence[str] | None,
+    *,
+    booking_url: str | None = None,
+) -> dict[str, Any]:
+    """Parse CLI defaults and add an optional selling booking URL."""
+
+    defaults: dict[str, Any] = parse_default_fields_or_exit(values)
+    cleaned_url = str(booking_url or "").strip()
+    if not cleaned_url:
+        return defaults
+    selling = defaults.get("selling")
+    selling_defaults = dict(selling) if isinstance(selling, Mapping) else {}
+    defaults["selling"] = {
+        **selling_defaults,
+        "booking_url": cleaned_url,
+    }
+    return defaults
+
+
 def _clean_default_fields(default_fields: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         str(key): value
@@ -796,6 +816,7 @@ __all__ = [
     "SourceDataFormat",
     "load_source_campaign_opportunities_from_file",
     "parse_default_fields",
+    "parse_default_fields_with_booking_url_or_exit",
     "parse_default_fields_or_exit",
     "source_row_to_campaign_opportunity",
     "source_rows_to_campaign_opportunities",

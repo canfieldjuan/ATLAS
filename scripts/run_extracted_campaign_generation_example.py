@@ -23,7 +23,7 @@ from extracted_content_pipeline.campaign_customer_data import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
-    parse_default_fields_or_exit,
+    parse_default_fields_with_booking_url_or_exit,
 )
 from extracted_content_pipeline.campaign_reasoning_data import (  # noqa: E402
     load_reasoning_provider_port,
@@ -132,6 +132,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Fallback metadata applied to every source row when --source-rows "
             "is selected. Repeat as key=value."
         ),
+    )
+    parser.add_argument(
+        "--booking-url",
+        help="Fallback selling.booking_url applied to source-row opportunities.",
     )
     parser.add_argument(
         "--limit",
@@ -329,7 +333,10 @@ async def _main() -> int:
         source_rows=bool(args.source_rows),
         source_format=args.source_format,
         max_source_text_chars=int(args.max_source_text_chars),
-        default_fields=parse_default_fields_or_exit(args.default_field),
+        default_fields=parse_default_fields_with_booking_url_or_exit(
+            args.default_field,
+            booking_url=args.booking_url if args.source_rows else None,
+        ),
     )
     if args.target_mode:
         payload["target_mode"] = args.target_mode

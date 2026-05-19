@@ -11,6 +11,7 @@ from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
     parse_default_fields,
+    parse_default_fields_with_booking_url_or_exit,
     parse_default_fields_or_exit,
     source_row_to_campaign_opportunity,
     source_rows_to_campaign_opportunities,
@@ -243,6 +244,27 @@ def test_parse_default_fields_rejects_invalid_values() -> None:
 def test_parse_default_fields_or_exit_raises_clean_system_exit() -> None:
     with pytest.raises(SystemExit, match="key=value"):
         parse_default_fields_or_exit(["company_name"])
+
+
+def test_parse_default_fields_with_booking_url_nests_selling_context() -> None:
+    defaults = parse_default_fields_with_booking_url_or_exit(
+        ["company_name=Acme Logistics"],
+        booking_url=" https://app.example.test/book ",
+    )
+
+    assert defaults == {
+        "company_name": "Acme Logistics",
+        "selling": {"booking_url": "https://app.example.test/book"},
+    }
+
+
+def test_parse_default_fields_with_booking_url_ignores_blank_url() -> None:
+    defaults = parse_default_fields_with_booking_url_or_exit(
+        ["company_name=Acme Logistics"],
+        booking_url="   ",
+    )
+
+    assert defaults == {"company_name": "Acme Logistics"}
 
 
 def test_source_document_title_does_not_become_buyer_fields() -> None:
@@ -1426,6 +1448,36 @@ def test_source_adapter_cli_applies_default_fields(tmp_path: Path) -> None:
     opportunity = json.loads(completed.stdout)["opportunities"][0]
     assert opportunity["company_name"] == "Acme Logistics"
     assert opportunity["contact_email"] == "ops@example.com"
+
+
+def test_source_adapter_cli_applies_booking_url_to_selling_context(tmp_path: Path) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(
+        json.dumps({
+            "id": "g2-review-1",
+            "vendor": "Slack",
+            "review_text": "Search gets slow once message history grows.",
+        }),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--format",
+            "jsonl",
+            "--booking-url",
+            "https://app.example.test/book",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    opportunity = json.loads(completed.stdout)["opportunities"][0]
+    assert opportunity["selling"] == {"booking_url": "https://app.example.test/book"}
 
 
 def test_source_adapter_cli_rejects_non_positive_text_limit(tmp_path: Path) -> None:

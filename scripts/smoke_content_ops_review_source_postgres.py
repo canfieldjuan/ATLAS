@@ -26,7 +26,7 @@ from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
 )
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
-    parse_default_fields_or_exit,
+    parse_default_fields_with_booking_url_or_exit,
 )
 from extracted_content_pipeline.ingestion_diagnostics import (  # noqa: E402
     inspect_ingestion_file,
@@ -170,17 +170,10 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 
 def _default_fields_for_args(args: argparse.Namespace) -> dict[str, Any]:
-    defaults: dict[str, Any] = parse_default_fields_or_exit(args.default_field)
-    booking_url = str(getattr(args, "booking_url", "") or "").strip()
-    if not booking_url:
-        return defaults
-    selling = defaults.get("selling")
-    selling_defaults = dict(selling) if isinstance(selling, Mapping) else {}
-    defaults["selling"] = {
-        **selling_defaults,
-        "booking_url": booking_url,
-    }
-    return defaults
+    return parse_default_fields_with_booking_url_or_exit(
+        args.default_field,
+        booking_url=getattr(args, "booking_url", None),
+    )
 
 
 async def _fetch_review_inputs(

@@ -320,7 +320,8 @@ directly:
 python scripts/run_extracted_campaign_generation_example.py \
   extracted_content_pipeline/examples/campaign_source_rows.jsonl \
   --source-rows \
-  --source-format jsonl
+  --source-format jsonl \
+  --booking-url https://book.customer.com/demo
 
 python scripts/run_extracted_campaign_generation_example.py \
   extracted_content_pipeline/examples/campaign_source_bundle.json \
@@ -348,7 +349,9 @@ generation, import, or smoke commands.
 For anonymous review exports such as G2 rows without buyer/contact columns,
 repeat `--default-field key=value` to bind the evidence to a target account at
 conversion, generation, inspection, smoke, or import time. Source-row values
-win when both the row and the default provide the same field.
+win when both the row and the default provide the same field. Use
+`--booking-url` on the source conversion or generation commands to apply a
+fallback `selling.booking_url` CTA to every converted opportunity.
 For customer bundle JSON files that group collections such as `reviews`,
 `support_tickets`, `surveys`, `calls`, `meetings`, `deals`, `account_notes`,
 `contracts`, `renewals`, or `subscriptions` under shared account metadata, use

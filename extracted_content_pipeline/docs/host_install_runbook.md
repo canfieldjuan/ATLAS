@@ -236,6 +236,8 @@ Customer bundle JSON can group `reviews`, `support_tickets`, `surveys`,
 For JSONL or CSV source exports that do not carry shared account metadata,
 repeat `--default-field key=value` on the conversion, inspection, smoke,
 generation, or import command. Defaults are fallbacks; row-specific values win.
+Use `--booking-url` on the source conversion or offline generation commands to
+apply a fallback `selling.booking_url` CTA to every converted opportunity.
 Rows with `deal_id` or `opportunity_id` are inferred as CRM deal evidence; rows
 with `note_id` or `activity_id` are inferred as CRM note evidence.
 Rows with `contract_id`, `renewal_id`, or `subscription_id` are inferred as
