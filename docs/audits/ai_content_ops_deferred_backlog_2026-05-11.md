@@ -132,6 +132,14 @@ row imported, 2 offline deterministic campaign drafts persisted
 (`email_cold`, `email_followup`), and the draft export CLI returned both rows
 under `account_id=content_ops_smoke`.
 
+**Live-provider smoke update:** PR #628 added optional `--llm pipeline` mode to
+the review-source Postgres smoke, and PR #630 added the same mode to the CFPB
+support-ticket-like Postgres smoke. Both paths still default to deterministic
+offline generation for CI and host readiness, but operators can now run the
+same imported source rows through the product `PipelineLLMClient` seam when
+database and provider credentials are available. A live operator run remains
+manual because this session did not have those credentials loaded.
+
 ## Current Pick Recommendation
 
 The host-facing AI Content Ops reasoning-policy arc is complete for the current
@@ -162,7 +170,8 @@ the list above in its plan doc.
 
 The review-source readiness and Postgres smoke closeouts do not create a new
 active Content Ops implementation backlog. G2 can use the existing exporter,
-source-row import, DB-backed draft persistence, and draft export path.
+source-row import, DB-backed draft persistence, optional live-provider
+generation mode, and draft export path.
 Capterra and TrustRadius now also pass the Postgres smoke. The TrustRadius run
 surfaced and closed a row-export gap: summary counts found 31 quote-grade rows
 while the row exporter returned 0 because quote-grade filtering happened after
@@ -177,5 +186,6 @@ organization names, issue descriptions, latest comments, and ticket/case
 titles. PR #621 exposed the existing backend `default_fields` contract in
 Atlas Intel so operators can bind fallback account/contact/vendor metadata
 without editing each source row. These close the known generic source-row
-ingestion friction. Further source breadth should still wait for a real host
-export fixture.
+ingestion friction. PR #630 added optional live-provider mode to the CFPB
+support-ticket-like Postgres smoke, matching the review-source path. Further
+source breadth should still wait for a real host export fixture.
