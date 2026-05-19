@@ -71,6 +71,24 @@ Use the draft-only contract in
 ChatGPT connector. The first write surface is draft creation/update only;
 send, payment, void, PDF export, and service mutation stay out of scope.
 
+The first write connector is `atlas-invoicing-draft-writer` at:
+
+```text
+https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+Use the draft-writer launcher and smokes:
+
+```bash
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py --dry-run
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+.venv/bin/python scripts/check_invoicing_draft_writer_oauth_e2e.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
 ## Step 2: add OAuth mode
 
 Use `atlas_brain/mcp/invoicing_readonly_oauth.py` as the template. The minimum
