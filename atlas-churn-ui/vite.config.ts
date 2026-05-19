@@ -255,12 +255,43 @@ function prerenderPlugin() {
         ...blogRoutes,
       ]
 
+      // Strip the default SEO meta tags from the base shell before
+      // injecting per-route versions. Without this, each prerendered
+      // page ships duplicate `og:*` / `twitter:*` / `description` tags
+      // -- the generic homepage values first, then the per-route ones
+      // -- and some no-JS crawlers (the audience for prerender) read
+      // the FIRST occurrence and end up with the generic metadata.
+      // Codex flagged this on PR #642.
+      //
+      // We keep `<meta charset>`, `<meta viewport>`, `<meta theme-color>`,
+      // `<link rel="icon">`, and the Vite-injected `<script>` / stylesheet
+      // links untouched -- those are not duplicated by the prerender
+      // plugin and have no per-route variant.
+      const SEO_TAG_RE = new RegExp(
+        [
+          // <title>...</title>
+          '\\s*<title>[^<]*<\\/title>',
+          // <meta name="description" ...>
+          '\\s*<meta\\s+name=["\']description["\'][^>]*\\/?>',
+          // <meta property="og:..." ...> (anywhere in tag, attribute order varies)
+          '\\s*<meta\\s+[^>]*property=["\']og:[^"\']+["\'][^>]*\\/?>',
+          // <meta name="twitter:..." ...>
+          '\\s*<meta\\s+[^>]*name=["\']twitter:[^"\']+["\'][^>]*\\/?>',
+        ].join('|'),
+        'gi',
+      )
+      const baseHtmlStripped = baseHtml.replace(SEO_TAG_RE, '')
+
       let count = 0
       for (const route of routes) {
         const headHtml = buildHeadHtml(route)
-        const rendered = baseHtml
-          .replace(/<title>[^<]*<\/title>/, `<title>${htmlEscape(route.title)}</title>`)
-          .replace('</head>', `${headHtml}\n  </head>`)
+        // Inject the route's own title + the rest of the head block
+        // before </head>. The base shell no longer has a <title> to
+        // replace, so the new one lands inside the head HTML block.
+        const rendered = baseHtmlStripped.replace(
+          '</head>',
+          `    <title>${htmlEscape(route.title)}</title>\n${headHtml}\n  </head>`,
+        )
         const segments = route.path.split('/').filter(Boolean)
         const outDir = segments.length === 0 ? distDir : join(distDir, ...segments)
         if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })

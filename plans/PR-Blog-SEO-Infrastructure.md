@@ -45,7 +45,7 @@ A small companion change on `atlas-intel-ui/` adds `Organization` +
 `BreadcrumbList` alongside `BlogPosting` on its blog posts, parity
 with the churn-ui work.
 
-## Scope
+## Scope (this PR)
 
 1. Port the prerender plugin from `atlas-intel-ui/vite.config.ts`
    to `atlas-churn-ui/vite.config.ts`. Adapted for churn-ui's
@@ -56,14 +56,23 @@ with the churn-ui work.
      * `/blog`, `/methodology`, `/landing` -- basic head + OG/Twitter
      * `/blog/<slug>` -- BlogPosting + BreadcrumbList + FAQPage
        (when `faq` is populated)
-3. Add `atlas-churn-ui/vercel.json` with rewrite rules so requests
-   like `/blog/<slug>` resolve to `dist/blog/<slug>/index.html`
-   instead of falling through to the SPA's `/index.html` shell.
-4. Add `atlas-churn-ui/public/og-default.png` (copied from
+3. Before injecting per-route head tags, strip the generic SEO
+   meta tags (title, description, og:*, twitter:*) from the base
+   shell so each prerendered page ships exactly one set of metadata
+   (closes Codex P1 on duplicate tags).
+4. Update the existing root `vercel.json` with prerender-aware
+   rewrite rules so requests like `/blog/<slug>` resolve to
+   `atlas-churn-ui/dist/blog/<slug>/index.html` instead of falling
+   through to the SPA's `/index.html` shell. The repo-root
+   `vercel.json` is the file Vercel actually reads (its
+   `installCommand` and `outputDirectory` already point at
+   `atlas-churn-ui/`); any subfolder `vercel.json` would be
+   ignored.
+5. Add `atlas-churn-ui/public/og-default.png` (copied from
    `atlas-intel-ui/public/`). The existing `BlogPost.tsx:53`
    JSON-LD references `https://churnsignals.co/og-default.png`;
    without the asset, social unfurls 404 the image.
-5. On `atlas-intel-ui/vite.config.ts`: add `Organization` + `WebSite`
+6. On `atlas-intel-ui/vite.config.ts`: add `Organization` + `WebSite`
    (with `SearchAction`) entries to the existing `LANDING_JSON_LD`
    `@graph`, and add a `BreadcrumbList` entry to the per-blog-post
    `@graph` so intel-ui blog posts emit Home -> Blog -> Post
@@ -72,7 +81,7 @@ with the churn-ui work.
 ### Files touched
 
 - `atlas-churn-ui/vite.config.ts`
-- `atlas-churn-ui/vercel.json`
+- `vercel.json` (root; rewrites updated in place, not a new file)
 - `atlas-churn-ui/public/og-default.png`
 - `atlas-intel-ui/vite.config.ts`
 - `plans/PR-Blog-SEO-Infrastructure.md`
