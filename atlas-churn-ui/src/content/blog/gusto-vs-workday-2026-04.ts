@@ -129,7 +129,6 @@ const post: BlogPost = {
   "category_filter": "HR / HCM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>This analysis draws from 317 enriched reviews across verified platforms (G2, Gartner, TrustRadius, Capterra) and community sources (Reddit, forums). We focus on complaint patterns, not definitive product truth. Public reviews are self-selected, so we treat them as sentiment evidence rather than universal claims.</p>
 <p>The core contrast is clear. Gusto reviewers report acute pricing friction—unauthorized withdrawals, hidden fees, and aggressive enforcement within 24-hour windows. Workday reviewers cite support quality failures and training inadequacy, with specific March 2026 incidents involving botched onboarding and quality review threats. Both platforms retain customers despite these pain points, which suggests the friction is real but not yet catastrophic.</p>
 <p>This comparison uses exact counts, scoped claims, and direct reviewer quotes. We do not inflate numbers or generalize beyond what the evidence supports. The goal is to help B2B decision-makers understand where each platform struggles and which buyer segments feel the most pressure.</p>

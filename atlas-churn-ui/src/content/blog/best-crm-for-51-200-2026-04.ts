@@ -162,7 +162,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Choosing a CRM for a team of 51-200 employees means balancing simplicity with scalability. You need something that works today without locking you into a platform that collapses under growth or bleeds budget through hidden fees.</p>
 <p>We analyzed 1163 real user reviews across 8 CRM tools to find who's actually best for what. The data comes from verified platforms like G2, Gartner, and PeerSpot (172 reviews), plus community sources like Reddit (3115 reviews), covering the period from February 25 to April 7, 2026.</p>
 <p>This is not a marketing roundup. It's a buyer's guide grounded in what reviewers report when they're evaluating, switching, or staying put. We'll show you the ratings, the recurring pain patterns, and the honest fit for each vendor—including who should avoid them.</p>

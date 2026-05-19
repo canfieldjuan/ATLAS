@@ -123,7 +123,6 @@ const post: BlogPost = {
   "category_filter": "E-commerce"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Shopify attracts inbound migrations from 3 documented competitor platforms based on analysis of 2383 total reviews collected between March 3 and April 6, 2026. This analysis examined 1067 enriched reviews, including 72 with explicit churn intent signals, to identify the platforms teams are leaving, the pain categories driving those decisions, and the practical considerations that shape successful migrations.</p>
 <p>The data comes from verified review platforms including G2, Gartner Peer Insights, and PeerSpot (33 reviews), and community platforms including Reddit (1034 reviews). The analysis reflects self-selected reviewer feedback and represents perception patterns rather than universal product capabilities.</p>
 <p>Migration triggers cluster around pricing pressure, with reviewers reporting monthly app fees escalating from $29 to $87 and total costs breaching the $300/month threshold for small merchants. These increases coincide with complexity thresholds that require third-party integrations, compounding the cost burden. The timing pattern suggests merchants evaluate alternatives immediately following monthly billing cycles when app fees show month-over-month increases.</p>

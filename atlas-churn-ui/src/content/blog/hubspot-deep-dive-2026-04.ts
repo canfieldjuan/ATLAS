@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Marketing Automation"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>HubSpot dominates conversations in marketing automation and CRM spaces, but what do actual users report about the experience? This analysis draws on <strong>1680 reviews</strong> collected between March 3, 2026 and April 6, 2026, with <strong>770 enriched for detailed sentiment analysis</strong>. The data comes from G2, Gartner Peer Insights, PeerSpot, and Reddit, representing both verified purchasers and community feedback.</p>
 <p>The reviewer base skews toward community sources (722 Reddit discussions, 48 verified platform reviews), which means this analysis captures candid, unfiltered sentiment alongside structured review data. <strong>63 reviews show explicit switching intent or active evaluation of alternatives</strong>, providing insight into where HubSpot's value proposition breaks down for specific buyer segments.</p>
 <p>This is not a product capability assessment. This is a perception analysis — what reviewers experience, where they report friction, and what the complaint patterns suggest about buyer fit. HubSpot's technical capabilities may exceed or fall short of reviewer experiences depending on deployment context, team sophistication, and use case alignment.</p>

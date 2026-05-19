@@ -117,7 +117,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>SentinelOne has become a frequent destination for teams evaluating endpoint security alternatives. Analysis of 488 total reviews between March 3 and April 8, 2026 reveals documented migration patterns from 3 competitor platforms, with active evaluation signals present in the review corpus.</p>
 <p>This guide examines where SentinelOne users are coming from, what triggers the switch, and what practical migration considerations emerge from reviewer experience. The analysis draws on 328 enriched reviews across verified platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit), with 35 reviews from verified platforms and 293 from community discussions.</p>
 <p>The data reflects self-selected reviewer feedback during a high-churn market period. Pricing friction appears as an explicit barrier at $7 to $10 per agent per month, particularly for SMB buyers, while enterprise reviewers more often frame the same price point as competitive for EDR functionality.</p>

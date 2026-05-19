@@ -111,7 +111,6 @@ const post: BlogPost = {
 ],
   related_slugs: ["switch-to-clickup-2026-03", "why-teams-leave-azure-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Shopify attracts migration traffic from multiple e-commerce platforms, with 93 switching signals visible across 1,503 enriched reviews collected between March 3 and March 29, 2026. These are not casual browsers—92 reviewers describe active evaluation of alternatives, and 2 report explicit switches already completed.</p>
 <p>This analysis draws on reviews from Reddit (1,243), Trustpilot (196), and verified platforms including G2, Capterra, and TrustRadius (260 verified reviews total). The data reflects reviewer perception patterns, not definitive product capability assessments.</p>
 <p>The migration pattern is notable for its breadth. Reviewers describe switching from 4 distinct competitor platforms, spanning open-source solutions, legacy POS systems, and niche e-commerce tools. The dominant trigger is a price squeeze—sustained pricing complaints across buyer roles, with pricing mentioned in 20% of reviews and driving active evaluation of alternatives. Pricing pain accelerated 16% in the recent window, while outcome gap complaints nearly doubled (+95%), suggesting buyers are re-evaluating ROI.</p>

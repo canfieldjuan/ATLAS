@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Marketing Automation"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Mailchimp has long been the default choice for small business email marketing. With 1,184 reviews across public platforms, the platform shows strong brand recognition and widespread adoption. However, a detailed analysis of 411 enriched reviews from Reddit, G2, Gartner Peer Insights, and PeerSpot reveals a platform in transition—one where user satisfaction is increasingly strained by pricing pressure and feature gaps.</p>
 <p>This deep dive synthesizes reviewer feedback across multiple dimensions: strengths, weaknesses, pain points, integrations, buyer personas, and competitive positioning. The data spans February 28 to April 6, 2026, capturing the immediate aftermath of Mailchimp's free plan cuts and recent price increases.</p>
 <p><strong>Data scope:</strong> 411 enriched reviews analyzed. 29 verified platform reviews (G2, Gartner, PeerSpot) and 382 community reviews (Reddit). High confidence in sentiment and complaint patterns. All evidence reflects reviewer perception, not product capability claims.</p>

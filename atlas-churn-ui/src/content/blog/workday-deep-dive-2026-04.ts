@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "HR / HCM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Workday dominates enterprise HR software conversations, but what do actual users say when the sales cycle ends and implementation begins? This analysis draws on 868 public reviews collected between March 3 and April 4, 2026, from G2, Gartner Peer Insights, PeerSpot, Reddit, and other B2B software review platforms. Of these, 224 reviews were enriched with detailed metadata, and 29 came from verified review platforms.</p>
 <p>The data reveals a platform with strong core capabilities undermined by implementation complexity and support inconsistency. Workday's HCM foundation earns praise from HR managers and analysts who successfully navigate deployment. But the path to that success is littered with frustrated administrators, confused end users, and organizations wrestling with integration challenges.</p>
 <p>This is not a hit piece or a puff piece. It is a signal intelligence report. Every vendor shows both strengths and weaknesses in reviewer data. Workday is no exception. The goal here is to help potential buyers understand what the sentiment patterns suggest about deployment risk, buyer fit, and where the platform genuinely excels versus where users consistently struggle.</p>

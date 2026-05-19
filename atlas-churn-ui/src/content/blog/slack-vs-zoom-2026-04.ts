@@ -129,7 +129,6 @@ const post: BlogPost = {
   "category_filter": "Communication"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Slack and Zoom occupy different lanes in the communication software category, but both face reviewer pressure in early 2026. Across 120 reviewer signals analyzed from March 3 to April 8, 2026, Slack shows an urgency score of 3.1 compared to Zoom's 2.3—a 0.8 gap that suggests Slack users report more immediate evaluation pressure.</p>
 <p>The 75 Slack signals and 45 Zoom signals come from 747 enriched reviews across verified platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit, Hacker News). This analysis reflects reviewer perception, not universal product truth. Self-selected feedback reveals complaint patterns and switching signals, but cannot prove causation or generalize to all users.</p>
 <p>Slack reviewers describe workflow substitution patterns where teams migrate primary communication from real-time chat to asynchronous document-based tools. Zoom reviewers cluster around pricing backlash following unannounced subscription renewals and support friction when attempting to downgrade. Both vendors operate in an entrenchment market regime where Microsoft Teams exerts consolidation pressure through bundling advantages.</p>

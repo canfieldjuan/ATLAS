@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Cloud Infrastructure"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Linode has accumulated 580 reviews across verified platforms and community channels, creating a substantial evidence base for understanding how the cloud infrastructure provider performs in real-world deployments. This analysis examines 188 enriched reviews collected between March 3 and April 7, 2026, with 19 from verified platforms like G2 and PeerSpot, and 169 from community sources including Reddit.</p>
 <p>The review period coincides with Linode's post-acquisition integration under Akamai ownership, a timing factor that surfaces repeatedly in reviewer commentary. The data shows 31 active evaluation signals, suggesting some users are reassessing their infrastructure choices during this transition period.</p>
 <p>This deep dive synthesizes complaint patterns, competitive pressure, buyer personas, and timing triggers to provide a comprehensive view of where Linode excels and where friction emerges. The analysis draws from public B2B software review platforms and represents self-selected reviewer feedback rather than universal product capability.</p>

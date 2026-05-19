@@ -145,7 +145,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>This analysis examines <strong>765 public reviews of Fortinet</strong> collected between March 3 and April 4, 2026, from verified review platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit). Of these, <strong>518 reviews were enriched with detailed sentiment analysis</strong>, and <strong>30 reviews showed explicit churn intent or active evaluation of alternatives</strong>.</p>
 <p>The data source is self-selected reviewer feedback — people who chose to write reviews, not a representative sample of all Fortinet users. This analysis identifies <strong>patterns in reviewer sentiment</strong>, not definitive product capabilities. Where complaint themes cluster, what reviewers praise, and how Fortinet compares to frequently mentioned alternatives.</p>
 <p><strong>Source distribution:</strong> 492 community reviews (Reddit), 26 verified reviews (G2, Gartner, PeerSpot). The heavy Reddit presence reflects where Fortinet discussions naturally occur — among network administrators and IT professionals seeking peer advice.</p>

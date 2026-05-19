@@ -120,7 +120,6 @@ const post: BlogPost = {
   }
 ],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Notion and Salesforce occupy different market positions — one a productivity and knowledge management platform, the other a CRM and enterprise software suite. Yet both face reviewer scrutiny in the same analysis window, and the contrast in urgency scores tells a story about where frustration concentrates.</p>
 <p>This analysis draws on 2791 enriched reviews from G2, Capterra, Reddit, and other public platforms, collected between February 25 and March 29, 2026. Notion generated 1233 review signals with an urgency score of <strong>2.4/10</strong>. Salesforce generated 1558 signals with an urgency score of <strong>1.8/10</strong> — a 0.6 point gap.</p>
 <p>Urgency scores measure the intensity of frustration expressed in reviews, not just the volume of complaints. A higher score indicates reviewers use stronger language, mention switching intent more frequently, and express more immediate dissatisfaction. The 0.6 gap suggests Notion reviewers are closer to a breaking point than Salesforce reviewers, even though Salesforce has more total review volume.</p>

@@ -109,7 +109,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every CRM has a flaw. Some charge too much. Some ship half-baked features. Some frustrate users so thoroughly that reviewers stop recommending them altogether.</p>
 <p>We analyzed <strong>1202 complaints</strong> across <strong>8 major CRM vendors</strong> between February 25 and April 7, 2026. The data comes from verified review platforms (G2, Gartner Peer Insights, PeerSpot) and community discussions (Reddit, Hacker News). We enriched 3326 reviews from a total pool of 4989, isolating 176 churn-intent signals and tracking complaint patterns by category, urgency, and timing.</p>
 <p>This is not a "best CRM" listicle. It is a structured breakdown of what actually frustrates users—vendor by vendor, complaint by complaint. No affiliate spin. No vendor favoritism. Just the data, the quotes, and the trade-offs you need to know.</p>

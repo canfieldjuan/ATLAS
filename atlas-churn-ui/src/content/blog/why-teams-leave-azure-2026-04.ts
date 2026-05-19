@@ -48,7 +48,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>The sample includes 986 enriched reviews from verified platforms (G2, Capterra, Gartner Peer Insights) and community sources (Reddit, Hacker News, Stack Overflow). Of those, 31 came from verified review platforms and 955 from community discussions. The average urgency score across all Azure reviews is 2.5 out of 10, but 55 reviews carried high urgency signals.</p>
 <p>This analysis treats public reviews as self-selected sentiment evidence, not universal product truth. Switching signals reflect reviewer perception and intent, not completed migrations. The goal is to present what reviewers report without overstating what review data can prove.</p>
 <p>The data shows pricing pressure as the dominant switching trigger, with specific references to Broadcom pricing changes and vSphere 7 license expirations. One reviewer described vSphere 7 Standard licenses expiring "in 2 days" with no usable perpetual replacement path, forcing immediate decisions under Broadcom's new pricing model. At the same time, Azure retains customers through trial credits, support quality, user experience, and feature breadth, though pricing signals show contradictory patterns.</p>

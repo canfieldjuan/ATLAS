@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Azure sits at the center of a market shift driven by external pricing pressure rather than category-wide disruption. Between March 3 and April 7, 2026, we analyzed 2327 Azure reviews across verified platforms (G2, Gartner, PeerSpot, Capterra) and community channels (Reddit, Hacker News, Stack Overflow). Of those, 986 reviews were enriched with structured pain signals, buying stage indicators, and competitive displacement patterns.</p>
 <p>The analysis reveals immediate timing pressure: vSphere 7 Standard licenses expire within 2 days for some organizations, forcing rapid decisions under Broadcom's new VMware pricing model. Three high-intent accounts (CDW, Snyk, CSP) show active Azure evaluation signals, and 5 live evaluation signals are visible across the dataset. AWS remains the primary competitive alternative with 15 displacement mentions, while Azure retains customers through trial credits, support quality, and feature breadth—though pricing complaints suggest those retention anchors may be promotional rather than structural.</p>
 <p>This is not a hit piece or a puff piece. It is a structured look at what reviewers report, where pressure concentrates, and when friction turns into action.</p>

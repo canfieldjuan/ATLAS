@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>SentinelOne sits at the center of ongoing EDR category evaluation activity. This deep dive analyzes 484 reviews collected between March 3 and April 6, 2026, drawing from verified platforms including G2, Gartner Peer Insights, PeerSpot, and community sources like Reddit. Of the 428 reviews analyzed, 323 were enriched with structured sentiment and pain-category data, providing a detailed view of where SentinelOne creates value and where friction surfaces.</p>
 <p>The analysis reveals a split perception: enterprise buyers accept SentinelOne's pricing for its functionality, while SMB segment reviewers cite affordability barriers at $7 to $10 per agent per month. Active evaluation signals are present, with pricing friction creating urgency for cost-comparison conversations. The EDR category exhibits high churn velocity, suggesting active buyer movement driven by functionality and operational fit rather than pure cost competition.</p>
 <p>This is a self-selected sample. Reviewers who take time to document their experience may not represent all users. Treat the patterns here as sentiment evidence, not universal product truth.</p>

@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>ClickUp has built a reputation as a feature-rich project management platform designed to replace multiple tools with one consolidated workspace. But what happens when that consolidation strategy meets real-world team workflows?</p>
 <p>This analysis examines 1058 ClickUp reviews collected between February 28, 2026 and April 8, 2026 from verified platforms including G2, Gartner Peer Insights, PeerSpot, and community sources like Reddit. Of those, 437 reviews were enriched with detailed complaint patterns, buyer role data, and switching intent signals. 42 reviews showed explicit churn or evaluation intent.</p>
 <p>The data reveals a platform wrestling with the consequences of its own ambition. Users praise ClickUp's feature breadth and customization depth, but navigation confusion, notification overload, and pricing friction cluster around the same consolidation strategy that makes the platform attractive. One Group Director managing client operations reported that "when scheduling a task for someone, their available hours not visible during scheduling"—a concrete example of how workflow consolidation creates visibility gaps.</p>

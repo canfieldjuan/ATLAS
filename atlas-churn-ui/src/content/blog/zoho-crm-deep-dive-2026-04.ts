@@ -155,7 +155,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Zoho CRM sits in a crowded market where pricing pressure defines competitive dynamics. This analysis draws on 940 reviews collected between February 28, 2026 and April 4, 2026, with 268 enriched for detailed sentiment analysis. The data comes from G2, Gartner, PeerSpot, and Reddit—a mix of verified review platforms (28 reviews) and community sources (240 reviews).</p>
 <p><strong>What this analysis can tell you:</strong> Where reviewer sentiment clusters—both positive and negative. What pain categories show the highest urgency scores. Which buyer roles report the most friction. What integrations and use cases reviewers actually describe.</p>
 <p><strong>What it cannot tell you:</strong> Whether Zoho CRM will work for your specific use case. Universal product quality claims. Definitive competitive rankings. The data reflects the experiences of people who chose to write reviews, not all users.</p>

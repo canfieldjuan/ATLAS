@@ -89,7 +89,6 @@ const post: BlogPost = {
 ],
   related_slugs: ["notion-vs-salesforce-2026-03", "jira-vs-trello-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>The B2B software market in 2026 presents decision-makers with 17 major platform choices, each showing distinct patterns in reviewer sentiment. This analysis draws on 26,335 enriched reviews from G2, Capterra, Reddit, and other platforms, collected between February 25 and March 29, 2026. Of these, 2,146 reviews show explicit switching intent—8.1% of the enriched sample.</p>
 <p>These are not product capability assessments. This is perception data: what teams who chose to write reviews report about their experiences. The sample overrepresents strong opinions—both positive and negative—and reflects the self-selected population of software reviewers, not all users.</p>
 <p>The data reveals a market in "price squeeze" mode. Pricing complaints remain stable at high volume (114.4 total mentions, 6 recent), while support quality has eroded sharply (73 total mentions, 1 recent, representing an 86% decline). Feature gaps are accelerating (+50% recent versus prior period), creating what the data suggests is a compounding vulnerability window for vendors who cannot maintain support quality while managing pricing pressure.</p>

@@ -121,7 +121,6 @@ const post: BlogPost = {
 ],
   related_slugs: ["why-teams-leave-azure-2026-03", "switch-to-shopify-2026-03", "notion-vs-salesforce-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Based on 1,017 total reviews analyzed between February 28 and March 29, 2026, ClickUp is attracting users from at least 7 competitor platforms. This analysis draws on 645 enriched reviews from G2, Capterra, Reddit, Trustpilot, and other public B2B software review platforms to understand migration patterns, triggers, and practical considerations.</p>
 <p>The data shows 80 active buyer evaluation signals right now — teams are comparing ClickUp against alternatives in real time. Decision-maker churn rate among competing platforms sits at 11.4%, meaning roughly 1 in 9 decision-makers reviewing competitor products show switching intent.</p>
 <p><strong>Data foundation</strong>: This analysis reflects self-selected reviewer feedback from verified platforms (229 reviews) and community sources (416 reviews). The patterns described represent reviewer experiences, not universal product truths. Sample size is sufficient for high-confidence pattern detection.</p>

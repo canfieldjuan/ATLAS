@@ -129,7 +129,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Microsoft Teams and Salesforce serve different primary functions—collaboration versus CRM—but both face pricing and integration pressure in the March-April 2026 review window. Across 108 signals (34 for Microsoft Teams, 74 for Salesforce), the urgency gap is stark: Salesforce registers 3.2 compared to Microsoft Teams' 1.9, a 1.3-point difference.</p>
 <p>This analysis draws from 2,878 reviews analyzed between February 25 and April 7, 2026, with 1,697 enriched for churn intent and 90 showing active switching signals. Sources include verified platforms (G2, Gartner, PeerSpot) and community platforms (Reddit, GitHub). The sample reflects self-selected reviewer feedback, not universal product performance.</p>
 <p>Two distinct pricing narratives emerge: Microsoft Teams faces Windows 11 forced upgrade friction and bundled suite costs, while Salesforce grapples with Agentforce pricing at $550/user/month versus Microsoft Dynamics 365 at $65/user/month—an 8.5x gap that surfaced explicitly in March 2026 comparisons. Decision-maker churn rates diverge sharply: 0% for Microsoft Teams, 16.7% for Salesforce.</p>

@@ -135,7 +135,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Two mid-market CRM platforms. Two distinct support friction patterns. One consolidated market backdrop.</p>
 <p>Between February 28 and April 6, 2026, we analyzed 32 reviewer complaints mentioning Insightly or Zoho CRM. Insightly generated 20 signals with an average urgency of 2.4. Zoho CRM produced 12 signals at 1.9 urgency. The 0.5-point gap separates the two, though neither crosses into high-urgency territory.</p>
 <p>This analysis draws from 291 enriched reviews across verified platforms (G2, Gartner, Capterra) and community sources (Reddit, Trustpilot). The dataset includes 46 verified reviews and 245 community posts. We focus on complaint patterns, not product capability claims.</p>

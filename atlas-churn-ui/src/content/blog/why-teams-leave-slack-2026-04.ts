@@ -48,7 +48,6 @@ const post: BlogPost = {
   "category_filter": "Communication"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>75 reviewers mentioned switching away from Slack in 283 reviews analyzed from March 3 to April 7, 2026. Average urgency across all reviews was 3.2 out of 10—moderate dissatisfaction, not crisis-level.</p>
 <p>This is not a story about mass exodus. It is a story about workflow migration.</p>
 <p>Teams are not necessarily abandoning Slack entirely. Witness evidence shows a pattern: teams keep Slack installed but move primary communication to asynchronous document-based workflows. One reviewer reported switching to Notion docs for primary communication. Another described using Loom for design reviews instead of Slack.</p>

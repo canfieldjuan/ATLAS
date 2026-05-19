@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Communication"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Slack has 1448 reviews in the analysis window, with 476 enriched for deeper intelligence. This deep dive examines reviewer sentiment, pain patterns, competitive pressure, and timing signals from March 3 to April 7, 2026.</p>
 <p>The data comes from verified platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit, Slashdot). 36 reviews come from verified platforms; 440 from community discussions. This is a self-selected sample. Results reflect reviewer perception, not universal product truth.</p>
 <p>The analysis identifies 6 strengths and 8 weaknesses, with 46 reviews showing churn intent. Two accounts show active evaluation signals. Witness evidence reveals workflow migration pressure as teams shift primary communication to asynchronous tools within the past few months.</p>

@@ -109,7 +109,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-30. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>WooCommerce attracts inbound migration from at least 2 documented competitor platforms, based on analysis of 1467 reviews collected between March 3 and March 30, 2026. This migration pattern reveals specific pain points driving teams away from alternatives and toward WooCommerce's open-source e-commerce model.</p>
 <p>The data shows <strong>678 enriched reviews</strong> with substantive migration context, providing insight into what triggers the switch and what teams encounter during the transition. This analysis draws on verified reviews from G2 (11 reviews) and community discussions from Reddit (667 reviews). Readers should understand that this represents self-selected reviewer feedback — the experiences of people who chose to share their migration stories publicly.</p>
 <p>The synthesis intelligence layer identifies a <strong>price squeeze</strong> pattern as the primary wedge driving migration interest. Specifically, reviewers describe accumulation of layered payment processing costs: platform transaction fees from competing SaaS alternatives, card transaction rates, payout fees, and plugin subscription costs. This creates recurring friction around total cost of ownership for store operators.</p>
