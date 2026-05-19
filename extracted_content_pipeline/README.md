@@ -199,6 +199,31 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --json
 ```
 
+Public CFPB complaint narratives can also seed the same source-row path when
+you want support-ticket-like evidence without using seller or review-site data.
+The exporter reads CFPB's public CSV endpoint, keeps narrative-bearing
+complaints, and emits `source_type="support_ticket"` rows. Account and contact
+binding still comes from host defaults:
+
+```bash
+python scripts/export_content_ops_cfpb_sources.py \
+  --company "Example Bank" \
+  --search-term fees \
+  --limit 25 \
+  --output cfpb_sources.jsonl
+```
+
+```bash
+python scripts/smoke_content_ops_cfpb_source_postgres.py \
+  --company "Example Bank" \
+  --search-term fees \
+  --limit 1 \
+  --account-id acct_123 \
+  --default-field company_name="Acme Logistics" \
+  --default-field contact_email=ops@example.com \
+  --json
+```
+
 Before converting or importing a customer export, inspect ingestion readiness:
 
 ```bash

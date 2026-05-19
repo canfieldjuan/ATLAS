@@ -27,6 +27,8 @@ pytest \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
   tests/test_export_content_ops_review_sources.py \
+  tests/test_export_content_ops_cfpb_sources.py \
+  tests/test_smoke_content_ops_cfpb_source_postgres.py \
   tests/test_extracted_content_ingestion_diagnostics.py \
   tests/test_extracted_blog_generation.py \
   tests/test_extracted_blog_blueprint_ingest.py \
