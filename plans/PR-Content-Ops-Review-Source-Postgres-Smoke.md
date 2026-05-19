@@ -48,7 +48,7 @@ This exceeds the 400 LOC soft cap because the smoke is only useful as one route 
 
 ## Verification
 
-- Focused Postgres smoke tests -> `6 passed`.
+- Focused Postgres smoke tests -> `7 passed`.
 - Python compile check for smoke script/tests -> passed.
 - Live G2/Slack Postgres smoke -> reached readiness/export/ingestion, then failed cleanly with `UndefinedTableError: relation "campaign_opportunities" does not exist`; host database needs extracted migrations before the smoke can pass live.
 - `git diff --check` -> passed.
@@ -58,8 +58,8 @@ This exceeds the 400 LOC soft cap because the smoke is only useful as one route 
 
 | Area | Estimated LOC |
 |---|---:|
-| Smoke script | 472 |
-| Tests | 358 |
+| Smoke script | 480 |
+| Tests | 381 |
 | Docs/status | 36 |
 | Coordination and plan | 72 |
-| Total | 938 |
+| Total | 969 |
