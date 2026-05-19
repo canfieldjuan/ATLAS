@@ -46,9 +46,9 @@ def test_source_type_precedence_table_matches_current_contract() -> None:
         (("contract_id",), "contract"),
         (("subscription_id",), "subscription"),
         (("complaint",), "complaint"),
-        (("ticket_id",), "support_ticket"),
-        (("case_id",), "case"),
-        (("conversation_id",), "conversation"),
+        (("ticket_id", "ticket_number", "request_id"), "support_ticket"),
+        (("case_id", "case_number"), "case"),
+        (("conversation_id", "conversation_number"), "conversation"),
         (("nps_score", "nps"), "nps_response"),
         (("csat_score", "csat"), "csat_response"),
         (("survey_id", "response_id"), "survey_response"),
@@ -310,6 +310,72 @@ def test_source_row_accepts_provider_style_ticket_field_labels() -> None:
         "source_id": "ticket-1",
         "source_type": "support_ticket",
         "source_title": "Renewal pricing escalation",
+    }]
+
+
+def test_source_row_accepts_common_helpdesk_ticket_aliases() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Ticket Number": "ZD-1001",
+        "Organization Name": "Acme Logistics",
+        "Vendor Name": "Zendesk",
+        "Requester Email": "ops@example.com",
+        "Requester Name": "Jordan Lee",
+        "Requester Title": "VP Revenue Operations",
+        "Ticket Title": "Attribution export blocked",
+        "Issue Description": (
+            "The support team cannot export campaign attribution data before renewal."
+        ),
+        "Pain Category": "reporting limits",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "ZD-1001"
+    assert opportunity["source_type"] == "support_ticket"
+    assert opportunity["company_name"] == "Acme Logistics"
+    assert opportunity["vendor_name"] == "Zendesk"
+    assert opportunity["contact_email"] == "ops@example.com"
+    assert opportunity["contact_name"] == "Jordan Lee"
+    assert opportunity["contact_title"] == "VP Revenue Operations"
+    assert opportunity["source_title"] == "Attribution export blocked"
+    assert "Ticket Title" not in opportunity
+    assert opportunity["pain_points"] == ["reporting limits"]
+    assert opportunity["evidence"] == [{
+        "text": (
+            "The support team cannot export campaign attribution data before renewal."
+        ),
+        "source_id": "ZD-1001",
+        "source_type": "support_ticket",
+        "source_title": "Attribution export blocked",
+    }]
+
+
+def test_source_row_accepts_case_aliases_and_latest_comment_text() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Case Number": "CASE-42",
+        "Customer Company": "Northstar Finance",
+        "Customer Email": "admin@northstar.example",
+        "Customer Contact Name": "Maya Chen",
+        "Customer Title": "Director of Support",
+        "Current Vendor": "Intercom",
+        "Case Subject": "SLA export delays",
+        "Latest Comment": "The team cannot prove SLA history before renewal.",
+    })
+
+    assert warnings == ()
+    assert opportunity["target_id"] == "CASE-42"
+    assert opportunity["source_type"] == "case"
+    assert opportunity["company_name"] == "Northstar Finance"
+    assert opportunity["vendor_name"] == "Intercom"
+    assert opportunity["contact_email"] == "admin@northstar.example"
+    assert opportunity["contact_name"] == "Maya Chen"
+    assert opportunity["contact_title"] == "Director of Support"
+    assert opportunity["source_title"] == "SLA export delays"
+    assert "Case Subject" not in opportunity
+    assert opportunity["evidence"] == [{
+        "text": "The team cannot prove SLA history before renewal.",
+        "source_id": "CASE-42",
+        "source_type": "case",
+        "source_title": "SLA export delays",
     }]
 
 

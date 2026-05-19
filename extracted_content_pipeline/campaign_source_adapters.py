@@ -72,8 +72,12 @@ _SOURCE_ID_KEYS = (
     "subscription_id",
     "document_id",
     "ticket_id",
+    "ticket_number",
     "case_id",
+    "case_number",
     "conversation_id",
+    "conversation_number",
+    "request_id",
     "survey_id",
     "response_id",
     "feedback_id",
@@ -88,12 +92,17 @@ _TEXT_KEYS = (
     "complaint",
     "message",
     "description",
+    "issue_description",
     "summary",
     "notes",
     "feedback",
     "feedback_text",
     "response_text",
     "comment_text",
+    "latest_comment",
+    "initial_message",
+    "requester_message",
+    "customer_message",
     "open_ended_response",
 )
 _THREAD_KEYS = (
@@ -121,14 +130,37 @@ _THREAD_TEXT_KEYS = (
 )
 _THREAD_SPEAKER_KEYS = ("speaker", "author", "role", "name")
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
-_SOURCE_TITLE_KEYS = ("source_title", "ticket_subject", "subject", "title", "name")
-_SOURCE_TITLE_COLLISION_KEYS = ("subject", "ticket_subject", "title", "name")
+_SOURCE_TITLE_KEYS = (
+    "source_title",
+    "ticket_subject",
+    "ticket_title",
+    "case_subject",
+    "case_title",
+    "subject",
+    "title",
+    "name",
+)
+_SOURCE_TITLE_COLLISION_KEYS = (
+    "subject",
+    "ticket_subject",
+    "ticket_title",
+    "case_subject",
+    "case_title",
+    "title",
+    "name",
+)
 _PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
 _PARENT_EXCLUDE_KEYS = set(_ROW_LIST_KEYS) | set(_SOURCE_TITLE_COLLISION_KEYS)
 _COMPANY_KEYS = (
     "company_name",
     "company",
+    "account",
     "account_name",
+    "organization",
+    "organization_name",
+    "requester_company",
+    "requester_organization",
+    "customer_company",
     "reviewer_company",
     "customer_name",
 )
@@ -139,9 +171,31 @@ _VENDOR_KEYS = (
     "current_vendor",
     "product_name",
 )
-_CONTACT_NAME_KEYS = ("contact_name", "recipient_name", "person_name")
-_CONTACT_EMAIL_KEYS = ("contact_email", "recipient_email", "email")
-_CONTACT_TITLE_KEYS = ("contact_title", "recipient_title", "job_title")
+_CONTACT_NAME_KEYS = (
+    "contact_name",
+    "recipient_name",
+    "person_name",
+    "requester_name",
+    "requester",
+    "customer_contact_name",
+    "user_name",
+)
+_CONTACT_EMAIL_KEYS = (
+    "contact_email",
+    "recipient_email",
+    "email",
+    "requester_email",
+    "customer_email",
+    "user_email",
+)
+_CONTACT_TITLE_KEYS = (
+    "contact_title",
+    "recipient_title",
+    "job_title",
+    "requester_title",
+    "customer_title",
+    "user_title",
+)
 _NPS_SCORE_KEYS = ("nps_score", "nps")
 _CSAT_SCORE_KEYS = ("csat_score", "csat")
 _CANONICAL_TEXT_ALIAS_KEYS = (
@@ -169,9 +223,9 @@ _SOURCE_TYPE_PRECEDENCE = (
     (("contract_id",), "contract"),
     (("subscription_id",), "subscription"),
     (("complaint",), "complaint"),
-    (("ticket_id",), "support_ticket"),
-    (("case_id",), "case"),
-    (("conversation_id",), "conversation"),
+    (("ticket_id", "ticket_number", "request_id"), "support_ticket"),
+    (("case_id", "case_number"), "case"),
+    (("conversation_id", "conversation_number"), "conversation"),
     (("nps_score", "nps"), "nps_response"),
     (("csat_score", "csat"), "csat_response"),
     (("survey_id", "response_id"), "survey_response"),
@@ -410,7 +464,8 @@ def source_row_to_campaign_opportunity(
     opportunity = {
         str(key): value
         for key, value in row.items()
-        if value not in (None, "", [], {}) and key not in _SOURCE_TITLE_COLLISION_KEYS
+        if value not in (None, "", [], {})
+        and not _is_source_title_collision_key(str(key))
     }
     _copy_alias_text(opportunity, lookup, "company_name", _COMPANY_KEYS)
     _copy_alias_text(opportunity, lookup, "vendor_name", _VENDOR_KEYS)
@@ -690,6 +745,18 @@ def _copy_alias_value(
         if value not in (None, "", [], {}):
             opportunity[canonical_key] = value
             return
+
+
+def _is_source_title_collision_key(key: str) -> bool:
+    normalized_key = _normalized_field_key(key)
+    compact_key = _compact_field_key(key)
+    for alias in _SOURCE_TITLE_COLLISION_KEYS:
+        if (
+            _normalized_field_key(alias) == normalized_key
+            or _compact_field_key(alias) == compact_key
+        ):
+            return True
+    return False
 
 
 def _field_value(row: Mapping[str, Any], key: str) -> Any:
