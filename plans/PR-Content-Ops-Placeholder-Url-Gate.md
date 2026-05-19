@@ -17,7 +17,8 @@ real asset, blog post, or booking URL.
    `body` and `cta` fields.
 2. Skip affected drafts with a clear `placeholder_url` error instead of
    persisting them.
-3. Add focused service tests for body and CTA placeholder URL rejection.
+3. Add focused service tests for body, CTA, scheme-less, punctuation-terminated,
+   subdomain, and email-address false-positive behavior.
 4. Register this slice in the coordination ledger.
 
 ### Files touched
@@ -59,7 +60,7 @@ Local checks:
 
 ```bash
 pytest tests/test_extracted_campaign_generation.py
-# 40 passed
+# 44 passed
 
 python -m py_compile extracted_content_pipeline/campaign_generation.py tests/test_extracted_campaign_generation.py
 # passed
@@ -75,16 +76,26 @@ python scripts/audit_extracted_standalone.py --fail-on-debt
 
 bash scripts/check_ascii_python.sh
 # passed
+
+python scripts/smoke_content_ops_review_source_postgres.py \
+  --source g2 --vendor Slack --limit 1 \
+  --account-id content_ops_live_g2_gate_20260519_125733 \
+  --llm pipeline --min-drafts 2 --json
+# expected fail-closed: 0 generated, 2 skipped with reason=placeholder_url
+
+python scripts/export_extracted_campaign_drafts.py \
+  --account-id content_ops_live_g2_gate_20260519_125733 --format json
+# count=0
 ```
 
 ## Estimated diff size
 
 | File | LOC churn (approx) |
 |---|---:|
-| `extracted_content_pipeline/campaign_generation.py` | 30 |
-| `tests/test_extracted_campaign_generation.py` | 55 |
-| `docs/extraction/coordination/inflight.md` | 2 |
-| `plans/PR-Content-Ops-Placeholder-Url-Gate.md` | 70 |
-| **Total** | **157** |
+| `extracted_content_pipeline/campaign_generation.py` | 20 |
+| `tests/test_extracted_campaign_generation.py` | 178 |
+| `docs/extraction/coordination/inflight.md` | 3 |
+| `plans/PR-Content-Ops-Placeholder-Url-Gate.md` | 101 |
+| **Total** | **302** |
 
 Below the 400 LOC review budget.

@@ -394,6 +394,80 @@ async def test_generate_skips_scheme_less_placeholder_url_with_www_prefix():
 
 
 @pytest.mark.asyncio
+async def test_generate_skips_placeholder_url_before_sentence_punctuation():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "Read the summary at example.com.",
+            "cta": "Book time at localhost, then bring your team.",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_placeholder_subdomain_url():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "Read the summary at https://demo.example.com/report",
+            "cta": "Keep building",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_treat_email_address_as_placeholder_url():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "Coordinate with ops@example.com before rollout.",
+            "cta": "Book time",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert result.errors == ()
+    assert len(campaigns.saved) == 1
+
+
+@pytest.mark.asyncio
 async def test_generate_includes_opportunity_payload_when_skill_has_no_placeholders():
     service, _, _, llm, _ = _service(
         [{"id": "opp-1", "company_name": "Acme", "pain": "pricing pressure"}],

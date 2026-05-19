@@ -39,8 +39,9 @@ from .services._parse_retry_helpers import (
 
 _PROOF_TERM_TEXT_KEYS = ("excerpt_text", "quote", "text", "anchor", "value")
 _PLACEHOLDER_URL_RE = re.compile(
-    r"(?<![A-Za-z0-9.-])(?:https?://)?(?:www\.)?"
-    r"(?:example\.(?:com|org|net)|localhost)(?::\d+)?(?:[/?#:]|$)",
+    r"(?<![A-Za-z0-9.@-])(?:https?://)?(?:www\.)?"
+    r"(?:(?:[A-Za-z0-9-]+\.)*example\.(?:com|org|net)|localhost)"
+    r"(?::\d+)?(?=$|[\s/?#:.,;!?)\]}>'\"])",
     re.IGNORECASE,
 )
 
