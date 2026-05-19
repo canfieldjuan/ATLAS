@@ -48,7 +48,16 @@ function decorateAffiliateLinks(
     highlightAffiliateLinks: boolean
   },
 ) {
-  if (!highlightAffiliateLinks || !affiliateUrl || typeof DOMParser === 'undefined') {
+  // Run whenever an affiliate URL is present, regardless of the preview-
+  // highlight flag. The function has two concerns:
+  //   1. Always: tag matching anchors with rel="sponsored" for FTC + Google
+  //      compliance. Affiliate links must declare the commercial relationship
+  //      so Google can attribute the link correctly and readers see the
+  //      relationship surfaced in browser link-info dialogs.
+  //   2. Preview-only (when highlightAffiliateLinks=true): paint the visual
+  //      dashed outline + data-preview-affiliate marker so admin reviewers
+  //      can scan a draft for affiliate placements.
+  if (!affiliateUrl || typeof DOMParser === 'undefined') {
     return html
   }
 
@@ -59,13 +68,25 @@ function decorateAffiliateLinks(
     anchors.forEach((anchor) => {
       const href = String(anchor.getAttribute('href') || '').trim()
       if (!href || href !== affiliateUrl) return
-      const existingStyle = String(anchor.getAttribute('style') || '').trim()
-      anchor.setAttribute(
-        'style',
-        existingStyle ? `${existingStyle};${AFFILIATE_INLINE_STYLE}` : AFFILIATE_INLINE_STYLE,
-      )
-      anchor.setAttribute('data-preview-affiliate', 'true')
-      anchor.setAttribute('title', 'Affiliate link')
+
+      // Always: ensure rel includes "sponsored". Preserve any existing
+      // tokens like "noopener" / "noreferrer" so we don't drop the
+      // security attributes set by upstream prose authors.
+      const existingRel = String(anchor.getAttribute('rel') || '').trim()
+      const relTokens = new Set(existingRel.split(/\s+/).filter(Boolean))
+      relTokens.add('sponsored')
+      anchor.setAttribute('rel', Array.from(relTokens).join(' '))
+
+      // Preview-only: visual decoration.
+      if (highlightAffiliateLinks) {
+        const existingStyle = String(anchor.getAttribute('style') || '').trim()
+        anchor.setAttribute(
+          'style',
+          existingStyle ? `${existingStyle};${AFFILIATE_INLINE_STYLE}` : AFFILIATE_INLINE_STYLE,
+        )
+        anchor.setAttribute('data-preview-affiliate', 'true')
+        anchor.setAttribute('title', 'Affiliate link')
+      }
     })
     return doc.body.innerHTML.replace(/^<div>|<\/div>$/g, '')
   } catch {
@@ -217,7 +238,15 @@ export default function BlogArticleView({
           <a
             href={cta.url}
             target="_blank"
-            rel="noopener noreferrer"
+            // Affiliate-mode CTAs declare the commercial relationship via
+            // rel="sponsored" (FTC + Google guidelines). Generic-mode CTAs
+            // are non-commercial (Cal.com booking, internal report) and
+            // keep just the security attributes.
+            rel={
+              cta.mode === 'affiliate'
+                ? 'sponsored noopener noreferrer'
+                : 'noopener noreferrer'
+            }
             className="inline-block px-6 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-white font-semibold transition-colors"
           >
             {cta.buttonText}
