@@ -1,13 +1,15 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
+
+const BASE_URL = 'https://churnsignals.co'
+const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
 
 function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
     closeBundle() {
-      // Read blog index to extract slugs
       const indexPath = resolve(import.meta.dirname, 'src/content/blog/index.ts')
       if (!existsSync(indexPath)) return
 
@@ -19,7 +21,6 @@ function sitemapPlugin() {
         slugs.push(match[1])
       }
 
-      // Also extract from individual .ts files in the blog directory
       const blogDir = resolve(import.meta.dirname, 'src/content/blog')
       for (const file of readdirSync(blogDir)) {
         if (file.endsWith('.ts') && file !== 'index.ts') {
@@ -31,12 +32,12 @@ function sitemapPlugin() {
 
       const today = new Date().toISOString().split('T')[0]
       const urls = [
-        { loc: 'https://churnsignals.co/', priority: '1.0', changefreq: 'weekly' },
-        { loc: 'https://churnsignals.co/blog', priority: '0.9', changefreq: 'daily' },
-        { loc: 'https://churnsignals.co/methodology', priority: '0.6', changefreq: 'monthly' },
-        { loc: 'https://churnsignals.co/landing', priority: '0.8', changefreq: 'weekly' },
+        { loc: `${BASE_URL}/`, priority: '1.0', changefreq: 'weekly' },
+        { loc: `${BASE_URL}/blog`, priority: '0.9', changefreq: 'daily' },
+        { loc: `${BASE_URL}/methodology`, priority: '0.6', changefreq: 'monthly' },
+        { loc: `${BASE_URL}/landing`, priority: '0.8', changefreq: 'weekly' },
         ...slugs.map(slug => ({
-          loc: `https://churnsignals.co/blog/${slug}`,
+          loc: `${BASE_URL}/blog/${slug}`,
           priority: '0.7',
           changefreq: 'monthly',
         })),
@@ -61,8 +62,218 @@ ${urls.map(u => `  <url>
   }
 }
 
+interface PrerenderedRoute {
+  path: string
+  title: string
+  description: string
+  canonical: string
+  ogType: string
+  jsonLd?: object
+  faqJsonLd?: object
+  breadcrumbJsonLd?: object
+}
+
+function htmlEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function extractFaq(content: string): Array<{ question: string; answer: string }> {
+  const faqMatch = content.match(/faq:\s*\[([\s\S]*?)\n\s*\],?/)
+  if (!faqMatch) return []
+  const items: Array<{ question: string; answer: string }> = []
+  const itemRegex = /"question":\s*"((?:[^"\\]|\\.)*)"\s*,\s*"answer":\s*"((?:[^"\\]|\\.)*)"/g
+  let m
+  while ((m = itemRegex.exec(faqMatch[1])) !== null) {
+    items.push({
+      question: m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+      answer: m[2].replace(/\\"/g, '"').replace(/\\\\/g, '\\'),
+    })
+  }
+  return items
+}
+
+function buildHeadHtml(route: PrerenderedRoute): string {
+  const t = htmlEscape(route.title)
+  const d = htmlEscape(route.description)
+  const c = htmlEscape(route.canonical)
+  const lines = [
+    `<meta name="description" content="${d}" />`,
+    `<link rel="canonical" href="${c}" />`,
+    `<meta property="og:title" content="${t}" />`,
+    `<meta property="og:description" content="${d}" />`,
+    `<meta property="og:url" content="${c}" />`,
+    `<meta property="og:type" content="${htmlEscape(route.ogType)}" />`,
+    `<meta property="og:site_name" content="Churn Signals" />`,
+    `<meta property="og:image" content="${DEFAULT_OG_IMAGE}" />`,
+    `<meta property="og:image:width" content="1200" />`,
+    `<meta property="og:image:height" content="630" />`,
+    `<meta name="twitter:card" content="summary_large_image" />`,
+    `<meta name="twitter:title" content="${t}" />`,
+    `<meta name="twitter:description" content="${d}" />`,
+    `<meta name="twitter:image" content="${DEFAULT_OG_IMAGE}" />`,
+  ]
+  if (route.jsonLd) {
+    lines.push(`<script id="seo-jsonld" type="application/ld+json">${JSON.stringify(route.jsonLd)}</script>`)
+  }
+  if (route.faqJsonLd) {
+    lines.push(`<script id="seo-faq-jsonld" type="application/ld+json">${JSON.stringify(route.faqJsonLd)}</script>`)
+  }
+  if (route.breadcrumbJsonLd) {
+    lines.push(`<script id="seo-breadcrumb-jsonld" type="application/ld+json">${JSON.stringify(route.breadcrumbJsonLd)}</script>`)
+  }
+  return lines.map(l => `    ${l}`).join('\n')
+}
+
+function prerenderPlugin() {
+  return {
+    name: 'prerender-public-routes',
+    closeBundle() {
+      const distDir = resolve(import.meta.dirname, 'dist')
+      const indexHtmlPath = join(distDir, 'index.html')
+      if (!existsSync(indexHtmlPath)) return
+      const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
+
+      const organization = {
+        '@type': 'Organization',
+        name: 'Churn Signals',
+        url: BASE_URL,
+        logo: DEFAULT_OG_IMAGE,
+        sameAs: ['https://twitter.com/churnsignals', 'https://www.linkedin.com/company/churn-signals'],
+      }
+      const website = {
+        '@type': 'WebSite',
+        name: 'Churn Signals',
+        url: BASE_URL,
+        potentialAction: {
+          '@type': 'SearchAction',
+          target: `${BASE_URL}/blog?q={search_term_string}`,
+          'query-input': 'required name=search_term_string',
+        },
+      }
+      const homeGraph = { '@context': 'https://schema.org', '@graph': [organization, website] }
+
+      const blogDir = resolve(import.meta.dirname, 'src/content/blog')
+      const blogRoutes: PrerenderedRoute[] = []
+      for (const file of readdirSync(blogDir)) {
+        if (!file.endsWith('.ts') || file === 'index.ts') continue
+        const content = readFileSync(join(blogDir, file), 'utf-8')
+        const slug = (content.match(/slug:\s*'([^']+)'/) || [])[1]
+        if (!slug) continue
+        const seoTitle =
+          (content.match(/seo_title:\s*'([^']+)'/) || [])[1] ||
+          (content.match(/title:\s*'([^']+)'/) || [])[1] ||
+          'Churn Signals'
+        const seoDesc =
+          (content.match(/seo_description:\s*'([^']+)'/) || [])[1] ||
+          (content.match(/description:\s*'([^']+)'/) || [])[1] ||
+          'B2B software churn intelligence from real enterprise reviews.'
+        const date = (content.match(/date:\s*'([^']+)'/) || [])[1] || ''
+        const title = `${seoTitle} | Churn Signals`
+        const canonical = `${BASE_URL}/blog/${slug}`
+
+        const blogPosting: Record<string, unknown> = {
+          '@context': 'https://schema.org',
+          '@type': 'BlogPosting',
+          headline: seoTitle,
+          description: seoDesc,
+          datePublished: date,
+          dateModified: date,
+          image: DEFAULT_OG_IMAGE,
+          author: { '@type': 'Organization', name: 'Churn Signals' },
+          publisher: {
+            '@type': 'Organization',
+            name: 'Churn Signals',
+            url: BASE_URL,
+            logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
+          },
+          mainEntityOfPage: { '@type': 'WebPage', '@id': canonical },
+        }
+
+        const breadcrumbJsonLd = {
+          '@context': 'https://schema.org',
+          '@type': 'BreadcrumbList',
+          itemListElement: [
+            { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/` },
+            { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
+            { '@type': 'ListItem', position: 3, name: seoTitle, item: canonical },
+          ],
+        }
+
+        const faqItems = extractFaq(content)
+        const faqJsonLd = faqItems.length > 0 ? {
+          '@context': 'https://schema.org',
+          '@type': 'FAQPage',
+          mainEntity: faqItems.map(it => ({
+            '@type': 'Question',
+            name: it.question,
+            acceptedAnswer: { '@type': 'Answer', text: it.answer },
+          })),
+        } : undefined
+
+        blogRoutes.push({
+          path: `/blog/${slug}`,
+          title,
+          description: seoDesc,
+          canonical,
+          ogType: 'article',
+          jsonLd: blogPosting,
+          faqJsonLd,
+          breadcrumbJsonLd,
+        })
+      }
+
+      const routes: PrerenderedRoute[] = [
+        {
+          path: '/',
+          title: 'Churn Signals - B2B Software Churn Intelligence',
+          description: 'B2B software churn intelligence from real enterprise reviews. Track vendor switching signals, competitive displacement, and high-intent leads.',
+          canonical: `${BASE_URL}/`,
+          ogType: 'website',
+          jsonLd: homeGraph,
+        },
+        {
+          path: '/blog',
+          title: 'Blog | Churn Signals',
+          description: 'Vendor deep dives, migration guides, and switching-signal analysis from enterprise software review data.',
+          canonical: `${BASE_URL}/blog`,
+          ogType: 'website',
+        },
+        {
+          path: '/methodology',
+          title: 'Our Methodology | Churn Signals',
+          description: 'How we aggregate, classify, and surface churn signals from G2, Capterra, TrustRadius, and Reddit reviews.',
+          canonical: `${BASE_URL}/methodology`,
+          ogType: 'article',
+        },
+        {
+          path: '/landing',
+          title: 'Churn Signals - B2B Churn Intelligence',
+          description: 'Track competitive displacement and high-intent buyer signals across B2B software categories.',
+          canonical: `${BASE_URL}/landing`,
+          ogType: 'website',
+        },
+        ...blogRoutes,
+      ]
+
+      let count = 0
+      for (const route of routes) {
+        const headHtml = buildHeadHtml(route)
+        const rendered = baseHtml
+          .replace(/<title>[^<]*<\/title>/, `<title>${htmlEscape(route.title)}</title>`)
+          .replace('</head>', `${headHtml}\n  </head>`)
+        const segments = route.path.split('/').filter(Boolean)
+        const outDir = segments.length === 0 ? distDir : join(distDir, ...segments)
+        if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })
+        writeFileSync(join(outDir, 'index.html'), rendered)
+        count++
+      }
+      console.log(`  Pre-rendered ${count} public routes`)
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), sitemapPlugin()],
+  plugins: [react(), sitemapPlugin(), prerenderPlugin()],
   server: {
     host: true,
     port: 5174,
