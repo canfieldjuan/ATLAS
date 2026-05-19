@@ -108,18 +108,25 @@ already are.
 
 ## Verification
 
-- `tests/test_b2b_blog_quality_gate.py` -> 212 tests passed via
-  `pytest` (was 210, +2 new tests covering the strip).
-- Two updated existing tests
+- `python -m pytest tests/test_b2b_blog_quality_gate.py -q` ->
+  `25 passed, 1 warning in 1.01s`. The file holds the strip-related
+  coverage for this slice; 2 of the 25 are the new tests
+  (`test_quality_gate_strips_generic_section_heading_h2`,
+  `test_quality_gate_does_not_strip_non_generic_section_headings`).
+- Two pre-existing tests
   (`test_quality_gate_sanitizes_answer_prefix_and_drops_unsourced_quotes`,
   `test_quality_gate_drops_quotes_from_unexpected_vendors`) had
   their fixture-content blockquotes separated into independent
   paragraphs to satisfy the all-quote-lines-must-ground contract
   introduced in PR #625; the assertions are unchanged.
-- `git diff --check` -> passed.
-- `scripts/local_pr_review.sh` -> expected to pass.
-- `extracted_content_pipeline` re-synced via the documented
-  script.
+- `scripts/local_pr_review.sh` -> `all checks passed / local
+  PR review passed`. Covers plan-shape, plan files-touched match,
+  plan diff-size drift (308 actual vs 270 estimated = 14.1%, within
+  the script's tolerance), plan/code consistency (5/5 path claims
+  resolve, 0/0 function claims), ASCII Python policy, and
+  `git diff --check`.
+- `extracted_content_pipeline` re-synced via
+  `extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline`.
 
 ## Estimated diff size
 
