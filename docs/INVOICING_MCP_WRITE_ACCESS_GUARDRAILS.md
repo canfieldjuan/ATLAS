@@ -126,6 +126,20 @@ ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN=<long-random-token>
 ATLAS_MCP_INVOICING_DRAFT_WRITER_PORT=<dedicated-port>
 ```
 
+For local operator runs, prefer storing the approval token in a private file
+instead of passing it directly on the command line:
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+python - <<'PY' > .secrets/invoicing-draft-writer-approval-token
+import secrets
+
+print(secrets.token_urlsafe(32))
+PY
+chmod 600 .secrets/invoicing-draft-writer-approval-token
+```
+
 The approval page copy must say draft-write access, not read-only access.
 
 The connector must not share the read-only approval token. Separate scopes and
@@ -136,8 +150,11 @@ separate approval tokens make accidental privilege expansion easier to detect.
 Start the draft-writer OAuth server through the operator launcher:
 
 ```bash
-.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py --dry-run
-.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --dry-run
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token
 ```
 
 The default public route is:
@@ -158,6 +175,7 @@ Then verify OAuth token exchange and the exact four-tool surface:
 
 ```bash
 .venv/bin/python scripts/check_invoicing_draft_writer_oauth_e2e.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 ```

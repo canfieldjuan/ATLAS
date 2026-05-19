@@ -47,6 +47,7 @@ backups/
 
 # Secret keys
 .webui_secret_key
+.secrets/
 
 # Development scripts and test files (root level)
 run_dev.sh

@@ -30,6 +30,7 @@ def _args(**overrides):
         "issuer_url": "https://atlas.example.com/invoicing-draft-writer",
         "resource_url": "https://atlas.example.com/invoicing-draft-writer/mcp",
         "approval_token": "approval-token-with-enough-entropy",
+        "approval_token_file": "",
         "redirect_uri": "https://chat.openai.com/aip/callback",
         "scope": "invoices.draft.write",
         "timeout": 10.0,
@@ -57,6 +58,35 @@ def test_config_from_args_requires_values() -> None:
     assert "--issuer-url" in message
     assert "--resource-url" in message
     assert "--approval-token" in message
+
+
+def test_config_from_args_reads_approval_token_file(tmp_path) -> None:
+    module = _load_script_module()
+    token_file = tmp_path / "draft-writer-token"
+    token_file.write_text("approval-token-from-local-secret-file\n")
+
+    config = module._config_from_args(
+        _args(
+            approval_token="",
+            approval_token_file=str(token_file),
+        )
+    )
+
+    assert config.approval_token == "approval-token-from-local-secret-file"
+
+
+def test_config_from_args_rejects_empty_approval_token_file(tmp_path) -> None:
+    module = _load_script_module()
+    token_file = tmp_path / "draft-writer-token"
+    token_file.write_text("\n")
+
+    try:
+        module._config_from_args(_args(approval_token_file=str(token_file)))
+    except ValueError as exc:
+        assert "is empty" in str(exc)
+        assert "draft-writer-token" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected ValueError")
 
 
 def test_pkce_challenge_uses_s256_urlsafe_without_padding() -> None:
