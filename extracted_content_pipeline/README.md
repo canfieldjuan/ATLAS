@@ -149,6 +149,23 @@ subscription, complaint, support-ticket, conversation, case, survey, NPS, CSAT,
 and document source rows can be converted into the same opportunity payload
 first. Source rows can be JSON, JSONL, or CSV:
 
+For a customer-owned support-ticket export, start with the packaged CSV or JSON
+bundle examples. The CSV uses provider-style labels such as `Ticket ID`,
+`Account Name`, `Vendor Name`, `Subject`, and `Description`; the JSON bundle
+shows shared account metadata with multiple `support_tickets`:
+
+```bash
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --format csv \
+  --output support_ticket_opportunities.json
+
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/support_ticket_bundle.json \
+  --format json \
+  --output support_ticket_bundle_opportunities.json
+```
+
 If Atlas already has scraped B2B review rows, export one reliable source as
 Content Ops source rows before generation. The G2 path is read-only, keeps only
 canonical enriched reviews, and exports the negative/mixed quote-grade phrase
@@ -273,6 +290,11 @@ python scripts/run_extracted_campaign_generation_example.py \
   extracted_content_pipeline/examples/campaign_source_bundle.json \
   --source-rows \
   --source-format json
+
+python scripts/run_extracted_campaign_generation_example.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-rows \
+  --source-format csv
 ```
 
 They can also be loaded directly into the Postgres opportunity table:

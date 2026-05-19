@@ -1,0 +1,3 @@
+Ticket ID,Account Name,Vendor Name,Contact Email,Contact Name,Contact Title,Subject,Description,Pain Category,Source URL
+ticket-acme-1,Acme Logistics,HubSpot,ops@example.com,Jordan Lee,VP Revenue Operations,Reporting export blocked before renewal,The operations team cannot export campaign attribution data without upgrading to a higher tier.,reporting friction,https://example.com/tickets/acme-1
+ticket-northstar-1,Northstar Foods,LegacyCRM,growth@example.com,Riley Chen,Director of Growth,Sequence handoff errors keep recurring,Support notes show campaign handoffs are still being reconciled manually after every webinar.,manual follow-up,https://example.com/tickets/northstar-1
