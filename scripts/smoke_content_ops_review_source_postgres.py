@@ -423,7 +423,8 @@ def _saved_draft_target_errors(
     imported = {str(target_id) for target_id in imported_target_ids}
     errors: list[str] = []
     for draft in saved_drafts:
-        draft_id = str(draft.get("id") or "")
+        draft_id_value = draft.get("id")
+        draft_id = str(draft_id_value) if draft_id_value is not None else ""
         target_id = str(draft.get("target_id") or "")
         if not target_id:
             errors.append(f"persisted draft missing target_id metadata: {draft_id or '<unknown>'}")
