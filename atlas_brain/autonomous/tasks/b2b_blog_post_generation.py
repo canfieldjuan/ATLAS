@@ -2261,36 +2261,49 @@ def _apply_specificity_anchor_repair(
     content: dict[str, Any],
     report: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Cleanup-only repair for the legacy "Evidence anchor:" injection.
+
+    HISTORY: This function previously INJECTED an ``Evidence anchor:``
+    prose line into the post body whenever a ``witness_specificity``
+    quality check failed. The injected text used internal-pipeline
+    jargon ("Evidence anchor:", "live timing trigger", "concrete spend
+    anchor", "core pressure", "workflow shift in play"). Readers saw
+    this as broken/draft content -- 19 of 79 published posts shipped
+    with the jargon visible (measured in PR #612's baseline analyzer).
+
+    CURRENT BEHAVIOR (PR #632+): the injection path is disabled.
+    Specificity failures stay in the report so the quality gate
+    surfaces them as quality issues, holding the post for human review
+    instead of papering over with jargon. The REMOVAL path is preserved:
+    if a post body already contains an ``Evidence anchor:`` line (from
+    a prior generation, or copy-pasted from a stale template), it's
+    stripped so subsequent passes don't ship the stale prose.
+
+    ``_build_specificity_anchor_note`` is no longer called from this
+    module and exists only as dead code; future cleanup can delete it.
+    """
     updated = dict(content or {})
     body = str(updated.get("content") or "")
     has_existing_note = _has_blog_note(body, marker="Evidence anchor:")
-    if not _has_specificity_issues(report) and not has_existing_note:
+
+    if not has_existing_note:
+        # Nothing to clean up. Specificity issues (if any) remain in
+        # the report so the quality gate fails the post for human
+        # review rather than silently auto-papering over the issue.
         return updated, report, False
 
-    note = _build_specificity_anchor_note(blueprint, report)
-    if not note:
-        if not has_existing_note:
-            return updated, report, False
-        repaired_body = _remove_blog_note(body, marker="Evidence anchor:")
-        if repaired_body == body:
-            return updated, report, False
-        updated["content"] = repaired_body
-        updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
-        repaired_report = dict(repaired_report)
-        fixes = list(repaired_report.get("fixes_applied", []) or [])
-        fixes.append("removed_low_signal_witness_anchor_note")
-        repaired_report["fixes_applied"] = fixes
-        return updated, repaired_report, True
-
-    repaired_body = _insert_blog_note(body, note, marker="Evidence anchor:")
+    # Existing "Evidence anchor:" line present. Strip it. Anchor
+    # injection produced reader-hostile prose; legacy anchors should
+    # be removed on every quality pass so a refreshed post doesn't
+    # carry over jargon from the prior generation.
+    repaired_body = _remove_blog_note(body, marker="Evidence anchor:")
     if repaired_body == body:
         return updated, report, False
-
     updated["content"] = repaired_body
     updated, repaired_report = _apply_blog_quality_gate(blueprint, updated)
     repaired_report = dict(repaired_report)
     fixes = list(repaired_report.get("fixes_applied", []) or [])
-    fixes.append("added_witness_anchor_note")
+    fixes.append("removed_disabled_witness_anchor_note")
     repaired_report["fixes_applied"] = fixes
     return updated, repaired_report, True
 
