@@ -19,6 +19,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
+from extracted_content_pipeline.campaign_llm_client import (  # noqa: E402
+    create_pipeline_llm_client,
+)
 from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
     import_campaign_opportunities,
 )
@@ -29,6 +32,8 @@ from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
 from extracted_content_pipeline.ingestion_diagnostics import (  # noqa: E402
     inspect_ingestion_file,
 )
+from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: E402
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - host dependency
@@ -113,7 +118,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Smoke-test CFPB complaint rows through Content Ops source export, "
-            "Postgres import, and DB-backed offline draft generation."
+            "Postgres import, and DB-backed draft generation."
         )
     )
     parser.add_argument("--company", default=None)
@@ -130,6 +135,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-type", default=DEFAULT_SOURCE_TYPE)
     parser.add_argument("--target-mode", default="vendor_retention")
     parser.add_argument("--channels", default=",".join(DEFAULT_CHANNELS))
+    parser.add_argument(
+        "--llm",
+        choices=("offline", "pipeline"),
+        default="offline",
+        help="Use deterministic offline generation or the product PipelineLLMClient.",
+    )
     parser.add_argument("--min-drafts", type=int, default=None)
     parser.add_argument("--allow-ingestion-warnings", action="store_true")
     parser.add_argument(
@@ -173,6 +184,15 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--account-id is required")
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
+
+
+def _generation_ports_for_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.llm == "offline":
+        return {}
+    return {
+        "llm": create_pipeline_llm_client(),
+        "skills": get_skill_registry(),
+    }
 
 
 async def run_cfpb_source_postgres_smoke(
@@ -270,6 +290,7 @@ async def run_cfpb_source_postgres_smoke(
                     channels=channels,
                     target_ids=imported_target_ids,
                     opportunity_table=str(args.opportunity_table),
+                    **_generation_ports_for_args(args),
                 )
                 saved_drafts = await fetch_saved_drafts(pool, drafts_result.get("saved_ids") or [])
                 errors.extend(generation_errors(drafts_result))

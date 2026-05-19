@@ -531,8 +531,9 @@ python scripts/export_content_ops_cfpb_sources.py \
 ```
 
 The DB smoke fetches CFPB rows, inspects source-row ingestion, imports them
-under the provided account id, and persists offline generated drafts through
-the Postgres runner:
+under the provided account id, and persists generated drafts through the
+Postgres runner. It defaults to offline generation; pass `--llm pipeline` to
+use the configured product `PipelineLLMClient`:
 
 ```bash
 python scripts/smoke_content_ops_cfpb_source_postgres.py \
@@ -542,6 +543,7 @@ python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --account-id acct_123 \
   --default-field company_name="Acme Logistics" \
   --default-field contact_email=ops@example.com \
+  --llm pipeline \
   --json
 ```
 
