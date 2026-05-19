@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -104,6 +105,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Operator approval token. Defaults to ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN.",
     )
     parser.add_argument(
+        "--approval-token-file",
+        default="",
+        help=(
+            "Read the operator approval token from this local file. Prefer this over "
+            "passing write-approval secrets directly on the command line."
+        ),
+    )
+    parser.add_argument(
         "--redirect-uri",
         default=DEFAULT_REDIRECT_URI,
         help=f"OAuth redirect URI to register. Default: {DEFAULT_REDIRECT_URI}.",
@@ -126,10 +135,25 @@ def _strip_trailing_slash(url: str) -> str:
     return url.strip().rstrip("/")
 
 
+def _read_secret_file(path: str) -> str:
+    secret_path = Path(path)
+    try:
+        value = secret_path.read_text().strip()
+    except OSError as exc:
+        raise ValueError(f"could not read approval token file {secret_path}") from exc
+    if not value:
+        raise ValueError(f"approval token file {secret_path} is empty")
+    return value
+
+
 def _config_from_args(args: argparse.Namespace) -> OAuthE2EConfig:
     issuer_url = _strip_trailing_slash(args.issuer_url)
     resource_url = _strip_trailing_slash(args.resource_url)
-    approval_token = args.approval_token.strip()
+    approval_token = (
+        _read_secret_file(args.approval_token_file)
+        if args.approval_token_file
+        else args.approval_token.strip()
+    )
     redirect_uri = args.redirect_uri.strip()
     scope = args.scope.strip()
     missing: list[str] = []
@@ -138,7 +162,10 @@ def _config_from_args(args: argparse.Namespace) -> OAuthE2EConfig:
     if not resource_url:
         missing.append("--resource-url or ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL")
     if not approval_token:
-        missing.append("--approval-token or ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN")
+        missing.append(
+            "--approval-token-file, --approval-token, or "
+            "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN"
+        )
     if not redirect_uri:
         missing.append("--redirect-uri")
     if not scope:

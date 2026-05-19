@@ -77,6 +77,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"OAuth resource URL. Defaults to env value or {DEFAULT_RESOURCE_URL}.",
     )
     parser.add_argument(
+        "--approval-token-file",
+        default=None,
+        help=(
+            "Read ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN from this local file. "
+            "Prefer this over putting write-approval secrets in shell history."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate and print the launch/smoke commands without starting the server.",
@@ -110,6 +118,17 @@ def _load_dotenv_files(paths: list[Path]) -> dict[str, str]:
             key, value = parsed
             values[key] = value
     return values
+
+
+def _read_secret_file(path: str) -> str:
+    secret_path = Path(path)
+    try:
+        value = secret_path.read_text().strip()
+    except OSError as exc:
+        raise ValueError(f"could not read approval token file {secret_path}") from exc
+    if not value:
+        raise ValueError(f"approval token file {secret_path} is empty")
+    return value
 
 
 def _masked_env_report(env: Mapping[str, str], keys: tuple[str, ...] = REQUIRED_KEYS) -> list[str]:
@@ -171,6 +190,10 @@ def _build_launch_config(args: argparse.Namespace) -> LaunchConfig:
         or env.get("ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL")
         or DEFAULT_RESOURCE_URL
     ).strip()
+    if args.approval_token_file:
+        env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN"] = _read_secret_file(
+            args.approval_token_file
+        )
     return LaunchConfig(
         env=env,
         python=args.python,
@@ -217,7 +240,11 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
 def _main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    config = _build_launch_config(args)
+    try:
+        config = _build_launch_config(args)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     errors = _validate_env(config.env)
     if errors:
         for error in errors:

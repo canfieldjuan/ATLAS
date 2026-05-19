@@ -30,6 +30,7 @@ def _args(**overrides):
         "port": None,
         "issuer_url": None,
         "resource_url": None,
+        "approval_token_file": None,
         "dry_run": False,
     }
     values.update(overrides)
@@ -135,6 +136,35 @@ def test_build_launch_config_process_env_overrides_env_file(tmp_path, monkeypatc
     assert config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL"] == (
         "https://file.example.com/invoicing-draft-writer"
     )
+
+
+def test_build_launch_config_reads_approval_token_file(tmp_path, monkeypatch) -> None:
+    module = _load_script_module()
+    token_file = tmp_path / "draft-writer-token"
+    token_file.write_text("approval-token-from-local-secret-file\n")
+    monkeypatch.delenv("ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN", raising=False)
+
+    config = module._build_launch_config(
+        _args(env_file=[], approval_token_file=str(token_file))
+    )
+
+    assert config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN"] == (
+        "approval-token-from-local-secret-file"
+    )
+
+
+def test_build_launch_config_rejects_empty_approval_token_file(tmp_path) -> None:
+    module = _load_script_module()
+    token_file = tmp_path / "draft-writer-token"
+    token_file.write_text("\n")
+
+    try:
+        module._build_launch_config(_args(env_file=[], approval_token_file=str(token_file)))
+    except ValueError as exc:
+        assert "is empty" in str(exc)
+        assert "draft-writer-token" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected ValueError")
 
 
 def test_server_command_uses_current_config_python() -> None:

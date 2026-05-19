@@ -80,11 +80,22 @@ https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 Use the draft-writer launcher and smokes:
 
 ```bash
-.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py --dry-run
+mkdir -p .secrets
+chmod 700 .secrets
+python - <<'PY' > .secrets/invoicing-draft-writer-approval-token
+import secrets
+
+print(secrets.token_urlsafe(32))
+PY
+chmod 600 .secrets/invoicing-draft-writer-approval-token
+.venv/bin/python scripts/start_invoicing_draft_writer_oauth_server.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --dry-run
 .venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 .venv/bin/python scripts/check_invoicing_draft_writer_oauth_e2e.py \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 ```
