@@ -145,7 +145,6 @@ const post: BlogPost = {
   "category_filter": "Communication"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-31. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Zoom became synonymous with remote work during the pandemic. But as the world shifted back to hybrid models and competitors bundled video into broader productivity suites, how has reviewer sentiment evolved? This analysis draws on <strong>1559 reviews</strong> collected through March 2026, with 259 enriched for detailed signal analysis. The data comes from G2, Gartner, PeerSpot, and Reddit, providing both verified buyer perspectives and community feedback.</p>
 <p>The review period spans March 3 to March 31, 2026. Of the 259 enriched reviews, <strong>27 show switching intent</strong> — a churn signal rate of 10.4%. This is a meaningful but not overwhelming dissatisfaction level, suggesting Zoom retains strong product-market fit for its core use cases while facing specific pressure points.</p>
 <p>This is not a product capabilities review. It is an analysis of <strong>reviewer perception patterns</strong> — what users report experiencing, where complaints cluster, and what the data suggests about who Zoom works best for. All findings are anchored in the review data, not vendor marketing claims or feature checklists.</p>

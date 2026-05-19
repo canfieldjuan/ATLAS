@@ -115,7 +115,6 @@ const post: BlogPost = {
   "category_filter": "Project Management"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Asana attracts users from 2 documented competitor platforms based on analysis of 1,012 total reviews collected between February 28, 2026 and April 6, 2026. This migration guide analyzes 333 enriched reviews to understand where Asana users come from, what triggers the switch, and what reviewers report about the transition.</p>
 <p>The data source is public B2B software review platforms, including 33 verified reviews from G2, Gartner, and PeerSpot, and 300 community reviews from Reddit. This is self-selected reviewer feedback — it reflects the experience of people who chose to write reviews, not all Asana users.</p>
 <p>The switching volume to Asana is modest compared to category leaders, but the patterns are instructive. Teams switching to Asana describe specific pain points with their previous tools, and their migration stories reveal what Asana delivers well — and where it shows limitations.</p>

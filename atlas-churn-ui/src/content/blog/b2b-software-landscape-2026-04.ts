@@ -105,7 +105,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-31. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>The B2B software market in early 2026 shows a landscape defined by pricing friction and competing approaches to customer retention. This analysis examines 23,873 enriched reviews collected between February 25 and March 31, 2026, spanning 17 major vendors and revealing 10,698 churn signals across public review platforms including G2, Capterra, Reddit, and TrustPilot.</p>
 <p>The data reflects self-selected reviewer feedback — people motivated enough to write public reviews. This overrepresents strong opinions and specific pain points, but it provides valuable signal about where complaint patterns cluster and how reviewer sentiment varies across vendors.</p>
 <p>Across the analyzed vendors, the average churn urgency score sits at 2.5 out of 10, indicating moderate frustration levels in the broader market. However, this average masks significant variation: some vendors face urgency scores above 6.0, while others remain below 2.0. The distribution suggests a market where churn risk concentrates around specific vendors and specific pain categories rather than spreading evenly.</p>

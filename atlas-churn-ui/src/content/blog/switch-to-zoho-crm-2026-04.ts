@@ -127,7 +127,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Zoho CRM attracts users from 4 documented competitor platforms based on analysis of 963 total reviews collected between February 28, 2026 and April 6, 2026. The sample includes 271 enriched reviews with 29 from verified platforms (G2, Gartner, PeerSpot) and 242 from community sources (Reddit, Trustpilot).</p>
 <p>This migration guide focuses on inbound switching patterns—the reasons teams leave other CRM platforms for Zoho CRM. The analysis draws from self-selected reviewer feedback, which reflects perception and experience rather than universal product capability.</p>
 <p>The evidence shows 4 explicit switching mentions, with pricing and UX concerns emerging as the most frequently cited pain categories. Reviewers also report a support experience shift between free and paid tiers, creating friction at renewal periods when paying customers reassess value received.</p>

@@ -99,7 +99,6 @@ const post: BlogPost = {
   "category_filter": "Marketing Automation"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every marketing automation platform has a weakness. The question is whether you can live with it.</p>
 <p>We analyzed 743 reviews across 6 marketing automation vendors between February 28 and April 8, 2026. The sample includes 156 verified reviews from G2, Gartner, PeerSpot, and Software Advice, plus 1,432 community discussions from Reddit and other forums. We enriched 1,588 of the 2,534 total reviews collected.</p>
 <p>This is not a ranking. This is a breakdown of the single most common complaint category for each vendor, based on what reviewers actually report. Every tool discussed here also has documented strengths. The goal is to help you pick the trade-off you can manage, not to crown a winner.</p>

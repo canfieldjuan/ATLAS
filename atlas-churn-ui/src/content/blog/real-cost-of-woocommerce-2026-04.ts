@@ -69,7 +69,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>WooCommerce markets itself as a free eCommerce plugin for WordPress. But 93 out of 435 reviews analyzed between March 3 and April 4, 2026 tell a different story about what store owners actually pay.</p>
 <p>The pricing complaints carry an average urgency of 2.3 out of 10—not catastrophic, but persistent enough to appear in 21% of the review sample. This analysis draws from 692 enriched reviews across verified platforms like G2 and Capterra, plus community feedback from Reddit and Twitter. 11 reviews came from verified platforms, while 681 came from community discussions where store owners candidly discuss real costs.</p>
 <p>The pattern that emerges isn't about sticker shock from a single price increase. It's about cumulative transaction fees, payment processor costs, hosting expenses, and customization charges that erode profit margins over time. Recent evidence from this week and within the past quarter shows store owners actively calculating these costs and comparing them to alternatives like Shopify.</p>

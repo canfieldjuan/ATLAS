@@ -115,7 +115,6 @@ const post: BlogPost = {
   "category_filter": "Project Management"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every project management tool has a fatal flaw. The question is whether you can live with it.</p>
 <p>We analyzed 3,019 reviews from February 28 to April 7, 2026, spanning verified platforms like G2, Gartner Peer Insights, and PeerSpot, plus community feedback from Reddit and other forums. Out of that set, 1,464 reviews contained actionable complaints about 10 major vendors.</p>
 <p>This isn't a hit piece. It's a reality check. Jira has 263 complaint-containing reviews. Notion has 218. Asana, Monday.com, ClickUp, Trello, Basecamp, Smartsheet, and Wrike all show up with documented weaknesses. Some complaints are low-urgency annoyances. Others—like unexpected $265 annual renewal charges with no prorated refund—trigger immediate switching behavior.</p>

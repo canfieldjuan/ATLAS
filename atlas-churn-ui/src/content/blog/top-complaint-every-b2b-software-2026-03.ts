@@ -97,7 +97,6 @@ const post: BlogPost = {
 ],
   related_slugs: ["b2b-software-landscape-2026-03", "notion-vs-salesforce-2026-03", "jira-vs-trello-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every B2B software tool has flaws. This analysis examines 11,399 complaints across 54 vendors, drawn from 26,335 enriched reviews collected between February 25 and March 29, 2026. The data comes from public review platforms including G2, Capterra, TrustRadius, Reddit, and Trustpilot—7,985 verified reviews and 18,350 community-sourced reviews.</p>
 <p>The goal is simple: show you each vendor's biggest weakness based on what reviewers actually say, not marketing claims. No vendor gets a pass. If a tool's top complaint is pricing, we say so. If it's feature gaps, we say so. If reviewers report support erosion, we say so.</p>
 <p>This is not a hit piece on any single vendor. It is a comparative analysis that acknowledges the reality every software buyer faces: <strong>there is no perfect tool.</strong> The question is which set of trade-offs fits your situation.</p>

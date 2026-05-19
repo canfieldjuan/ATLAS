@@ -147,7 +147,6 @@ const post: BlogPost = {
   "category_filter": "Helpdesk"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>The helpdesk software market in 2026 is shaped by intense price competition and high churn velocity. Five major vendors—Freshdesk, Zendesk, Help Scout, HappyFox, and Zoho Desk—dominate the landscape, collectively generating 41 churn signals across 1501 enriched reviews analyzed between February 28 and April 7, 2026.</p>
 <p>This analysis draws from verified platforms (G2, Gartner Peer Insights, PeerSpot, Software Advice) and community sources (Reddit, Twitter, forums) to map vendor strengths, weaknesses, and the recurring pain patterns that drive switching behavior. Rather than treating each vendor in isolation, we've identified the category-wide challenges that affect all five platforms and the specific friction points that make customers vulnerable to competitive displacement.</p>
 <p>Our goal: help you navigate the helpdesk market by understanding what reviewers actually experience, not just what vendors claim.</p>

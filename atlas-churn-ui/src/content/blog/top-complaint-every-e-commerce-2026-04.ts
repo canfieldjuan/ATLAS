@@ -96,7 +96,6 @@ const post: BlogPost = {
 },
   content: `<p>Coverage snapshot: this piece draws from 2455 enriched reviews, including 147 churn-intent signals, collected between 2026-03-03 to 2026-04-06, with the visible source mix led by community_count (2362), and verified_count (93), and and a current data-quality posture of high confidence. Treat the analysis as directional evidence rather than a full market census.</p>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every e-commerce platform has a fatal flaw. Some break when you need them most. Others nickel-and-dime you into budget hell. A few promise simplicity but deliver complexity you didn't ask for.</p>
 <p>We analyzed 1206 reviews across 4 major e-commerce vendors between March 3 and April 6, 2026. The dataset includes 2455 enriched reviews from G2, Gartner Peer Insights, PeerSpot, Reddit, and other public sources. 93 reviews came from verified platforms. 2362 came from community discussions.</p>
 <p>This is not a ranking. It's a map of trade-offs. Shopify's top complaint is reliability. WooCommerce's is pricing. Magento's is also pricing. BigCommerce's is user experience. Each platform excels in some areas and fails in others.</p>

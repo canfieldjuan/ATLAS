@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Data & Analytics"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-31. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Tableau sits at the center of the data visualization and business intelligence market, with 1046 public reviews collected across G2, Gartner, PeerSpot, and Reddit between March 3, 2026 and March 31, 2026. This analysis draws on 439 enriched reviews from verified platforms and community sources, with 37 from verified review platforms and 402 from community discussions.</p>
 <p>The data reveals a product with deep technical capabilities and a loyal user base, but also persistent pain points around pricing, performance at scale, and accessibility for non-technical users. 22 reviews show explicit switching intent, representing 5% of the enriched sample -- a relatively low churn signal compared to other data and analytics platforms in the same period.</p>
 <p>Tableau operates in a <strong>platform consolidation</strong> market regime, where established vendors compete on ecosystem lock-in and enterprise integration depth rather than disruptive innovation. This context shapes reviewer expectations: buyers evaluate Tableau not just as a visualization tool, but as a strategic platform choice with long-term implications for their data stack.</p>

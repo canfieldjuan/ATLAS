@@ -150,7 +150,6 @@ const post: BlogPost = {
   "category_filter": "Project Management"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>This analysis draws on 794 public reviews of Basecamp collected from G2, PeerSpot, and Reddit between February 28, 2026 and April 6, 2026. Of these, 92 reviews were enriched with structured data, and 7 showed explicit switching intent. The source distribution skews toward community feedback (78 Reddit reviews) with 14 verified platform reviews.</p>
 <p><strong>What this data represents:</strong> Self-selected reviewer feedback from teams who chose to share their experience publicly. This is not a representative sample of all Basecamp users — it overrepresents strong opinions, both positive and negative. The findings reflect perception patterns among reviewers, not definitive statements about product capability.</p>
 <p>Basecamp occupies a distinctive position in the project management category. While competitors like <a href="https://asana.com/">Asana</a> and Monday.com race to add features, Basecamp maintains an opinionated, minimalist philosophy. This analysis examines where that philosophy resonates with reviewers and where it creates friction.</p>

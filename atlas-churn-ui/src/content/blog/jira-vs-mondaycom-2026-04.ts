@@ -135,7 +135,6 @@ const post: BlogPost = {
   "category_filter": "Project Management"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Jira and Monday.com occupy different positions in the project management software landscape, but both face recurring complaints about interface complexity and pricing friction. Between March 3 and April 7, 2026, 62 complaint signals surfaced across public review platforms and community forums: 49 for Jira and 13 for Monday.com.</p>
 <p>The urgency difference is notable. Monday.com reviewers express an average urgency score of 3.3, compared to Jira's 2.1—a gap of 1.2 points. This suggests Monday.com users reach frustration thresholds faster, though the smaller sample size (13 vs. 49 signals) limits broad conclusions.</p>
 <p>Both platforms serve project management workflows, but complaint patterns diverge. Jira reviewers in Q2 2026 report interface complexity accumulation and cross-project navigation friction, particularly among client service managers handling multiple boards. Monday.com reviewers cite pricing backlash incidents and support friction during cancellation attempts, with one reviewer reporting an unexpected jump to $72 per month.</p>

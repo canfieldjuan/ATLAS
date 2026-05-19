@@ -140,7 +140,6 @@ const post: BlogPost = {
   }
 ],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>HubSpot positions itself as an all-in-one inbound marketing and sales platform. But what do actual users think? This analysis draws on <strong>1648 reviews</strong> collected between March 3 and March 29, 2026, from G2, Capterra, Reddit, Trustpilot, and other public review platforms. Of these, <strong>1104 were enriched</strong> with detailed sentiment analysis, and <strong>103 showed explicit switching intent</strong>.</p>
 <p>This is not a product capabilities list. It's a data-driven look at where reviewer sentiment clusters—both positive and negative. The sample skews toward people with strong opinions (those who choose to write reviews), so treat this as perception data, not universal truth. <strong>285 reviews come from verified platforms</strong> like G2 and Capterra; <strong>819 come from community sources</strong> like Reddit and Trustpilot.</p>
 <p>HubSpot's profile richness score is <strong>5 out of 5</strong>, indicating deep cross-platform review coverage and extensive integration data. This is one of the most-reviewed marketing automation platforms in our dataset, giving us high confidence in the patterns that emerge.</p>

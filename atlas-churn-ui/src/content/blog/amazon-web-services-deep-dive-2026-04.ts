@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Cloud Infrastructure"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Amazon Web Services dominates the cloud infrastructure category, but what do 784 public reviews actually reveal about the platform's strengths and pain points? This analysis draws on 177 enriched reviews from G2, Gartner, PeerSpot, and Reddit, collected between March 3, 2026 and April 4, 2026. The data reflects reviewer perception patterns, not definitive product quality assessments.</p>
 <p>The review landscape for AWS is notably community-heavy: 147 of 177 enriched reviews come from Reddit and other community platforms, while 30 come from verified review sites like G2, Gartner, and PeerSpot. This distribution means the data overrepresents vocal technical users who choose to share experiences publicly.</p>
 <p>Among 177 enriched reviews, 11 show explicit churn intent—a relatively low rate that suggests AWS benefits from significant switching friction. The synthesis intelligence identifies <strong>support erosion</strong> as the primary wedge driving dissatisfaction, with timing triggers clustering around service disruptions and unexpected billing incidents in March-April 2026.</p>

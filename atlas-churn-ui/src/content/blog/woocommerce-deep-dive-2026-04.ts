@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>WooCommerce powers millions of online stores, marketed as a free, open-source eCommerce solution for WordPress. But what do actual users say when the initial setup is done and the monthly invoices start arriving?</p>
 <p>This analysis examines 1101 WooCommerce reviews collected between March 3 and April 4, 2026, with 692 enriched for detailed sentiment and signal extraction. The sample draws primarily from community platforms (681 reviews from Reddit) and verified review sites (11 from G2), reflecting a mix of hands-on technical users and business decision-makers.</p>
 <p>This is not a product capability assessment. It is a pattern analysis of what reviewers report when they evaluate, use, and sometimes leave WooCommerce. The evidence is self-selected and sentiment-driven, not a universal product truth.</p>

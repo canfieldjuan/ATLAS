@@ -145,7 +145,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-30. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Magento (now Adobe Commerce) occupies a distinctive position in the e-commerce platform landscape. With 1047 reviews analyzed across G2, Gartner, PeerSpot, and Reddit from March 2026, this deep dive examines where Magento shows strength in reviewer sentiment and where complaint patterns cluster.</p>
 <p>This analysis draws on 566 enriched reviews collected between March 3 and March 30, 2026. The source distribution skews heavily toward community platforms (539 Reddit discussions) with 27 verified reviews from G2, Gartner, and PeerSpot. Readers should understand this data foundation: these are self-selected reviewer experiences, not a representative sample of all Magento users.</p>
 <p>The platform shows a profile richness score of 4/10, indicating moderate depth in reviewer feedback. 39 reviews show explicit switching intent or active evaluation signals. The data suggests Magento operates in a stable market regime with consistent complaint patterns rather than acute disruption.</p>

@@ -155,7 +155,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Close CRM serves small to mid-sized sales teams looking for a focused, sales-first platform. But how does it actually perform in the field?</p>
 <p>This deep dive analyzes 1042 Close reviews collected between March 3 and April 7, 2026. We enriched 610 of those reviews with structured sentiment analysis, pain categorization, and buyer role identification. The analysis draws from G2 verified reviews and Reddit community discussions to surface patterns that self-reported review data can reveal.</p>
 <p>The sample includes 11 verified platform reviews and 599 community posts. While this is a self-selected sample—reviewers choose when and why to share feedback—it offers concrete insight into where Close creates friction and where it delivers value.</p>

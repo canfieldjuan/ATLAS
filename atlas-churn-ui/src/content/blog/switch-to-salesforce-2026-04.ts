@@ -113,7 +113,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Salesforce attracts inbound migration from 3 documented competitor platforms, based on analysis of 2,257 total reviews collected between February 25 and April 6, 2026. This analysis draws on 1,122 enriched reviews from G2, PeerSpot, Gartner, and Reddit. The data reflects self-selected reviewer feedback — patterns in who writes reviews and what drives them to document their experience.</p>
 <p>The migration pattern shows a platform that draws teams from established competitors, but the reasons for switching cluster around specific pain points rather than universal dissatisfaction. Understanding these triggers helps contextualize whether Salesforce addresses the specific frustrations driving your evaluation.</p>
 <p>This analysis is based on public B2B software review platforms. Results reflect reviewer perception, not product capability. The sample size of 1,122 enriched reviews provides high confidence in the patterns identified.</p>

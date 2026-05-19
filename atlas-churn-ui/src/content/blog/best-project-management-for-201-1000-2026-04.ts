@@ -167,7 +167,6 @@ const post: BlogPost = {
   "category_filter": "Project Management"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Most project management software comparisons rank vendors by rating or feature count. This one doesn't.</p>
 <p>We analyzed <strong>1464 real user reviews</strong> across <strong>10 project management tools</strong> to find who's actually best for <strong>201-1000 employee teams</strong>. The data comes from verified platforms like G2, Gartner Peer Insights, and PeerSpot, plus community feedback from Reddit and other forums, covering reviews from February 28 to April 7, 2026.</p>
 <p>This isn't a marketing roundup. It's an honest buyer's guide grounded in what reviewers actually report—pricing traps, UX friction, support gaps, and the tradeoffs that show up across every vendor in this category.</p>

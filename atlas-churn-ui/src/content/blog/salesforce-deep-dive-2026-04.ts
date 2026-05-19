@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Salesforce remains one of the most analyzed platforms in B2B software, with 2256 public reviews collected across G2, Reddit, Gartner, and PeerSpot between February 25, 2026 and April 4, 2026. This analysis draws on 1122 enriched reviews from that dataset, with 73 showing explicit switching intent or active evaluation signals.</p>
 <p>The sample skews heavily toward community sources (1090 Reddit mentions versus 32 verified platform reviews), which means this data reflects the experience of users motivated to seek advice or share frustrations publicly. That self-selection matters: reviewers discussing Salesforce on Reddit are more likely to be troubleshooting problems or evaluating alternatives than posting routine satisfaction updates.</p>
 <p>This is perception data, not product capability assessment. The findings below represent patterns in what reviewers choose to discuss, not a comprehensive evaluation of Salesforce's technical features. Where complaint patterns cluster, we note them. Where reviewers praise the platform, we note that too. The goal is to help decision-makers understand what current users report experiencing, not to declare definitive verdicts on product quality.</p>

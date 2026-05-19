@@ -155,7 +155,6 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Pipedrive positions itself as a sales-focused CRM built for pipeline visibility and deal management. But what happens when reviewer experience diverges from vendor positioning?</p>
 <p>This analysis examines 262 Pipedrive reviews collected between March 3 and April 6, 2026, drawing from verified platforms including G2, Gartner Peer Insights, and PeerSpot, alongside community discussions on Reddit. Of the 262 reviews analyzed, 143 contained enriched context including role, company size, or specific pain points. 10 reviews showed explicit churn intent.</p>
 <p>The data comes from a mix of 30 verified platform reviews and 113 community posts, providing both structured feedback and unfiltered user sentiment. This is not a representative sample of all Pipedrive customers—it reflects the self-selected population willing to post public feedback during a specific 34-day window.</p>

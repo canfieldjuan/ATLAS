@@ -135,7 +135,6 @@ const post: BlogPost = {
   "category_filter": "Helpdesk"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Help Scout and Zendesk occupy opposite ends of the helpdesk market: one built for simplicity and support experience, the other for enterprise-grade feature depth and multi-channel orchestration. But when 27 enriched reviews from February 28 to April 8, 2026 are examined side by side, a clear contrast emerges—not in capability, but in the urgency and nature of reviewer complaints.</p>
 <p>Help Scout generated 15 signals with an average urgency score of 2.2. Zendesk generated 12 signals with an urgency score of 3.3. That 1.1-point gap suggests Zendesk reviewers are experiencing more immediate operational friction or billing disputes, while Help Scout complaints cluster around workflow limitations and integration gaps that accumulate over time rather than trigger immediate crisis.</p>
 <p>The question is not which vendor is objectively better. The question is which vendor's friction points align—or misalign—with your team's operational priorities and risk tolerance.</p>

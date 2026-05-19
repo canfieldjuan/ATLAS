@@ -156,7 +156,6 @@ const post: BlogPost = {
 },
   content: `<h1 id="asana-deep-dive-reviewer-sentiment-across-1012-reviews">Asana Deep Dive: Reviewer Sentiment Across 1012 Reviews</h1>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Asana is a widely-used project management platform that competes directly with ClickUp, Trello, Notion, and Monday.com. This analysis synthesizes feedback from <strong>1012 public reviews</strong> across G2, Capterra, Gartner Peer Insights, PeerSpot, and Reddit, collected between February 28 and April 6, 2026. We enriched 333 reviews with structured signals around pricing friction, feature gaps, integration patterns, and switching intent. The goal is to show you what real users experience—not marketing claims—so you can assess whether Asana fits your team.</p>
 <p><strong>Data scope:</strong> 333 enriched reviews analyzed for sentiment, pain signals, and buyer context. Source mix includes 300 community posts (Reddit) and 33 verified platform reviews (G2, Capterra, Gartner, PeerSpot). High confidence in patterns due to sample size and cross-source consistency.</p>
 <hr />

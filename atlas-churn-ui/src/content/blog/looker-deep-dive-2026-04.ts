@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "Data & Analytics"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Looker sits at the center of a crowded Data &amp; Analytics market where business intelligence platforms compete on semantic modeling, integration depth, and ease of use. This deep dive examines 514 reviews collected between March 3, 2026 and April 7, 2026, drawing from verified platforms like G2, Gartner Peer Insights, and PeerSpot, alongside community sources including Reddit discussions.</p>
 <p>Of the 412 reviews analyzed in depth, 194 were enriched with structured sentiment, pain point, and signal data. 29 came from verified review platforms, while 165 originated from community discussions. 11 reviews contained churn intent signals, providing a window into when and why Looker friction converts to evaluation activity.</p>
 <p>This analysis reflects self-selected reviewer feedback, not universal product capability. The goal is to surface patterns in what reviewers report—strengths they celebrate, pain points that persist, and competitive dynamics that shape buying decisions—without overstating what review data alone can prove.</p>

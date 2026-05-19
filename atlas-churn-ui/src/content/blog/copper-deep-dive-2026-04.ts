@@ -149,7 +149,6 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-03-31. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Copper positions itself as the CRM built for Google Workspace. This analysis examines 1619 reviews collected between February 28, 2026 and March 31, 2026 from G2, Gartner, and Reddit to understand how that positioning holds up in practice. Of the 1278 reviews analyzed, 1079 were enriched with detailed sentiment and pain signals, providing a high-confidence view of reviewer experiences.</p>
 <p>The data reveals a product with clear strengths in Google integration and customization, but also persistent pain points in UX complexity and feature depth. This is not a hit piece or a puff piece — it is a data-driven profile of where Copper earns praise and where reviewers report frustration.</p>
 <p>This analysis draws on 1079 enriched reviews from verified platforms (G2, Gartner) and community sources (Reddit). The sample includes 14 verified reviews and 1065 community reviews, with 37 showing explicit churn intent. Readers should understand this reflects the experiences of people who chose to write reviews, not all Copper users.</p>

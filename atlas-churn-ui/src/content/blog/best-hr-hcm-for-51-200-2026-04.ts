@@ -142,7 +142,6 @@ const post: BlogPost = {
 },
   content: `<h1 id="best-hr-hcm-tools-for-51200-teams-4-vendors-compared-across-943-reviews">Best HR / HCM Tools for 51–200 Teams: 4 Vendors Compared Across 943 Reviews</h1>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Choosing an HR / HCM tool is one of the most consequential software decisions a mid-market team makes. Payroll accuracy, compliance, and employee experience depend on it. Yet most vendor comparisons rely on marketing claims, not what actual users experience.</p>
 <p>This guide is different. We analyzed <strong>943 real user reviews</strong> across <strong>4 major HR / HCM vendors</strong>—BambooHR, Gusto, Rippling, and Workday—to uncover what actually works for teams with 51–200 employees. The data comes from verified platforms (G2, Capterra, Gartner Peer Insights, PeerSpot) and community forums (Reddit, Hacker News) collected between March and April 2026.</p>
 <p>Our analysis focused on enriched reviews from 453 accounts, identifying pain patterns, strengths, and honest tradeoffs. This is not a marketing piece. We'll tell you where each tool shines and where it falls short.</p>

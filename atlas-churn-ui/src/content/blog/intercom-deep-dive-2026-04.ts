@@ -155,7 +155,6 @@ const post: BlogPost = {
   "category_filter": "Helpdesk"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Intercom sits at the center of 984 public reviews collected between February 28, 2026 and April 4, 2026. This analysis draws on 172 enriched reviews from G2, Gartner, PeerSpot, and Reddit to understand where reviewer sentiment clusters — both positive and negative.</p>
 <p>The data comes from self-selected reviewers, meaning it overrepresents strong opinions. This is not a measurement of product quality. It is a pattern analysis of what reviewers choose to emphasize when they write about their Intercom experience.</p>
 <p>Of the 172 enriched reviews, 29 come from verified review platforms (G2, Gartner, PeerSpot) and 143 from community sources (Reddit). The sample size supports high-confidence conclusions about reviewer perception patterns. The broader 984-review corpus provides additional context on volume and reach.</p>

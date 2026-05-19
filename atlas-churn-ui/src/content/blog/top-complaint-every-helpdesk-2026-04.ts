@@ -110,7 +110,6 @@ const post: BlogPost = {
   "category_filter": "Helpdesk"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Every helpdesk tool has a flaw. Not a minor quirk—a recurring complaint that shows up in review after review.</p>
 <p>We analyzed 424 helpdesk software reviews across 7 major vendors from February 28 to April 8, 2026. The sample includes 196 verified reviews from G2, Gartner, and PeerSpot, plus 1,332 community mentions from Reddit and other platforms. The goal: identify the #1 complaint for each tool based on what reviewers actually say.</p>
 <p>This is not a ranking. It's a catalog of trade-offs. Zendesk, Freshdesk, Intercom, Zoho Desk, HubSpot, Help Scout, and HappyFox all solve real problems. They also all have documented weaknesses. The question is which weakness you can live with.</p>

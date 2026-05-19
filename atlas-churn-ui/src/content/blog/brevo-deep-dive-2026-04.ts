@@ -150,7 +150,6 @@ const post: BlogPost = {
 },
   content: `<h1 id="brevo-deep-dive-what-38-enriched-reviews-reveal-about-pricing-support-and-switching-intent">Brevo Deep Dive: What 38 Enriched Reviews Reveal About Pricing, Support, and Switching Intent</h1>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-28. It captures reviewer perception, not a census of all users.</em></p>
-<h2 id="introduction">Introduction</h2>
 <p>Brevo (formerly SendinBlue) is a marketing automation platform serving teams from startups to mid-market companies. This analysis examines 38 enriched reviews drawn from 430 total Brevo reviews across verified platforms (G2, Gartner, TrustRadius) and community sources (Reddit). The data spans March 3–28, 2026, and represents a moderate-confidence sample of reviewer sentiment, pain points, and switching signals.</p>
 <p><strong>Why this matters:</strong> Brevo occupies a crowded marketing automation space where pricing transparency and feature parity directly influence renewal and switching decisions. Understanding where reviewer satisfaction clusters and where friction accumulates helps buyers and vendors alike navigate platform fit.</p>
 <p><strong>Data scope:</strong> 38 enriched reviews analyzed; 8 verified reviews (Gartner, G2, TrustRadius), 30 community reviews (Reddit). 5 reviews showed explicit churn or switching intent. Results reflect reviewer perception, not product capability; self-selected sample bias applies.</p>
