@@ -215,8 +215,25 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --account-id acct_123 \
   --default-field company_name="Acme Logistics" \
   --default-field contact_email=ops@example.com \
+  --booking-url https://book.customer.com/demo \
   --llm pipeline \
   --json
+```
+
+For hosted Content Ops execution, pass the same selling asset through request
+inputs so every generated campaign opportunity sees it in `opportunity_json`:
+
+```json
+{
+  "outputs": ["email_campaign"],
+  "inputs": {
+    "target_account": "Acme Logistics",
+    "offer": "Churn audit",
+    "selling": {
+      "booking_url": "https://book.customer.com/demo"
+    }
+  }
+}
 ```
 
 Public CFPB complaint narratives can also seed the same source-row path when
