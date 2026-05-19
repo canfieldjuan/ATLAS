@@ -128,8 +128,7 @@ const post: BlogPost = {
   "vendor_filter": "ClickUp",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: month is the live timing trigger, $29 is the concrete spend anchor, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>ClickUp attracts inbound migrations from 6 documented competitor platforms, according to analysis of 1058 total reviews collected between February 28, 2026 and April 8, 2026. The dataset includes 437 enriched reviews from verified platforms like G2 (37 reviews), Gartner Peer Insights (10 reviews), and PeerSpot (9 reviews), alongside 381 community platform signals from Reddit.</p>
 <p>Teams switching to ClickUp typically come from Trello, Notion, Jira, Asana, Airtable, and Todoist. The migration pattern centers on bundled suite consolidation—teams seeking to replace multiple point solutions with a single platform. However, the evidence also shows that ClickUp's consolidation strategy introduces its own complexity trade-offs, particularly around navigation hierarchy and notification management.</p>

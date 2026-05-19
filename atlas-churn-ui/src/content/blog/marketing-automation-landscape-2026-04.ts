@@ -142,7 +142,6 @@ const post: BlogPost = {
 },
   content: `<h1 id="marketing-automation-landscape-2026-5-vendors-compared-by-real-user-data">Marketing Automation Landscape 2026: 5 Vendors Compared by Real User Data</h1>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<p>Evidence anchor: 24/7 is the live timing trigger, $800 m is the concrete spend anchor, unknown is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
 <h2 id="introduction">Introduction</h2>
 <p>The marketing automation category has become a crowded, price-sensitive market where feature parity is high and cost differentiation drives switching behavior. This analysis examines 1,568 enriched reviews of five major vendors—ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp—collected between February 28 and April 6, 2026.</p>
 <p>Our data comes from verified review platforms (G2, Gartner Peer Insights, PeerSpot) and community platforms (Reddit, Software Advice, TrustPilot), giving us both structured ratings and unfiltered switching intent signals. The goal is not to declare a winner, but to show you where the churn pressure lies, which vendors face the highest replacement risk, and what patterns repeat across the category.</p>

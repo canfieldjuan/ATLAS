@@ -128,8 +128,7 @@ const post: BlogPost = {
   "vendor_filter": "Microsoft Teams",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Microsoft Teams and Notion occupy different corners of the collaboration software market, but both face rising reviewer frustration in early 2026. Between March 3 and April 8, 2026, we analyzed 198 reviewer signals: 36 for Microsoft Teams and 162 for Notion. The data reveals a stark urgency gap. Notion's average urgency score sits at 2.7, while Microsoft Teams registers 1.8—a 0.9-point difference that reflects distinct pain points and market pressures.</p>
 <p>This analysis draws from 2,568 total reviews, with 1,509 enriched for deeper context and 152 flagged for churn intent. Sources include verified platforms like G2, Gartner Peer Insights, and PeerSpot (111 reviews), alongside community feedback from Reddit and other forums (1,398 reviews). The sample is self-selected, so results reflect reviewer perception rather than universal product truth.</p>

@@ -68,8 +68,7 @@ const post: BlogPost = {
   "vendor_filter": "WooCommerce",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: this week is the live timing trigger, $29/mo is the concrete spend anchor, Shopify is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is workflow substitution.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>WooCommerce markets itself as a free eCommerce plugin for WordPress. But 93 out of 435 reviews analyzed between March 3 and April 4, 2026 tell a different story about what store owners actually pay.</p>
 <p>The pricing complaints carry an average urgency of 2.3 out of 10—not catastrophic, but persistent enough to appear in 21% of the review sample. This analysis draws from 692 enriched reviews across verified platforms like G2 and Capterra, plus community feedback from Reddit and Twitter. 11 reviews came from verified platforms, while 681 came from community discussions where store owners candidly discuss real costs.</p>

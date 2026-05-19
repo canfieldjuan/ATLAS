@@ -154,8 +154,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "Project Management"
 },
-  content: `<p>Evidence anchor: year is the live timing trigger, $10.99 is the concrete spend anchor, the core pressure showing up in the evidence is pricing, and the workflow shift in play is workflow substitution.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>The project management software market remains one of the most contested categories in B2B SaaS. As of April 2026, 10 major vendors compete for mindshare across teams of every size, from five-person startups to 30,000-employee enterprises.</p>
 <p>This landscape analysis draws from <strong>1,464 churn signals</strong> collected between February 28 and April 7, 2026. The dataset includes 345 reviews from verified platforms (G2, Gartner Peer Insights, PeerSpot) and 2,674 mentions from community sources (Reddit, forums). The average churn urgency score across the category sits at 2.8, indicating moderate but persistent dissatisfaction.</p>

@@ -72,8 +72,7 @@ const post: BlogPost = {
   "vendor_filter": "Copper",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: $12 is the concrete spend anchor, Aluminum is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is workflow substitution.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>When you're evaluating Copper CRM, pricing is not the loudest complaint—but it's persistent enough to matter. Out of 738 total Copper reviews analyzed between February 28 and April 7, 2026, 90 reviewers flagged pricing as a pain point. That's roughly 12% of the review corpus, with an average urgency score of 1.8 out of 10.</p>
 <p>This analysis draws from 1,085 enriched reviews across verified platforms like G2, Gartner Peer Insights, and Software Advice, plus community discussions on Reddit and Hacker News. The majority of reviews (1,071) come from community platforms, with only 14 from verified review sites. That distribution matters: community reviews tend to surface raw frustration and switching intent more openly than structured platform reviews.</p>

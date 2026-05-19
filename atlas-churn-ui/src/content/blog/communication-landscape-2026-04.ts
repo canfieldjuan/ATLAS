@@ -136,8 +136,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "Communication"
 },
-  content: `<p>Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>The Communication software market in 2026 is defined by consolidation pressure, bundled suite economics, and a Windows 11 upgrade cycle that exposed cost trade-offs for small and mid-sized buyers. This analysis examines 159 churn signals collected from March 3 to April 8, 2026, spanning Microsoft Teams, Slack, Zoom, and RingCentral.</p>
 <p>The data comes from 1,512 enriched reviews across verified platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit, Hacker News). Of those, 151 reviews came from verified platforms and 1,361 from community discussions. This is a self-selected sample reflecting reviewer perception, not universal product truth.</p>
