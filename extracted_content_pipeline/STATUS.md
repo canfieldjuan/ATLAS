@@ -60,6 +60,10 @@ source of truth for what remains.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
   without LLM, database, or Atlas dependencies.
+- `ticket_faq_markdown` builds deterministic FAQ Markdown from support-ticket,
+  case, conversation, and complaint source-row evidence. The CLI
+  `scripts/build_extracted_ticket_faq_markdown.py` writes or prints a grounded
+  `.md` artifact for fast operator review before adding persistence or UI.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.
