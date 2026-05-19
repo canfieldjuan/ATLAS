@@ -200,6 +200,13 @@ Then verify OAuth token exchange and the exact four-tool surface:
 
 The e2e smoke lists tools only. It must not create or update invoices.
 
+If discovery passes but e2e fails with `421 Misdirected Request` or
+`Invalid Host header`, the MCP transport host allowlist is stale. OAuth mode
+must allow the public host from
+`ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL` /
+`ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL` while keeping
+DNS-rebinding protection enabled.
+
 ## Required implementation tests
 
 The server PR must include tests that prove:
