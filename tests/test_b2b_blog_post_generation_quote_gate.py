@@ -34,6 +34,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pain_point_roundup,
     _blueprint_pricing_reality_check,
     _blueprint_vendor_showdown,
+    _pick_affiliate_partner_for_vendors,
     _quote_grade_blueprint_phrases,
     _remove_unmatched_quote_lines,
     _split_and_gate_blog_quotes,
@@ -425,6 +426,162 @@ def test_regression_introductory_prose_orphaned_when_quote_stripped():
     # signals data-pipeline trouble per the v1.4.0 skill regex).
     assert "One reviewer on Reddit noted:" in out
     assert "That quote is from a compensation discussion" in out
+
+
+# ---------------------------------------------------------------------------
+# Vendor-matched affiliate selection
+#
+# Tests for _pick_affiliate_partner_for_vendors -- the pure matcher that
+# replaces the prior category-only fallback. The matcher returns the
+# first enabled partner whose product_name or alias matches a vendor
+# in the post's vendor set (bidirectional whole-word match).
+# ---------------------------------------------------------------------------
+
+
+def _partner(
+    name: str,
+    product_name: str,
+    *,
+    aliases: list[str] | None = None,
+    category: str = "CRM",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    return {
+        "id": f"00000000-0000-0000-0000-{abs(hash(name)) % 10**12:012x}",
+        "name": name,
+        "product_name": product_name,
+        "product_aliases": aliases or [],
+        "affiliate_url": f"https://example.com/{product_name.lower().replace(' ', '-')}",
+        "category": category,
+        "enabled": enabled,
+    }
+
+
+def test_vendor_matcher_returns_none_for_empty_vendor_list():
+    """Category-level posts (landscapes, roundups) have no specific
+    vendor. They should not get an affiliate injected."""
+    partners = [_partner("HubSpot Partner", "HubSpot")]
+    assert _pick_affiliate_partner_for_vendors(partners, []) is None
+
+
+def test_vendor_matcher_returns_none_for_empty_partners():
+    """No partners registered -> no affiliate, regardless of vendors."""
+    assert _pick_affiliate_partner_for_vendors([], ["HubSpot"]) is None
+
+
+def test_vendor_matcher_exact_product_name_match():
+    partners = [_partner("HubSpot Partner", "HubSpot")]
+    out = _pick_affiliate_partner_for_vendors(partners, ["HubSpot"])
+    assert out is not None
+    assert out["name"] == "HubSpot Partner"
+
+
+def test_vendor_matcher_case_insensitive():
+    """Vendor name 'hubspot' should match partner 'HubSpot'."""
+    partners = [_partner("HubSpot Partner", "HubSpot")]
+    out = _pick_affiliate_partner_for_vendors(partners, ["hubspot"])
+    assert out is not None
+    assert out["name"] == "HubSpot Partner"
+
+
+def test_vendor_matcher_alias_match():
+    """Vendor matches an alias rather than the canonical product_name."""
+    partners = [_partner(
+        "Monday.com",
+        "Monday.com",
+        aliases=["monday", "monday CRM", "monday work OS"],
+    )]
+    out = _pick_affiliate_partner_for_vendors(partners, ["monday CRM"])
+    assert out is not None
+    assert out["product_name"] == "Monday.com"
+
+
+def test_vendor_matcher_punctuation_in_product_name():
+    """Punctuation like the dot in 'Monday.com' should match vendor
+    'Monday.com' literally without regex issues."""
+    partners = [_partner("Monday.com", "Monday.com")]
+    out = _pick_affiliate_partner_for_vendors(partners, ["Monday.com"])
+    assert out is not None
+    assert out["product_name"] == "Monday.com"
+
+
+def test_vendor_matcher_bidirectional_alias_longer_than_vendor():
+    """Vendor 'monday' should match alias 'monday CRM' because the vendor
+    name appears as a whole word in the alias (bidirectional matching).
+    The prior simple substring check would fail here."""
+    partners = [_partner(
+        "Monday.com",
+        "Monday.com",
+        aliases=["monday CRM"],
+    )]
+    out = _pick_affiliate_partner_for_vendors(partners, ["monday"])
+    assert out is not None
+    assert out["product_name"] == "Monday.com"
+
+
+def test_vendor_matcher_rejects_partial_word():
+    """Partner 'Up' should NOT match vendor 'PipeUp' -- word boundaries
+    prevent the partial-word false positive."""
+    partners = [_partner("Up Partner", "Up", category="Misc")]
+    out = _pick_affiliate_partner_for_vendors(partners, ["PipeUp"])
+    assert out is None
+
+
+def test_vendor_matcher_no_match_when_partner_in_different_category():
+    """The HubSpot-on-CRM-roundup case generalised: when the post's
+    vendor set does not include HubSpot, the HubSpot partner does NOT
+    get injected even though both might share the 'CRM' category."""
+    partners = [_partner("HubSpot Partner", "HubSpot")]
+    # Post analyzes Salesforce, Zoho, Pipedrive (no HubSpot).
+    vendor_names = ["Salesforce", "Zoho CRM", "Pipedrive"]
+    out = _pick_affiliate_partner_for_vendors(partners, vendor_names)
+    assert out is None
+
+
+def test_vendor_matcher_first_vendor_wins_priority():
+    """When multiple vendors could match different partners, the FIRST
+    vendor in the list wins. Mirrors how callers stack
+    (vendor, vendor_a, vendor_b, from_vendor)."""
+    partners = [
+        _partner("HubSpot Partner", "HubSpot"),
+        _partner("Pipedrive Partner", "Pipedrive"),
+    ]
+    # vendor (primary) = Pipedrive, vendor_a (secondary) = HubSpot.
+    out = _pick_affiliate_partner_for_vendors(partners, ["Pipedrive", "HubSpot"])
+    assert out is not None
+    assert out["product_name"] == "Pipedrive"
+
+
+def test_vendor_matcher_skips_empty_or_whitespace_vendors():
+    """Empty / whitespace strings in the vendor list are ignored, not
+    treated as match candidates."""
+    partners = [_partner("HubSpot Partner", "HubSpot")]
+    out = _pick_affiliate_partner_for_vendors(partners, ["", "  ", "HubSpot"])
+    assert out is not None
+    assert out["product_name"] == "HubSpot"
+
+
+def test_vendor_matcher_returns_first_match_within_partner_order():
+    """When one vendor matches multiple partners (rare), partners are
+    tried in supplied order. Caller is responsible for ordering by
+    insertion time / priority."""
+    partners = [
+        _partner("First Partner", "Salesforce"),
+        _partner("Second Partner", "Salesforce", aliases=["sfdc"]),
+    ]
+    out = _pick_affiliate_partner_for_vendors(partners, ["Salesforce"])
+    assert out is not None
+    assert out["name"] == "First Partner"
+
+
+def test_vendor_matcher_handles_none_aliases():
+    """Partner row with product_aliases=None (rather than []) should not
+    crash. asyncpg may return None for an empty TEXT[] column in some
+    drivers."""
+    partner = _partner("HubSpot Partner", "HubSpot")
+    partner["product_aliases"] = None
+    out = _pick_affiliate_partner_for_vendors([partner], ["HubSpot"])
+    assert out is not None
 
 
 # ---------------------------------------------------------------------------

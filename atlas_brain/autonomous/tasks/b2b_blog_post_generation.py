@@ -6019,14 +6019,26 @@ async def _gather_data(
                 data["data_context"]["market_regime"] = regime
 
     # Attach affiliate info to data_context if available.
-    # For topic types that don't explicitly fetch a partner (everything except
-    # vendor_alternative), look up a matching partner by product category so
-    # comparison/landscape/deep-dive posts can include the affiliate link.
+    # For topic types that don't explicitly fetch a partner (everything
+    # except vendor_alternative), match a partner against the post's vendor
+    # set. A partner is injected only if its product_name or an alias
+    # appears in vendor / vendor_a / vendor_b / from_vendor. If no vendor
+    # set is present (category-level roundups, landscapes) or no partner
+    # matches, no affiliate is injected -- booking_url and the rest of
+    # data_context remain intact.
+    #
+    # This replaces the previous category-only fallback, which injected
+    # the first enabled partner in a category regardless of whether the
+    # post actually discussed that vendor.
     partner = data.get("partner")
     if not partner:
-        category = topic_ctx.get("category") or topic_ctx.get("product_category")
-        if category:
-            partner = await _fetch_affiliate_partner_by_category(pool, category)
+        vendor_names = [
+            str(topic_ctx.get(key) or "").strip()
+            for key in ("vendor", "vendor_a", "vendor_b", "from_vendor")
+            if str(topic_ctx.get(key) or "").strip()
+        ]
+        if vendor_names:
+            partner = await _match_affiliate_partner_for_vendors(pool, vendor_names)
             if partner:
                 data["partner"] = partner
     if partner:
@@ -6483,16 +6495,87 @@ async def _fetch_affiliate_partner(pool, partner_id: str | None) -> dict[str, An
 
 
 async def _fetch_affiliate_partner_by_category(pool, category: str) -> dict[str, Any] | None:
-    """Fetch the first enabled affiliate partner matching a product category."""
-    row = await pool.fetchrow(
-        "SELECT id, name, product_name, affiliate_url, category "
-        "FROM affiliate_partners WHERE enabled = true AND LOWER(category) = LOWER($1) "
-        "LIMIT 1",
-        category,
-    )
-    if not row:
+    """DEPRECATED. Kept for callers that mock this name in tests.
+
+    The previous category-fallback policy caused editorial mismatches
+    (e.g., HubSpot affiliate injected into a CRM-roundup post that
+    doesn't analyze HubSpot). The current policy matches the partner
+    against the post's vendor set instead -- see
+    ``_match_affiliate_partner_for_vendors``. This function now always
+    returns None to avoid resurrecting the old behavior if some path
+    still calls it.
+    """
+    return None
+
+
+def _pick_affiliate_partner_for_vendors(
+    partners: list[dict[str, Any]],
+    vendor_names: list[str],
+) -> dict[str, Any] | None:
+    """Pure matcher: return the first enabled partner whose product_name
+    or any product_alias matches a vendor in ``vendor_names``.
+
+    A match is a case-insensitive whole-word match in either direction:
+    the partner candidate (product_name / alias) appears in the vendor
+    name OR the vendor name appears in the partner candidate. Bidirectional
+    matching handles cases like vendor "monday" matching alias "monday CRM"
+    and vendor "Monday.com" matching product_name "Monday.com".
+
+    Iteration order matters: vendors are tried in priority order
+    (the caller decides), and within each vendor partners are tried in
+    the order supplied. Returns None if no partner matches any vendor.
+    """
+    for vendor in vendor_names:
+        vendor_lower = (vendor or "").strip().lower()
+        if not vendor_lower:
+            continue
+        for partner in partners:
+            candidates: list[str] = []
+            product_name = partner.get("product_name") or ""
+            if product_name:
+                candidates.append(str(product_name))
+            aliases = partner.get("product_aliases") or []
+            if isinstance(aliases, (list, tuple)):
+                candidates.extend(str(a) for a in aliases if a)
+            for cand in candidates:
+                cand_lower = cand.strip().lower()
+                if not cand_lower:
+                    continue
+                # Bidirectional whole-word match.
+                if (
+                    re.search(r"\b" + re.escape(cand_lower) + r"\b", vendor_lower)
+                    or re.search(r"\b" + re.escape(vendor_lower) + r"\b", cand_lower)
+                ):
+                    return dict(partner)
+    return None
+
+
+async def _match_affiliate_partner_for_vendors(
+    pool,
+    vendor_names: list[str],
+) -> dict[str, Any] | None:
+    """Match an enabled affiliate partner against the post's vendor list.
+
+    DB-backed wrapper around ``_pick_affiliate_partner_for_vendors``:
+    fetch all enabled partners ordered by creation time, delegate to
+    the pure matcher. Returns None if ``vendor_names`` is empty or no
+    partner matches -- callers should skip affiliate injection in that
+    case (booking_url and other data_context fields stay intact).
+
+    This replaces the prior category-only fallback that caused
+    editorial mismatches.
+    """
+    if not vendor_names:
         return None
-    return dict(row)
+    rows = await pool.fetch(
+        "SELECT id, name, product_name, product_aliases, affiliate_url, category "
+        "FROM affiliate_partners WHERE enabled = true "
+        "ORDER BY created_at"
+    )
+    if not rows:
+        return None
+    partners = [dict(r) for r in rows]
+    return _pick_affiliate_partner_for_vendors(partners, vendor_names)
 
 
 

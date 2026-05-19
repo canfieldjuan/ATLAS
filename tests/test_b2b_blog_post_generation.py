@@ -2604,6 +2604,7 @@ async def test_gather_data_vendor_alternative_uses_evidence_vault_overlay(monkey
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_match_affiliate_partner_for_vendors", AsyncMock(return_value=None))
 
     data = await _gather_data(
         pool,
@@ -2687,6 +2688,7 @@ async def test_gather_data_vendor_alternative_suppresses_stale_evidence_vault_ov
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_match_affiliate_partner_for_vendors", AsyncMock(return_value=None))
 
     data = await _gather_data(
         pool,
@@ -2768,6 +2770,7 @@ async def test_gather_data_pricing_reality_check_uses_evidence_vault_review_fall
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_match_affiliate_partner_for_vendors", AsyncMock(return_value=None))
 
     data = await _gather_data(
         pool,
@@ -2838,6 +2841,7 @@ async def test_gather_data_switching_story_uses_evidence_vault_review_fallback(m
     monkeypatch.setattr(blog_mod, "_fetch_source_distribution", AsyncMock(return_value={"g2": 10}))
     monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
     monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_match_affiliate_partner_for_vendors", AsyncMock(return_value=None))
 
     data = await _gather_data(
         pool,
