@@ -527,6 +527,11 @@ python -m atlas_brain.mcp.invoicing_readonly_server --sse
 python scripts/check_invoicing_readonly_mcp_connector.py \
   --url http://127.0.0.1:8065/mcp \
   --token "$ATLAS_MCP_AUTH_TOKEN"
+
+# OAuth public-discovery smoke (metadata + 401 challenge; no invoice reads)
+python scripts/check_invoicing_readonly_oauth_discovery.py \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-readonly/mcp
 ```
 
 Tools: `get_invoice`, `list_invoices`, `search_invoices`,
@@ -547,11 +552,16 @@ before attaching a ChatGPT-style connector.
 ChatGPT online should use OAuth mode, not raw bearer mode. OAuth mode adds MCP
 authorization-server metadata, protected-resource metadata, dynamic client
 registration, and an operator approval page at `/oauth/approve`. The approval
-page requires `ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN`, so the
-connector is not silently auto-approved. Because the current public URL is
-path-prefixed under `/invoicing-readonly`, the OAuth `/.well-known/...`
-metadata routes may require an additional Tailscale serve route or a dedicated
-hostname before ChatGPT can discover the OAuth server.
+page posts back to the current external URL, so a path-prefixed public approval
+URL keeps its prefix on submit. The page still requires
+`ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN`, so the connector is not
+silently auto-approved.
+
+Run `scripts/check_invoicing_readonly_oauth_discovery.py` against the public
+issuer/resource URLs before attaching ChatGPT. The current public URL is
+path-prefixed under `/invoicing-readonly`; if the smoke cannot reach the OAuth
+`/.well-known/...` routes, add the missing Tailscale serve route or use a
+dedicated hostname before retrying the connector.
 
 ### Intelligence MCP Server (33 tools)
 ```bash

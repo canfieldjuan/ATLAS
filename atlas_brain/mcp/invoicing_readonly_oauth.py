@@ -216,7 +216,7 @@ def approval_page(
     provider: InvoicingReadonlyOAuthProvider,
     request_id: str,
     *,
-    form_action: str = "",
+    form_action: str | None = None,
 ) -> Response:
     pending = provider.pending_authorization(request_id)
     if pending is None:
@@ -227,7 +227,9 @@ def approval_page(
     client = escape(pending.client_id)
     scopes = escape(", ".join(pending.scopes))
     request_value = escape(request_id)
-    action_value = escape(form_action, quote=True)
+    action_attr = ""
+    if form_action is not None:
+        action_attr = f' action="{escape(form_action, quote=True)}"'
     return HTMLResponse(
         f"""
 <!doctype html>
@@ -238,7 +240,7 @@ def approval_page(
     <p>Client: <code>{client}</code></p>
     <p>Scopes: <code>{scopes}</code></p>
     <p>This grants read-only invoice review tools. It does not grant invoice creation, sending, payment recording, voiding, or service mutation tools.</p>
-    <form method="post" action="{action_value}">
+    <form method="post"{action_attr}>
       <input type="hidden" name="request_id" value="{request_value}" />
       <label>Approval token <input name="approval_token" type="password" /></label>
       <button type="submit">Approve connector</button>
@@ -253,7 +255,7 @@ async def handle_approval_request(provider: InvoicingReadonlyOAuthProvider, requ
     """Handle GET/POST requests for the operator approval page."""
     if request.method == "GET":
         request_id = request.query_params.get("request_id", "")
-        return approval_page(provider, request_id, form_action=request.scope.get("root_path", "") + request.url.path)
+        return approval_page(provider, request_id)
 
     form: FormData = await request.form()
     request_id = str(form.get("request_id") or "")
