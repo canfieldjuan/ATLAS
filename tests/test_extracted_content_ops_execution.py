@@ -63,6 +63,7 @@ class _OpportunityService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         topic: str | None = None,
+        opportunity_defaults: Mapping[str, Any] | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -81,6 +82,7 @@ class _OpportunityService:
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "quality_gates_enabled": quality_gates_enabled,
             "topic": topic,
+            "opportunity_defaults": dict(opportunity_defaults or {}),
             "extras": dict(extras),
         })
         return _Result()
@@ -96,6 +98,40 @@ class _ReasoningAwareOpportunityService(_OpportunityService):
         provider: Any | None,
     ) -> "_ReasoningAwareOpportunityService":
         return _ReasoningAwareOpportunityService(reasoning_context=provider)
+
+
+class _StrictCampaignService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int | None = None,
+        filters: Mapping[str, Any] | None = None,
+        channels: Any | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
+        quality_revalidation_enabled: bool | None = None,
+        quality_prompt_proof_term_limit: int | None = None,
+        parse_retry_response_excerpt_chars: int | None = None,
+    ) -> _Result:
+        del scope
+        del target_mode
+        del limit
+        del filters
+        del channels
+        del temperature
+        del max_tokens
+        del parse_retry_attempts
+        del quality_revalidation_enabled
+        del quality_prompt_proof_term_limit
+        del parse_retry_response_excerpt_chars
+        self.calls += 1
+        return _Result()
 
 
 def test_services_with_reasoning_context_can_target_specific_outputs() -> None:
@@ -303,6 +339,7 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
     assert campaign_call["filters"] == {"status": "ready"}
     # Plan default channels reach the service even without per-request override.
     assert campaign_call["channels"] == ("email_cold", "email_followup")
+    assert campaign_call["opportunity_defaults"] == {}
     assert campaign_call["default_report_type"] is None
     # extras locks the kwarg surface: a typo'd kwarg in PR-OptionA-2/3 would
     # silently land here and never reach the right service field.
@@ -316,6 +353,7 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
     # Plan default report type reaches the service.
     assert report_call["default_report_type"] == "vendor_pressure"
     assert report_call["channels"] is None
+    assert report_call["opportunity_defaults"] == {}
     assert report_call["extras"] == {}
 
 
@@ -532,6 +570,74 @@ async def test_execute_threads_user_selected_channels_into_email_campaign_servic
 
     assert result["status"] == "completed"
     assert campaign.calls[0]["channels"] == ("email_cold",)
+    assert campaign.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_omits_opportunity_defaults_when_selling_context_absent() -> None:
+    campaign = _StrictCampaignService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_selling_context_into_email_campaign_service() -> None:
+    campaign = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "selling": {
+                    "booking_url": "https://customer.test/book",
+                    "sender_name": "Juan",
+                },
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls[0]["opportunity_defaults"] == {
+        "selling": {
+            "booking_url": "https://customer.test/book",
+            "sender_name": "Juan",
+        }
+    }
+    assert campaign.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_promotes_flat_booking_url_into_selling_context() -> None:
+    campaign = _OpportunityService()
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "booking_url": "https://customer.test/book",
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls[0]["opportunity_defaults"] == {
+        "selling": {"booking_url": "https://customer.test/book"}
+    }
     assert campaign.calls[0]["extras"] == {}
 
 

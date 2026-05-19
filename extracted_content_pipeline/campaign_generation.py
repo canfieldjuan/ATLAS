@@ -146,6 +146,37 @@ def _contains_placeholder_url(value: Any) -> bool:
     return bool(_PLACEHOLDER_URL_RE.search(str(value or "")))
 
 
+def _clean_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key).strip() and item not in (None, "", [], {})
+    }
+
+
+def _merge_opportunity_defaults(
+    opportunity: Mapping[str, Any],
+    defaults: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    clean_defaults = _clean_mapping(defaults)
+    if not clean_defaults:
+        return dict(opportunity)
+    merged = dict(clean_defaults)
+    merged.update(_clean_mapping(opportunity))
+    default_selling = clean_defaults.get("selling")
+    row_selling = opportunity.get("selling")
+    if isinstance(default_selling, Mapping) and isinstance(row_selling, Mapping):
+        selling = {
+            **_clean_mapping(default_selling),
+            **_clean_mapping(row_selling),
+        }
+        if selling:
+            merged["selling"] = selling
+    return merged
+
+
 @dataclass(frozen=True)
 class CampaignGenerationConfig:
     skill_name: str = "digest/b2b_campaign_generation"
@@ -285,6 +316,7 @@ class CampaignGenerationService:
         quality_revalidation_enabled: bool | None = None,
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        opportunity_defaults: Mapping[str, Any] | None = None,
     ) -> CampaignGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -324,7 +356,10 @@ class CampaignGenerationService:
 
         requested = int(limit or self._config.limit)
         opportunities = [
-            normalize_campaign_opportunity(row, target_mode=target_mode)
+            normalize_campaign_opportunity(
+                _merge_opportunity_defaults(row, opportunity_defaults),
+                target_mode=target_mode,
+            )
             for row in await self._intelligence.read_campaign_opportunities(
                 scope=scope,
                 target_mode=target_mode,

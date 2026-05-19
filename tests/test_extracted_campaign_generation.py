@@ -290,6 +290,78 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
 
 
 @pytest.mark.asyncio
+async def test_generate_merges_opportunity_defaults_into_prompt_and_metadata():
+    service, _intelligence, campaigns, llm, _skills = _service(
+        [{"id": "opp-1", "company_name": "Acme", "vendor": "Slack"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "<p>Pricing note. Book: https://customer.test/book</p>",
+            "cta": "Book time: https://customer.test/book",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        opportunity_defaults={
+            "selling": {
+                "booking_url": "https://customer.test/book",
+                "sender_name": "Juan",
+            }
+        },
+    )
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert '"booking_url":"https://customer.test/book"' in prompt
+    assert '"sender_name":"Juan"' in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert source["selling"] == {
+        "booking_url": "https://customer.test/book",
+        "sender_name": "Juan",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generate_opportunity_selling_context_wins_over_defaults():
+    service, _intelligence, campaigns, llm, _skills = _service(
+        [
+            {
+                "id": "opp-1",
+                "company_name": "Acme",
+                "selling": {"booking_url": "https://row.test/book"},
+            }
+        ],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "<p>Book: https://row.test/book</p>",
+            "cta": "Book time: https://row.test/book",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        opportunity_defaults={
+            "selling": {
+                "booking_url": "https://default.test/book",
+                "sender_name": "Juan",
+            }
+        },
+    )
+
+    assert result.generated == 1
+    prompt = llm.calls[0]["messages"][0].content
+    assert '"booking_url":"https://row.test/book"' in prompt
+    assert "https://default.test/book" not in prompt
+    source = campaigns.saved[0]["drafts"][0].metadata["source_opportunity"]
+    assert source["selling"] == {
+        "booking_url": "https://row.test/book",
+        "sender_name": "Juan",
+    }
+
+
+@pytest.mark.asyncio
 async def test_generate_skips_draft_with_placeholder_url_in_body():
     service, _, campaigns, _, _ = _service(
         [{"id": "opp-1", "company_name": "Acme"}],

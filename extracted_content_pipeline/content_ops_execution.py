@@ -380,25 +380,29 @@ async def _dispatch_email_campaign(
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
 ) -> Any:
-    return await service.generate(
-        scope=scope,
-        target_mode=request.target_mode,
-        limit=request.limit,
-        filters=filters,
-        channels=_step_config_sequence(step.config, "channels"),
-        temperature=_step_config_float(step.config, "temperature"),
-        max_tokens=_step_config_int(step.config, "max_tokens"),
-        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
-        quality_revalidation_enabled=_step_config_bool(
+    kwargs: dict[str, Any] = {
+        "scope": scope,
+        "target_mode": request.target_mode,
+        "limit": request.limit,
+        "filters": filters,
+        "channels": _step_config_sequence(step.config, "channels"),
+        "temperature": _step_config_float(step.config, "temperature"),
+        "max_tokens": _step_config_int(step.config, "max_tokens"),
+        "parse_retry_attempts": _step_config_int(step.config, "parse_retry_attempts"),
+        "quality_revalidation_enabled": _step_config_bool(
             step.config, "quality_revalidation_enabled"
         ),
-        quality_prompt_proof_term_limit=_step_config_int(
+        "quality_prompt_proof_term_limit": _step_config_int(
             step.config, "quality_prompt_proof_term_limit"
         ),
-        parse_retry_response_excerpt_chars=_step_config_int(
+        "parse_retry_response_excerpt_chars": _step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
-    )
+    }
+    opportunity_defaults = _opportunity_defaults_from_inputs(request.inputs)
+    if opportunity_defaults is not None:
+        kwargs["opportunity_defaults"] = opportunity_defaults
+    return await service.generate(**kwargs)
 
 
 async def _dispatch_report(
@@ -643,6 +647,26 @@ def _step_config_sequence(
 def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
     filters = inputs.get("filters")
     return filters if isinstance(filters, Mapping) else None
+
+
+def _opportunity_defaults_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    defaults: dict[str, Any] = {}
+    selling = inputs.get("selling")
+    selling_defaults = dict(selling) if isinstance(selling, Mapping) else {}
+    booking_url = (
+        _clean(inputs.get("booking_url"))
+        or _clean(inputs.get("selling_booking_url"))
+    )
+    if booking_url and not _clean(selling_defaults.get("booking_url")):
+        selling_defaults["booking_url"] = booking_url
+    selling_defaults = {
+        str(key): value
+        for key, value in selling_defaults.items()
+        if str(key).strip() and value not in (None, "", [], {})
+    }
+    if selling_defaults:
+        defaults["selling"] = selling_defaults
+    return defaults or None
 
 
 # PR-OptionA-4: explicit allowlist of MarketingCampaign.context fields.
