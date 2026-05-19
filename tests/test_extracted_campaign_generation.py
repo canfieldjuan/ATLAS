@@ -368,6 +368,32 @@ async def test_generate_skips_scheme_less_placeholder_urls():
 
 
 @pytest.mark.asyncio
+async def test_generate_skips_scheme_less_placeholder_url_with_www_prefix():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "Read the summary at www.example.com/updates",
+            "cta": "Keep building",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
 async def test_generate_includes_opportunity_payload_when_skill_has_no_placeholders():
     service, _, _, llm, _ = _service(
         [{"id": "opp-1", "company_name": "Acme", "pain": "pricing pressure"}],
