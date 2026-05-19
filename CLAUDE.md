@@ -523,6 +523,9 @@ ATLAS_MCP_INVOICING_READONLY_OAUTH_RESOURCE_URL=https://atlas-brain.tailc7bd29.t
 ATLAS_MCP_INVOICING_READONLY_OAUTH_APPROVAL_TOKEN=<long-operator-token> \
 python -m atlas_brain.mcp.invoicing_readonly_server --sse
 
+# Operator launcher (loads .env/.env.local, validates OAuth config, prints smokes)
+.venv/bin/python scripts/start_invoicing_readonly_oauth_server.py
+
 # connector boundary smoke (auth + exact read-only tool list; no invoice reads)
 python scripts/check_invoicing_readonly_mcp_connector.py \
   --url http://127.0.0.1:8065/mcp \
@@ -584,6 +587,12 @@ temporary OAuth client, approves it with
 code for a bearer token, and lists the MCP tools. It must report exactly the
 eight read-only tools above and does not call invoice/service/balance/payment
 tools.
+
+Use `scripts/start_invoicing_readonly_oauth_server.py` for local operator
+startup instead of shell-sourcing `.env` manually. The launcher loads `.env` and
+`.env.local`, forces OAuth mode, validates required public URLs and approval
+token length, starts the read-only server in the foreground, and prints the
+discovery/e2e smoke commands. It masks bearer and approval tokens in output.
 
 ### Intelligence MCP Server (33 tools)
 ```bash
