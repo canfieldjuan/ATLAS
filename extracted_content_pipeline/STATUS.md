@@ -102,7 +102,9 @@ source of truth for what remains.
 - `scripts/smoke_content_ops_review_source_postgres.py` extends that same
   review-source path through scoped source-row import and DB-backed offline
   campaign draft persistence. It replaces matching imported opportunities by
-  default so repeated smoke runs do not duplicate `campaign_opportunities`.
+  default so repeated smoke runs do not duplicate `campaign_opportunities`,
+  and it preflights required Content Ops tables before import so hosts get a
+  migration-runner instruction instead of a late `UndefinedTableError`.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes

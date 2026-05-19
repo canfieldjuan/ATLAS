@@ -237,6 +237,9 @@ async def run_review_source_postgres_smoke(
                     )
 
             if not errors:
+                errors.extend(await _schema_readiness_errors(pool, args))
+
+            if not errors:
                 loaded = load_source_campaign_opportunities_from_file(
                     source_rows_path,
                     file_format="jsonl",
@@ -364,6 +367,33 @@ async def _generate_imported_target_drafts(
         "saved_ids": saved_ids,
         "errors": [dict(error) for error in errors],
     }
+
+
+async def _schema_readiness_errors(pool: Any, args: argparse.Namespace) -> list[str]:
+    required_tables = (
+        str(args.opportunity_table),
+        "b2b_campaigns",
+    )
+    missing: list[str] = []
+    for table_name in required_tables:
+        exists = await _relation_exists(pool, table_name)
+        if not exists:
+            missing.append(table_name)
+    if not missing:
+        return []
+    command = (
+        "python scripts/run_extracted_content_pipeline_migrations.py "
+        "--database-url \"$EXTRACTED_DATABASE_URL\""
+    )
+    return [
+        "required Content Ops table(s) missing: "
+        f"{', '.join(missing)}. Run {command} before this smoke."
+    ]
+
+
+async def _relation_exists(pool: Any, table_name: str) -> bool:
+    value = await pool.fetchval("SELECT to_regclass($1)::text", table_name)
+    return bool(value)
 
 
 async def _fetch_saved_drafts(pool: Any, saved_ids: Sequence[Any]) -> list[dict[str, Any]]:

@@ -483,7 +483,10 @@ importing.
 For a DB-backed smoke, use the Postgres variant. It imports the exported
 source rows into `campaign_opportunities`, replaces matching imported
 opportunities by default, runs offline draft generation through the product
-Postgres runner, and reports persisted campaign ids:
+Postgres runner, and reports persisted campaign ids. The smoke checks for the
+required `campaign_opportunities` and `b2b_campaigns` tables before import; if
+either is missing, run `scripts/run_extracted_content_pipeline_migrations.py`
+against the same database first:
 
 ```bash
 python scripts/smoke_content_ops_review_source_postgres.py \

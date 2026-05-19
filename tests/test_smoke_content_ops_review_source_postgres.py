@@ -27,11 +27,15 @@ class _Pool:
         source_rows,
         opportunity_rows=None,
         saved_draft_rows=None,
+        existing_relations=None,
     ):
         self.summary_rows = list(summary_rows)
         self.source_rows = list(source_rows)
         self.opportunity_rows = list(opportunity_rows or [])
         self.saved_draft_rows = list(saved_draft_rows or [])
+        self.existing_relations = set(
+            existing_relations or ("campaign_opportunities", "b2b_campaigns")
+        )
         self.fetch_calls = []
         self.execute_calls = []
         self.fetchval_calls = []
@@ -55,6 +59,8 @@ class _Pool:
 
     async def fetchval(self, query, *args):
         self.fetchval_calls.append({"query": str(query), "args": args})
+        if "to_regclass" in str(query):
+            return args[0] if args and args[0] in self.existing_relations else None
         return self.fetchval_results.pop(0)
 
     async def close(self):
@@ -225,9 +231,37 @@ async def test_review_source_postgres_smoke_imports_and_persists(monkeypatch, tm
         "vendor_retention",
         ["review-1"],
     )
-    assert "INSERT INTO b2b_campaigns" in pool.fetchval_calls[0]["query"]
+    assert any("INSERT INTO b2b_campaigns" in call["query"] for call in pool.fetchval_calls)
     assert "FROM b2b_campaigns" in pool.fetch_calls[-1]["query"]
     assert pool.fetch_calls[2]["args"] == ("vendor_retention", "acct-smoke", "review-1", 1)
+
+
+@pytest.mark.asyncio
+async def test_review_source_postgres_smoke_fails_before_import_when_schema_missing(
+    monkeypatch,
+    tmp_path,
+):
+    pool = _Pool(
+        summary_rows=[_summary_row()],
+        source_rows=[_source_row()],
+        existing_relations={"b2b_campaigns"},
+    )
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+
+    code, payload = await smoke.run_review_source_postgres_smoke(
+        _args(),
+        source_rows_path=tmp_path / "g2_sources.jsonl",
+    )
+
+    assert code == 1
+    assert any("required Content Ops table(s) missing" in error for error in payload["errors"])
+    assert any("campaign_opportunities" in error for error in payload["errors"])
+    assert any(
+        "run_extracted_content_pipeline_migrations.py" in error
+        for error in payload["errors"]
+    )
+    assert pool.execute_calls == []
+    assert all("INSERT INTO b2b_campaigns" not in call["query"] for call in pool.fetchval_calls)
 
 
 @pytest.mark.asyncio

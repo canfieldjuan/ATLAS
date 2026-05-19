@@ -185,7 +185,8 @@ python scripts/smoke_content_ops_review_source_generation.py \
 To prove the same source can run through the Postgres-backed path, use the
 database smoke. It imports source rows into `campaign_opportunities` under the
 provided account id, replaces matching imported opportunities by default, and
-persists offline generated drafts:
+persists offline generated drafts. If the required Content Ops tables are not
+present, the smoke fails before import and points at the migration runner:
 
 ```bash
 python scripts/smoke_content_ops_review_source_postgres.py \
