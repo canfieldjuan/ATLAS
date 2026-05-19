@@ -104,13 +104,19 @@ source of truth for what remains.
   and offline campaign draft generation, so operators can prove a source such
   as G2 produces usable drafts before import or live provider generation.
 - `scripts/smoke_content_ops_review_source_postgres.py` extends that same
-  review-source path through scoped source-row import and DB-backed offline
-  campaign draft persistence. It replaces matching imported opportunities by
-  default so repeated smoke runs do not duplicate `campaign_opportunities`,
-  and it preflights required Content Ops tables before import so hosts get a
-  migration-runner instruction instead of a late `UndefinedTableError`. A live
-  local Atlas G2/Slack run has passed through source export, import,
-  DB-backed offline draft persistence, and draft export.
+  review-source path through scoped source-row import and DB-backed campaign
+  draft persistence. It defaults to deterministic offline generation and also
+  accepts `--llm pipeline` for product `PipelineLLMClient` runs. It replaces
+  matching imported opportunities by default so repeated smoke runs do not
+  duplicate `campaign_opportunities`, and it preflights required Content Ops
+  tables before import so hosts get a migration-runner instruction instead of a
+  late `UndefinedTableError`. A live local Atlas G2/Slack run has passed
+  through source export, import, DB-backed offline draft persistence, and draft
+  export.
+- `scripts/smoke_content_ops_cfpb_source_postgres.py` gives the public CFPB
+  support-ticket-like source path the same Postgres import and draft
+  persistence smoke, with offline default mode and optional `--llm pipeline`
+  provider mode.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes
