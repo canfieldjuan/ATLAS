@@ -183,6 +183,7 @@ export function toWireIngestionInspectRequest(
     target_mode: domain.targetMode,
     max_source_text_chars: domain.maxSourceTextChars,
     sample_limit: domain.sampleLimit,
+    default_fields: { ...domain.defaultFields },
   }
 }
 

@@ -114,6 +114,7 @@ export interface ContentOpsIngestionInspectRequest {
   target_mode?: string | null                       // default "vendor_retention"
   max_source_text_chars?: number                    // 1..10000
   sample_limit?: number                             // 0..25
+  default_fields?: Record<string, unknown>
 }
 
 export interface ContentOpsIngestionImportRequest
