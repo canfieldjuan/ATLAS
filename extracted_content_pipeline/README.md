@@ -223,7 +223,9 @@ Public CFPB complaint narratives can also seed the same source-row path when
 you want support-ticket-like evidence without using seller or review-site data.
 The exporter reads CFPB's public CSV endpoint, keeps narrative-bearing
 complaints, and emits `source_type="support_ticket"` rows. Account and contact
-binding still comes from host defaults:
+binding still comes from host defaults. The Postgres smoke defaults to offline
+generation; pass `--llm pipeline` to use the configured product
+`PipelineLLMClient`:
 
 ```bash
 python scripts/export_content_ops_cfpb_sources.py \
@@ -241,6 +243,7 @@ python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --account-id acct_123 \
   --default-field company_name="Acme Logistics" \
   --default-field contact_email=ops@example.com \
+  --llm pipeline \
   --json
 ```
 
