@@ -25,6 +25,50 @@ It should expose the smallest useful surface:
 
 It must not expose the full `atlas_brain.mcp.invoicing_server` tool surface.
 
+## Current operational state: 2026-05-19
+
+The draft-writer connector is live and proven through the public ChatGPT-style
+OAuth path:
+
+```text
+https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+Merged implementation slices:
+
+- `#623`: Funnel route checker for draft-writer app and protected-resource
+  metadata routes.
+- `#626`: public-host transport security allowlist with DNS-rebinding
+  protection still enabled.
+- `#629`: case-insensitive invoice-number lookup so created mixed-case invoice
+  numbers can be read back.
+- `#632`: explicit blocked-draft live write smoke.
+- `#633`: OAuth state-file persistence for clients and refresh tokens.
+
+Current local runtime expectations:
+
+- Server listens on port `8066`.
+- Approval token lives at
+  `.secrets/invoicing-draft-writer-approval-token`.
+- OAuth state lives at
+  `.secrets/invoicing-draft-writer-oauth-state.json`.
+- Start/restart with
+  `ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_STATE_FILE=.secrets/invoicing-draft-writer-oauth-state.json`.
+- Run discovery, no-mutation OAuth e2e, then live write smoke after restart.
+
+The live smoke draft is:
+
+- Invoice number: `INV-2026-May-0185`
+- Invoice id: `fa473ad7-435d-442d-9ab8-9f8fb7ec6954`
+- Customer: `ATLAS TEST - DO NOT SEND - Draft Writer Connector`
+- Business context: `atlas-mcp-live-smoke`
+- Send blocker: `no_email`
+- Warnings: `subtotal_zero`, `no_contact_id`
+
+Do not send, approve, or clean up that smoke draft unless the operator
+explicitly asks for cleanup. It is useful as a persistent audit artifact proving
+the connector creates blocked review-only drafts.
+
 ## Why separate server
 
 The existing full server is designed for trusted local operators. It contains
