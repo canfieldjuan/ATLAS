@@ -1554,15 +1554,84 @@ def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
     return False
 
 
+# Disclaimer-prose patterns. When a blockquote block is stripped, an
+# adjacent paragraph matching one of these patterns is itself orphaned
+# (it references content that no longer exists) and stripped along
+# with the block. These match the seo-geo-aeo-blog-post skill's v1.4.0
+# detection patterns -- the audit catches the same shapes post-publish,
+# and this stripper catches them upstream during generation.
+_ORPHAN_DISCLAIMER_RES = (
+    re.compile(r"that quote is from a .{0,60}? discussion, not a", re.IGNORECASE),
+    re.compile(r"misattributed in the source data", re.IGNORECASE),
+    re.compile(
+        r"(?:quote|review|reviewer) (?:is|was) (?:from|on) a .{0,60}? "
+        r"(?:discussion|review|forum|context)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:quote|review) is misattributed", re.IGNORECASE),
+)
+
+
+def _looks_like_intro_paragraph(line: str) -> bool:
+    """True if ``line`` looks like a single-line paragraph introducing a
+    blockquote that immediately follows. Used by the orphan-prose cleanup
+    in ``_remove_unmatched_quote_lines``.
+
+    A line qualifies as an intro when it:
+      * has non-empty content;
+      * ends with a colon (the canonical lead-in to a quote);
+      * is not itself a blockquote, heading, or list marker;
+      * is not absurdly long (>180 chars) -- introductions are short.
+    """
+    stripped = (line or "").strip()
+    if len(stripped) < 3 or len(stripped) > 180:
+        return False
+    if not stripped.endswith(":"):
+        return False
+    if stripped.startswith((">", "#", "-", "*")):
+        return False
+    if re.match(r"^\d+\.\s", stripped):  # ordered list item
+        return False
+    return True
+
+
+def _looks_like_orphan_disclaimer(line: str) -> bool:
+    """True if ``line`` matches one of the acknowledged-misattribution
+    disclaimer patterns. When a stripped blockquote is followed by a
+    disclaimer apologising for it, the disclaimer is also orphaned and
+    should be removed."""
+    if not line or not line.strip():
+        return False
+    return any(p.search(line) for p in _ORPHAN_DISCLAIMER_RES)
+
+
 def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
     """Strip LLM-generated blockquote BLOCKS that do not ground in a
-    quote-grade source pool.
+    quote-grade source pool, AND the orphan prose adjacent to them.
 
     A "block" is a maximal run of contiguous ``>``-prefixed lines. The
     block is kept iff EVERY quote-bearing line in it matches the source
     pool. A block with at least one ungrounded quote line is stripped
-    in its entirety (including matched quote lines and attribution
-    lines) -- the block is the unit of trust.
+    in its entirety (matched quote lines and attribution lines alike) --
+    the block is the unit of trust.
+
+    When a block is stripped, the cleanup also widens the strip span to
+    include:
+
+      * **Orphan introductory prose**: a single-line paragraph ending
+        with ``:`` immediately preceding the block (e.g.
+        ``One reviewer on Reddit noted:``). Without removal it dangles
+        with no quote to introduce.
+      * **Orphan disclaimer prose**: a single-line paragraph matching
+        one of the acknowledged-misattribution patterns (e.g.
+        ``That quote is from a compensation discussion, not a CRM
+        review``) immediately following the block. These shipped in
+        production posts when the upstream LLM hedged on ungrounded
+        quotes; the v1.4.0 audit catches them post-publish and this
+        stripper catches them upstream during generation.
+
+    Blank-line separators between the prose and the block are also
+    removed so the post body doesn't accumulate dead vertical space.
 
     A line is "quote-bearing" if ``_extract_quote_body`` returns
     non-empty text for it; attribution-only lines like ``> -- reviewer
@@ -1571,94 +1640,99 @@ def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tu
     sibling fails.
 
     Fails closed: when ``source_quotes`` is empty, ALL blockquote blocks
-    are removed. The absence of a source pool is treated as "no quote
-    material is grounded", not as "everything passes" -- the latter was
-    the prior backdoor that allowed paraphrased LLM quotes to ship when
-    the producer hadn't supplied verbatim phrases.
+    are removed (along with their adjacent intro/disclaimer prose).
 
-    Why block-level (not line-level): the prior implementation iterated
-    line-by-line. A multi-line markdown blockquote like::
-
-        > "Some quote text"
-        > -- Attribution Person
-
-    would have its quote line stripped (quote body fails source match)
-    but the attribution line would be PRESERVED, because
-    ``_extract_quote_body`` returns an empty string for an attribution-
-    only line, falsifying the ``if quote and ...`` removal condition.
-    The result was orphan ``<blockquote><p>-- Attribution</p></blockquote>``
-    in the rendered HTML (44 of 79 published posts at the time of fix).
-    Block-level processing removes the entire block atomically.
-
-    The returned ``removed`` count is the number of LINES stripped (for
-    backwards compatibility with the prior contract), not the number of
-    blocks.
+    The returned ``removed`` count is the total number of LINES
+    stripped (block + intro + disclaimer + intervening blank lines).
     """
     text = str(markdown or "")
     if not text:
         return text, 0
 
     lines = text.splitlines(keepends=False)
-    output: list[str] = []
-    removed_lines = 0
-    i = 0
     n = len(lines)
+
+    # ---- Pass 1: identify strip spans ------------------------------------
+    # Each span is a (start, end_exclusive) range of line indices to
+    # remove. Spans may include adjacent intro / blank-separator /
+    # disclaimer lines around a stripped block.
+    strip_spans: list[tuple[int, int]] = []
+    i = 0
     while i < n:
         if not _BLOCKQUOTE_RE.match(lines[i]):
-            output.append(lines[i])
             i += 1
             continue
 
-        # Collect the contiguous blockquote block starting at i.
         block_start = i
         while i < n and _BLOCKQUOTE_RE.match(lines[i]):
             i += 1
-        block_lines = lines[block_start:i]
+        block_end = i  # exclusive
 
-        # Decide: keep the block, or strip it.
-        #
-        # Contract: no ungrounded quote text ships. A block is the unit
-        # of trust -- if any quote-bearing line in the block fails to
-        # match the source pool, the entire block is contaminated and
-        # stripped (including attribution lines, which can't stand on
-        # their own).
-        #
-        # Implementation:
-        #   1. Collect quote-bearing lines (where _extract_quote_body
-        #      returns non-empty content).
-        #   2. If there are no quote-bearing lines, the block is
-        #      orphan attribution -- strip.
-        #   3. If EVERY quote-bearing line matches the source pool,
-        #      keep the whole block (attribution included).
-        #   4. Otherwise (at least one quote-bearing line ungrounded),
-        #      strip the whole block.
+        # Decide keep-vs-strip for this block.
         if not source_quotes:
-            removed_lines += len(block_lines)
-            continue
-
-        quote_bearing: list[str] = []
-        for line in block_lines:
-            m = _BLOCKQUOTE_RE.match(line)
-            if not m:
-                continue
-            quote = _extract_quote_body(m.group(1))
-            if quote:
-                quote_bearing.append(quote)
-
-        if not quote_bearing:
-            # Orphan attribution / non-quote content. Nothing to ground on.
-            removed_lines += len(block_lines)
-            continue
-
-        all_quotes_grounded = all(
-            _quote_matches_source(q, source_quotes) for q in quote_bearing
-        )
-        if all_quotes_grounded:
-            output.extend(block_lines)
+            should_strip = True
         else:
-            removed_lines += len(block_lines)
+            quote_bearing: list[str] = []
+            for line in lines[block_start:block_end]:
+                m = _BLOCKQUOTE_RE.match(line)
+                if not m:
+                    continue
+                quote = _extract_quote_body(m.group(1))
+                if quote:
+                    quote_bearing.append(quote)
 
-    # Preserve trailing newline if the original text had one.
+            if not quote_bearing:
+                # Orphan attribution / non-quote content. Nothing to
+                # ground on; strip the whole block.
+                should_strip = True
+            else:
+                should_strip = not all(
+                    _quote_matches_source(q, source_quotes) for q in quote_bearing
+                )
+
+        if not should_strip:
+            continue
+
+        # Widen the span backward to swallow blank separators + an
+        # orphan intro paragraph ending with ':'.
+        span_start = block_start
+        cursor = block_start - 1
+        while cursor >= 0 and not lines[cursor].strip():
+            cursor -= 1
+        if cursor >= 0 and _looks_like_intro_paragraph(lines[cursor]):
+            # Don't pull intro across a prior strip-span boundary.
+            prior_end = strip_spans[-1][1] if strip_spans else 0
+            if cursor >= prior_end:
+                # Include the intro line + all blanks between it and
+                # the block.
+                span_start = cursor
+
+        # Widen the span forward to swallow blank separators + an
+        # orphan disclaimer paragraph.
+        span_end = block_end
+        cursor = block_end
+        while cursor < n and not lines[cursor].strip():
+            cursor += 1
+        if cursor < n and _looks_like_orphan_disclaimer(lines[cursor]):
+            span_end = cursor + 1
+
+        strip_spans.append((span_start, span_end))
+
+    # ---- Pass 2: build output --------------------------------------------
+    output: list[str] = []
+    removed_lines = 0
+    span_idx = 0
+    for idx in range(n):
+        while span_idx < len(strip_spans) and idx >= strip_spans[span_idx][1]:
+            span_idx += 1
+        if (
+            span_idx < len(strip_spans)
+            and strip_spans[span_idx][0] <= idx < strip_spans[span_idx][1]
+        ):
+            removed_lines += 1
+        else:
+            output.append(lines[idx])
+
     result = "\n".join(output)
     if text.endswith("\n"):
         result += "\n"
