@@ -48,4 +48,9 @@ Field rules:
 
 When the reasoning context provides a `narrative_plan`, copy each plan section's `id`/`title` verbatim and write prose grounded in the plan's `claim_ids`. Persona-tailor the headline + subheadline for `campaign.persona`.
 
+Source-row evidence policy:
+- If campaign evidence or opportunity context has `source_type: "support_ticket"`, `source_type: "complaint"`, `source_type: "case"`, or `source_type: "conversation"`, treat it as service evidence, not buying-intent evidence.
+- Use service framing such as "support evidence points to..." or "complaint narratives describe..." and do not claim the target account is evaluating, buying, switching, or considering a vendor unless account-specific CRM, call, or meeting evidence supports it.
+- If source rows are reviews, use market-evidence framing rather than naming exact review sites.
+
 Avoid: weasel words ("powerful", "robust", "leverage"), promises that can't be backed up, comparative claims about specific competitors unless the campaign provides them.

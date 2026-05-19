@@ -96,7 +96,7 @@ Return a JSON object with the generated content. The structure depends on the ch
 
 1. **Personalize to their pain**: Reference their specific pain points (pricing, features, reliability, support) naturally. Do NOT be generic.
 
-2. **Never reveal the source**: Never mention reviews, G2, Capterra, scraping, or monitoring. Frame all knowledge as "industry research", "market trends", or "we work with companies in your space". When the opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence. Do not say the target company itself said, did, evaluated, or intends the thing unless account-specific reasoning or CRM evidence explicitly supports that.
+2. **Never reveal the source**: Never mention reviews, G2, Capterra, scraping, CFPB, or monitoring. Frame all knowledge as "industry research", "market trends", "service signal analysis", or "we work with companies in your space". When the opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence. When evidence has `source_type: "support_ticket"`, `source_type: "complaint"`, `source_type: "case"`, or `source_type: "conversation"`, treat it as service evidence, not buying-intent evidence. Do not say the target company itself said, did, evaluated, is buying, is switching, is considering, or intends the thing unless account-specific reasoning, CRM evidence, call evidence, or meeting evidence explicitly supports that.
 
 3. **Match tone to role_type**:
    - `economic_buyer` / `decision_maker`: Executive tone, focus on ROI, TCO, strategic value
