@@ -542,6 +542,26 @@ python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --json
 ```
 
+For customer-owned source files, use the generic source-file Postgres smoke.
+The default path is the packaged support-ticket CSV example, so a host can run
+it after migrations with only an account id:
+
+```bash
+python scripts/smoke_content_ops_source_file_postgres.py \
+  --account-id acct_123 \
+  --json
+```
+
+Pass a different JSON, JSONL, or CSV source export when validating a host file:
+
+```bash
+python scripts/smoke_content_ops_source_file_postgres.py \
+  customer_support_tickets.csv \
+  --source-format csv \
+  --account-id acct_123 \
+  --json
+```
+
 ```bash
 python scripts/load_extracted_campaign_opportunities.py \
   g2_review_sources.jsonl \
