@@ -65,6 +65,12 @@ For read-only surfaces, add a boundary smoke equivalent to
 
 Do not call real data tools in connector boundary smoke.
 
+For invoicing write access, do not expose the full `atlas-invoicing` server.
+Use the draft-only contract in
+`docs/INVOICING_MCP_WRITE_ACCESS_GUARDRAILS.md` before adding any mutating
+ChatGPT connector. The first write surface is draft creation/update only;
+send, payment, void, PDF export, and service mutation stay out of scope.
+
 ## Step 2: add OAuth mode
 
 Use `atlas_brain/mcp/invoicing_readonly_oauth.py` as the template. The minimum
