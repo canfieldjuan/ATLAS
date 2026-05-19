@@ -3,5 +3,11 @@
   "installCommand": "cd atlas-churn-ui && npm install",
   "buildCommand": "cd atlas-churn-ui && npm run build",
   "outputDirectory": "atlas-churn-ui/dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/blog",        "destination": "/blog/index.html" },
+    { "source": "/blog/(.*)",   "destination": "/blog/$1/index.html" },
+    { "source": "/landing",     "destination": "/landing/index.html" },
+    { "source": "/methodology", "destination": "/methodology/index.html" },
+    { "source": "/(.*)",        "destination": "/index.html" }
+  ]
 }

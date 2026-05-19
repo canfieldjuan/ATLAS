@@ -155,23 +155,30 @@ function prerenderPlugin() {
           ogType: 'article',
           jsonLd: {
             '@context': 'https://schema.org',
-            '@type': 'BlogPosting',
-            headline: seoTitle,
-            description: seoDesc,
-            image: DEFAULT_OG_IMAGE,
-            author: {
-              '@type': 'Organization',
-              name: 'Atlas Intelligence',
-            },
-            publisher: {
-              '@type': 'Organization',
-              name: 'Atlas Intelligence',
-              url: BASE_URL,
-            },
-            mainEntityOfPage: {
-              '@type': 'WebPage',
-              '@id': `${BASE_URL}/blog/${slug}`,
-            },
+            '@graph': [
+              {
+                '@type': 'BlogPosting',
+                headline: seoTitle,
+                description: seoDesc,
+                image: DEFAULT_OG_IMAGE,
+                author: { '@type': 'Organization', name: 'Atlas Intelligence' },
+                publisher: {
+                  '@type': 'Organization',
+                  name: 'Atlas Intelligence',
+                  url: BASE_URL,
+                  logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
+                },
+                mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${slug}` },
+              },
+              {
+                '@type': 'BreadcrumbList',
+                itemListElement: [
+                  { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
+                  { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
+                  { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${slug}` },
+                ],
+              },
+            ],
           },
         })
       }
@@ -179,7 +186,22 @@ function prerenderPlugin() {
       const LANDING_JSON_LD = {
         '@context': 'https://schema.org',
         '@graph': [
-          { '@type': 'WebSite', name: 'Atlas Intelligence', url: BASE_URL },
+          {
+            '@type': 'Organization',
+            name: 'Atlas Intelligence',
+            url: BASE_URL,
+            logo: DEFAULT_OG_IMAGE,
+          },
+          {
+            '@type': 'WebSite',
+            name: 'Atlas Intelligence',
+            url: BASE_URL,
+            potentialAction: {
+              '@type': 'SearchAction',
+              target: `${BASE_URL}/blog?q={search_term_string}`,
+              'query-input': 'required name=search_term_string',
+            },
+          },
           {
             '@type': 'SoftwareApplication',
             name: 'Atlas Intelligence',
