@@ -88,8 +88,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "Communication"
 },
-  content: `<p>Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Every Communication tool has a fatal flaw. We analyzed 756 reviews across Slack, Zoom, Microsoft Teams, and RingCentral between March 3 and April 8, 2026 to find out what breaks first.</p>
 <p>This is not a hit piece. It is also not a puff piece. The data comes from 1,512 enriched reviews pulled from G2, Gartner, Reddit, and other verified and community platforms. The goal is simple: show you the single biggest complaint for each vendor, backed by reviewer evidence, so you can pick the trade-off you can live with.</p>

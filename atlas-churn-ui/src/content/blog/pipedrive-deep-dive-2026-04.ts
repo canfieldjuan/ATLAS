@@ -154,8 +154,7 @@ const post: BlogPost = {
   "vendor_filter": "Pipedrive",
   "category_filter": "CRM"
 },
-  content: `<p>Evidence anchor: 2 months is the live timing trigger, $15/user is the concrete spend anchor, Nutshell is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is competitor switch.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Pipedrive positions itself as a sales-focused CRM built for pipeline visibility and deal management. But what happens when reviewer experience diverges from vendor positioning?</p>
 <p>This analysis examines 262 Pipedrive reviews collected between March 3 and April 6, 2026, drawing from verified platforms including G2, Gartner Peer Insights, and PeerSpot, alongside community discussions on Reddit. Of the 262 reviews analyzed, 143 contained enriched context including role, company size, or specific pain points. 10 reviews showed explicit churn intent.</p>

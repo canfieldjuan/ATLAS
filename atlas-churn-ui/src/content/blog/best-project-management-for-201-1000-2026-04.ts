@@ -166,8 +166,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "Project Management"
 },
-  content: `<p>Evidence anchor: year is the live timing trigger, $10.99 is the concrete spend anchor, the core pressure showing up in the evidence is pricing, and the workflow shift in play is workflow substitution.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Most project management software comparisons rank vendors by rating or feature count. This one doesn't.</p>
 <p>We analyzed <strong>1464 real user reviews</strong> across <strong>10 project management tools</strong> to find who's actually best for <strong>201-1000 employee teams</strong>. The data comes from verified platforms like G2, Gartner Peer Insights, and PeerSpot, plus community feedback from Reddit and other forums, covering reviews from February 28 to April 7, 2026.</p>

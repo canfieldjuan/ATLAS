@@ -154,8 +154,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "CRM"
 },
-  content: `<p>Evidence anchor: month end is the live timing trigger, $170k is the concrete spend anchor, and the core pressure showing up in the evidence is pricing.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>The CRM market in 2026 is crowded, competitive, and under pricing pressure. Between February 25 and April 7, 2026, we analyzed 3,287 enriched reviews across 8 major vendors to map the current landscape. The sample includes 172 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 3,115 community reviews from Reddit and similar forums.</p>
 <p>This analysis covers 1,163 total churn signals with an average urgency score of 2.1 across the category. The goal is not to crown a winner, but to show which vendors face the highest churn risk, which pain points recur across platforms, and where each product holds strength or shows weakness.</p>

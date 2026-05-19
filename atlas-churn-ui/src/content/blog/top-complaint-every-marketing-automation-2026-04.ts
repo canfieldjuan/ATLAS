@@ -98,8 +98,7 @@ const post: BlogPost = {
   "vendor_filter": null,
   "category_filter": "Marketing Automation"
 },
-  content: `<p>Evidence anchor: 24/7 is the live timing trigger, $800 m is the concrete spend anchor, unknown is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Every marketing automation platform has a weakness. The question is whether you can live with it.</p>
 <p>We analyzed 743 reviews across 6 marketing automation vendors between February 28 and April 8, 2026. The sample includes 156 verified reviews from G2, Gartner, PeerSpot, and Software Advice, plus 1,432 community discussions from Reddit and other forums. We enriched 1,588 of the 2,534 total reviews collected.</p>

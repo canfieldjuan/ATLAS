@@ -128,8 +128,7 @@ const post: BlogPost = {
   "vendor_filter": "Microsoft Teams",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is bundled suite consolidation.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Microsoft Teams and Salesforce serve different primary functions—collaboration versus CRM—but both face pricing and integration pressure in the March-April 2026 review window. Across 108 signals (34 for Microsoft Teams, 74 for Salesforce), the urgency gap is stark: Salesforce registers 3.2 compared to Microsoft Teams' 1.9, a 1.3-point difference.</p>
 <p>This analysis draws from 2,878 reviews analyzed between February 25 and April 7, 2026, with 1,697 enriched for churn intent and 90 showing active switching signals. Sources include verified platforms (G2, Gartner, PeerSpot) and community platforms (Reddit, GitHub). The sample reflects self-selected reviewer feedback, not universal product performance.</p>

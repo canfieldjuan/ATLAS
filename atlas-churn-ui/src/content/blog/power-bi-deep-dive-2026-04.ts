@@ -148,8 +148,7 @@ const post: BlogPost = {
   "vendor_filter": "Power BI",
   "category_filter": "B2B Software"
 },
-  content: `<p>Evidence anchor: today is the live timing trigger, $5/month is the concrete spend anchor, Tableau is the competitive alternative in the witness-backed record, the core pressure showing up in the evidence is pricing, and the workflow shift in play is competitor switch.</p>
-<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
+  content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-04-08. It captures reviewer perception, not a census of all users.</em></p>
 <h2 id="introduction">Introduction</h2>
 <p>Power BI sits at the center of Microsoft's analytics strategy, but 1374 reviews analyzed between March 3 and April 8, 2026 reveal a product under pressure from its own vendor's bundling ambitions. This analysis draws from 796 enriched reviews across G2, Gartner Peer Insights, PeerSpot, and Reddit to map where Power BI delivers value and where friction is pushing teams toward Tableau, Looker, and cloud-native alternatives.</p>
 <p>The core tension: Microsoft's Fabric licensing push is creating immediate pricing decisions for teams that adopted Power BI for Excel integration and Microsoft 365 workflow continuity. Reviewers report evaluating €400/mo Pro-only licenses against €1k/mo Pro+Fabric bundles while navigating April 2026 scorecard hierarchy deprecation and May 2026 legacy import sunset deadlines. That compressed timeline is turning latent dissatisfaction into active evaluation pressure.</p>
