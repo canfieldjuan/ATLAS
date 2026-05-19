@@ -321,7 +321,12 @@ def test_validator_handles_markdown_without_blockquotes():
 
 def test_full_block_stripped_when_pool_empty():
     """Baseline: with empty source_quotes, the fail-closed path strips
-    every blockquote block atomically."""
+    every blockquote block atomically.
+
+    The stripper also sweeps the orphan introductory paragraph
+    immediately preceding the block (``One reviewer noted:`` -- a
+    single-line paragraph ending with ``:``) so the resulting body
+    doesn't dangle the lead-in with no quote to follow."""
     markdown = (
         "## Section\n"
         "\n"
@@ -333,9 +338,15 @@ def test_full_block_stripped_when_pool_empty():
         "More prose continues here.\n"
     )
     out, removed = _remove_unmatched_quote_lines(markdown, [])
-    assert removed == 2
+    # Block (2 lines) + blank separator + intro line = 4 lines removed.
+    assert removed == 4
     assert "fabricated quote" not in out
     assert "Group Director" not in out
+    # Orphan intro prose is also gone.
+    assert "One reviewer noted:" not in out
+    # Surrounding content preserved.
+    assert "## Section" in out
+    assert "More prose continues here." in out
 
 
 def test_full_block_stripped_when_pool_populated_no_match():
@@ -466,25 +477,20 @@ def test_multiple_blocks_independent_decisions():
     assert "Final prose." in out
 
 
-def test_regression_introductory_prose_orphaned_when_quote_stripped():
-    """KNOWN GAP (deferred): prose introducing a blockquote is not
-    cleaned up when the blockquote itself gets stripped.
+def test_orphan_intro_and_disclaimer_prose_stripped_with_block():
+    """When a blockquote is stripped, the stripper also sweeps the
+    orphan introductory paragraph immediately before it AND any
+    acknowledged-misattribution disclaimer paragraph immediately
+    after it. Both reference content that no longer exists, so leaving
+    them in the body produces dangling prose.
 
-    With block-level stripping now in place, the blockquote is removed
-    atomically, but the orphan introduction ("One reviewer noted:") and
-    any acknowledged-misattribution disclaimer ("That quote is from a
-    compensation discussion, not a CRM review") still survive because
-    they aren't blockquote-prefixed lines. They reference content that
-    no longer exists.
+    The disclaimer detection mirrors the seo-geo-aeo-blog-post skill's
+    v1.4.0 audit patterns -- the audit catches these post-publish, and
+    the generator now catches them upstream.
 
-    A complete fix would also detect and remove orphan introductory and
-    disclaimer prose adjacent to stripped blocks. The seo-geo-aeo-blog-
-    post skill v1.4.0 added regex patterns that catch the disclaimer
-    pattern in audit mode; upstream detection in the generator should
-    mirror them.
-
-    For now: this test documents the gap. When the orphan-prose work
-    lands, update the assertions."""
+    Previously this test documented the gap (intro and disclaimer
+    survived stripping). The orphan-prose extension to the stripper
+    closes the gap; the assertions are inverted accordingly."""
     source: list[str] = []  # fail-closed: all blockquotes stripped
     markdown = (
         "## Section\n"
@@ -496,12 +502,139 @@ def test_regression_introductory_prose_orphaned_when_quote_stripped():
         "That quote is from a compensation discussion, not a CRM review, but it surfaced in the same complaint pattern analysis.\n"
     )
     out, removed = _remove_unmatched_quote_lines(markdown, source)
-    assert removed == 1
+    # Block (1 line) + 2 blanks + intro line + disclaimer line = 5 lines.
+    assert removed == 5
     assert "gets stripped" not in out
-    # KNOWN GAP: the orphan intro and disclaimer prose survive.
-    # When the orphan-prose fix lands, change these to `not in out`.
-    assert "One reviewer on Reddit noted:" in out
-    assert "That quote is from a compensation discussion" in out
+    assert "One reviewer on Reddit noted:" not in out
+    assert "That quote is from a compensation discussion" not in out
+    # Surrounding content (the H2) is preserved.
+    assert "## Section" in out
+
+
+def test_orphan_intro_alone_stripped_when_no_disclaimer():
+    """Intro-only case: block has an intro paragraph before it but no
+    disclaimer after. Only the intro is swept along with the block."""
+    source: list[str] = []
+    markdown = (
+        "## Section\n"
+        "\n"
+        "A reviewer on G2 said:\n"
+        "\n"
+        "> some fabricated quote\n"
+        "\n"
+        "Body prose continues here.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert "some fabricated quote" not in out
+    assert "A reviewer on G2 said:" not in out
+    assert "Body prose continues here." in out
+
+
+def test_orphan_disclaimer_alone_stripped_when_no_intro():
+    """Disclaimer-only case: block has a disclaimer after but no
+    introductory ':' paragraph before. Only the disclaimer is swept
+    along with the block."""
+    source: list[str] = []
+    markdown = (
+        "## Section\n"
+        "\n"
+        "Some normal prose without a colon ending.\n"
+        "\n"
+        "> a quote\n"
+        "\n"
+        "That quote is from a payment platform discussion, not a CRM review.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    # The blockquote line `> a quote` is gone (assertion was previously
+    # `"a quote" not in out OR ">" not in out` which would pass even when
+    # the blockquote remained as long as "a quote" appeared elsewhere --
+    # tightened per Copilot review on PR #638).
+    assert "> a quote" not in out
+    assert "That quote is from a payment platform discussion" not in out
+    # The 'normal prose' line doesn't end with ':' so it's preserved.
+    assert "Some normal prose without a colon ending." in out
+
+
+def test_orphan_prose_preserved_for_kept_blocks():
+    """When a block is KEPT (its quotes ground), the surrounding intro
+    and prose are also preserved. The orphan-prose cleanup only fires
+    on stripped blocks."""
+    source = ["it costs too much money for what you get"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "A verified reviewer noted:\n"
+        "\n"
+        "> \"it costs too much money for what you get\"\n"
+        "> -- Customer Reviewer on G2\n"
+        "\n"
+        "Body prose continues here.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 0
+    assert "A verified reviewer noted:" in out
+    assert "costs too much money" in out
+    assert "Customer Reviewer on G2" in out
+    assert "Body prose continues here." in out
+
+
+def test_orphan_intro_not_stripped_when_too_long():
+    """An 'intro paragraph' must be reasonably short. A long paragraph
+    that happens to end with ':' is NOT swept along with a stripped
+    block -- it's substantive content, not a lead-in."""
+    source: list[str] = []
+    long_intro = (
+        "This is a long paragraph that contains substantive analysis "
+        "and discussion of the methodology, the data sources, the "
+        "limitations of self-selected reviewer feedback, and the way "
+        "patterns emerge from cross-vendor analysis across the corpus:"
+    )
+    markdown = (
+        "## Section\n"
+        "\n"
+        f"{long_intro}\n"
+        "\n"
+        "> some fabricated quote\n"
+        "\n"
+        "Body prose continues here.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    # The block (1 line) is stripped; the long intro is preserved.
+    assert "some fabricated quote" not in out
+    assert long_intro in out
+
+
+def test_adjacent_blocks_disclaimer_shaped_second_block_not_absorbed():
+    """Codex P1 on PR #638: with two adjacent blockquotes, if the
+    second block starts with text matching the disclaimer regex
+    (e.g. `> "That quote is from a different review..."`), the first
+    stripped block's forward span must NOT widen into the second
+    block. Otherwise a grounded second block can be silently deleted.
+
+    The fix lives in ``_looks_like_orphan_disclaimer``: it now refuses
+    to classify blockquote-, heading-, or list-prefixed lines as
+    orphan disclaimer prose, so the forward-span widening stops at
+    structural boundaries.
+    """
+    source = ["that quote is from a real source about pricing pressure"]
+    markdown = (
+        "## Section\n"
+        "\n"
+        "> a fabricated quote\n"
+        "\n"
+        "> that quote is from a real source about pricing pressure\n"
+        "\n"
+        "Final prose.\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    # First block (fabricated) -- stripped.
+    assert "a fabricated quote" not in out
+    # Second block matches the source pool AND happens to start with
+    # disclaimer-shaped text -- must be preserved, NOT absorbed into
+    # the first block's strip span.
+    assert "that quote is from a real source about pricing pressure" in out
+    # Final prose unaffected.
+    assert "Final prose." in out
 
 
 # ---------------------------------------------------------------------------
