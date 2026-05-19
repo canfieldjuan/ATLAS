@@ -170,8 +170,8 @@ class InvoiceRepository:
 
         try:
             row = await pool.fetchrow(
-                "SELECT * FROM invoices WHERE invoice_number = $1",
-                invoice_number.upper(),
+                "SELECT * FROM invoices WHERE lower(invoice_number) = lower($1)",
+                invoice_number.strip(),
             )
             return self._row_to_dict(row) if row else None
         except DatabaseUnavailableError:
