@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
@@ -369,9 +370,6 @@ def _configure_oauth_auth() -> InvoicingDraftWriterOAuthProvider:
     """Configure FastMCP's built-in OAuth auth for ChatGPT connectors."""
     global _oauth_provider
 
-    if _oauth_provider is not None:
-        return _oauth_provider
-
     from mcp.server.auth.provider import ProviderTokenVerifier
     from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 
@@ -383,6 +381,13 @@ def _configure_oauth_auth() -> InvoicingDraftWriterOAuthProvider:
         resource_server_url=resource_url,
         approval_token=approval_token,
     )
+    mcp.settings.transport_security = _oauth_transport_security_settings(
+        issuer_url=issuer_url,
+        resource_url=resource_url,
+    )
+
+    if _oauth_provider is not None:
+        return _oauth_provider
 
     provider = InvoicingDraftWriterOAuthProvider(
         issuer_url=issuer_url,
@@ -403,6 +408,37 @@ def _configure_oauth_auth() -> InvoicingDraftWriterOAuthProvider:
     mcp._token_verifier = ProviderTokenVerifier(provider)
     _oauth_provider = provider
     return provider
+
+
+def _oauth_transport_security_settings(*, issuer_url: str, resource_url: str):
+    """Allow public OAuth hosts while keeping MCP DNS-rebinding protection on."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    allowed_hosts = {
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    }
+    for url in (issuer_url, resource_url):
+        allowed_hosts.update(_host_header_variants(url))
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(allowed_hosts),
+    )
+
+
+def _host_header_variants(url: str) -> set[str]:
+    parsed = urlparse(url.strip())
+    if not parsed.hostname:
+        return set()
+    variants = {parsed.netloc}
+    if parsed.port is None:
+        variants.add(parsed.hostname)
+        if parsed.scheme == "https":
+            variants.add(f"{parsed.hostname}:443")
+        elif parsed.scheme == "http":
+            variants.add(f"{parsed.hostname}:80")
+    return {variant for variant in variants if variant}
 
 
 if __name__ == "__main__":

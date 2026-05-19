@@ -64,6 +64,7 @@ def _reset_draft_writer_auth_state() -> None:
     draft_writer.mcp._auth_server_provider = None
     draft_writer.mcp._token_verifier = None
     draft_writer.mcp._session_manager = None
+    draft_writer.mcp.settings.transport_security = None
 
 
 @pytest.fixture(autouse=True)
@@ -234,6 +235,43 @@ def test_streamable_http_app_in_oauth_mode_exposes_metadata_and_requires_auth(mo
         response = client.get("/mcp")
         assert response.status_code == 401
         assert "resource_metadata=" in response.headers["www-authenticate"]
+
+
+def test_oauth_transport_security_allows_configured_public_host():
+    settings = draft_writer._oauth_transport_security_settings(
+        issuer_url="https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer",
+        resource_url="https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp",
+    )
+
+    assert settings.enable_dns_rebinding_protection is True
+    assert "atlas-brain.tailc7bd29.ts.net" in settings.allowed_hosts
+    assert "atlas-brain.tailc7bd29.ts.net:443" in settings.allowed_hosts
+    assert "127.0.0.1:*" in settings.allowed_hosts
+    assert "localhost:*" in settings.allowed_hosts
+    assert "evil.example.com" not in settings.allowed_hosts
+
+
+def test_configure_oauth_auth_installs_public_host_transport_security(monkeypatch):
+    monkeypatch.setenv("ATLAS_MCP_INVOICING_DRAFT_WRITER_AUTH_MODE", "oauth")
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL",
+        "https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL",
+        "https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp",
+    )
+    monkeypatch.setenv(
+        "ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_APPROVAL_TOKEN",
+        "approval-token-with-enough-entropy",
+    )
+
+    draft_writer._configure_oauth_auth()
+
+    settings = draft_writer.mcp.settings.transport_security
+    assert settings is not None
+    assert settings.enable_dns_rebinding_protection is True
+    assert "atlas-brain.tailc7bd29.ts.net" in settings.allowed_hosts
 
 
 def test_approval_page_omits_absolute_form_action_for_prefixed_mount(monkeypatch):

@@ -107,6 +107,11 @@ tailscale funnel --bg --yes \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 ```
 
+If the e2e smoke reaches token exchange but the MCP session fails with
+`421 Misdirected Request` / `Invalid Host header`, the OAuth server's transport
+host allowlist does not include the public Tailscale host. Keep DNS-rebinding
+protection enabled and add the configured issuer/resource host to the allowlist.
+
 ## Step 2: add OAuth mode
 
 Use `atlas_brain/mcp/invoicing_readonly_oauth.py` as the template. The minimum
