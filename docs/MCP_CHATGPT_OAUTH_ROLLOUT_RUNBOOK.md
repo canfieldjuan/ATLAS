@@ -105,7 +105,16 @@ tailscale funnel --bg --yes \
   --approval-token-file .secrets/invoicing-draft-writer-approval-token \
   --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
   --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+.venv/bin/python scripts/check_invoicing_draft_writer_live_write.py \
+  --create-blocked-draft \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
 ```
+
+Run the live write smoke only after the no-mutation e2e smoke passes. It creates
+or reuses one idempotent blocked test draft and verifies invoice-number readback
+plus pending-draft blockers.
 
 If the e2e smoke reaches token exchange but the MCP session fails with
 `421 Misdirected Request` / `Invalid Host header`, the OAuth server's transport

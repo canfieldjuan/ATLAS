@@ -200,6 +200,22 @@ Then verify OAuth token exchange and the exact four-tool surface:
 
 The e2e smoke lists tools only. It must not create or update invoices.
 
+After discovery and no-mutation e2e pass, operators can run the explicit live
+write smoke:
+
+```bash
+.venv/bin/python scripts/check_invoicing_draft_writer_live_write.py \
+  --create-blocked-draft \
+  --approval-token-file .secrets/invoicing-draft-writer-approval-token \
+  --issuer-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer \
+  --resource-url https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp
+```
+
+That command creates or reuses one idempotent test draft with no customer email
+and a zero subtotal, then verifies `get_invoice` by invoice number and
+`list_pending_drafts`. The expected result is a blocked draft with `no_email`
+and `subtotal_zero`, not a sendable invoice.
+
 If discovery passes but e2e fails with `421 Misdirected Request` or
 `Invalid Host header`, the MCP transport host allowlist is stale. OAuth mode
 must allow the public host from
@@ -224,6 +240,8 @@ The public smoke scripts must mirror the read-only connector pattern:
 
 - Discovery smoke checks metadata and unauthenticated `401`.
 - OAuth e2e smoke completes the flow and calls only `list_tools`.
+- Live write smoke requires explicit acknowledgement and creates only a blocked
+  idempotent smoke draft.
 - Tool-surface check rejects denied tools by name.
 
 ## Required audit metadata
