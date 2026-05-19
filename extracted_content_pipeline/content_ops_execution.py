@@ -46,6 +46,7 @@ class ContentOpsExecutionServices:
     landing_page: Any | None = None
     sales_brief: Any | None = None
     signal_extraction: Any | None = None
+    faq_markdown: Any | None = None
     reasoning_provider_configured: bool = False
     reasoning_provider_outputs: tuple[str, ...] = ()
 
@@ -68,6 +69,8 @@ class ContentOpsExecutionServices:
             return self.sales_brief
         if output == "signal_extraction":
             return self.signal_extraction
+        if output == "faq_markdown":
+            return self.faq_markdown
         return None
 
     def configured_outputs(self) -> tuple[str, ...]:
@@ -79,6 +82,7 @@ class ContentOpsExecutionServices:
             "landing_page",
             "sales_brief",
             "signal_extraction",
+            "faq_markdown",
         ):
             if _has_generate_method(self.for_output(output)):
                 outputs.append(output)
@@ -147,6 +151,8 @@ class ContentOpsExecutionServices:
             sales_brief=services["sales_brief"],
             # signal_extraction stays as-is; it does not consume reasoning.
             signal_extraction=self.signal_extraction,
+            # faq_markdown stays as-is; it does not consume reasoning.
+            faq_markdown=self.faq_markdown,
             reasoning_provider_configured=bool(active_outputs),
             reasoning_provider_outputs=active_tuple,
         )
@@ -524,6 +530,27 @@ async def _dispatch_signal_extraction(
     )
 
 
+async def _dispatch_faq_markdown(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    del filters
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        source_material=request.inputs.get("source_material"),
+        title=_step_config_text(step.config, "title"),
+        max_items=_step_config_int(step.config, "max_items"),
+        max_evidence_per_item=_step_config_int(step.config, "max_evidence_per_item"),
+        source_types=_step_config_sequence(step.config, "source_types"),
+        max_text_chars=_step_config_int(step.config, "max_text_chars"),
+    )
+
+
 async def _dispatch_default(
     *,
     step: GenerationPlanStep,
@@ -553,6 +580,7 @@ _DISPATCH: Mapping[str, Any] = {
     "landing_page": _dispatch_landing_page,
     "blog_post": _dispatch_blog_post,
     "signal_extraction": _dispatch_signal_extraction,
+    "faq_markdown": _dispatch_faq_markdown,
 }
 
 _MAX_REASONING_VALIDATION_FAILURES = 50

@@ -153,6 +153,17 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         required_inputs=("source_material",),
         default_parse_retry_attempts=0,
     ),
+    "faq_markdown": OutputDefinition(
+        id="faq_markdown",
+        label="FAQ Markdown",
+        description="Grounded FAQ Markdown from support-ticket source evidence.",
+        implemented=True,
+        estimated_unit_cost_usd=0.0,
+        required_inputs=("source_material",),
+        default_max_items=8,
+        reasoning_requirement="absent",
+        default_parse_retry_attempts=0,
+    ),
 })
 
 

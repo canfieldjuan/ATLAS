@@ -180,6 +180,10 @@ The FAQ builder is deterministic and extractive: it groups ticket evidence by
 pain point, quotes compact snippets from the source rows, and lists ticket
 source ids under each answer.
 
+The same artifact can run through the Content Ops execution seam by selecting
+`faq_markdown` and passing inline `source_material`. It remains zero-provider
+and zero-database unless the host adds persistence later.
+
 If Atlas already has scraped B2B review rows, export one reliable source as
 Content Ops source rows before generation. The G2 path is read-only, keeps only
 canonical enriched reviews, and exports the negative/mixed quote-grade phrase

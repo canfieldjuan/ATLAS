@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Any
+
+from .campaign_ports import TenantScope
+from .campaign_source_adapters import source_rows_to_campaign_opportunities
 
 
 DEFAULT_TICKET_SOURCE_TYPES = (
@@ -44,15 +47,86 @@ class TicketFAQMarkdownResult:
     source_count: int
     ticket_source_count: int
     output_checks: dict[str, bool]
+    warnings: tuple[dict[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "generated": len(self.items),
             "markdown": self.markdown,
             "items": [dict(item) for item in self.items],
             "source_count": self.source_count,
             "ticket_source_count": self.ticket_source_count,
             "output_checks": dict(self.output_checks),
+            "warnings": [dict(warning) for warning in self.warnings],
         }
+
+
+@dataclass(frozen=True)
+class TicketFAQMarkdownConfig:
+    """Config for service-shaped FAQ Markdown generation."""
+
+    title: str = DEFAULT_TITLE
+    max_items: int = 8
+    max_evidence_per_item: int = 3
+    source_types: tuple[str, ...] = DEFAULT_TICKET_SOURCE_TYPES
+    max_text_chars: int = 1200
+
+
+class TicketFAQMarkdownService:
+    """Build FAQ Markdown from inline source material."""
+
+    def __init__(self, config: TicketFAQMarkdownConfig | None = None) -> None:
+        self.config = config or TicketFAQMarkdownConfig()
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        source_material: Any,
+        title: str | None = None,
+        max_items: int | None = None,
+        max_evidence_per_item: int | None = None,
+        source_types: Sequence[str] | None = None,
+        max_text_chars: int | None = None,
+        **kwargs: Any,
+    ) -> TicketFAQMarkdownResult:
+        del scope
+        del kwargs
+        resolved_max_items = int(max_items) if max_items is not None else self.config.max_items
+        resolved_max_evidence = (
+            int(max_evidence_per_item)
+            if max_evidence_per_item is not None
+            else self.config.max_evidence_per_item
+        )
+        resolved_max_text_chars = (
+            int(max_text_chars)
+            if max_text_chars is not None
+            else self.config.max_text_chars
+        )
+        if resolved_max_text_chars < 1:
+            raise ValueError("max_text_chars must be positive")
+        normalized = source_rows_to_campaign_opportunities(
+            _rows_from_source_material(source_material),
+            target_mode=target_mode,
+            max_text_chars=resolved_max_text_chars,
+        )
+        resolved_source_types = (
+            tuple(source_types)
+            if source_types is not None
+            else self.config.source_types
+        )
+        result = build_ticket_faq_markdown(
+            normalized.opportunities,
+            title=title or self.config.title,
+            max_items=resolved_max_items,
+            max_evidence_per_item=resolved_max_evidence,
+            source_types=resolved_source_types,
+        )
+        return replace(
+            result,
+            warnings=tuple(warning.as_dict() for warning in normalized.warnings),
+        )
 
 
 def build_ticket_faq_markdown(
@@ -245,8 +319,37 @@ def _md(value: Any) -> str:
     return _clean(value).replace("|", "\\|")
 
 
+def _rows_from_source_material(source_material: Any) -> list[Any]:
+    if isinstance(source_material, str):
+        text = source_material.strip()
+        return [{"text": text, "source_type": "support_ticket"}] if text else []
+    if isinstance(source_material, Mapping):
+        for key in (
+            "support_tickets",
+            "tickets",
+            "cases",
+            "conversations",
+            "complaints",
+            "sources",
+            "rows",
+            "data",
+            "opportunities",
+        ):
+            value = source_material.get(key)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                rows = list(value)
+                if rows:
+                    return rows
+        return [dict(source_material)]
+    if isinstance(source_material, Sequence) and not isinstance(source_material, (bytes, bytearray)):
+        return list(source_material)
+    return []
+
+
 __all__ = [
     "DEFAULT_TICKET_SOURCE_TYPES",
+    "TicketFAQMarkdownConfig",
     "TicketFAQMarkdownResult",
+    "TicketFAQMarkdownService",
     "build_ticket_faq_markdown",
 ]

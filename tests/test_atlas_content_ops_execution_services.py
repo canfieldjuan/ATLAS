@@ -11,10 +11,10 @@ the host has wired. Currently:
   same shape as landing_page but each also takes a
   shared `PostgresIntelligenceRepository`. Skip together
   when LLM or pool is absent.
-- `blog_post` (E4, this slice): same shape as
-  landing_page (no IntelligenceRepository); plugs the
-  `PostgresBlogBlueprintRepository` (PR #458) +
-  `PostgresBlogPostRepository`.
+- `blog_post` (E4): same shape as landing_page (no
+  IntelligenceRepository); plugs the `PostgresBlogBlueprintRepository`
+  (PR #458) + `PostgresBlogPostRepository`.
+- `faq_markdown` (this slice): always wired (stateless).
 
 Tests use the factory's dependency-injection kwargs (`llm_factory`
 / `skills_factory` / `pool_factory`) to stub host
@@ -22,7 +22,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (14 tests):
+Test inventory (15 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -39,15 +39,16 @@ Test inventory (14 tests):
 11. `blog_post` populated when LLM + db enabled (E4 canary)
     and `for_output("blog_post")` returns the service.
 12. `blog_post` skips when no LLM (E4 fallback).
-13. `configured_outputs()` with LLM + db enabled advertises
-    all 6 outputs: `(email_campaign, blog_post, report,
-    landing_page, sales_brief, signal_extraction)` -- order
+13. `faq_markdown` runs through the full executor.
+14. `configured_outputs()` with LLM + db enabled advertises
+    all 7 outputs: `(email_campaign, blog_post, report,
+    landing_page, sales_brief, signal_extraction, faq_markdown)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-14. `configured_outputs()` without an active LLM (even with
+15. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
-    `signal_extraction`.
+    `signal_extraction` and `faq_markdown`.
 """
 
 from __future__ import annotations
@@ -125,6 +126,40 @@ async def test_signal_extraction_runs_through_host_bundle() -> None:
     assert step["result"]["target_mode"] == "vendor_retention"
 
 
+@pytest.mark.asyncio
+async def test_faq_markdown_runs_through_host_bundle() -> None:
+    """`faq_markdown` is deterministic like `signal_extraction`, so
+    the host bundle wires it without LLM or DB services."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": [{
+                    "ticket_id": "ticket-1",
+                    "source_type": "ticket",
+                    "message": "How do I fix failed exports?",
+                    "pain_category": "exports",
+                }]
+            },
+        },
+        services=services,
+    )
+
+    assert result["status"] == "completed", result
+    step = result["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+    assert step["result"]["generated"] == 1
+    assert "How do I fix failed exports?" in step["result"]["markdown"]
+
+
 def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
     """E2 canary: when the LLM factory returns a non-None client
     AND `enable_db_services=True`, the bundle's `landing_page`
@@ -146,6 +181,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
         "landing_page",
         "sales_brief",
         "signal_extraction",
+        "faq_markdown",
     )
 
 
@@ -163,7 +199,7 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
     )
 
     assert services.landing_page is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
@@ -184,7 +220,7 @@ def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
         enable_db_services=True,
     )
     assert services.landing_page is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_landing_page_slot_stays_none_in_production_default() -> None:
@@ -203,7 +239,7 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
     )
 
     assert services.landing_page is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_campaign_wired_when_llm_active_and_db_enabled() -> None:
@@ -263,7 +299,7 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
     assert services.campaign is None
     assert services.report is None
     assert services.sales_brief is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_e3_services_skip_together_when_pool_is_none() -> None:
@@ -284,7 +320,7 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
     assert services.report is None
     assert services.sales_brief is None
     assert services.blog_post is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_blog_post_wired_when_llm_active_and_db_enabled() -> None:
@@ -306,7 +342,7 @@ def test_blog_post_wired_when_llm_active_and_db_enabled() -> None:
 def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
     """E4 fallback: blog_post slot stays `None` when no LLM
     is active. Same short-circuit shape as landing_page
-    (PR #454). With no LLM only signal_extraction remains
+    (PR #454). With no LLM only deterministic outputs remain
     advertised."""
 
     services = build_content_ops_execution_services(
@@ -316,14 +352,14 @@ def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
         enable_db_services=True,
     )
     assert services.blog_post is None
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")
 
 
 def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
     """`configured_outputs()` is the source of truth the catalog
     endpoint surfaces in `execution.configured_outputs`. With
     LLM wired AND `enable_db_services=True`, the bundle
-    advertises landing_page + signal_extraction."""
+    advertises every wired output."""
 
     services = build_content_ops_execution_services(
         llm_factory=_make_llm_stub,
@@ -338,12 +374,13 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         "landing_page",
         "sales_brief",
         "signal_extraction",
+        "faq_markdown",
     )
 
 
 def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
     """Without an active LLM (even with `enable_db_services=True`),
-    only `signal_extraction` is advertised."""
+    only deterministic outputs are advertised."""
 
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,
@@ -351,4 +388,4 @@ def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
         pool_factory=_make_pool_stub,
         enable_db_services=True,
     )
-    assert services.configured_outputs() == ("signal_extraction",)
+    assert services.configured_outputs() == ("signal_extraction", "faq_markdown")

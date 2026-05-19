@@ -111,6 +111,23 @@ def test_preview_allows_signal_extraction_when_source_material_present():
     assert preview["estimated_cost_usd"] == 0.0
 
 
+def test_preview_allows_faq_markdown_when_source_material_present():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [{"source_type": "ticket", "text": "How do I change my email?"}],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["faq_markdown"]
+    assert preview["blocked_outputs"] == []
+    assert preview["estimated_cost_usd"] == 0.0
+
+
 def test_preview_blocks_when_estimate_exceeds_budget():
     preview = preview_from_mapping(
             {
@@ -166,6 +183,7 @@ def test_output_catalog_states_reasoning_requirement():
     assert OUTPUT_CATALOG["sales_brief"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["blog_post"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["signal_extraction"].reasoning_requirement == "absent"
+    assert OUTPUT_CATALOG["faq_markdown"].reasoning_requirement == "absent"
 
 
 def test_request_from_mapping_rejects_zero_limit():

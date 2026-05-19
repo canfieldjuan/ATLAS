@@ -117,6 +117,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     preset_ids = {item["id"] for item in payload["presets"]}
     assert "email_campaign" in output_ids
     assert "landing_page" in output_ids
+    assert "faq_markdown" in output_ids
     assert outputs["signal_extraction"]["implemented"] is True
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
@@ -126,6 +127,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["email_campaign"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
+    assert outputs["faq_markdown"]["reasoning_requirement"] == "absent"
     assert payload["execution"] == {"configured": False, "configured_outputs": []}
     assert payload["reasoning"] == {"configured": False}
     assert "email_only" in preset_ids
@@ -144,6 +146,7 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
             campaign=_CampaignService(),
             report=_CampaignService(),
             signal_extraction=_CampaignService(),
+            faq_markdown=_CampaignService(),
         )
     )
 
@@ -153,7 +156,12 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
     outputs = {item["id"]: item for item in payload["outputs"]}
     assert payload["execution"] == {
         "configured": True,
-        "configured_outputs": ["email_campaign", "report", "signal_extraction"],
+        "configured_outputs": [
+            "email_campaign",
+            "faq_markdown",
+            "report",
+            "signal_extraction",
+        ],
     }
     assert outputs["email_campaign"]["execution_configured"] is True
     assert outputs["email_campaign"]["can_execute"] is True
@@ -161,6 +169,8 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
     assert outputs["report"]["can_execute"] is True
     assert outputs["signal_extraction"]["execution_configured"] is True
     assert outputs["signal_extraction"]["can_execute"] is True
+    assert outputs["faq_markdown"]["execution_configured"] is True
+    assert outputs["faq_markdown"]["can_execute"] is True
     assert outputs["blog_post"]["execution_configured"] is False
     assert outputs["blog_post"]["can_execute"] is False
     assert payload["reasoning"] == {"configured": False}
