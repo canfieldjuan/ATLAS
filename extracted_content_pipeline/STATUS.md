@@ -104,7 +104,9 @@ source of truth for what remains.
   campaign draft persistence. It replaces matching imported opportunities by
   default so repeated smoke runs do not duplicate `campaign_opportunities`,
   and it preflights required Content Ops tables before import so hosts get a
-  migration-runner instruction instead of a late `UndefinedTableError`.
+  migration-runner instruction instead of a late `UndefinedTableError`. A live
+  local Atlas G2/Slack run has passed through source export, import,
+  DB-backed offline draft persistence, and draft export.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes

@@ -122,6 +122,15 @@ quote-grade rows, so it should not be used for Content Ops export until those
 reviews are re-enriched with v4 phrase metadata. This closes the "which scraped
 review source is usable now?" uncertainty without adding a new ingestion slice.
 
+**Review-source Postgres smoke update:** PR #597 added the repeatable
+review-source Postgres smoke, and PR #598 added a schema preflight so missing
+Content Ops tables fail before import with a migration-runner instruction. A
+live local Atlas run against G2/Slack now passes end to end after creating the
+product-owned `campaign_opportunities` table: 1 quote-grade G2 review source
+row imported, 2 offline deterministic campaign drafts persisted
+(`email_cold`, `email_followup`), and the draft export CLI returned both rows
+under `account_id=content_ops_smoke`.
+
 ## Current Pick Recommendation
 
 The host-facing AI Content Ops reasoning-policy arc is complete for the current
@@ -150,7 +159,9 @@ highest-leverage code should come from either a real source export fixture
 future slice touches reasoning policy, it should name the concrete trigger from
 the list above in its plan doc.
 
-The review-source readiness closeout from PR #591 does not create a new active
-Content Ops implementation backlog. G2, Capterra, and TrustRadius can use the
-existing exporter path. Trustpilot is blocked on data quality, not extractor
-code.
+The review-source readiness and Postgres smoke closeouts do not create a new
+active Content Ops implementation backlog. G2 can use the existing exporter,
+source-row import, DB-backed draft persistence, and draft export path.
+Capterra and TrustRadius have quote-grade inventory but have not yet been run
+through the Postgres smoke. Trustpilot is blocked on data quality, not
+extractor code.
