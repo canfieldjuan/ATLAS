@@ -200,10 +200,12 @@ const post: BlogPost = {
 <p>The one-year pattern surfaces most clearly in support complaint timing. One reviewer explicitly referenced "after one year" when describing help function inadequacy and video library frustration. This timing correlation suggests that Insightly's onboarding resources successfully address initial deployment questions but fail to scale with implementation complexity. Teams moving beyond basic contact entry into project management, opportunity tracking, or multi-user coordination encounter support gaps that trigger evaluation cycles.</p>
 <p>Contract renewal windows create natural evaluation pressure. One contract end signal appears in the sample, indicating a team approaching renewal decision with active dissatisfaction. The absence of budget cycle signals (0 mentions) and renewal signals (0 mentions) suggests that timing pressure comes more from accumulated operational friction than from formal procurement processes.</p>
 <p>Sentiment trajectory data shows neutral movement, with 0% declining and 0% improving sentiment in the temporal analysis window. This stability indicates that Insightly maintains baseline satisfaction among retained users but struggles to generate momentum or enthusiasm. The absence of improving sentiment signals limits viral adoption and champion development, while stable dissatisfaction creates persistent churn risk.</p>
-<p>Priority timing triggers include:
-- One-year contract renewal approaching
-- Just over one year tenure
-- 2.1-2 years tenure</p>
+<p>Priority timing triggers include:</p>
+<ul>
+<li>One-year contract renewal approaching</li>
+<li>Just over one year tenure</li>
+<li>2.1-2 years tenure</li>
+</ul>
 <p>These windows represent natural evaluation points when teams reassess CRM platform fit, support adequacy, and feature maturity. The concentration around one-year tenure suggests that Insightly's retention challenge centers on the transition from initial deployment to mature usage rather than on early-stage onboarding failure.</p>
 <p>Storage limit friction creates immediate timing pressure outside of contract cycles. At least one account discontinued usage after exceeding free-tier capacity, demonstrating that capacity-based pricing can trigger abrupt churn when usage growth outpaces plan limits. This pattern disproportionately affects small businesses experiencing rapid contact database expansion or document attachment growth.</p>
 <h2 id="where-insightly-pressure-shows-up-in-accounts">Where Insightly Pressure Shows Up in Accounts</h2>

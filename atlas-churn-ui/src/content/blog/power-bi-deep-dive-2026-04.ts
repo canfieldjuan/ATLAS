@@ -281,25 +281,31 @@ const post: BlogPost = {
 <p>Power BI in early 2026 is a product under pressure from its own vendor's bundling strategy. Microsoft's Fabric tier push is creating pricing complexity and forced migration deadlines that are converting latent dissatisfaction into active evaluation pressure. The March-May 2026 window—April 15 scorecard hierarchy deprecation, May 31 legacy import sunset—is the critical decision period when teams will choose between migrating to Fabric-bundled tiers or switching to Tableau, Looker, or cloud-native alternatives.</p>
 <p>The review evidence shows Power BI's retention is driven by Microsoft 365 workflow lock-in rather than product enthusiasm. Teams stay because Excel integration, Teams embedding, and SharePoint connectivity create switching costs, not because Power BI outperforms Tableau on UX or Looker on performance. That lock-in advantage is real, but it is under pressure from cloud-native consolidation trends and Microsoft's own Fabric complexity.</p>
 <h3 id="who-should-buy-power-bi">Who should buy Power BI</h3>
-<p>Power BI makes sense for teams that:
-- Are already embedded in Microsoft 365 and value Excel, Teams, and SharePoint integration
-- Have end users who prefer familiar Microsoft UI patterns over best-of-breed BI tools
-- Can absorb Fabric tier complexity and are willing to navigate Microsoft's licensing roadmap
-- Do not need cutting-edge performance or cloud-native data platform integration</p>
-<p>Power BI does not make sense for teams that:
-- Are consolidating on Google Cloud Platform or AWS and want cloud-native BI tools
-- Prioritize performance, UX, and simplicity over Microsoft ecosystem lock-in
-- Are cost-sensitive and want predictable pricing without tier bundling complexity
-- Are facing April-May 2026 deprecation deadlines and prefer switching over migration</p>
+<p>Power BI makes sense for teams that:</p>
+<ul>
+<li>Are already embedded in Microsoft 365 and value Excel, Teams, and SharePoint integration</li>
+<li>Have end users who prefer familiar Microsoft UI patterns over best-of-breed BI tools</li>
+<li>Can absorb Fabric tier complexity and are willing to navigate Microsoft's licensing roadmap</li>
+<li>Do not need cutting-edge performance or cloud-native data platform integration</li>
+</ul>
+<p>Power BI does not make sense for teams that:</p>
+<ul>
+<li>Are consolidating on Google Cloud Platform or AWS and want cloud-native BI tools</li>
+<li>Prioritize performance, UX, and simplicity over Microsoft ecosystem lock-in</li>
+<li>Are cost-sensitive and want predictable pricing without tier bundling complexity</li>
+<li>Are facing April-May 2026 deprecation deadlines and prefer switching over migration</li>
+</ul>
 <h3 id="competitive-alternatives-to-consider">Competitive alternatives to consider</h3>
 <p>Tableau remains the primary alternative for teams prioritizing UX and performance. It wins on dashboard flexibility and data visualization but loses on Microsoft integration. Teams evaluating Tableau should assess whether the UX advantage is worth the loss of Excel and Teams continuity.</p>
 <p>Looker is the cloud-native alternative for GCP-committed teams. It fits cleanly into GCP's data platform strategy and offers simpler pricing than Power BI's Fabric tiers. Teams consolidating on Google Cloud should evaluate Looker as a platform-native option.</p>
 <p>Databricks and Metabase serve niche use cases: Databricks for data platform-native BI, Metabase for cost-sensitive teams that prefer open-source simplicity. Neither is a direct Power BI replacement, but both appeal to teams that want to avoid vendor lock-in.</p>
 <h3 id="timing-guidance-march-may-2026-is-the-decision-window">Timing guidance: March-May 2026 is the decision window</h3>
-<p>The March-May 2026 window is the most critical decision period for Power BI customers. April 15 scorecard hierarchy deprecation and May 31 legacy import sunset force technical debt resolution during the same period when Fabric pricing evaluation is most active. Teams facing these deadlines should:
-- Assess migration cost vs. switching cost before committing to Fabric tier upgrades
-- Evaluate Tableau, Looker, and cloud-native alternatives during the deprecation window
-- Use the forced migration moment as a natural switching trigger if Power BI no longer fits</p>
+<p>The March-May 2026 window is the most critical decision period for Power BI customers. April 15 scorecard hierarchy deprecation and May 31 legacy import sunset force technical debt resolution during the same period when Fabric pricing evaluation is most active. Teams facing these deadlines should:</p>
+<ul>
+<li>Assess migration cost vs. switching cost before committing to Fabric tier upgrades</li>
+<li>Evaluate Tableau, Looker, and cloud-native alternatives during the deprecation window</li>
+<li>Use the forced migration moment as a natural switching trigger if Power BI no longer fits</li>
+</ul>
 <p>The 4 active evaluation signals visible in early April 2026 suggest some teams are already in this decision cycle. The stable category regime may shift to unstable if deprecation deadlines convert latent dissatisfaction into explicit switching.</p>
 <p>For more context on how Power BI fits into broader Microsoft ecosystem dynamics, see <a href="/blog/microsoft-teams-vs-notion-2026-04">Microsoft Teams vs Notion</a> and <a href="/blog/azure-deep-dive-2026-04">Azure Deep Dive</a>.</p>`,
 }

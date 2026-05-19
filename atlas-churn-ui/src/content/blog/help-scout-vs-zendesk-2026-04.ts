@@ -183,36 +183,46 @@ const post: BlogPost = {
 <h2 id="who-is-churning-buyer-profile-breakdown">Who Is Churning? Buyer Profile Breakdown</h2>
 <p>Buyer role distribution reveals who is experiencing friction and who is making switching decisions.</p>
 <h3 id="help-scout-buyer-roles">Help Scout Buyer Roles</h3>
-<p>Help Scout signals include:
-- 1 economic buyer
-- 1 champion
-- 1 evaluator</p>
+<p>Help Scout signals include:</p>
+<ul>
+<li>1 economic buyer</li>
+<li>1 champion</li>
+<li>1 evaluator</li>
+</ul>
 <p>The decision-maker churn rate is 1.0, meaning 100% of decision-makers in the sample expressed churn intent or active dissatisfaction. That is a small sample (3 total roles), but it is a red flag: the people who control budget and vendor decisions are the ones expressing friction.</p>
 <p>The Customer Success Manager who cited CRM integration gaps is an evaluator role. That is a workflow owner, not a budget owner, but evaluators influence champion and economic buyer decisions. When an evaluator publicly states a dislike on G2, it is a signal that the pain point has already been escalated internally.</p>
 <h3 id="zendesk-buyer-roles">Zendesk Buyer Roles</h3>
-<p>Zendesk signals include:
-- 2 economic buyers
-- 2 champions
-- 2 end users</p>
+<p>Zendesk signals include:</p>
+<ul>
+<li>2 economic buyers</li>
+<li>2 champions</li>
+<li>2 end users</li>
+</ul>
 <p>The decision-maker churn rate is 0.0, meaning no economic buyers or champions in the sample expressed explicit churn intent. That is surprising given the higher urgency score (3.3), but it aligns with the nature of Zendesk complaints: billing disputes and support delays are frustrating, but they do not always trigger immediate switching decisions.</p>
 <p>The two end users in the sample are likely experiencing operational friction—email delivery failures, support delays, or workflow complexity—but are not in a position to make vendor decisions. That creates a lag: end-user dissatisfaction accumulates, but switching decisions wait for contract renewal or budget cycle windows.</p>
 <p>The November 13, 2024 billing dispute and the May 14, 2025 cancellation dispute are both outlier signals, meaning they represent edge cases rather than common patterns. However, outlier signals often predict future common patterns when the underlying cause (billing opacity, cancellation friction) is systemic rather than account-specific.</p>
 <h3 id="segment-and-size-signals">Segment and Size Signals</h3>
-<p>The data does not include explicit company size or industry breakdowns, but the quotable phrases and witness highlights offer clues:
-- A Zendesk reviewer on Reddit described a "small business (four employees)" using Zendesk Sell
-- A Gartner reviewer described Zendesk as handling "emails, chat and socials in one view," suggesting a mid-market or enterprise use case
-- A Software Advice reviewer noted Zendesk is "pricey and complex for small teams"</p>
+<p>The data does not include explicit company size or industry breakdowns, but the quotable phrases and witness highlights offer clues:</p>
+<ul>
+<li>A Zendesk reviewer on Reddit described a "small business (four employees)" using Zendesk Sell</li>
+<li>A Gartner reviewer described Zendesk as handling "emails, chat and socials in one view," suggesting a mid-market or enterprise use case</li>
+<li>A Software Advice reviewer noted Zendesk is "pricey and complex for small teams"</li>
+</ul>
 <p>That suggests Zendesk's friction points are most acute for small teams (under 10 employees) who lack the operational capacity to navigate billing disputes or support delays. Help Scout's friction points, by contrast, are most acute for teams that rely on deep CRM integration or advanced workflow automation—likely mid-market teams (50-200 employees) with dedicated Customer Success or Support Operations roles.</p>
 <h2 id="the-verdict">The Verdict</h2>
 <p>Zendesk faces higher urgency pressure (3.3 vs 2.2), more acute operational friction, and active displacement to Freshdesk and Intercom. Help Scout faces lower urgency but structural friction around integration gaps and customization depth.</p>
 <p>The decisive factor is not feature parity. It is market regime and switching cost trajectory. The helpdesk category is in an entrenchment regime with negative churn velocity, meaning buyers who delay switching face rising lock-in costs over time. Zendesk's higher urgency score suggests accounts are already experiencing that lock-in pressure and are actively evaluating alternatives. Help Scout's lower urgency score suggests accounts are tolerating friction for now, but the integration gaps create a natural opening for competitors.</p>
-<p>For buyers evaluating between Help Scout and Zendesk:
-- If your team is under 20 employees and does not require deep CRM integration, Help Scout's simplicity and support experience are defensible strengths
-- If your team is over 50 employees and relies on multi-channel orchestration, Zendesk's feature depth is defensible—but only if you can navigate billing disputes and support delays without operational disruption
-- If your team is in the 20-50 employee range and requires CRM connectivity, neither vendor is a clean fit. Freshdesk and Intercom are capturing displacement flow from Zendesk for a reason: they offer better pricing transparency and workflow flexibility at that segment.</p>
-<p>For vendors targeting Help Scout or Zendesk accounts:
-- Help Scout accounts are vulnerable on integration depth and workflow automation. A Customer Success Manager explicitly cited CRM connectivity as a dislike, and support weakness mentions are ticking up. The timing window is immediate: the category is hardening into entrenchment, and buyers who delay switching face rising lock-in costs.
-- Zendesk accounts are vulnerable on pricing disputes, billing transparency, and support responsiveness. The November 13, 2024 and May 14, 2025 billing disputes are outlier signals, but they point to systemic friction. The timing window is also immediate: accounts experiencing operational disruption (email delivery failures, billing disputes) are already in active evaluation mode.</p>
+<p>For buyers evaluating between Help Scout and Zendesk:</p>
+<ul>
+<li>If your team is under 20 employees and does not require deep CRM integration, Help Scout's simplicity and support experience are defensible strengths</li>
+<li>If your team is over 50 employees and relies on multi-channel orchestration, Zendesk's feature depth is defensible—but only if you can navigate billing disputes and support delays without operational disruption</li>
+<li>If your team is in the 20-50 employee range and requires CRM connectivity, neither vendor is a clean fit. Freshdesk and Intercom are capturing displacement flow from Zendesk for a reason: they offer better pricing transparency and workflow flexibility at that segment.</li>
+</ul>
+<p>For vendors targeting Help Scout or Zendesk accounts:</p>
+<ul>
+<li>Help Scout accounts are vulnerable on integration depth and workflow automation. A Customer Success Manager explicitly cited CRM connectivity as a dislike, and support weakness mentions are ticking up. The timing window is immediate: the category is hardening into entrenchment, and buyers who delay switching face rising lock-in costs.</li>
+<li>Zendesk accounts are vulnerable on pricing disputes, billing transparency, and support responsiveness. The November 13, 2024 and May 14, 2025 billing disputes are outlier signals, but they point to systemic friction. The timing window is also immediate: accounts experiencing operational disruption (email delivery failures, billing disputes) are already in active evaluation mode.</li>
+</ul>
 <h3 id="help-scout-reviewer-voices">Help Scout Reviewer Voices</h3>
 <p>A Customer Success Manager on G2 described the CRM integration gap:</p>
 <blockquote>

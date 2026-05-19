@@ -160,11 +160,13 @@ const post: BlogPost = {
 <p>Close CRM serves small to mid-sized sales teams looking for a focused, sales-first platform. But how does it actually perform in the field?</p>
 <p>This deep dive analyzes 1042 Close reviews collected between March 3 and April 7, 2026. We enriched 610 of those reviews with structured sentiment analysis, pain categorization, and buyer role identification. The analysis draws from G2 verified reviews and Reddit community discussions to surface patterns that self-reported review data can reveal.</p>
 <p>The sample includes 11 verified platform reviews and 599 community posts. While this is a self-selected sample—reviewers choose when and why to share feedback—it offers concrete insight into where Close creates friction and where it delivers value.</p>
-<p>Key findings:
-- 34 reviews showed churn or switching intent
-- Economic buyers surfaced the strongest pressure signals
-- Pricing complaints cluster around month-end compensation review windows
-- 3 active evaluation signals were visible during the analysis period</p>
+<p>Key findings:</p>
+<ul>
+<li>34 reviews showed churn or switching intent</li>
+<li>Economic buyers surfaced the strongest pressure signals</li>
+<li>Pricing complaints cluster around month-end compensation review windows</li>
+<li>3 active evaluation signals were visible during the analysis period</li>
+</ul>
 <p>This is not a universal product assessment. It is an evidence-backed look at what reviewers report when they choose to speak up.</p>
 <h2 id="what-close-does-well-and-where-it-falls-short">What Close Does Well -- and Where It Falls Short</h2>
 <p>Close CRM's strengths and weaknesses emerge clearly when you map reviewer feedback across 610 enriched reviews.</p>

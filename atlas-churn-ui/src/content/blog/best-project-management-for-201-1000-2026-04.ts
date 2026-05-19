@@ -223,14 +223,18 @@ const post: BlogPost = {
 <p>That's a displacement signal tied to feature gaps and UX friction. The migration itself became a pain point, suggesting data export and import complexity.</p>
 <p>Pricing complaints appear across the review set. One reviewer mentioned unexpected annual renewal charges. Another noted per-seat pricing at $10.99 scales quickly for mid-market teams.</p>
 <p>Security and reliability weaknesses show up in the data, though with lower mention counts than UX and pricing. Data migration pain is real—reviewers cite export limitations and formatting loss when moving to or from Asana.</p>
-<p><strong>Who should use Asana:</strong>
-- 51-200 or 201-1000 employee teams with straightforward project workflows
-- Teams that prioritize onboarding speed and clean UX over deep customization
-- Organizations willing to accept limited automation and reporting in exchange for simplicity</p>
-<p><strong>Who should avoid Asana:</strong>
-- Teams with complex, multi-layered workflows requiring extensive automation
-- Organizations with strict data migration or export requirements
-- Budget-conscious teams scaling beyond 100 seats where per-seat pricing becomes prohibitive</p>
+<p><strong>Who should use Asana:</strong></p>
+<ul>
+<li>51-200 or 201-1000 employee teams with straightforward project workflows</li>
+<li>Teams that prioritize onboarding speed and clean UX over deep customization</li>
+<li>Organizations willing to accept limited automation and reporting in exchange for simplicity</li>
+</ul>
+<p><strong>Who should avoid Asana:</strong></p>
+<ul>
+<li>Teams with complex, multi-layered workflows requiring extensive automation</li>
+<li>Organizations with strict data migration or export requirements</li>
+<li>Budget-conscious teams scaling beyond 100 seats where per-seat pricing becomes prohibitive</li>
+</ul>
 <h2 id="basecamp-best-for-201-1000-1000-teams">Basecamp: Best For 201-1000, 1000+ Teams</h2>
 <p><strong>Average rating:</strong> 4.4<br />
 <strong>Review count:</strong> 19<br />
@@ -241,14 +245,18 @@ const post: BlogPost = {
 <p>Reviewers cite flat-rate pricing as a strength—no per-seat surprises. Data migration is easier than competitors, and the feature set covers core project management needs without bloat.</p>
 <p>But UX friction appears in the pain data. Reviewers report a dated interface, limited customization, and navigation patterns that feel rigid compared to newer tools. Integration weaknesses show up too—Basecamp doesn't connect as deeply to third-party tools as Asana, Monday.com, or Jira.</p>
 <p>Support is the primary weakness. Reviewers report slow response times and limited help documentation for edge cases.</p>
-<p><strong>Who should use Basecamp:</strong>
-- 201-1000 or 1000+ employee teams that want predictable, flat-rate pricing
-- Organizations with straightforward workflows that don't require deep third-party integrations
-- Teams willing to accept a simpler, less customizable interface in exchange for cost stability</p>
-<p><strong>Who should avoid Basecamp:</strong>
-- Teams that rely heavily on integrations with CRM, analytics, or development tools
-- Organizations that need responsive, high-touch support
-- Teams that prioritize modern UX and extensive customization options</p>
+<p><strong>Who should use Basecamp:</strong></p>
+<ul>
+<li>201-1000 or 1000+ employee teams that want predictable, flat-rate pricing</li>
+<li>Organizations with straightforward workflows that don't require deep third-party integrations</li>
+<li>Teams willing to accept a simpler, less customizable interface in exchange for cost stability</li>
+</ul>
+<p><strong>Who should avoid Basecamp:</strong></p>
+<ul>
+<li>Teams that rely heavily on integrations with CRM, analytics, or development tools</li>
+<li>Organizations that need responsive, high-touch support</li>
+<li>Teams that prioritize modern UX and extensive customization options</li>
+</ul>
 <h2 id="jira-best-for-201-1000-1000-teams">Jira: Best For 201-1000, 1000+ Teams</h2>
 <p><strong>Average rating:</strong> 4.3<br />
 <strong>Review count:</strong> 60<br />
@@ -271,14 +279,18 @@ const post: BlogPost = {
 <p>-- Customer Support Specialist, verified reviewer on G2</p>
 </blockquote>
 <p>That's a positive sentiment signal from a mid-market user in computer software. The review suggests Jira still works for technical teams that can absorb the complexity, but the overall dissatisfaction pattern indicates fragile retention.</p>
-<p><strong>Who should use Jira:</strong>
-- 201-1000 or 1000+ employee engineering or product teams with technical users
-- Organizations that need deep customization, automation, and reporting
-- Teams willing to invest in onboarding and configuration to unlock Jira's full feature set</p>
-<p><strong>Who should avoid Jira:</strong>
-- Non-technical teams or cross-functional organizations with mixed user types
-- Budget-conscious teams facing Jira Cloud pricing increases
-- Organizations that need simple, fast data migration or flexible contract terms</p>
+<p><strong>Who should use Jira:</strong></p>
+<ul>
+<li>201-1000 or 1000+ employee engineering or product teams with technical users</li>
+<li>Organizations that need deep customization, automation, and reporting</li>
+<li>Teams willing to invest in onboarding and configuration to unlock Jira's full feature set</li>
+</ul>
+<p><strong>Who should avoid Jira:</strong></p>
+<ul>
+<li>Non-technical teams or cross-functional organizations with mixed user types</li>
+<li>Budget-conscious teams facing Jira Cloud pricing increases</li>
+<li>Organizations that need simple, fast data migration or flexible contract terms</li>
+</ul>
 <h2 id="mondaycom-best-for-51-200-1000-teams">Monday.com: Best For 51-200, 1000+ Teams</h2>
 <p><strong>Average rating:</strong> 4.5<br />
 <strong>Review count:</strong> 62<br />
@@ -291,14 +303,18 @@ const post: BlogPost = {
 <p>UX friction appears in the review data too. Reviewers report feature bloat, navigation complexity, and a learning curve that grows steeper as teams add more boards and automations.</p>
 <p>Support gaps show up consistently. Reviewers cite slow response times, limited help documentation, and difficulty getting answers for complex configuration issues.</p>
 <p>Security and reliability are the primary weaknesses. Reviewers report occasional downtime, slow load times for large boards, and concerns about data access controls.</p>
-<p><strong>Who should use Monday.com:</strong>
-- 51-200 or 1000+ employee teams with non-technical users who need visual, board-based workflows
-- Organizations that prioritize low admin burden and fast onboarding
-- Teams willing to accept pricing risk and support gaps in exchange for a flexible, customizable interface</p>
-<p><strong>Who should avoid Monday.com:</strong>
-- Budget-conscious teams scaling beyond 100 seats where per-seat pricing becomes prohibitive
-- Organizations with strict security or uptime requirements
-- Teams that need responsive, high-touch support for complex configurations</p>
+<p><strong>Who should use Monday.com:</strong></p>
+<ul>
+<li>51-200 or 1000+ employee teams with non-technical users who need visual, board-based workflows</li>
+<li>Organizations that prioritize low admin burden and fast onboarding</li>
+<li>Teams willing to accept pricing risk and support gaps in exchange for a flexible, customizable interface</li>
+</ul>
+<p><strong>Who should avoid Monday.com:</strong></p>
+<ul>
+<li>Budget-conscious teams scaling beyond 100 seats where per-seat pricing becomes prohibitive</li>
+<li>Organizations with strict security or uptime requirements</li>
+<li>Teams that need responsive, high-touch support for complex configurations</li>
+</ul>
 <p><a href="https://try.monday.com/1p7bntdd5bui">Try Monday.com</a></p>
 <h2 id="smartsheet-best-for-201-1000-51-200-teams">Smartsheet: Best For 201-1000, 51-200 Teams</h2>
 <p><strong>Average rating:</strong> 4.0<br />
@@ -311,14 +327,18 @@ const post: BlogPost = {
 <p>But pricing complaints lead the pain map, followed by support gaps and overall dissatisfaction. Reviewers report unexpected cost increases, per-seat pricing that scales unpredictably, and annual contracts with no prorated refunds.</p>
 <p>Support is a consistent weakness. Reviewers cite slow response times, limited help documentation, and difficulty getting answers for complex formula or automation issues.</p>
 <p>Data migration and contract lock-in are the primary weaknesses. Reviewers report difficulty exporting data in usable formats, and annual contracts create friction when teams want to leave.</p>
-<p><strong>Who should use Smartsheet:</strong>
-- 51-200 or 201-1000 employee teams with spreadsheet-heavy workflows
-- Organizations that prioritize reliability and low technical debt
-- Teams willing to accept pricing risk and support gaps in exchange for a familiar, spreadsheet-like interface</p>
-<p><strong>Who should avoid Smartsheet:</strong>
-- Budget-conscious teams facing pricing increases or per-seat scaling issues
-- Organizations that need responsive, high-touch support
-- Teams that require simple, fast data migration or flexible contract terms</p>
+<p><strong>Who should use Smartsheet:</strong></p>
+<ul>
+<li>51-200 or 201-1000 employee teams with spreadsheet-heavy workflows</li>
+<li>Organizations that prioritize reliability and low technical debt</li>
+<li>Teams willing to accept pricing risk and support gaps in exchange for a familiar, spreadsheet-like interface</li>
+</ul>
+<p><strong>Who should avoid Smartsheet:</strong></p>
+<ul>
+<li>Budget-conscious teams facing pricing increases or per-seat scaling issues</li>
+<li>Organizations that need responsive, high-touch support</li>
+<li>Teams that require simple, fast data migration or flexible contract terms</li>
+</ul>
 <h2 id="teamwork-best-for-51-200-201-1000-teams">Teamwork: Best For 51-200, 201-1000 Teams</h2>
 <p><strong>Average rating:</strong> 4.5<br />
 <strong>Review count:</strong> 32<br />
@@ -329,14 +349,18 @@ const post: BlogPost = {
 <p>Reviewers cite strong UX, solid integration depth, and reliable performance. The interface is clean, and the feature set covers most project management workflows without the bloat that shows up in Monday.com or Jira.</p>
 <p>But overall dissatisfaction appears in the pain data, followed by UX friction. The review sample is smaller (32 reviews), so confidence is lower, but the pattern suggests retention is fragile.</p>
 <p>Support, reliability, and pricing are the primary weaknesses. Reviewers report slow response times, occasional downtime, and pricing that scales unpredictably as teams grow.</p>
-<p><strong>Who should use Teamwork:</strong>
-- 51-200 or 201-1000 employee teams that prioritize clean UX and integration depth
-- Organizations willing to accept support and reliability gaps in exchange for a simpler, less bloated interface
-- Teams that need solid performance without the complexity of Jira or the feature bloat of Monday.com</p>
-<p><strong>Who should avoid Teamwork:</strong>
-- Organizations with strict uptime or support requirements
-- Budget-conscious teams facing pricing increases or per-seat scaling issues
-- Teams that need a larger review sample and higher confidence before committing</p>
+<p><strong>Who should use Teamwork:</strong></p>
+<ul>
+<li>51-200 or 201-1000 employee teams that prioritize clean UX and integration depth</li>
+<li>Organizations willing to accept support and reliability gaps in exchange for a simpler, less bloated interface</li>
+<li>Teams that need solid performance without the complexity of Jira or the feature bloat of Monday.com</li>
+</ul>
+<p><strong>Who should avoid Teamwork:</strong></p>
+<ul>
+<li>Organizations with strict uptime or support requirements</li>
+<li>Budget-conscious teams facing pricing increases or per-seat scaling issues</li>
+<li>Teams that need a larger review sample and higher confidence before committing</li>
+</ul>
 <h2 id="how-to-actually-choose">How to Actually Choose</h2>
 <p>Ratings and feature lists won't tell you which tool fits your team. Here's a decision framework based on the evidence.</p>
 <h3 id="start-with-team-size-and-user-type">Start with team size and user type</h3>
@@ -347,19 +371,23 @@ const post: BlogPost = {
 <li><strong>1000+ employees, flat-rate pricing preference:</strong> Basecamp. Limited integrations and dated UX, but predictable costs.</li>
 </ul>
 <h3 id="then-layer-in-budget-and-contract-risk">Then layer in budget and contract risk</h3>
-<p>Per-seat pricing scales unpredictably. One Reddit reviewer compared vendors and found:
-- Jira: 92× multiplier at $9.05/seat
-- Monday.com: 78× multiplier at $9/seat
-- Asana: 62× multiplier at $10.99/seat</p>
+<p>Per-seat pricing scales unpredictably. One Reddit reviewer compared vendors and found:</p>
+<ul>
+<li>Jira: 92× multiplier at $9.05/seat</li>
+<li>Monday.com: 78× multiplier at $9/seat</li>
+<li>Asana: 62× multiplier at $10.99/seat</li>
+</ul>
 <p>For a 200-person team, that's $1810/month (Jira), $1800/month (Monday), or $2198/month (Asana). Annual contracts lock you in with no prorated refunds.</p>
 <p>One Software Advice reviewer was charged $265 for an annual renewal on a barely-used service. No refund. No flexibility.</p>
 <p>If budget predictability matters, Basecamp's flat-rate pricing is the only option in this set that eliminates per-seat risk.</p>
 <h3 id="finally-test-for-your-must-have-features">Finally, test for your must-have features</h3>
-<p>Don't assume every tool covers your workflow. The pain data shows:
-- <strong>Automation and reporting:</strong> Jira is strongest, but complex. Asana and Monday.com cover basics but hit limits quickly.
-- <strong>Integrations:</strong> Teamwork and Monday.com are strongest. Basecamp is weakest.
-- <strong>Data migration:</strong> Basecamp is easiest. Jira and Smartsheet are hardest.
-- <strong>Support:</strong> All vendors show support gaps. Jira and Smartsheet are worst.</p>
+<p>Don't assume every tool covers your workflow. The pain data shows:</p>
+<ul>
+<li><strong>Automation and reporting:</strong> Jira is strongest, but complex. Asana and Monday.com cover basics but hit limits quickly.</li>
+<li><strong>Integrations:</strong> Teamwork and Monday.com are strongest. Basecamp is weakest.</li>
+<li><strong>Data migration:</strong> Basecamp is easiest. Jira and Smartsheet are hardest.</li>
+<li><strong>Support:</strong> All vendors show support gaps. Jira and Smartsheet are worst.</li>
+</ul>
 <h3 id="the-category-conclusion">The category conclusion</h3>
 <p>The project management category exhibits moderate displacement intensity with a stable market structure. ClickUp is experiencing significant outbound displacement (10 mentions to Asana, 2 to Monday.com) with UX cited as the primary driver. Jira shows end-user dissatisfaction with UX and faces displacement pressure toward both Asana (5 mentions) and ClickUp (3 mentions).</p>
 <p>Pricing backlash is the immediate trigger. Unexpected annual renewal charges combined with inflexible cancellation policies create acute dissatisfaction when users attempt to cancel after discovering charges. This happens immediately following annual renewal charges, particularly when users discover unexpected billing after reduced usage periods.</p>

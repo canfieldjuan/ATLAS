@@ -177,23 +177,27 @@ const post: BlogPost = {
 <p>The pain distribution aligns with the pricing-driven thesis: reviewers feel cost pressure first, followed by operational friction in management workflows. The security functionality itself generates fewer complaints, supporting the claim that customers stay for the EDR capabilities despite other friction.</p>
 <h2 id="the-sentinelone-ecosystem-integrations-use-cases">The SentinelOne Ecosystem: Integrations &amp; Use Cases</h2>
 <p>SentinelOne reviewers mention 8 integrations and 6 primary use cases. The integration profile reveals a cloud-native and endpoint-focused deployment pattern.</p>
-<p>Top integrations by mention count:
-- SentinelOne (6 mentions)
-- Huntress (5 mentions)
-- AWS (4 mentions)
-- Intune (4 mentions)
-- M365 (4 mentions)
-- Azure (3 mentions)
-- NinjaOne (3 mentions)
-- O365 (3 mentions)</p>
+<p>Top integrations by mention count:</p>
+<ul>
+<li>SentinelOne (6 mentions)</li>
+<li>Huntress (5 mentions)</li>
+<li>AWS (4 mentions)</li>
+<li>Intune (4 mentions)</li>
+<li>M365 (4 mentions)</li>
+<li>Azure (3 mentions)</li>
+<li>NinjaOne (3 mentions)</li>
+<li>O365 (3 mentions)</li>
+</ul>
 <p>The integration mentions cluster around Microsoft 365 ecosystems and cloud infrastructure, suggesting SentinelOne deployments often sit within broader Microsoft and AWS environments. The Huntress mentions indicate co-deployment scenarios where SentinelOne handles EDR while Huntress provides managed detection and response.</p>
-<p>Top use cases by mention count and urgency:
-- SentinelOne Singularity Endpoint (6 mentions, 1.2 urgency)
-- SentinelOne Singularity (5 mentions, 4.5 urgency)
-- EDR (4 mentions, 5.6 urgency)
-- SentinelOne Singularity Complete (3 mentions, 5.0 urgency)
-- Defender (3 mentions, 4.0 urgency)
-- Huntress (3 mentions, 3.2 urgency)</p>
+<p>Top use cases by mention count and urgency:</p>
+<ul>
+<li>SentinelOne Singularity Endpoint (6 mentions, 1.2 urgency)</li>
+<li>SentinelOne Singularity (5 mentions, 4.5 urgency)</li>
+<li>EDR (4 mentions, 5.6 urgency)</li>
+<li>SentinelOne Singularity Complete (3 mentions, 5.0 urgency)</li>
+<li>Defender (3 mentions, 4.0 urgency)</li>
+<li>Huntress (3 mentions, 3.2 urgency)</li>
+</ul>
 <p>The urgency scores suggest active evaluation pressure around EDR category decisions, with reviewers comparing SentinelOne Singularity Complete against Microsoft Defender and Huntress. One reviewer explicitly stated:</p>
 <blockquote>
 <p>I currently run Sophos Intercept X XDR and Arctic Wolf. We are handling a migration from legacy stack and finding the right fit with CS and S1.</p>
@@ -202,12 +206,14 @@ const post: BlogPost = {
 <p>This migration language indicates active switching behavior, consistent with the high churn velocity observed in the EDR category.</p>
 <h2 id="who-reviews-sentinelone-buyer-personas">Who Reviews SentinelOne: Buyer Personas</h2>
 <p>The buyer role distribution reveals who engages with SentinelOne during evaluation and post-purchase stages.</p>
-<p>Top buyer roles by review count:
-- Evaluator, evaluation stage: 57 reviews
-- Economic buyer, post-purchase: 5 reviews
-- Unknown, post-purchase: 3 reviews
-- Evaluator, post-purchase: 2 reviews
-- End user, post-purchase: 2 reviews</p>
+<p>Top buyer roles by review count:</p>
+<ul>
+<li>Evaluator, evaluation stage: 57 reviews</li>
+<li>Economic buyer, post-purchase: 5 reviews</li>
+<li>Unknown, post-purchase: 3 reviews</li>
+<li>Evaluator, post-purchase: 2 reviews</li>
+<li>End user, post-purchase: 2 reviews</li>
+</ul>
 <p>Evaluators dominate the sample, with 57 reviews coming from individuals in active evaluation. This aligns with the active evaluation signals and timing urgency observed in the data. Economic buyers appear in smaller numbers but at the post-purchase stage, suggesting they engage after the initial evaluation phase.</p>
 <p>The role distribution supports the thesis that SentinelOne generates evaluation interest but faces conversion friction. The high evaluator count relative to post-purchase economic buyers suggests a gap between interest and purchase commitment, potentially driven by the pricing friction documented in the pain analysis.</p>
 <h2 id="which-teams-feel-sentinelone-pain-first">Which Teams Feel SentinelOne Pain First</h2>
@@ -216,14 +222,16 @@ const post: BlogPost = {
 <p>The enterprise high contract signal indicates that SentinelOne's customer base skews toward larger deployments, consistent with reviewer statements that enterprises accept the cost while SMBs find it prohibitive. The segment targeting summary confirms this: pressure concentrates where budget authority meets deployment scale.</p>
 <h2 id="when-sentinelone-friction-turns-into-action">When SentinelOne Friction Turns Into Action</h2>
 <p>Timing signals reveal when dissatisfaction becomes operational. The current window shows immediate engagement opportunity.</p>
-<p>Key timing metrics:
-- 2 active evaluation signals visible now
-- 2 evaluation deadline signals present
-- 0 contract end signals
-- 0 renewal signals
-- 0 budget cycle signals
-- 0% declining sentiment
-- 0% improving sentiment</p>
+<p>Key timing metrics:</p>
+<ul>
+<li>2 active evaluation signals visible now</li>
+<li>2 evaluation deadline signals present</li>
+<li>0 contract end signals</li>
+<li>0 renewal signals</li>
+<li>0 budget cycle signals</li>
+<li>0% declining sentiment</li>
+<li>0% improving sentiment</li>
+</ul>
 <p>The absence of sentiment trend data suggests stable perception, with neither widespread deterioration nor improvement. The active evaluation signals indicate current decision-making activity, with pricing friction creating urgency for cost-comparison conversations.</p>
 <p>One priority timing trigger emerged: "SentinelOne WatchTower merged into another solution." This consolidation signal suggests product portfolio changes that may create evaluation pressure for customers using WatchTower.</p>
 <p>The best timing window for engagement is immediate. Active evaluation signals are present, and pricing friction creates natural entry points for cost-competitive alternatives. The lack of renewal or contract end signals means this pressure is evaluation-driven, not contract-driven.</p>
@@ -233,11 +241,13 @@ const post: BlogPost = {
 <p>The minimal account pressure data contrasts with the broader evaluation signals, suggesting that while category-level evaluation activity is present, specific named-account intent is harder to detect in this sample. This may reflect data collection limitations rather than actual account behavior.</p>
 <h2 id="how-sentinelone-stacks-up-against-competitors">How SentinelOne Stacks Up Against Competitors</h2>
 <p>SentinelOne reviewers most frequently compare the platform to CrowdStrike, Sophos, Huntress, and Webroot. The competitive landscape reveals a crowded EDR category with active displacement patterns.</p>
-<p>CrowdStrike appears as the primary comparison point, mentioned in multiple reviewer contexts. The competitive positioning shows similar strength profiles:
-- CrowdStrike strengths: integration, features
-- CrowdStrike weaknesses: contract lock-in, technical debt
-- SentinelOne strengths: API capabilities, features
-- SentinelOne weaknesses: reliability, contract lock-in</p>
+<p>CrowdStrike appears as the primary comparison point, mentioned in multiple reviewer contexts. The competitive positioning shows similar strength profiles:</p>
+<ul>
+<li>CrowdStrike strengths: integration, features</li>
+<li>CrowdStrike weaknesses: contract lock-in, technical debt</li>
+<li>SentinelOne strengths: API capabilities, features</li>
+<li>SentinelOne weaknesses: reliability, contract lock-in</li>
+</ul>
 <p>Both vendors face contract lock-in concerns, suggesting that EDR category switching friction is a common pattern, not a SentinelOne-specific issue. The technical debt mentions for CrowdStrike and reliability mentions for SentinelOne suggest different operational pain points despite similar feature strength.</p>
 <p>One reviewer directly addressed the comparison:</p>
 <blockquote>
@@ -281,10 +291,12 @@ const post: BlogPost = {
 </li>
 </ol>
 <p>The EDR category's high churn velocity (0.16 average) means that even satisfied customers may evaluate alternatives as part of routine assessment. SentinelOne's position within this regime requires ongoing competitive vigilance, particularly as CrowdStrike, Sophos, and Huntress appear as frequent comparison points.</p>
-<p>For buyers evaluating SentinelOne:
-- <strong>If you are an enterprise buyer prioritizing EDR functionality</strong>, reviewer evidence suggests SentinelOne delivers on security capabilities and integration with Microsoft 365 ecosystems. The pricing at $7 to $10 per agent per month is viewed as competitive when functionality is factored in.
-- <strong>If you are an SMB buyer with budget constraints</strong>, reviewer evidence suggests pricing friction may create affordability barriers. Consider whether the EDR functionality justifies the cost relative to alternatives.
-- <strong>If you are evaluating SentinelOne against CrowdStrike</strong>, both vendors show similar strength profiles in features and integration, with different operational pain points. CrowdStrike reviewers cite technical debt concerns, while SentinelOne reviewers mention reliability friction.</p>
+<p>For buyers evaluating SentinelOne:</p>
+<ul>
+<li><strong>If you are an enterprise buyer prioritizing EDR functionality</strong>, reviewer evidence suggests SentinelOne delivers on security capabilities and integration with Microsoft 365 ecosystems. The pricing at $7 to $10 per agent per month is viewed as competitive when functionality is factored in.</li>
+<li><strong>If you are an SMB buyer with budget constraints</strong>, reviewer evidence suggests pricing friction may create affordability barriers. Consider whether the EDR functionality justifies the cost relative to alternatives.</li>
+<li><strong>If you are evaluating SentinelOne against CrowdStrike</strong>, both vendors show similar strength profiles in features and integration, with different operational pain points. CrowdStrike reviewers cite technical debt concerns, while SentinelOne reviewers mention reliability friction.</li>
+</ul>
 <p>The minimal account-level intent data (2 accounts at 0.7 intent score) limits confidence in named-account targeting. The broader evaluation signals and category churn velocity suggest that engagement opportunities exist, but specific account pressure is harder to detect in this sample.</p>
 <p>This analysis is based on self-selected reviewer feedback collected between March 3 and April 6, 2026. Results reflect reviewer perception, not product capability. The high confidence rating is based on 323 enriched reviews, but the sample remains a subset of SentinelOne's total customer base.</p>`,
 }
