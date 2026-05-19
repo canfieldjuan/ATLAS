@@ -165,8 +165,11 @@ we can verify against the analyzer's pre-strip baseline (77).
 
 - Skill analyzer `Generic <h2>Introduction</h2>` count: 77 / 78 -> 0 / 0
   (`~/.claude/skills/seo-geo-aeo-blog-post/scripts/audit-published-posts.js`).
-  Inline grep fallback for contributors without the skill:
-  `grep -c '<h2 id="introduction">Introduction</h2>' atlas-churn-ui/src/content/blog/*.ts` -> `0` after the change.
+  Inline aggregating grep fallback for contributors without the skill
+  (a single number, not per-file counts):
+  `grep -R '<h2 id="introduction">Introduction</h2>' atlas-churn-ui/src/content/blog/ | wc -l` -> `0` after the change.
+  Same form for the conclusion case:
+  `grep -R '<h2 id="conclusion">Conclusion</h2>' atlas-churn-ui/src/content/blog/ | wc -l` -> `0`.
 - `npm run build` in `atlas-churn-ui` -> 83-URL sitemap, no TS errors.
 - `git diff --check` -> passed.
 - Spot-check on `hubspot-deep-dive-2026-04`: the H2 at line 152
