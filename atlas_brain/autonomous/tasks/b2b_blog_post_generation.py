@@ -2145,117 +2145,6 @@ def _needs_timing_or_numeric_anchor(report: dict[str, Any]) -> bool:
     )
 
 
-def _select_specificity_anchor_terms(
-    blueprint: PostBlueprint,
-    report: dict[str, Any],
-) -> dict[str, str]:
-    specificity = _blog_specificity_context(blueprint)
-    rows = _specificity_rows(blueprint)
-    if not rows:
-        return {}
-
-    needs_timing_numeric = _needs_timing_or_numeric_anchor(report)
-    timing_anchor = _first_term_from_rows(rows, lambda row: row.get("time_anchor"))
-    numeric_anchor = _first_term_from_rows(rows, _first_numeric_literal)
-    competitor = _first_term_from_rows(rows, lambda row: row.get("competitor"))
-    pain = _first_term_from_rows(rows, _meaningful_pain_label)
-    workflow = _first_term_from_rows(rows, _meaningful_workflow_label)
-
-    signal_terms = specificity_signal_terms(
-        anchor_examples=specificity.get("anchor_examples"),
-        witness_highlights=specificity.get("witness_highlights"),
-        allow_company_names=False,
-    )
-    if not timing_anchor:
-        timing_anchor = _preferred_signal_term(signal_terms.get("timing_terms"))
-    if not numeric_anchor:
-        numeric_anchor = _preferred_signal_term(
-            signal_terms.get("numeric_terms"),
-            predicate=_is_meaningful_numeric_anchor,
-        )
-    if not competitor:
-        competitor = _preferred_signal_term(signal_terms.get("competitor_terms"))
-    if not pain:
-        pain = _preferred_signal_term(
-            signal_terms.get("pain_terms"),
-            skip={
-                "recommendation",
-                "unknown",
-                "none",
-                *(_blog_low_signal_anchor_labels()),
-            },
-        )
-        if pain and not _is_meaningful_blog_anchor_label(pain):
-            pain = ""
-        else:
-            pain = _humanize_blog_anchor_label(pain)
-    if not workflow:
-        workflow = _preferred_signal_term(
-            signal_terms.get("workflow_terms"),
-            skip={"unknown", "none"},
-        )
-        if workflow and not _is_meaningful_blog_anchor_label(workflow):
-            workflow = ""
-        else:
-            workflow = _humanize_blog_anchor_label(workflow)
-
-    if needs_timing_numeric and not (timing_anchor or numeric_anchor):
-        return {}
-
-    return {
-        "time_anchor": timing_anchor,
-        "numeric_anchor": numeric_anchor,
-        "competitor": competitor,
-        "pain": pain,
-        "workflow": workflow,
-    }
-
-
-def _build_specificity_anchor_note(
-    blueprint: PostBlueprint,
-    report: dict[str, Any],
-) -> str:
-    terms = _select_specificity_anchor_terms(blueprint, report)
-    if not terms:
-        return ""
-
-    detail_bits: list[str] = []
-    time_anchor = terms["time_anchor"]
-    numeric_anchor = terms["numeric_anchor"]
-    competitor = terms["competitor"]
-    pain = terms["pain"]
-    workflow = terms["workflow"]
-
-    if time_anchor:
-        detail_bits.append(f"{time_anchor} is the live timing trigger")
-    if numeric_anchor:
-        detail_bits.append(f"{numeric_anchor} is the concrete spend anchor")
-    if competitor:
-        detail_bits.append(f"{competitor} is the competitive alternative in the witness-backed record")
-    if pain:
-        detail_bits.append(f"the core pressure showing up in the evidence is {pain}")
-    if workflow:
-        detail_bits.append(f"the workflow shift in play is {workflow}")
-
-    if not detail_bits:
-        return ""
-
-    note = "Evidence anchor: " + ", ".join(detail_bits[:-1])
-    if len(detail_bits) > 1:
-        note += f", and {detail_bits[-1]}."
-    else:
-        note += f"{detail_bits[-1]}."
-    if len(detail_bits) == 1:
-        note = "Evidence anchor: " + detail_bits[0] + "."
-    return note
-
-
-def _has_specificity_issues(report: dict[str, Any]) -> bool:
-    blockers = [str(issue) for issue in (report.get("blocking_issues") or [])]
-    warnings = [str(warning) for warning in (report.get("warnings") or [])]
-    return any(issue.startswith("witness_specificity:") for issue in blockers + warnings)
-
-
 def _apply_specificity_anchor_repair(
     blueprint: PostBlueprint,
     content: dict[str, Any],
@@ -2279,8 +2168,6 @@ def _apply_specificity_anchor_repair(
     a prior generation, or copy-pasted from a stale template), it's
     stripped so subsequent passes don't ship the stale prose.
 
-    ``_build_specificity_anchor_note`` is no longer called from this
-    module and exists only as dead code; future cleanup can delete it.
     """
     updated = dict(content or {})
     body = str(updated.get("content") or "")

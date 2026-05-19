@@ -1277,8 +1277,9 @@ def test_best_fit_guide_blueprint_routes_quotes_through_contract_gate():
 
 
 def test_specificity_anchor_repair_does_not_inject_when_specificity_fails():
-    """Even with a clear specificity_anchor in the report, the disabled
-    repair does NOT inject "Evidence anchor:" prose into the body."""
+    """Even with ``witness_specificity`` entries in the report's
+    ``blocking_issues``, the disabled repair does NOT inject an
+    "Evidence anchor:" prose line into the body."""
     from atlas_brain.autonomous.tasks.b2b_blog_post_generation import PostBlueprint
     blueprint = PostBlueprint(
         topic_type="vendor_deep_dive",
