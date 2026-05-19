@@ -88,6 +88,7 @@ type IngestionFileLoadState =
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
+const DEFAULT_INGESTION_DEFAULT_FIELDS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_SOURCE = 'manual'
 const INGESTION_SAMPLE_LIMIT = 5
 const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
@@ -117,6 +118,8 @@ export default function ContentOpsNewRun() {
   const [ingestionRowsJson, setIngestionRowsJson] = useState<string>(
     DEFAULT_INGESTION_ROWS_JSON,
   )
+  const [ingestionDefaultFieldsJson, setIngestionDefaultFieldsJson] =
+    useState<string>(DEFAULT_INGESTION_DEFAULT_FIELDS_JSON)
   const [ingestionSourceRows, setIngestionSourceRows] = useState(false)
   const [ingestionSource, setIngestionSource] = useState(DEFAULT_INGESTION_SOURCE)
   const [ingestionDryRun, setIngestionDryRun] = useState(true)
@@ -365,6 +368,16 @@ export default function ContentOpsNewRun() {
       })
       return
     }
+    const parsedDefaultFields = parseIngestionDefaultFieldsJson(
+      ingestionDefaultFieldsJson,
+    )
+    if (!parsedDefaultFields.ok) {
+      setIngestionInspectState({
+        kind: 'invalid_input',
+        message: parsedDefaultFields.message,
+      })
+      return
+    }
 
     setIngestionInspectState({ kind: 'submitting' })
     try {
@@ -376,6 +389,7 @@ export default function ContentOpsNewRun() {
           targetMode: request.targetMode,
           maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
           sampleLimit: INGESTION_SAMPLE_LIMIT,
+          defaultFields: parsedDefaultFields.fields,
         }),
       )
       if (requestId !== ingestionInspectRequestIdRef.current) return
@@ -403,6 +417,16 @@ export default function ContentOpsNewRun() {
       })
       return
     }
+    const parsedDefaultFields = parseIngestionDefaultFieldsJson(
+      ingestionDefaultFieldsJson,
+    )
+    if (!parsedDefaultFields.ok) {
+      setIngestionImportState({
+        kind: 'invalid_input',
+        message: parsedDefaultFields.message,
+      })
+      return
+    }
 
     setIngestionImportState({ kind: 'submitting' })
     try {
@@ -414,6 +438,7 @@ export default function ContentOpsNewRun() {
           targetMode: request.targetMode,
           maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
           sampleLimit: INGESTION_SAMPLE_LIMIT,
+          defaultFields: parsedDefaultFields.fields,
           replaceExisting: ingestionReplaceExisting,
           dryRun: ingestionDryRun,
         }),
@@ -766,6 +791,20 @@ export default function ContentOpsNewRun() {
               <span className="text-slate-300">Replace existing targets</span>
             </label>
           </div>
+          <label className="mb-3 block text-sm">
+            <span className="text-slate-300">Fallback fields JSON</span>
+            <textarea
+              value={ingestionDefaultFieldsJson}
+              onChange={(e) => {
+                setIngestionDefaultFieldsJson(e.target.value)
+                markIngestionStale()
+              }}
+              rows={3}
+              spellCheck={false}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+              placeholder='{"company_name": "Acme", "contact_email": "ops@example.com"}'
+            />
+          </label>
           <textarea
             value={ingestionRowsJson}
             onChange={(e) => {
@@ -1245,6 +1284,10 @@ type ParsedIngestionRows =
   | { ok: true; rows: Array<Record<string, unknown>> }
   | { ok: false; message: string }
 
+type ParsedIngestionDefaultFields =
+  | { ok: true; fields: Record<string, unknown> }
+  | { ok: false; message: string }
+
 function parseIngestionRowsJson(value: string): ParsedIngestionRows {
   let parsed: unknown
   try {
@@ -1262,6 +1305,24 @@ function parseIngestionRowsJson(value: string): ParsedIngestionRows {
     return { ok: false, message: 'Provide at least one row to inspect.' }
   }
   return rows
+}
+
+function parseIngestionDefaultFieldsJson(
+  value: string,
+): ParsedIngestionDefaultFields {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value.trim() || '{}')
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Fallback fields must be a JSON object.' }
+  }
+  return { ok: true, fields: { ...parsed } }
 }
 
 function parseIngestionFileRows(

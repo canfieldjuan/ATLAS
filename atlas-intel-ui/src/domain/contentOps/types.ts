@@ -95,6 +95,7 @@ export interface ContentOpsIngestionInspectRequest {
   targetMode: string | null
   maxSourceTextChars: number
   sampleLimit: number
+  defaultFields: Record<string, unknown>
 }
 
 export interface ContentOpsIngestionImportRequest
