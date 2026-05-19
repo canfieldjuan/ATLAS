@@ -120,8 +120,12 @@ class StaticCampaignSkillStore:
         return self.prompt
 
 
-def _opportunity_uses_review_evidence(opportunity: Mapping[str, Any]) -> bool:
-    if str(opportunity.get("source_type") or "").strip().lower() == "review":
+def _opportunity_uses_source_type(
+    opportunity: Mapping[str, Any],
+    source_type: str,
+) -> bool:
+    expected = str(source_type or "").strip().lower()
+    if str(opportunity.get("source_type") or "").strip().lower() == expected:
         return True
     evidence = opportunity.get("evidence")
     if not isinstance(evidence, Sequence) or isinstance(evidence, (str, bytes, bytearray)):
@@ -129,7 +133,7 @@ def _opportunity_uses_review_evidence(opportunity: Mapping[str, Any]) -> bool:
     for row in evidence:
         if not isinstance(row, Mapping):
             continue
-        if str(row.get("source_type") or "").strip().lower() == "review":
+        if str(row.get("source_type") or "").strip().lower() == expected:
             return True
     return False
 
@@ -162,10 +166,16 @@ class DeterministicCampaignLLM:
         pains = opportunity.get("pain_points") or []
         pain = str(pains[0]) if pains else "workflow friction"
         subject = f"{company}: {pain}"[:80]
-        if _opportunity_uses_review_evidence(opportunity):
+        if _opportunity_uses_source_type(opportunity, "review"):
             body = (
                 f"<p>Teams evaluating {vendor} are reporting pain around {pain}.</p>"
                 f"<p>{company} can pair that market signal with your own data "
+                "and approval rules for a focused account sequence.</p>"
+            )
+        elif _opportunity_uses_source_type(opportunity, "support_ticket"):
+            body = (
+                f"<p>Support-ticket evidence around {vendor} points to {pain}.</p>"
+                f"<p>{company} can pair that service signal with your own data "
                 "and approval rules for a focused account sequence.</p>"
             )
         else:

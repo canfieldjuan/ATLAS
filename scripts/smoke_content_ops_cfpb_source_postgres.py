@@ -58,7 +58,7 @@ def _load_cfpb_exporter_module():
 
 _cfpb_exporter = _load_cfpb_exporter_module()
 DEFAULT_CHANNELS = ("email_cold", "email_followup")
-DEFAULT_FORBIDDEN_PHRASES: tuple[str, ...] = ()
+DEFAULT_FORBIDDEN_PHRASES = ("appears to be weighing",)
 DEFAULT_API_URL = _cfpb_exporter.DEFAULT_API_URL
 DEFAULT_MAX_ROWS_SCANNED = _cfpb_exporter.DEFAULT_MAX_ROWS_SCANNED
 DEFAULT_SOURCE_SYSTEM = _cfpb_exporter.DEFAULT_SOURCE_SYSTEM

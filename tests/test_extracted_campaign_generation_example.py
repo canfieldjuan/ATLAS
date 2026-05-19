@@ -123,6 +123,37 @@ async def test_example_generates_drafts_from_customer_opportunity_payload() -> N
 
 
 @pytest.mark.asyncio
+async def test_example_avoids_buyer_intent_for_support_ticket_sources() -> None:
+    payload = {
+        "scope": {"account_id": "acct-1"},
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "opportunities": [
+            {
+                "id": "cfpb:1",
+                "company": "Acme Logistics",
+                "vendor": "Example Bank",
+                "email": "ops@example.com",
+                "source_type": "support_ticket",
+                "pain_category": "Fees",
+                "evidence": [
+                    {
+                        "source_type": "support_ticket",
+                        "text": "The bank kept charging fees after I closed the account.",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = await generate_campaign_drafts_from_payload(payload)
+
+    body = result["drafts"][0]["body"]
+    assert "Support-ticket evidence around Example Bank points to Fees." in body
+    assert "appears to be weighing" not in body
+
+
+@pytest.mark.asyncio
 async def test_example_accepts_host_llm_and_skill_store_overrides() -> None:
     llm = _InjectedLLM()
     payload = {
