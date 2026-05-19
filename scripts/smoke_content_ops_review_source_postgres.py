@@ -425,7 +425,8 @@ def _saved_draft_target_errors(
     for draft in saved_drafts:
         draft_id_value = draft.get("id")
         draft_id = str(draft_id_value) if draft_id_value is not None else ""
-        target_id = str(draft.get("target_id") or "")
+        target_id_value = draft.get("target_id")
+        target_id = str(target_id_value) if target_id_value is not None else ""
         if not target_id:
             errors.append(f"persisted draft missing target_id metadata: {draft_id or '<unknown>'}")
             continue
