@@ -1,0 +1,3418 @@
+{
+  "repo": "/home/juan-canfield/Desktop/Atlas-blog-generator-safety-net/atlas-churn-ui",
+  "generated": "2026-05-19T03:55:55.457Z",
+  "posts_scanned": 79,
+  "reports": [
+    {
+      "slug": "amazon-web-services-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "asana-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "azure-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "azure-vs-salesforce-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "b2b-software-landscape-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "b2b-software-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "basecamp-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "best-b2b-software-for-1000-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'best_fit_guide' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "best-crm-for-51-200-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: month end is the live timing trigger, $170k is the concrete spend anchor, and the core pressure showing"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'best_fit_guide' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "best-hr-hcm-for-51-200-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- Office Manager, verified reviewer</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 10,
+          "examples": [
+            "<p>Yes, if: - You're a US-only company with stable headcount (under 300) - You want straightfor",
+            "<p>No, if: - You're planning international expansion - You need advanced payroll, tax, or bene",
+            "<p>Yes, if: - Payroll accuracy and tax compliance are your top priority - You want a single pla",
+            "<p>No, if: - You need a highly customizable, modern interface - You want to keep payroll and H",
+            "<p>Yes, if: - You want a single platform for HR, payroll, and IT management - Your team has str",
+            "<p>No, if: - You want a simple, easy-to-use interface - You need immediate, responsive support",
+            "<p>Yes, if: - You have 1000+ employees across multiple countries - You need advanced reporting,",
+            "<p>No, if: - You're a 51–200 person team - You want quick time-to-value - You need responsive,",
+            "<p>Both Gusto and Rippling face support complaints. If you need responsive support: - Budget for a dedicated HR admin or",
+            "<p>All four vendors have contract lock-in. Before you sign: - Understand data export and migration capabilities - Negoti"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'best_fit_guide' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "best-project-management-for-201-1000-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: year is the live timing trigger, $10.99 is the concrete spend anchor, the core pressure showing up in t"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 1,
+          "examples": [
+            "<p>Per-seat pricing scales unpredictably. One Reddit reviewer compared vendors and found: - Jira: 92× multiplier at $9.0"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'best_fit_guide' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "brevo-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on TrustPilot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 3,
+          "examples": [
+            "<p>Pricing complaints dominate the recent review window. Reviewers report: - Escalating costs as contact volume grows pa",
+            "<p>Reviewers report friction around: - Difficulty downgrading plans mid-cycle - Feature availability tied to plan tier r",
+            "<p>Reviewers explicitly ask for a $100–200/month tier with: - 25,000–50,000 contact limits - Basic automation (not full "
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "clickup-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "close-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 5,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: month end is the live timing trigger, $170k is the concrete spend anchor, and the core pressure showing"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 1,
+          "examples": [
+            "<p>Key findings: - 34 reviews showed churn or switching intent - Economic buyers surfaced the strong"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "close-vs-zoho-crm-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "communication-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, th"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "copper-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "crm-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: month end is the live timing trigger, $170k is the concrete spend anchor, and the core pressure showing"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "fortinet-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "gusto-vs-workday-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 10,
+          "examples": [
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- CEO, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Owner, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "help-scout-vs-zendesk-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 9,
+          "examples": [
+            "<blockquote>\n<p>-- Customer Success Manager, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Customer Success Manager, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Software Advice</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 5,
+          "examples": [
+            "<p>Help Scout signals include: - 1 economic buyer - 1 champion - 1 evaluator",
+            "<p>Zendesk signals include: - 2 economic buyers - 2 champions - 2 end users",
+            "<p>The data does not include explicit company size or industry breakdowns, but the quotable phrases and witness highligh",
+            "<p>For buyers evaluating between Help Scout and Zendesk: - If your team is under 20 employees and does not require deep ",
+            "<p>For vendors targeting Help Scout or Zendesk accounts: - Help Scout accounts are vulnerable on integration depth and w"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "helpdesk-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: two months is the live timing trigger, $500,000 is the concrete spend anchor, HubSpot is the competitiv"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "hr-hcm-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Office Manager on TrustRadius</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "hubspot-deep-dive-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "hubspot-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "hubspot-vs-power-bi-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 8,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "insightly-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on G2</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 1,
+          "examples": [
+            "<p>Priority timing triggers include: - One-year contract renewal approaching - Just over one year tenure - 2.1-2 years t"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "insightly-vs-zoho-crm-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "intercom-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "jira-vs-mondaycom-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 10,
+          "examples": [
+            "<blockquote>\n<p>-- Client service manager, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Twitter/X</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Diretor de arte sênior, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Twitter/X</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Diretor de arte sênior, verified reviewer on G2</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "jira-vs-trello-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "linode-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Twitter</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 6,
+          "examples": [
+            "<p>The relatively low mention frequency across use cases suggests either: - Review data doesn't capture the full breadth",
+            "<p>However, account-level intent data shows a significant gap. The account packet reports zero accounts across all metri",
+            "<p>However, the temporal signal data shows significant gaps. Evaluation deadline signals, contract end signals, renewal ",
+            "<p>This data gap has several possible explanations: - Privacy filtering may be removing identifiable account information",
+            "<p>The absence of account-level metrics prevents answering critical questions: - Which named accounts are showing churn ",
+            "<p>For vendors competing against Linode, the competitive landscape suggests positioning around: - Feature breadth (if yo"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "looker-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Mechanical Design Engineer, Mid-Market (51-1000 emp.), Design industry, verified reviewer on G2</p>\n<",
+            "<blockquote>\n<p>-- Mechanical Design Engineer, Mid-Market (51-1000 emp.), Design industry, verified reviewer on G2</p>\n<",
+            "<blockquote>\n<p>-- reviewer on Twitter/X</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "magento-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "mailchimp-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "marketing-automation-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 24/7 is the live timing trigger, $800 m is the concrete spend anchor, unknown is the competitive altern"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 2,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>",
+            "<h2 id=\"conclusion\">Conclusion</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "metabase-vs-tableau-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 6,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Mechanical Design Engineer, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Mechanical Design Engineer, verified reviewer on G2</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "microsoft-defender-for-endpoint-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "microsoft-teams-vs-notion-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 6,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Solution Architect, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Student and Owner, verified reviewer on G2</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, th"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "microsoft-teams-vs-salesforce-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 10,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on software_advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Solution Architect, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on software_advice</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, th"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "notion-vs-salesforce-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "pipedrive-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 2 months is the live timing trigger, $15/user is the concrete spend anchor, Nutshell is the competitive"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "power-bi-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: today is the live timing trigger, $5/month is the concrete spend anchor, Tableau is the competitive alt"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 3,
+          "examples": [
+            "<p>Power BI makes sense for teams that: - Are already embedded in Microsoft 365 and value Excel, Teams, and SharePoint i",
+            "<p>Power BI does not make sense for teams that: - Are consolidating on Google Cloud Platform or AWS and want cloud-nativ",
+            "<p>The March-May 2026 window is the most critical decision period for Power BI customers. April 15 scorecard hierarchy d"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "project-management-landscape-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: year is the live timing trigger, $10.99 is the concrete spend anchor, the core pressure showing up in t"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'market_landscape' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "real-cost-of-copper-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: $12 is the concrete spend anchor, Aluminum is the competitive alternative in the witness-backed record,"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pricing_reality_check' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "real-cost-of-shopify-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pricing_reality_check' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "real-cost-of-woocommerce-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: this week is the live timing trigger, $29/mo is the concrete spend anchor, Shopify is the competitive a"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pricing_reality_check' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "salesforce-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "sentinelone-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 5,
+          "examples": [
+            "<p>Top integrations by mention count: - SentinelOne (6 mentions) - Huntress (5 mentions) - AWS (4 mentions) - Intune (4 ",
+            "<p>Top use cases by mention count and urgency: - SentinelOne Singularity Endpoint (6 mentions, 1.2 urgency) - SentinelOn",
+            "<p>Top buyer roles by review count: - Evaluator, evaluation stage: 57 reviews - Economic buyer, post-purchase: 5 review",
+            "<p>Key timing metrics: - 2 active evaluation signals visible now - 2 evaluation deadline signals present -",
+            "<p>CrowdStrike appears as the primary comparison point, mentioned in multiple reviewer contexts. The competitive positio"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "shopify-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "slack-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "slack-vs-zoom-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 1,
+          "examples": [
+            "<blockquote>\n<p>-- network security engineer, verified reviewer on g2</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'vendor_showdown' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-asana-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-clickup-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-clickup-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 6,
+          "examples": [
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: month is the live timing trigger, $29 is the concrete spend anchor, the core pressure showing up in the"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 12,
+          "examples": [
+            "<p>For example, a team might migrate from: - Trello for task management - Notion for documentation - Zapier for workflow",
+            "<p>Reviewers leaving Trello, Asana, and Jira frequently cite UX regression. The complaints cluster around: - Navigation ",
+            "<p>Teams leaving Notion and Airtable cite feature gaps around: - Advanced automation - Native time tracking - Resource c",
+            "<p>ClickUp addresses some of these gaps with built-in features. However, integration depth varies. The most frequently m",
+            "<p>Performance issues rank fourth among migration triggers. Reviewers leaving Notion and Airtable report: - Slow load ti",
+            "<p>Onboarding friction appears in both outbound signals (teams leaving rigid tools like Jira) and inbound caution (teams",
+            "<p>ClickUp supports CSV imports and native connectors for Trello, Asana, Jira, and other platforms. However, reviewers r",
+            "<p>This suggests teams should invest time in hierarchy planning before migration. Common patterns include: - Folders for",
+            "<p>Teams should expect: - Initial productivity dip during the learning phase - Gradual productivity recover",
+            "<p>The data supports migration for: - Teams outgrowing simpler tools like Trello or Todoist - Teams consolidating multi",
+            "<p>The data flags caution for: - Teams expecting plug-and-play simplicity - Teams with limited admin capacity for ",
+            "<p>The reasoning context flags low confidence for timing intelligence, migration proof, and category reasoning. This mea"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-klaviyo-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-salesforce-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-sentinelone-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-shopify-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 1,
+          "examples": [
+            "<p>For teams evaluating Shopify, the data suggests asking: - How much technical control do we need versus operational si"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-shopify-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-woocommerce-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 1
+    },
+    {
+      "slug": "switch-to-zoho-crm-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 5,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 5,
+          "examples": [
+            "<p>Common data migration challenges include: - Field mapping between your current CRM and Zoho CRM's schema - Custom fie",
+            "<p>For teams considering whether to migrate, the review data suggests Zoho CRM works best when: - You're consolidating m",
+            "<p>The consolidation opportunity is strongest when: - You're currently paying for multiple tools that Zoho CRM can repla",
+            "<p>Reviewer experience suggests Zoho CRM works best for: - Small-to-midsize teams (under 50 users) - Teams consolidating",
+            "<p>Zoho CRM may not fit if: - You require complex contact segmentation or account-based filtering - You need en"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "tableau-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "teamwork-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 0,
+          "examples": []
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 0
+    },
+    {
+      "slug": "top-complaint-every-b2b-software-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-communication-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Solution Architect, verified reviewer on G2</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Trustpilot</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 3 m is the concrete spend anchor, Linux is the competitive alternative in the witness-backed record, th"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-crm-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: month end is the live timing trigger, $170k is the concrete spend anchor, and the core pressure showing"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 6,
+          "examples": [
+            "That quote is from a compensation discussion, not a",
+            "misattributed in the source data",
+            "quote is from a compensation discussion, not a CRM review",
+            "quote is from a personal finance discussion, not a CRM review",
+            "quote is from a payment platform discussion, not a CRM review, but it reflects a common pattern: review",
+            "quote is misattributed"
+          ]
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 4,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-e-commerce-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 3,
+          "examples": [
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Director of Technology, verified reviewer on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Director of Technology, verified reviewer on TrustRadius</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-helpdesk-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Twitter</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Twitter</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: two months is the live timing trigger, $500,000 is the concrete spend anchor, HubSpot is the competitiv"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-marketing-automation-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 6,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>",
+            "<blockquote>\n<p>-- software reviewer</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 1,
+          "examples": [
+            "Evidence anchor: 24/7 is the live timing trigger, $800 m is the concrete spend anchor, unknown is the competitive altern"
+          ]
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "top-complaint-every-project-management-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on PeerSpot</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Software Advice</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'pain_point_roundup' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "why-teams-leave-azure-2026-03",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'switching_story' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "why-teams-leave-azure-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- verified reviewer on Capterra</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'switching_story' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "why-teams-leave-slack-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 4,
+          "examples": [
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>",
+            "<blockquote>\n<p>-- reviewer on Reddit</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 3,
+          "examples": [
+            "<p>Full replacement makes sense when: - Cost pressure is severe and Microsoft 365 is already deployed - Infrastructure o",
+            "<p>Workflow migration makes sense when: - Specific workflows (design reviews, project documentation, decision records) a",
+            "<p>Stay on Slack when: - Real-time coordination is genuinely critical to your workflows - Integration ecos"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 1,
+          "examples": [
+            "topic_type: 'switching_story' (not in valid enum)"
+          ]
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 3,
+      "highCount": 1
+    },
+    {
+      "slug": "woocommerce-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 1,
+          "examples": [
+            "<p>This means the analysis cannot assess: - Which specific companies are evaluating WooCommerce alternatives - Whether p"
+          ]
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 2,
+          "examples": [
+            "affiliate_url: https://example.com/atlas-live-test-partner",
+            "affiliate partner name: Atlas Live Test Partner"
+          ]
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 2,
+      "highCount": 1
+    },
+    {
+      "slug": "workday-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "wrike-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 2,
+          "examples": [
+            "<blockquote>\n<p>-- Event Production Manager on TrustRadius</p>\n</blockquote>",
+            "<blockquote>\n<p>-- Event Production Manager on TrustRadius</p>\n</blockquote>"
+          ]
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 0,
+          "examples": []
+        }
+      },
+      "criticalCount": 1,
+      "highCount": 0
+    },
+    {
+      "slug": "zoho-crm-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    },
+    {
+      "slug": "zoom-deep-dive-2026-04",
+      "findings": {
+        "empty_blockquote": {
+          "count": 0,
+          "examples": []
+        },
+        "evidence_anchor": {
+          "count": 0,
+          "examples": []
+        },
+        "markdown_in_html": {
+          "count": 0,
+          "examples": []
+        },
+        "misattribution_disclaimer": {
+          "count": 0,
+          "examples": []
+        },
+        "placeholder_affiliate": {
+          "count": 0,
+          "examples": []
+        },
+        "invalid_topic_type": {
+          "count": 0,
+          "examples": []
+        },
+        "generic_intro_h2": {
+          "count": 1,
+          "examples": [
+            "<h2 id=\"introduction\">Introduction</h2>"
+          ]
+        }
+      },
+      "criticalCount": 0,
+      "highCount": 1
+    }
+  ]
+}
