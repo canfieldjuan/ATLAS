@@ -18,6 +18,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
+from extracted_content_pipeline.campaign_llm_client import (  # noqa: E402
+    create_pipeline_llm_client,
+)
 from extracted_content_pipeline.campaign_postgres_import import (  # noqa: E402
     import_campaign_opportunities,
 )
@@ -28,6 +31,8 @@ from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
 from extracted_content_pipeline.ingestion_diagnostics import (  # noqa: E402
     inspect_ingestion_file,
 )
+from extracted_content_pipeline.skills.registry import get_skill_registry  # noqa: E402
+
 
 def _load_script_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -72,7 +77,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Smoke-test Atlas review-source rows through Content Ops source "
-            "export, Postgres import, and DB-backed offline draft generation."
+            "export, Postgres import, and DB-backed draft generation."
         )
     )
     parser.add_argument("--source", default="g2")
@@ -80,6 +85,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--target-mode", default="vendor_retention")
     parser.add_argument("--channels", default=",".join(DEFAULT_CHANNELS))
+    parser.add_argument(
+        "--llm",
+        choices=("offline", "pipeline"),
+        default="offline",
+        help="Use deterministic offline generation or the product PipelineLLMClient.",
+    )
     parser.add_argument("--min-drafts", type=int, default=None)
     parser.add_argument("--min-quote-grade-rows", type=int, default=1)
     parser.add_argument("--min-review-text-chars", type=int, default=80)
@@ -177,6 +188,15 @@ async def _fetch_review_inputs(
         require_review_url=not bool(args.allow_missing_source_url),
     )
     return source_summary, source_rows
+
+
+def _generation_ports_for_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.llm == "offline":
+        return {}
+    return {
+        "llm": create_pipeline_llm_client(),
+        "skills": get_skill_registry(),
+    }
 
 
 async def run_review_source_postgres_smoke(
@@ -279,6 +299,7 @@ async def run_review_source_postgres_smoke(
                     channels=channels,
                     target_ids=imported_target_ids,
                     opportunity_table=str(args.opportunity_table),
+                    **_generation_ports_for_args(args),
                 )
                 saved_drafts = await fetch_saved_drafts(pool, drafts_result.get("saved_ids") or [])
                 errors.extend(generation_errors(drafts_result))

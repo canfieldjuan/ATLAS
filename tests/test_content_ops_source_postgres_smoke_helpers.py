@@ -160,3 +160,41 @@ async def test_generate_imported_target_drafts_aggregates_multiple_targets(monke
     assert result["errors"] == [{"target_id": "source-2", "reason": "bad"}]
     assert calls[0]["filters"] == {"target_id": "source-1"}
     assert calls[0]["channels"] == ("email_cold", "email_followup")
+    assert isinstance(calls[0]["llm"], helpers.DeterministicCampaignLLM)
+    assert isinstance(calls[0]["skills"], helpers.StaticCampaignSkillStore)
+
+
+@pytest.mark.asyncio
+async def test_generate_imported_target_drafts_uses_injected_llm_and_skills(monkeypatch):
+    calls = []
+    llm = object()
+    skills = object()
+
+    async def fake_generate(*_args, **kwargs):
+        calls.append(kwargs)
+        return _GenerationResult({
+            "requested": 1,
+            "generated": 1,
+            "skipped": 0,
+            "reasoning_contexts_used": 0,
+            "saved_ids": ["campaign-1"],
+            "errors": [],
+        })
+
+    monkeypatch.setattr(helpers, "generate_campaign_drafts_from_postgres", fake_generate)
+
+    result = await helpers.generate_imported_target_drafts(
+        pool=object(),
+        account_id="acct",
+        user_id="user",
+        target_mode="vendor_retention",
+        channels=("email_cold",),
+        target_ids=("source-1",),
+        opportunity_table="campaign_opportunities",
+        llm=llm,
+        skills=skills,
+    )
+
+    assert result["generated"] == 1
+    assert calls[0]["llm"] is llm
+    assert calls[0]["skills"] is skills

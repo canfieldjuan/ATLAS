@@ -162,6 +162,7 @@ def _args(**overrides):
         "limit": 1,
         "target_mode": "vendor_retention",
         "channels": "email_cold",
+        "llm": "offline",
         "min_drafts": None,
         "min_quote_grade_rows": 1,
         "min_review_text_chars": 80,
@@ -188,6 +189,17 @@ def _args(**overrides):
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+def test_parse_args_defaults_to_offline_llm():
+    args = smoke._parse_args([
+        "--account-id",
+        "acct-smoke",
+        "--database-url",
+        "postgres://example",
+    ])
+
+    assert args.llm == "offline"
 
 
 @pytest.mark.asyncio
@@ -226,6 +238,47 @@ async def test_review_source_postgres_smoke_imports_and_persists(monkeypatch, tm
     assert any("INSERT INTO b2b_campaigns" in call["query"] for call in pool.fetchval_calls)
     assert "FROM b2b_campaigns" in pool.fetch_calls[-1]["query"]
     assert pool.fetch_calls[2]["args"] == ("vendor_retention", "acct-smoke", "review-1", 1)
+
+
+@pytest.mark.asyncio
+async def test_review_source_postgres_smoke_pipeline_llm_wires_provider_ports(
+    monkeypatch,
+    tmp_path,
+):
+    pool = _Pool(
+        summary_rows=[_summary_row()],
+        source_rows=[_source_row()],
+        opportunity_rows=[_saved_draft_row()],
+    )
+    llm = object()
+    skills = object()
+    calls = []
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+    monkeypatch.setattr(smoke, "create_pipeline_llm_client", lambda: llm)
+    monkeypatch.setattr(smoke, "get_skill_registry", lambda: skills)
+
+    async def generate_with_ports(**kwargs):
+        calls.append(kwargs)
+        return {
+            "requested": 1,
+            "generated": 1,
+            "skipped": 0,
+            "reasoning_contexts_used": 0,
+            "saved_ids": ["campaign-1"],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(smoke, "generate_imported_target_drafts", generate_with_ports)
+
+    code, payload = await smoke.run_review_source_postgres_smoke(
+        _args(llm="pipeline"),
+        source_rows_path=tmp_path / "g2_sources.jsonl",
+    )
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert calls[0]["llm"] is llm
+    assert calls[0]["skills"] is skills
 
 
 @pytest.mark.asyncio
