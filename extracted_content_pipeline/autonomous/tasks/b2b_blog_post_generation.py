@@ -6508,6 +6508,42 @@ async def _fetch_affiliate_partner_by_category(pool, category: str) -> dict[str,
     return None
 
 
+# Defense-in-depth against placeholder/test rows reaching production.
+# Triggered after one such row ("Atlas Live Test Partner" with
+# affiliate_url=https://example.com/atlas-live-test-partner) lived in the
+# live affiliate_partners table for ~8 weeks and re-injected itself into
+# every category='B2B Software' post until manual cleanup. The DB row was
+# deleted, but a generator-side guard prevents recurrence if anyone
+# recreates a placeholder row by mistake.
+_PLACEHOLDER_PARTNER_URL_RE = re.compile(
+    r"(?:^|//)example\.com|test[-_]?partner|placeholder",
+    re.IGNORECASE,
+)
+_PLACEHOLDER_PARTNER_NAME_RE = re.compile(
+    r"\btest\b|placeholder",
+    re.IGNORECASE,
+)
+
+
+def _is_placeholder_partner(partner: dict[str, Any]) -> bool:
+    """True if the partner row looks like test or placeholder data.
+
+    Checks affiliate_url for ``example.com`` / ``test-partner`` /
+    ``placeholder``, and name / product_name for whole-word ``test`` or
+    ``placeholder``. Partners flagged here are refused by the matcher.
+    """
+    url = partner.get("affiliate_url") or ""
+    name = partner.get("name") or ""
+    product = partner.get("product_name") or ""
+    if _PLACEHOLDER_PARTNER_URL_RE.search(str(url)):
+        return True
+    if _PLACEHOLDER_PARTNER_NAME_RE.search(str(name)):
+        return True
+    if _PLACEHOLDER_PARTNER_NAME_RE.search(str(product)):
+        return True
+    return False
+
+
 def _pick_affiliate_partner_for_vendors(
     partners: list[dict[str, Any]],
     vendor_names: list[str],
@@ -6521,10 +6557,16 @@ def _pick_affiliate_partner_for_vendors(
     matching handles cases like vendor "monday" matching alias "monday CRM"
     and vendor "Monday.com" matching product_name "Monday.com".
 
+    Partners that look like placeholder/test data are filtered out before
+    matching, so even if a placeholder row is present in the DB it won't
+    be injected -- see ``_is_placeholder_partner``.
+
     Iteration order matters: vendors are tried in priority order
     (the caller decides), and within each vendor partners are tried in
     the order supplied. Returns None if no partner matches any vendor.
     """
+    # Defense-in-depth: drop placeholder rows before matching.
+    partners = [p for p in partners if not _is_placeholder_partner(p)]
     for vendor in vendor_names:
         vendor_lower = (vendor or "").strip().lower()
         if not vendor_lower:

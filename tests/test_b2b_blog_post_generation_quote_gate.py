@@ -34,6 +34,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pain_point_roundup,
     _blueprint_pricing_reality_check,
     _blueprint_vendor_showdown,
+    _is_placeholder_partner,
     _pick_affiliate_partner_for_vendors,
     _quote_grade_blueprint_phrases,
     _remove_unmatched_quote_lines,
@@ -445,13 +446,18 @@ def _partner(
     aliases: list[str] | None = None,
     category: str = "CRM",
     enabled: bool = True,
+    affiliate_url: str | None = None,
 ) -> dict[str, Any]:
+    # Note: do NOT use example.com here -- _is_placeholder_partner flags
+    # that domain as a placeholder signal. Use the product slug as a
+    # plausible-looking real referrer URL.
+    slug = product_name.lower().replace(' ', '-').replace('.', '-')
     return {
         "id": f"00000000-0000-0000-0000-{abs(hash(name)) % 10**12:012x}",
         "name": name,
         "product_name": product_name,
         "product_aliases": aliases or [],
-        "affiliate_url": f"https://example.com/{product_name.lower().replace(' ', '-')}",
+        "affiliate_url": affiliate_url or f"https://{slug}.test-affiliates.io/ref=atlas",
         "category": category,
         "enabled": enabled,
     }
@@ -582,6 +588,100 @@ def test_vendor_matcher_handles_none_aliases():
     partner["product_aliases"] = None
     out = _pick_affiliate_partner_for_vendors([partner], ["HubSpot"])
     assert out is not None
+
+
+# ---------------------------------------------------------------------------
+# Placeholder-partner defense-in-depth
+#
+# Triggered by the "Atlas Live Test Partner" incident: a test row with
+# affiliate_url=https://example.com/atlas-live-test-partner lived in the
+# live affiliate_partners table for ~8 weeks and re-injected itself into
+# every category='B2B Software' post until manual cleanup. The DB row was
+# deleted, but the matcher should also refuse such rows defensively.
+# ---------------------------------------------------------------------------
+
+
+def test_is_placeholder_partner_flags_example_com_url():
+    """The exact pattern from the production incident."""
+    partner = _partner(
+        "Atlas Live Test Partner",
+        "Atlas B2B Software Partner",
+    )
+    partner["affiliate_url"] = "https://example.com/atlas-live-test-partner"
+    assert _is_placeholder_partner(partner) is True
+
+
+def test_is_placeholder_partner_flags_test_in_name():
+    partner = _partner("Test Vendor", "Real Product")
+    assert _is_placeholder_partner(partner) is True
+
+
+def test_is_placeholder_partner_flags_test_in_product_name():
+    partner = _partner("Real Vendor", "Test Product")
+    assert _is_placeholder_partner(partner) is True
+
+
+def test_is_placeholder_partner_flags_placeholder_in_name():
+    partner = _partner("Placeholder Partner", "RealProduct")
+    assert _is_placeholder_partner(partner) is True
+
+
+def test_is_placeholder_partner_flags_test_partner_in_url():
+    partner = _partner("Some Name", "SomeProduct")
+    partner["affiliate_url"] = "https://realdomain.com/test-partner-ref"
+    assert _is_placeholder_partner(partner) is True
+
+
+def test_is_placeholder_partner_does_not_flag_real_data():
+    """Real partner rows should pass through cleanly."""
+    real_partners = [
+        _partner("HubSpot Partner", "HubSpot"),
+        _partner("Pipedrive Partner", "Pipedrive"),
+        _partner("Monday.com", "Monday.com", aliases=["monday CRM"]),
+        _partner("Amazon Associates", "Amazon"),
+        _partner("Shopify Affiliates", "Shopify"),
+        _partner("HelpDesk", "HelpDesk"),
+    ]
+    for p in real_partners:
+        assert _is_placeholder_partner(p) is False, (
+            f"Real partner {p['name']!r} should not be flagged as placeholder"
+        )
+
+
+def test_is_placeholder_partner_handles_attest_substring():
+    """`\\btest\\b` is whole-word, so partner names like 'Attestation
+    Service' should NOT flag (substring 'test' inside 'Attestation')."""
+    partner = _partner("Attestation Service", "Attest")
+    assert _is_placeholder_partner(partner) is False
+
+
+def test_vendor_matcher_drops_placeholder_partner_even_if_vendor_matches():
+    """If a placeholder row sneaks into the DB and somehow shares a vendor
+    name with the post, the matcher still refuses to inject it. This is
+    the integration test for the defensive filter inside
+    _pick_affiliate_partner_for_vendors.
+    """
+    placeholder = _partner(
+        "Atlas Live Test Partner",
+        "Atlas B2B Software Partner",
+    )
+    placeholder["affiliate_url"] = "https://example.com/atlas-live-test-partner"
+    # Pretend the post's vendor matches the placeholder's product_name.
+    out = _pick_affiliate_partner_for_vendors(
+        [placeholder],
+        ["Atlas B2B Software Partner"],
+    )
+    assert out is None
+
+
+def test_vendor_matcher_prefers_real_partner_over_placeholder():
+    """When both a placeholder AND a real partner could match, the
+    placeholder is filtered out and the real partner is returned."""
+    placeholder = _partner("Test HubSpot", "HubSpot")
+    real = _partner("HubSpot Partner", "HubSpot")
+    out = _pick_affiliate_partner_for_vendors([placeholder, real], ["HubSpot"])
+    assert out is not None
+    assert out["name"] == "HubSpot Partner"
 
 
 # ---------------------------------------------------------------------------
