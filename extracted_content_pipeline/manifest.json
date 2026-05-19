@@ -77,6 +77,10 @@
       "target": "extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql",
+      "target": "extracted_content_pipeline/storage/migrations/325_ticket_faq_markdown.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/066_b2b_campaigns.sql",
       "target": "extracted_content_pipeline/storage/migrations/066_b2b_campaigns.sql"
     },
@@ -252,6 +256,12 @@
     },
     {
       "target": "extracted_content_pipeline/ticket_faq_markdown.py"
+    },
+    {
+      "target": "extracted_content_pipeline/ticket_faq_ports.py"
+    },
+    {
+      "target": "extracted_content_pipeline/ticket_faq_postgres.py"
     },
     {
       "target": "extracted_content_pipeline/ingestion_diagnostics.py"
