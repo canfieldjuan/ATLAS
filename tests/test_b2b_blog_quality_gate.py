@@ -57,6 +57,13 @@ def test_quality_gate_sanitizes_answer_prefix_and_drops_unsourced_quotes():
     content = {
         "title": "Mailchimp vs Intercom",
         "description": "desc",
+        # Each blockquote is its own paragraph (blank-line separated)
+        # so the block-level stripper evaluates them independently.
+        # Per the all-quote-lines-must-ground contract from PR #625,
+        # quotes grouped into a single `> ... > ... > ...` block are
+        # stripped atomically if any line fails source-match. Separating
+        # them keeps the matched Mailchimp + Intercom quotes while only
+        # the pipedrive quote (no source match) gets dropped.
         "content": f"""
 ## Introduction
 Answer: This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
@@ -65,7 +72,9 @@ Mailchimp and Intercom are compared using reviewer signals.
 {{{{chart:head2head-bar}}}}
 
 > "I just canceled my Mailchimp account after hitting plan limits" -- reviewer on Reddit
+
 > "Intercom support solved our issue in one day" -- reviewer on G2
+
 > "Been using pipedrive for years with DNS errors" -- reviewer on Reddit
 """,
     }
@@ -76,6 +85,91 @@ Mailchimp and Intercom are compared using reviewer signals.
     assert "pipedrive" not in cleaned["content"].lower()
     assert any(item.startswith("removed_answer_prefix:") for item in report["fixes_applied"])
     assert any(item.startswith("removed_unmatched_quotes:") for item in report["fixes_applied"])
+
+
+def test_quality_gate_strips_generic_section_heading_h2():
+    """Generic <h2>Introduction</h2> / <h2>Conclusion</h2> are
+    extraction-hostile -- AI engines (ChatGPT, Perplexity, Google AI
+    Overviews) skip sections whose heading doesn't predict the content
+    underneath. The deterministic sanitizer strips literal anti-pattern
+    H2 lines before publishing so the prose underneath becomes the
+    post's visible opening."""
+    blueprint = _build_blueprint(
+        quotes=[
+            {"phrase": "Mailchimp pricing climbed too quickly for our team"},
+        ]
+    )
+    _pad = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "and switching context from public software reviews across platforms. "
+    ) * 120
+    content = {
+        "title": "Mailchimp vs Intercom",
+        "description": "desc",
+        "content": f"""
+<p><em>Methodology note: analysis from 2026-02 to 2026-03.</em></p>
+<h2 id="introduction">Introduction</h2>
+<p>Real introductory prose follows the generic H2 and should stay.</p>
+{_pad}
+{{{{chart:head2head-bar}}}}
+<h2 id="conclusion">Conclusion</h2>
+<p>Real closing prose follows the generic H2 and should stay too.</p>
+
+> "Mailchimp pricing climbed too quickly for our team" -- reviewer on G2
+""",
+    }
+
+    cleaned, report = _apply_blog_quality_gate(blueprint, content)
+    # Generic H2 lines stripped.
+    assert "<h2 id=\"introduction\">Introduction</h2>" not in cleaned["content"]
+    assert "<h2 id=\"conclusion\">Conclusion</h2>" not in cleaned["content"]
+    # Real surrounding content preserved.
+    assert "Real introductory prose follows the generic H2" in cleaned["content"]
+    assert "Real closing prose follows the generic H2" in cleaned["content"]
+    assert "Methodology note: analysis from 2026-02 to 2026-03" in cleaned["content"]
+    # Fix label recorded with the count.
+    assert any(
+        item.startswith("removed_generic_section_heading:")
+        for item in report["fixes_applied"]
+    )
+
+
+def test_quality_gate_does_not_strip_non_generic_section_headings():
+    """Topic-specific H2s that name substantive content (vendor names,
+    pain categories, comparison subjects) must NOT be touched by the
+    generic-heading strip. The strip is a literal-label whitelist
+    against ``Introduction`` / ``Conclusion`` / ``Overview`` / etc.;
+    anything else stays."""
+    blueprint = _build_blueprint(
+        quotes=[
+            {"phrase": "Mailchimp pricing climbed too quickly for our team"},
+        ]
+    )
+    _pad = (
+        "Mailchimp and Intercom are compared using reviewer sentiment signals "
+        "and switching context from public software reviews across platforms. "
+    ) * 120
+    content = {
+        "title": "Mailchimp vs Intercom",
+        "description": "desc",
+        "content": f"""
+<h2 id="what-mailchimp-reviewers-complain-about">What Mailchimp Reviewers Complain About</h2>
+<p>Substantive content. Should remain untouched.</p>
+{_pad}
+{{{{chart:head2head-bar}}}}
+
+> "Mailchimp pricing climbed too quickly for our team" -- reviewer on G2
+""",
+    }
+
+    cleaned, report = _apply_blog_quality_gate(blueprint, content)
+    # Topic-specific H2 preserved.
+    assert "What Mailchimp Reviewers Complain About" in cleaned["content"]
+    # No strip fix-label emitted since nothing matched.
+    assert not any(
+        item.startswith("removed_generic_section_heading:")
+        for item in report["fixes_applied"]
+    )
 
 
 def test_quality_gate_emits_and_enforces_score_threshold(monkeypatch):
@@ -152,6 +246,10 @@ def test_quality_gate_drops_quotes_from_unexpected_vendors():
     content = {
         "title": "Mailchimp vs Intercom",
         "description": "desc",
+        # See note on the prior test: separate blockquote blocks so
+        # the all-quote-lines-must-ground contract evaluates each
+        # independently. Otherwise the Zendesk quote (no source match)
+        # would drag down the other two into the same strip.
         "content": f"""
 ## Introduction
 This analysis is based on self-selected reviewers from 2026-02 to 2026-03.
@@ -160,7 +258,9 @@ Mailchimp and Intercom are compared using reviewer signals.
 {{{{chart:head2head-bar}}}}
 
 > "Mailchimp pricing climbed too quickly for our team" -- reviewer on Reddit
+
 > "Zendesk costs kept rising without warning" -- reviewer on G2
+
 > "Intercom onboarding helped us move faster" -- reviewer on G2
 """,
     }
