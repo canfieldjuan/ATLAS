@@ -355,6 +355,8 @@ def test_campaign_generation_example_cli_applies_source_default_fields(tmp_path)
             "company_name=Acme Logistics",
             "--default-field",
             "contact_email=ops@example.com",
+            "--booking-url",
+            "https://app.example.test/book",
             "--channels",
             "email_cold",
             "--limit",
@@ -370,6 +372,7 @@ def test_campaign_generation_example_cli_applies_source_default_fields(tmp_path)
     source = json.loads(completed.stdout)["drafts"][0]["metadata"]["source_opportunity"]
     assert source["company_name"] == "Acme Logistics"
     assert source["contact_email"] == "ops@example.com"
+    assert source["selling"] == {"booking_url": "https://app.example.test/book"}
     draft = json.loads(completed.stdout)["drafts"][0]
     assert "Teams evaluating Slack are reporting pain around" in draft["body"]
     assert "Acme Logistics appears to be weighing Slack" not in draft["body"]
