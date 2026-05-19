@@ -223,6 +223,20 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   --output support_ticket_bundle_opportunities.json
 ```
 
+For a fast non-campaign artifact, render the same ticket rows as a grounded
+Markdown FAQ:
+
+```bash
+python scripts/build_extracted_ticket_faq_markdown.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --output support_ticket_faq.md
+```
+
+The FAQ file quotes source snippets and lists ticket ids, so operators can
+inspect grounding before choosing whether to generate campaigns or longer
+assets.
+
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
 `description`, `summary`, `notes`, `feedback`, `feedback_text`,
 `response_text`, `comment_text`, `open_ended_response`, `content`, `body`,

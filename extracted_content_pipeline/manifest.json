@@ -251,6 +251,9 @@
       "target": "extracted_content_pipeline/campaign_source_adapters.py"
     },
     {
+      "target": "extracted_content_pipeline/ticket_faq_markdown.py"
+    },
+    {
       "target": "extracted_content_pipeline/ingestion_diagnostics.py"
     },
     {

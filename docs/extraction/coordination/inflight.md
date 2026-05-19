@@ -6,6 +6,6 @@ Add a row before opening a PR (session protocol step 2). Drop the row when the P
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| TBD | PR-Content-Selling-Url-Source-Cli | `extracted_content_pipeline/campaign_source_adapters.py`; source-row CLIs; source adapter/generation/smoke tests | codex-2026-05-19 | Avoid concurrent edits to source-row default-field parsing or `--booking-url` CLI flags. |
+| TBD | PR-Content-Ops-Ticket-FAQ-Markdown | `extracted_content_pipeline/ticket_faq_markdown.py`; FAQ markdown CLI/test/docs | codex-2026-05-19 | Avoid concurrent edits to support-ticket FAQ artifact generation. |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.

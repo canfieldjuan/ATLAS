@@ -166,6 +166,20 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   --output support_ticket_bundle_opportunities.json
 ```
 
+To produce a quick grounded FAQ artifact from those same support-ticket rows,
+write Markdown directly:
+
+```bash
+python scripts/build_extracted_ticket_faq_markdown.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --output support_ticket_faq.md
+```
+
+The FAQ builder is deterministic and extractive: it groups ticket evidence by
+pain point, quotes compact snippets from the source rows, and lists ticket
+source ids under each answer.
+
 If Atlas already has scraped B2B review rows, export one reliable source as
 Content Ops source rows before generation. The G2 path is read-only, keeps only
 canonical enriched reviews, and exports the negative/mixed quote-grade phrase

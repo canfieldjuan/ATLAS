@@ -26,6 +26,7 @@ pytest \
   tests/test_extracted_campaign_generation_example.py \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
+  tests/test_extracted_ticket_faq_markdown.py \
   tests/test_export_content_ops_review_sources.py \
   tests/test_export_content_ops_cfpb_sources.py \
   tests/test_content_ops_source_postgres_smoke_helpers.py \
