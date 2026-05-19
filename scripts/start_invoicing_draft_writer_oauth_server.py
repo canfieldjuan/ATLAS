@@ -17,6 +17,7 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = "8066"
 DEFAULT_ISSUER_URL = "https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer"
 DEFAULT_RESOURCE_URL = "https://atlas-brain.tailc7bd29.ts.net/invoicing-draft-writer/mcp"
+PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 MIN_APPROVAL_TOKEN_LENGTH = 24
 SECRET_KEYS = {
     "ATLAS_MCP_AUTH_TOKEN",
@@ -220,10 +221,18 @@ def _funnel_app_path(resource_url: str) -> str:
     return path or "/"
 
 
+def _funnel_metadata_path(resource_url: str) -> str:
+    app_path = _funnel_app_path(resource_url)
+    if app_path == "/":
+        return PROTECTED_RESOURCE_METADATA_PATH
+    return f"{PROTECTED_RESOURCE_METADATA_PATH}{app_path}"
+
+
 def _print_operator_guidance(config: LaunchConfig) -> None:
     issuer_url = config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_ISSUER_URL"]
     resource_url = config.env["ATLAS_MCP_INVOICING_DRAFT_WRITER_OAUTH_RESOURCE_URL"]
     app_path = _funnel_app_path(resource_url)
+    metadata_path = _funnel_metadata_path(resource_url)
     print("Draft-writer invoicing OAuth launch configuration:")
     for line in _masked_env_report(config.env):
         print(f"- {line}")
@@ -240,8 +249,8 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
     print()
     print("Required Funnel route for protected-resource metadata:")
     print("tailscale funnel --bg --yes \\")
-    print("  --set-path /.well-known/oauth-protected-resource \\")
-    print(f"  http://127.0.0.1:{config.port}/.well-known/oauth-protected-resource")
+    print(f"  --set-path {metadata_path} \\")
+    print(f"  http://127.0.0.1:{config.port}{metadata_path}")
     print()
     print("After startup, verify public discovery:")
     print(".venv/bin/python scripts/check_invoicing_draft_writer_oauth_discovery.py \\")

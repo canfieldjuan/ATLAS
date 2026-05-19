@@ -192,6 +192,12 @@ def test_funnel_app_path_derives_parent_path_for_mcp_resource() -> None:
         "/invoicing-draft-writer"
     )
     assert module._funnel_app_path("http://127.0.0.1:8066/mcp") == "/"
+    assert module._funnel_metadata_path("https://atlas.example.com/invoicing-draft-writer/mcp") == (
+        "/.well-known/oauth-protected-resource/invoicing-draft-writer"
+    )
+    assert module._funnel_metadata_path("http://127.0.0.1:8066/mcp") == (
+        "/.well-known/oauth-protected-resource"
+    )
 
 
 def test_guidance_masks_secrets_and_uses_configured_port(capsys) -> None:
@@ -214,7 +220,11 @@ def test_guidance_masks_secrets_and_uses_configured_port(capsys) -> None:
     assert "bearer-token-value-that-must-not-print" not in captured.out
     assert "--set-path /invoicing-draft-writer" in captured.out
     assert "http://127.0.0.1:9000" in captured.out
-    assert "http://127.0.0.1:9000/.well-known/oauth-protected-resource" in captured.out
+    assert "--set-path /.well-known/oauth-protected-resource/invoicing-draft-writer" in captured.out
+    assert (
+        "http://127.0.0.1:9000/.well-known/oauth-protected-resource/invoicing-draft-writer"
+        in captured.out
+    )
     assert "http://127.0.0.1:8065/.well-known/oauth-protected-resource" not in captured.out
     assert "check_invoicing_draft_writer_oauth_e2e.py" in captured.out
 
