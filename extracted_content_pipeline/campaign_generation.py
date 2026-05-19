@@ -38,6 +38,11 @@ from .services._parse_retry_helpers import (
 
 
 _PROOF_TERM_TEXT_KEYS = ("excerpt_text", "quote", "text", "anchor", "value")
+_PLACEHOLDER_URL_RE = re.compile(
+    r"(?<![A-Za-z0-9.-])(?:https?://)?(?:www\.)?"
+    r"(?:example\.(?:com|org|net)|localhost)(?::\d+)?(?:[/?#:]|$)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_channels(items: Sequence[Any]) -> tuple[str, ...]:
@@ -134,6 +139,10 @@ def _campaign_generation_user_prompt(
             "Return one JSON object with non-empty subject and body."
         ),
     )
+
+
+def _contains_placeholder_url(value: Any) -> bool:
+    return bool(_PLACEHOLDER_URL_RE.search(str(value or "")))
 
 
 @dataclass(frozen=True)
@@ -380,6 +389,16 @@ class CampaignGenerationService:
                         "target_id": target_id,
                         "channel": channel,
                         "reason": "unparseable_response",
+                    })
+                    continue
+                if _contains_placeholder_url(parsed.get("body")) or _contains_placeholder_url(
+                    parsed.get("cta")
+                ):
+                    skipped += 1
+                    errors.append({
+                        "target_id": target_id,
+                        "channel": channel,
+                        "reason": "placeholder_url",
                     })
                     continue
                 parsed, revalidation_error = self._revalidated_parsed(

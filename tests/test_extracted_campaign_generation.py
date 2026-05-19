@@ -290,6 +290,84 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
 
 
 @pytest.mark.asyncio
+async def test_generate_skips_draft_with_placeholder_url_in_body():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": '<p>Read the analysis: <a href="https://example.com/report">Report</a></p>',
+            "cta": "Read the report",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_draft_with_placeholder_url_in_cta():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "<p>Pricing note</p>",
+            "cta": "Book time: http://localhost:3000/demo",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_scheme_less_placeholder_urls():
+    service, _, campaigns, _, _ = _service(
+        [{"id": "opp-1", "company_name": "Acme"}],
+        [json.dumps({
+            "subject": "Acme signal",
+            "body": "Read the analysis at example.com/report",
+            "cta": "Book time at localhost:3000/demo",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "target_id": "opp-1",
+        "channel": "email",
+        "reason": "placeholder_url",
+    },)
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
 async def test_generate_includes_opportunity_payload_when_skill_has_no_placeholders():
     service, _, _, llm, _ = _service(
         [{"id": "opp-1", "company_name": "Acme", "pain": "pricing pressure"}],
