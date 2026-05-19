@@ -24,7 +24,11 @@ async def generate_imported_target_drafts(
     channels: Sequence[str],
     target_ids: Sequence[str],
     opportunity_table: str,
+    llm: Any | None = None,
+    skills: Any | None = None,
 ) -> dict[str, Any]:
+    resolved_llm = llm or DeterministicCampaignLLM()
+    resolved_skills = skills or StaticCampaignSkillStore()
     saved_ids: list[str] = []
     errors: list[Mapping[str, Any]] = []
     requested = 0
@@ -40,8 +44,8 @@ async def generate_imported_target_drafts(
             channels=tuple(channels),
             limit=1,
             filters={"target_id": target_id},
-            llm=DeterministicCampaignLLM(),
-            skills=StaticCampaignSkillStore(),
+            llm=resolved_llm,
+            skills=resolved_skills,
             config=CampaignGenerationConfig(channels=tuple(channels), limit=1),
             opportunity_table=opportunity_table,
         )

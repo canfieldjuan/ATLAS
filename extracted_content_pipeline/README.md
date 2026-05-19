@@ -202,8 +202,10 @@ python scripts/smoke_content_ops_review_source_generation.py \
 To prove the same source can run through the Postgres-backed path, use the
 database smoke. It imports source rows into `campaign_opportunities` under the
 provided account id, replaces matching imported opportunities by default, and
-persists offline generated drafts. If the required Content Ops tables are not
-present, the smoke fails before import and points at the migration runner:
+persists generated drafts. The default uses deterministic offline generation;
+pass `--llm pipeline` to exercise the product `PipelineLLMClient`. If the
+required Content Ops tables are not present, the smoke fails before import and
+points at the migration runner:
 
 ```bash
 python scripts/smoke_content_ops_review_source_postgres.py \
@@ -213,6 +215,7 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --account-id acct_123 \
   --default-field company_name="Acme Logistics" \
   --default-field contact_email=ops@example.com \
+  --llm pipeline \
   --json
 ```
 
