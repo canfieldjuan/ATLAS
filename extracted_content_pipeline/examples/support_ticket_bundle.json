@@ -1,0 +1,34 @@
+{
+  "account_id": "acct_support_demo",
+  "company": "Riverbend Supply",
+  "vendor": "LegacyCRM",
+  "email": "ops@riverbend.example",
+  "contact_name": "Avery Morgan",
+  "title": "Director of Operations",
+  "segment": "industrial distribution",
+  "support_tickets": [
+    {
+      "ticket_id": "support-riverbend-1",
+      "subject": "Attribution export blocked",
+      "description": "The operations team cannot export campaign attribution data before the renewal review.",
+      "pain_category": "reporting friction",
+      "source_url": "https://example.com/tickets/riverbend-1"
+    },
+    {
+      "ticket_id": "support-riverbend-2",
+      "subject": "Manual sequence cleanup after demos",
+      "comments": [
+        {
+          "author": "Customer",
+          "body": "Every demo follow-up still has to be rebuilt by hand."
+        },
+        {
+          "role": "Agent",
+          "message": "The workflow automation feature is not available on the current plan."
+        }
+      ],
+      "pain_category": "manual follow-up",
+      "source_url": "https://example.com/tickets/riverbend-2"
+    }
+  ]
+}

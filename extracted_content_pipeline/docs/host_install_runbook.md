@@ -167,6 +167,11 @@ python scripts/smoke_extracted_content_pipeline_host.py \
   extracted_content_pipeline/examples/campaign_source_bundle.json \
   --source-rows \
   --source-format json
+
+python scripts/smoke_extracted_content_pipeline_host.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-rows \
+  --source-format csv
 ```
 
 For source-row CSV exports, pass `--source-format csv` to the same smoke
@@ -206,6 +211,16 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   extracted_content_pipeline/examples/campaign_source_bundle.json \
   --format json \
   --output customer_bundle_opportunities.json
+
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --format csv \
+  --output support_ticket_opportunities.json
+
+python scripts/build_extracted_campaign_opportunities_from_sources.py \
+  extracted_content_pipeline/examples/support_ticket_bundle.json \
+  --format json \
+  --output support_ticket_bundle_opportunities.json
 ```
 
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,

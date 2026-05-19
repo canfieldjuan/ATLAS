@@ -25,6 +25,12 @@ EXAMPLE_SOURCE_ROWS = (
 EXAMPLE_SOURCE_BUNDLE = (
     ROOT / "extracted_content_pipeline/examples/campaign_source_bundle.json"
 )
+EXAMPLE_SUPPORT_TICKET_CSV = (
+    ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
+)
+EXAMPLE_SUPPORT_TICKET_BUNDLE = (
+    ROOT / "extracted_content_pipeline/examples/support_ticket_bundle.json"
+)
 
 
 def test_source_type_precedence_table_matches_current_contract() -> None:
@@ -773,6 +779,88 @@ def test_packaged_source_bundle_example_loads_all_collections() -> None:
         "nps_response",
     ]
     assert loaded.warnings == ()
+
+
+def test_packaged_support_ticket_csv_example_loads_provider_labels() -> None:
+    loaded = load_source_campaign_opportunities_from_file(
+        EXAMPLE_SUPPORT_TICKET_CSV,
+        file_format="csv",
+    )
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "ticket-acme-1",
+        "ticket-northstar-1",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "support_ticket",
+        "support_ticket",
+    ]
+    assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
+    assert loaded.opportunities[0]["vendor_name"] == "HubSpot"
+    assert loaded.opportunities[0]["source_title"] == "Reporting export blocked before renewal"
+    assert loaded.opportunities[0]["evidence"][0] == {
+        "text": (
+            "The operations team cannot export campaign attribution data without "
+            "upgrading to a higher tier."
+        ),
+        "source_id": "ticket-acme-1",
+        "source_type": "support_ticket",
+        "source_title": "Reporting export blocked before renewal",
+    }
+    assert loaded.warnings == ()
+
+
+def test_packaged_support_ticket_bundle_inherits_account_metadata() -> None:
+    loaded = load_source_campaign_opportunities_from_file(EXAMPLE_SUPPORT_TICKET_BUNDLE)
+
+    assert [row["target_id"] for row in loaded.opportunities] == [
+        "support-riverbend-1",
+        "support-riverbend-2",
+    ]
+    assert [row["company_name"] for row in loaded.opportunities] == [
+        "Riverbend Supply",
+        "Riverbend Supply",
+    ]
+    assert [row["source_type"] for row in loaded.opportunities] == [
+        "support_ticket",
+        "support_ticket",
+    ]
+    assert loaded.opportunities[1]["evidence"][0] == {
+        "text": (
+            "Customer: Every demo follow-up still has to be rebuilt by hand.\n"
+            "Agent: The workflow automation feature is not available on the current plan."
+        ),
+        "source_id": "support-riverbend-2",
+        "source_type": "support_ticket",
+        "source_title": "Manual sequence cleanup after demos",
+    }
+    assert loaded.warnings == ()
+
+
+def test_build_sources_cli_converts_packaged_support_ticket_csv(tmp_path: Path) -> None:
+    output = tmp_path / "support_ticket_opportunities.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(EXAMPLE_SUPPORT_TICKET_CSV),
+            "--format",
+            "csv",
+            "--output",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert result.stdout == ""
+    assert [row["target_id"] for row in payload["opportunities"]] == [
+        "ticket-acme-1",
+        "ticket-northstar-1",
+    ]
+    assert payload["opportunities"][0]["source_type"] == "support_ticket"
 
 
 def test_load_source_campaign_opportunities_from_support_ticket_object(tmp_path: Path) -> None:
