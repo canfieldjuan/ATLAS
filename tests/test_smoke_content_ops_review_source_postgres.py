@@ -177,6 +177,7 @@ def _args(**overrides):
             "contact_email=ops@example.com",
             "contact_name=Jordan Lee",
         ],
+        "booking_url": None,
         "account_id": "acct-smoke",
         "user_id": None,
         "opportunity_table": "campaign_opportunities",
@@ -200,6 +201,21 @@ def test_parse_args_defaults_to_offline_llm():
     ])
 
     assert args.llm == "offline"
+
+
+def test_default_fields_for_args_adds_booking_url_to_selling_context():
+    defaults = smoke._default_fields_for_args(
+        _args(booking_url=" https://app.example.test/book ")
+    )
+
+    assert defaults["company_name"] == "Acme Logistics"
+    assert defaults["selling"] == {"booking_url": "https://app.example.test/book"}
+
+
+def test_default_fields_for_args_ignores_blank_booking_url():
+    defaults = smoke._default_fields_for_args(_args(booking_url="   "))
+
+    assert "selling" not in defaults
 
 
 @pytest.mark.asyncio
@@ -238,6 +254,31 @@ async def test_review_source_postgres_smoke_imports_and_persists(monkeypatch, tm
     assert any("INSERT INTO b2b_campaigns" in call["query"] for call in pool.fetchval_calls)
     assert "FROM b2b_campaigns" in pool.fetch_calls[-1]["query"]
     assert pool.fetch_calls[2]["args"] == ("vendor_retention", "acct-smoke", "review-1", 1)
+
+
+@pytest.mark.asyncio
+async def test_review_source_postgres_smoke_imports_booking_url_metadata(
+    monkeypatch,
+    tmp_path,
+):
+    pool = _Pool(
+        summary_rows=[_summary_row()],
+        source_rows=[_source_row()],
+        opportunity_rows=[_opportunity_row()],
+        saved_draft_rows=[_saved_draft_row()],
+    )
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+
+    code, payload = await smoke.run_review_source_postgres_smoke(
+        _args(booking_url="https://app.example.test/book"),
+        source_rows_path=tmp_path / "g2_sources.jsonl",
+    )
+
+    assert code == 0
+    assert payload["ok"] is True
+    insert_args = pool.execute_calls[1]["args"]
+    raw_payload = json.loads(insert_args[13])
+    assert raw_payload["selling"] == {"booking_url": "https://app.example.test/book"}
 
 
 @pytest.mark.asyncio

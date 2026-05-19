@@ -110,6 +110,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--booking-url",
+        default=None,
+        help=(
+            "Real booking or selling asset URL added to imported opportunities "
+            "as selling.booking_url."
+        ),
+    )
+    parser.add_argument(
         "--account-id",
         required=True,
         help="Tenant/account id used to scope imported opportunities and drafts.",
@@ -161,6 +169,20 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
 
 
+def _default_fields_for_args(args: argparse.Namespace) -> dict[str, Any]:
+    defaults: dict[str, Any] = parse_default_fields_or_exit(args.default_field)
+    booking_url = str(getattr(args, "booking_url", "") or "").strip()
+    if not booking_url:
+        return defaults
+    selling = defaults.get("selling")
+    selling_defaults = dict(selling) if isinstance(selling, Mapping) else {}
+    defaults["selling"] = {
+        **selling_defaults,
+        "booking_url": booking_url,
+    }
+    return defaults
+
+
 async def _fetch_review_inputs(
     pool: Any,
     args: argparse.Namespace,
@@ -204,7 +226,7 @@ async def run_review_source_postgres_smoke(
     *,
     source_rows_path: Path,
 ) -> tuple[int, dict[str, Any]]:
-    default_fields = parse_default_fields_or_exit(args.default_field)
+    default_fields = _default_fields_for_args(args)
     channels = _csv_list(args.channels)
     min_drafts = (
         int(args.min_drafts)
