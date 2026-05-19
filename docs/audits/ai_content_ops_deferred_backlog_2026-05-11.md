@@ -162,6 +162,10 @@ the list above in its plan doc.
 The review-source readiness and Postgres smoke closeouts do not create a new
 active Content Ops implementation backlog. G2 can use the existing exporter,
 source-row import, DB-backed draft persistence, and draft export path.
-Capterra and TrustRadius have quote-grade inventory but have not yet been run
-through the Postgres smoke. Trustpilot is blocked on data quality, not
-extractor code.
+Capterra and TrustRadius now also pass the Postgres smoke. The TrustRadius run
+surfaced and closed a row-export gap: summary counts found 31 quote-grade rows
+while the row exporter returned 0 because quote-grade filtering happened after
+the first urgency/date scan window. The row exporter now applies the same
+quote-grade predicate in SQL before ordering/paging, and a live TrustRadius
+run imported 1 BambooHR review source row and persisted 2 offline deterministic
+drafts. Trustpilot is blocked on data quality, not extractor code.

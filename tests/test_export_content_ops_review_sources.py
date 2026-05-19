@@ -182,9 +182,52 @@ def test_build_review_source_query_filters_canonical_enriched_g2_rows() -> None:
     assert "length(r.review_text) >= $2" in query
     assert "LOWER(r.vendor_name) = LOWER($3)" in query
     assert "NULLIF(BTRIM(r.source_url), '') IS NOT NULL" in query
-    assert "LIMIT $4" in query
-    assert "OFFSET $5" in query
-    assert args == ["g2", 120, "HubSpot", 0, 0]
+    assert "jsonb_array_elements" in query
+    assert "lower(BTRIM(pm->>'subject')) = 'subject_vendor'" in query
+    assert "pm->'verbatim' = 'true'::jsonb" in query
+    assert "lower(BTRIM(pm->>'polarity')) = ANY($4::text[])" in query
+    assert "BTRIM(pm->>'field') = ANY($5::text[])" in query
+    assert "LIMIT $6" in query
+    assert "OFFSET $7" in query
+    assert args == [
+        "g2",
+        120,
+        "HubSpot",
+        ["negative", "mixed"],
+        [
+            "specific_complaints",
+            "pricing_phrases",
+            "feature_gaps",
+            "recommendation_language",
+        ],
+        0,
+        0,
+    ]
+
+
+def test_build_review_source_query_applies_quote_grade_filter_without_vendor() -> None:
+    query, args = mod.build_review_source_query(
+        source="trustradius",
+        vendor_name=None,
+        min_review_text_chars=80,
+        require_review_url=False,
+        allowed_polarities=("negative",),
+        allowed_fields=("specific_complaints",),
+    )
+
+    assert "LOWER(r.vendor_name)" not in query
+    assert "NULLIF(BTRIM(r.source_url), '') IS NOT NULL" not in query
+    assert "jsonb_array_elements" in query
+    assert "LIMIT $5" in query
+    assert "OFFSET $6" in query
+    assert args == [
+        "trustradius",
+        80,
+        ["negative"],
+        ["specific_complaints"],
+        0,
+        0,
+    ]
 
 
 def test_build_review_source_summary_query_counts_quote_grade_rows() -> None:
@@ -233,6 +276,7 @@ async def test_fetch_review_source_rows_dedupes_and_filters_after_fetch() -> Non
     assert "FROM b2b_reviews r" in query
     assert args[0] == "g2"
     assert args[-2:] == (6, 0)
+    assert args[-4:-2] == (["negative", "mixed"], list(mod.DEFAULT_PHRASE_FIELDS))
 
 
 @pytest.mark.asyncio

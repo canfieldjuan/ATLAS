@@ -94,7 +94,9 @@ source of truth for what remains.
 - `scripts/export_content_ops_review_sources.py --source-summary` reports
   canonical, enriched, export-candidate, and quote-grade row counts for
   scraped review sources before operators choose a source for Content Ops
-  ingestion.
+  ingestion. The source-row export query applies the same quote-grade
+  predicate as the summary so lower-ranked sources such as TrustRadius are not
+  skipped when the first scan window has no eligible phrases.
 - `scripts/smoke_content_ops_review_source_generation.py` runs the live
   review-source readiness/export path through source-row ingestion inspection
   and offline campaign draft generation, so operators can prove a source such
