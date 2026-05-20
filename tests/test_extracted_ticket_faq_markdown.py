@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from html.parser import HTMLParser
 import json
 import subprocess
@@ -92,6 +93,16 @@ def _write_ticket_csv(tmp_path: Path, *rows: str) -> Path:
         )),
         encoding="utf-8",
     )
+    return source
+
+
+def _write_source_csv(tmp_path: Path, name: str, rows: list[dict[str, str]]) -> Path:
+    source = tmp_path / name
+    fieldnames = tuple(dict.fromkeys(key for row in rows for key in row))
+    with source.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
     return source
 
 
@@ -978,6 +989,141 @@ def test_build_ticket_faq_markdown_does_not_classify_generic_investigation_as_cr
     assert result.items[0]["question"] == "How do I export the investigation dashboard report?"
     assert "Open the reporting or analytics area" in result.markdown
     assert "credit bureau" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_credit_report_rows(tmp_path: Path) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "credit_reporting.csv",
+        [{
+            "Complaint ID": "3181474",
+            "Product": "Credit reporting, credit repair services, or other personal consumer reports",
+            "Issue": "Improper use of your report",
+            "Consumer complaint narrative": (
+                "The inquiries are a result of identity theft and should not remain on my report."
+            ),
+            "Company": "Example Bureau",
+        }],
+    )
+    loaded = load_source_campaign_opportunities_from_file(source, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities, support_contact="https://example.com/support")
+
+    assert result.items[0]["topic"] == "credit report disputes"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert "Get your latest credit reports and mark the account" in result.markdown
+    assert "Open the reporting or analytics area" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_debt_collection_rows(tmp_path: Path) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "debt_collection.csv",
+        [{
+            "Complaint ID": "3177182",
+            "Product": "Debt collection",
+            "Issue": "Communication tactics",
+            "Consumer complaint narrative": (
+                "The collector keeps calling and asking me to confirm my email address for a debt I do not owe."
+            ),
+            "Company": "Example Collector",
+        }],
+    )
+    loaded = load_source_campaign_opportunities_from_file(source, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities, support_contact="https://example.com/support")
+
+    assert result.items[0]["topic"] == "debt collection disputes"
+    assert result.output_checks["uses_user_vocabulary"] is True
+    assert "Ask the collector in writing to identify the original creditor" in result.markdown
+    assert "Open your profile, account settings, or login settings" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_mortgage_rows(tmp_path: Path) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "mortgage.csv",
+        [{
+            "Complaint ID": "3178554",
+            "Product": "Mortgage",
+            "Issue": "Struggling to pay mortgage",
+            "Consumer complaint narrative": (
+                "The servicer posted a foreclosure notice even though the modification documents were submitted."
+            ),
+            "Company": "Example Servicer",
+        }],
+    )
+    loaded = load_source_campaign_opportunities_from_file(source, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities, support_contact="https://example.com/support")
+
+    assert result.items[0]["topic"] == "mortgage servicing issues"
+    assert result.items[0]["question"] == (
+        "What should I do if my mortgage servicer will not fix a payment, payoff, foreclosure, or modification issue?"
+    )
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert "Gather the mortgage statement, payment history, escrow record" in result.markdown
+    assert "Open the bill, statement, payment history, or dispute record" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_does_not_treat_generic_loan_modification_as_mortgage(
+    tmp_path: Path,
+) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "vehicle_loan.csv",
+        [{
+            "Complaint ID": "vehicle-1",
+            "Product": "Vehicle loan or lease",
+            "Issue": "Managing the loan or lease",
+            "Consumer complaint narrative": (
+                "I need help with a loan modification and payment dispute on my auto loan."
+            ),
+            "Company": "Example Auto Lender",
+        }],
+    )
+    loaded = load_source_campaign_opportunities_from_file(source, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities, support_contact="https://example.com/support")
+
+    assert result.items[0]["topic"] == "billing and payments"
+    assert "mortgage servicer" not in result.markdown
+    assert "Gather the mortgage statement" not in result.markdown
+    assert "Open the bill, statement, payment history, or dispute record" in result.markdown
+
+
+def test_build_ticket_faq_markdown_rejects_complaint_process_boilerplate_question() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "complaint",
+        "Product": "Mortgage",
+        "Issue": "Struggling to pay mortgage",
+        "evidence": [{
+            "text": (
+                "My husband and I have submitted several complaints through the CFPB. "
+                "The servicer still has not reviewed the modification documents."
+            ),
+            "source_id": "cfpb:3178270",
+            "source_type": "complaint",
+        }],
+    }])
+
+    assert result.items[0]["topic"] == "mortgage servicing issues"
+    assert result.items[0]["question"] == (
+        "What should I do if my mortgage servicer will not fix a payment, payoff, foreclosure, or modification issue?"
+    )
+    assert result.items[0]["question_source"] == "source_policy"
+    assert "## 1. What should I do if my mortgage servicer" in result.markdown
+    assert "## 1. What should I do if my husband" not in result.markdown
 
 
 def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified_rows() -> None:

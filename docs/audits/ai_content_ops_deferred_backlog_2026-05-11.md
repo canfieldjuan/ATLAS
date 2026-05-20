@@ -213,3 +213,15 @@ needed financial complaint action policy before SaaS-style reporting/account
 rules. PR-Content-Ops-FAQ-Complaint-Source-Policy owns that source-level fix.
 Future FAQ/source work should be driven by a real customer help desk export,
 hosted UI need, or another real dataset exposing a generic policy gap.
+
+**Real CFPB output-quality update:** A follow-up run against three 150-row
+samples from the same local CFPB export (`Debt collection`, `Credit reporting,
+credit repair services, or other personal consumer reports`, and `Mortgage`)
+showed that the source adapter preserved provider context such as `Product`,
+`Issue`, and `Sub-issue`, but the FAQ classifier did not read that context
+when choosing intent/action policy. That caused financial complaint rows to
+fall into generic SaaS reporting/account workflows.
+PR-Content-Ops-FAQ-Source-Context-Policy owns the generic fix: include
+normalized source-context fields in FAQ intent classification and add
+mortgage-servicing policy. This is still not a CFPB-specific branch; CFPB is
+the real public fixture that exposed the generic source-context gap.
