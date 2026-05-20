@@ -199,5 +199,11 @@ CLI now has an opt-in `--require-output-checks` guard for host smoke runs. This
 does not create a new active implementation backlog. PR #673 upgraded the
 deterministic FAQ renderer from a thin evidence summary to article-style
 answers with grounded summaries, numbered next steps, support escalation
-guidance, and cited ticket quotes. Future FAQ/source work should be driven by a
-real customer help desk export or hosted UI need.
+guidance, and cited ticket quotes. PR #684 added generic complaint-narrative
+question extraction and billing intent grouping so real public complaint rows
+such as CFPB narratives can still satisfy the customer-vocabulary check without
+CFPB-specific renderer logic. PR #687 added a live CFPB-to-FAQ Markdown smoke
+that fetches public complaint rows, converts them through the generic
+source-row adapter, and fails closed when FAQ output checks do not pass.
+Future FAQ/source work should be driven by a real customer help desk export or
+hosted UI need.
