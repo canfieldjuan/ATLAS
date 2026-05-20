@@ -137,6 +137,26 @@ def _blog_generation_user_prompt(
     )
 
 
+def _blog_quality_repair_user_prompt(
+    *,
+    base_prompt: str,
+    blockers: Sequence[str],
+    previous_json: str,
+) -> str:
+    blocker_text = "\n".join(f"- {item}" for item in blockers)
+    return (
+        f"{base_prompt}\n\n"
+        "The previous blog JSON parsed, but it failed the blog quality gate.\n"
+        "Quality blockers:\n"
+        f"{blocker_text}\n\n"
+        "Return the full blog JSON object again. Keep the valid fields that already "
+        "worked, but revise the draft so it fixes every blocker above. Do not return "
+        "commentary, markdown fences, or partial JSON.\n\n"
+        "Previous parsed JSON:\n"
+        f"{previous_json}"
+    )
+
+
 class BlogPostGenerationService:
     """Generate blog-post drafts through product-owned ports."""
 
@@ -268,13 +288,43 @@ class BlogPostGenerationService:
                 quality_gates_enabled=resolved_quality_gates_enabled,
             )
             if not quality["passed"]:
-                skipped += 1
-                errors.append({
-                    "blueprint_id": blueprint_id,
-                    "reason": "quality_blocked",
-                    "blockers": quality["blockers"],
-                })
-                continue
+                try:
+                    repaired = await self._repair_quality_once(
+                        prompt_template,
+                        parsed=parsed,
+                        quality=quality,
+                        blueprint=blueprint,
+                        target_mode=target_mode,
+                        temperature=resolved_temperature,
+                        max_tokens=resolved_max_tokens,
+                        parse_retry_attempts=resolved_parse_retry_attempts,
+                        topic=resolved_topic,
+                    )
+                except Exception as exc:
+                    skipped += 1
+                    errors.append({
+                        "blueprint_id": blueprint_id,
+                        "reason": "quality_repair_failed",
+                        "error": str(exc),
+                    })
+                    continue
+                if repaired:
+                    repaired_quality = self._quality_check(
+                        repaired,
+                        blueprint=blueprint,
+                        quality_gates_enabled=resolved_quality_gates_enabled,
+                    )
+                    quality = repaired_quality
+                    if repaired_quality["passed"]:
+                        parsed = repaired
+                if not quality["passed"]:
+                    skipped += 1
+                    errors.append({
+                        "blueprint_id": blueprint_id,
+                        "reason": "quality_blocked",
+                        "blockers": quality["blockers"],
+                    })
+                    continue
             if _has_prompt_reasoning_context(blueprint):
                 reasoning_contexts_used += 1
                 consumed_reasoning_contexts.extend(
@@ -339,18 +389,11 @@ class BlogPostGenerationService:
         parse_retry_response_excerpt_chars: int,
         topic: str = "",
     ) -> dict[str, Any] | None:
-        blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
-        if "{blueprint_json}" in prompt_template:
-            system_prompt = prompt_template.replace("{blueprint_json}", blueprint_json)
-            base_user_prompt = "Generate one blog post from the blueprint above."
-        else:
-            system_prompt = prompt_template
-            base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
-        # PR-Blog-Topic-Per-Call: operator-supplied topic substitutes into
-        # the ``{topic}`` placeholder. Empty topic resolves to "" so hosts
-        # on the prior prompt (without ``{topic}``) are unaffected -- the
-        # ``replace()`` is a no-op when the placeholder isn't present.
-        system_prompt = system_prompt.replace("{topic}", topic)
+        system_prompt, base_user_prompt = _blog_generation_prompts(
+            prompt_template,
+            blueprint=blueprint,
+            topic=topic,
+        )
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
@@ -384,12 +427,75 @@ class BlogPostGenerationService:
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
+                    "_quality_repair_attempts": 0,
                 }
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
             )
         return None
+
+    async def _repair_quality_once(
+        self,
+        prompt_template: str,
+        *,
+        parsed: Mapping[str, Any],
+        quality: Mapping[str, Any],
+        blueprint: Mapping[str, Any],
+        target_mode: str,
+        temperature: float,
+        max_tokens: int,
+        parse_retry_attempts: int,
+        topic: str = "",
+    ) -> dict[str, Any] | None:
+        blockers = tuple(str(item) for item in quality.get("blockers") or () if item)
+        if not blockers:
+            return None
+        parse_attempts_used = int(parsed.get("_parse_attempts") or 1)
+        retries_used_for_parsing = max(0, parse_attempts_used - 1)
+        if retries_used_for_parsing >= max(0, int(parse_retry_attempts or 0)):
+            return None
+        system_prompt, base_user_prompt = _blog_generation_prompts(
+            prompt_template,
+            blueprint=blueprint,
+            topic=topic,
+        )
+        response = await self._llm.complete(
+            [
+                LLMMessage(role="system", content=system_prompt),
+                LLMMessage(
+                    role="user",
+                    content=_blog_quality_repair_user_prompt(
+                        base_prompt=base_user_prompt,
+                        blockers=blockers,
+                        previous_json=_public_blog_json(parsed),
+                    ),
+                ),
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            metadata={
+                "target_mode": target_mode,
+                "blueprint_id": _blueprint_id(blueprint),
+                "skill_name": self._config.skill_name,
+                "asset_type": "blog_post",
+                "attempt_no": parse_attempts_used + 1,
+                "quality_repair_attempt_no": 1,
+            },
+        )
+        repaired = parse_blog_post_response(response.content)
+        if not repaired:
+            return None
+        return {
+            **repaired,
+            "_model": response.model,
+            "_usage": accumulate_usage(
+                dict(parsed.get("_usage") or {}),
+                response.usage,
+            ),
+            "_parse_attempts": parse_attempts_used,
+            "_quality_repair_attempts": int(parsed.get("_quality_repair_attempts") or 0) + 1,
+        }
 
     def _quality_check(
         self,
@@ -441,6 +547,7 @@ class BlogPostGenerationService:
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
+            "generation_quality_repair_attempts": parsed.get("_quality_repair_attempts") or 0,
         }
         # PR-Blog-Reasoning-Parity: surface reasoning audit fields on
         # the draft metadata when the blueprint carried merged context.
@@ -493,6 +600,36 @@ def _quality_context(
         "secondary_keywords": parsed.get("secondary_keywords"),
         "faq": parsed.get("faq"),
     }
+
+
+def _blog_generation_prompts(
+    prompt_template: str,
+    *,
+    blueprint: Mapping[str, Any],
+    topic: str = "",
+) -> tuple[str, str]:
+    blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
+    if "{blueprint_json}" in prompt_template:
+        system_prompt = prompt_template.replace("{blueprint_json}", blueprint_json)
+        base_user_prompt = "Generate one blog post from the blueprint above."
+    else:
+        system_prompt = prompt_template
+        base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
+    # PR-Blog-Topic-Per-Call: operator-supplied topic substitutes into
+    # the ``{topic}`` placeholder. Empty topic resolves to "" so hosts
+    # on the prior prompt (without ``{topic}``) are unaffected -- the
+    # ``replace()`` is a no-op when the placeholder isn't present.
+    system_prompt = system_prompt.replace("{topic}", topic)
+    return system_prompt, base_user_prompt
+
+
+def _public_blog_json(parsed: Mapping[str, Any]) -> str:
+    payload = {
+        key: value
+        for key, value in parsed.items()
+        if not str(key).startswith("_")
+    }
+    return json.dumps(payload, separators=(",", ":"), default=str)
 
 
 def _blueprint_id(blueprint: Mapping[str, Any]) -> str:
