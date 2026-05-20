@@ -412,6 +412,8 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
                 "faq_max_evidence_per_item": 2,
                 "faq_source_types": "ticket, support-ticket",
                 "source_max_text_chars": 80,
+                "faq_window_days": 90,
+                "faq_as_of_date": "2026-05-20",
             },
         }
     )
@@ -425,6 +427,8 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
         "max_evidence_per_item": 2,
         "source_types": ["ticket", "support-ticket"],
         "max_text_chars": 80,
+        "window_days": 90,
+        "as_of_date": "2026-05-20",
     }
 
 

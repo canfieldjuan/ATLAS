@@ -173,12 +173,15 @@ write Markdown directly:
 python scripts/build_extracted_ticket_faq_markdown.py \
   extracted_content_pipeline/examples/support_ticket_sources.csv \
   --source-format csv \
+  --window-days 90 \
   --output support_ticket_faq.md
 ```
 
 The FAQ builder is deterministic and extractive: it groups ticket evidence by
 pain point, quotes compact snippets from the source rows, and lists ticket
-source ids under each answer.
+source ids under each answer. Add `--as-of-date YYYY-MM-DD` with
+`--window-days` when you need a reproducible audit window instead of today's
+date.
 
 The same artifact can run through the Content Ops execution seam by selecting
 `faq_markdown` and passing inline `source_material`. It remains zero-provider.

@@ -502,11 +502,22 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                     {
                         "ticket_id": "ticket-1",
                         "source_type": "ticket",
+                        "created_at": "2026-05-01",
                         "subject": "Profile email change",
                         "message": "How do I change my email address?",
                         "pain_category": "login",
+                    },
+                    {
+                        "ticket_id": "ticket-old",
+                        "source_type": "ticket",
+                        "created_at": "2026-01-01",
+                        "subject": "Billing export",
+                        "message": "Billing export is confusing.",
+                        "pain_category": "billing",
                     }
                 ],
+                "faq_window_days": 90,
+                "faq_as_of_date": "2026-05-20",
             },
         },
         services=ContentOpsExecutionServices(faq_markdown=TicketFAQMarkdownService()),
@@ -518,6 +529,7 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
     assert step["result"]["generated"] == 1
     assert step["result"]["markdown"].startswith("# Support FAQ")
     assert "How do I change my email address?" in step["result"]["markdown"]
+    assert "Billing export is confusing." not in step["result"]["markdown"]
 
 
 @pytest.mark.asyncio

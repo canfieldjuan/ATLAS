@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 import re
 from typing import Any
 
@@ -23,6 +24,19 @@ DEFAULT_TICKET_SOURCE_TYPES = (
 DEFAULT_TITLE = "Customer Ticket FAQ"
 _WHITESPACE_RE = re.compile(r"\s+")
 _KEY_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
+_DATE_KEYS = (
+    "created_at",
+    "created",
+    "ticket_created_at",
+    "case_created_at",
+    "submitted_at",
+    "opened_at",
+    "received_at",
+    "updated_at",
+    "closed_at",
+    "date",
+    "timestamp",
+)
 _ACTION_RULES = (
     (("export", "report", "dashboard", "attribution"), (
         "Check whether your plan and role include the needed export or reporting access.",
@@ -73,6 +87,8 @@ class TicketFAQMarkdownConfig:
     max_evidence_per_item: int = 3
     source_types: tuple[str, ...] = DEFAULT_TICKET_SOURCE_TYPES
     max_text_chars: int = 1200
+    window_days: int | None = None
+    as_of_date: str | None = None
 
 
 class TicketFAQMarkdownService:
@@ -98,6 +114,8 @@ class TicketFAQMarkdownService:
         max_evidence_per_item: int | None = None,
         source_types: Sequence[str] | None = None,
         max_text_chars: int | None = None,
+        window_days: int | None = None,
+        as_of_date: Any = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
@@ -112,6 +130,12 @@ class TicketFAQMarkdownService:
             if max_text_chars is not None
             else self.config.max_text_chars
         )
+        resolved_window_days = (
+            int(window_days)
+            if window_days is not None
+            else self.config.window_days
+        )
+        resolved_as_of_date = as_of_date if as_of_date is not None else self.config.as_of_date
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be positive")
         normalized = source_rows_to_campaign_opportunities(
@@ -131,6 +155,8 @@ class TicketFAQMarkdownService:
             max_items=resolved_max_items,
             max_evidence_per_item=resolved_max_evidence,
             source_types=resolved_source_types,
+            window_days=resolved_window_days,
+            as_of_date=resolved_as_of_date,
         )
         result = replace(
             result,
@@ -150,7 +176,13 @@ class TicketFAQMarkdownService:
                     ticket_source_count=result.ticket_source_count,
                     output_checks=result.output_checks,
                     warnings=result.warnings,
-                    metadata={"source_types": list(resolved_source_types)},
+                    metadata={
+                        "source_types": list(resolved_source_types),
+                        **_date_window_metadata(
+                            window_days=resolved_window_days,
+                            as_of_date=resolved_as_of_date,
+                        ),
+                    },
                 )
             ],
             scope=scope,
@@ -165,6 +197,8 @@ def build_ticket_faq_markdown(
     max_items: int = 8,
     max_evidence_per_item: int = 3,
     source_types: Sequence[str] = DEFAULT_TICKET_SOURCE_TYPES,
+    window_days: int | None = None,
+    as_of_date: Any = None,
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -174,11 +208,18 @@ def build_ticket_faq_markdown(
         raise ValueError("max_evidence_per_item must be positive")
 
     allowed = {_source_type_key(item) for item in source_types if _source_type_key(item)}
+    date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
 
     for opportunity_index, opportunity in enumerate(opportunities, start=1):
         for evidence_index, evidence in enumerate(_evidence_rows(opportunity), start=1):
+            if date_window is not None and not _inside_date_window(
+                opportunity,
+                evidence,
+                date_window=date_window,
+            ):
+                continue
             source_type = _source_type_key(evidence.get("source_type") or opportunity.get("source_type"))
             # Empty allowed set means "no filter" rather than "reject all".
             if allowed and source_type not in allowed:
@@ -302,6 +343,86 @@ def _source_label(row: Mapping[str, str]) -> str:
     if source_id and title:
         return f"`{source_id}` - {title}"
     return f"`{source_id or 'unknown'}`"
+
+
+def _date_window(*, window_days: int | None, as_of_date: Any) -> tuple[date, date] | None:
+    if window_days is None:
+        return None
+    days = int(window_days)
+    if days < 1:
+        raise ValueError("window_days must be positive")
+    as_of = _parse_as_of_date(as_of_date) or date.today()
+    return (as_of - timedelta(days=days), as_of)
+
+
+def _inside_date_window(
+    opportunity: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    date_window: tuple[date, date],
+) -> bool:
+    source_date = _source_date(evidence) or _source_date(opportunity)
+    if source_date is None:
+        return False
+    start, end = date_window
+    return start <= source_date <= end
+
+
+def _source_date(row: Mapping[str, Any]) -> date | None:
+    for key in _DATE_KEYS:
+        value = _field_value(row, key)
+        parsed = _parse_source_date(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _field_value(row: Mapping[str, Any], key: str) -> Any:
+    if key in row:
+        return row.get(key)
+    target = _source_type_key(key)
+    for raw_key, value in row.items():
+        if _source_type_key(raw_key) == target:
+            return value
+    return None
+
+
+def _parse_source_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = _clean(value)
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _parse_as_of_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+    parsed = _parse_source_date(value)
+    if parsed is None:
+        raise ValueError("as_of_date must be a valid ISO date")
+    return parsed
+
+
+def _date_window_metadata(*, window_days: int | None, as_of_date: Any) -> dict[str, Any]:
+    if window_days is None:
+        return {}
+    metadata: dict[str, Any] = {"window_days": int(window_days)}
+    parsed = _parse_as_of_date(as_of_date)
+    if parsed is not None:
+        metadata["as_of_date"] = parsed.isoformat()
+    return metadata
 
 
 def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:

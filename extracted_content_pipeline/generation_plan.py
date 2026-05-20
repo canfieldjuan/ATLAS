@@ -217,6 +217,8 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
             _positive_int_input(request.inputs, "source_max_text_chars")
             or defaults.max_text_chars
         ),
+        window_days=_positive_int_input(request.inputs, "faq_window_days"),
+        as_of_date=_text_input(request.inputs, "faq_as_of_date"),
     )
 
 
@@ -356,17 +358,22 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         )
     if output == "faq_markdown":
         config = _faq_markdown_config_for_request(request)
+        step_config: dict[str, Any] = {
+            "title": config.title,
+            "max_items": config.max_items,
+            "max_evidence_per_item": config.max_evidence_per_item,
+            "source_types": list(config.source_types),
+            "max_text_chars": config.max_text_chars,
+        }
+        if config.window_days is not None:
+            step_config["window_days"] = config.window_days
+        if config.as_of_date is not None:
+            step_config["as_of_date"] = config.as_of_date
         return GenerationPlanStep(
             output=output,
             runner="TicketFAQMarkdownService.generate",
             status="runnable",
-            config={
-                "title": config.title,
-                "max_items": config.max_items,
-                "max_evidence_per_item": config.max_evidence_per_item,
-                "source_types": list(config.source_types),
-                "max_text_chars": config.max_text_chars,
-            },
+            config=step_config,
         )
     return GenerationPlanStep(
         output=output,

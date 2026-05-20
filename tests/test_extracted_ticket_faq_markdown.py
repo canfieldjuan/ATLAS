@@ -134,6 +134,53 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
     }
 
 
+def test_build_ticket_faq_markdown_filters_to_requested_date_window() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "created_at": "2026-05-01T12:00:00Z",
+                "pain_points": ["login"],
+                "evidence": [{
+                    "text": "How do I update my login email?",
+                    "source_id": "ticket-new",
+                    "source_type": "support_ticket",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "created_at": "2026-01-01",
+                "pain_points": ["billing"],
+                "evidence": [{
+                    "text": "Billing export is confusing.",
+                    "source_id": "ticket-old",
+                    "source_type": "support_ticket",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "pain_points": ["exports"],
+                "evidence": [{
+                    "text": "Export settings are missing.",
+                    "source_id": "ticket-undated",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ],
+        window_days=90,
+        as_of_date="2026-05-20",
+    )
+
+    assert result.ticket_source_count == 1
+    assert "ticket-new" in result.markdown
+    assert "ticket-old" not in result.markdown
+    assert "ticket-undated" not in result.markdown
+    with pytest.raises(ValueError, match="window_days must be positive"):
+        build_ticket_faq_markdown([], window_days=0)
+    with pytest.raises(ValueError, match="as_of_date must be a valid ISO date"):
+        build_ticket_faq_markdown([], window_days=90, as_of_date="2026-99-99")
+
+
 @pytest.mark.asyncio
 async def test_ticket_faq_service_generates_from_inline_source_material() -> None:
     service = TicketFAQMarkdownService()
@@ -239,10 +286,13 @@ async def test_ticket_faq_service_saves_generated_markdown_when_repository_confi
         source_material=[{
             "ticket_id": "ticket-1",
             "source_type": "ticket",
+            "created_at": "2026-05-01",
             "message": "The attribution export is missing renewals.",
             "pain_category": "exports",
         }],
         title="Renewal FAQ",
+        window_days=90,
+        as_of_date="2026-05-20",
     )
 
     assert result.as_dict()["saved_ids"] == ["faq-uuid-1"]
@@ -259,6 +309,8 @@ async def test_ticket_faq_service_saves_generated_markdown_when_repository_confi
         "conversation",
         "complaint",
     ]
+    assert draft.metadata["window_days"] == 90
+    assert draft.metadata["as_of_date"] == "2026-05-20"
 
 
 @pytest.mark.asyncio
@@ -378,6 +430,71 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert markdown.startswith("# Support FAQ")
     assert "Ticket evidence rows used: 2" in markdown
     assert "ticket-acme-1" in markdown
+
+
+def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
+    source = tmp_path / "tickets.csv"
+    source.write_text(
+        "\n".join([
+            "Ticket ID,Created At,Subject,Description,Pain Category",
+            "ticket-new,2026-05-01,Login email,How do I change my login email?,login",
+            "ticket-old,2026-01-01,Billing export,Billing export is confusing.,billing",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source),
+            "--source-format",
+            "csv",
+            "--window-days",
+            "90",
+            "--as-of-date",
+            "2026-05-20",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "ticket-new" in completed.stdout
+    assert "ticket-old" not in completed.stdout
+    assert "Ticket evidence rows used: 1" in completed.stdout
+
+
+def test_ticket_faq_cli_rejects_invalid_as_of_date(tmp_path: Path) -> None:
+    source = tmp_path / "tickets.csv"
+    source.write_text(
+        "\n".join([
+            "Ticket ID,Created At,Subject,Description,Pain Category",
+            "ticket-new,2026-05-01,Login email,How do I change my login email?,login",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(source),
+            "--source-format",
+            "csv",
+            "--window-days",
+            "90",
+            "--as-of-date",
+            "2026-99-99",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "as_of_date must be a valid ISO date" in completed.stderr
 
 
 def test_ticket_faq_cli_stdout_limits_and_result_serializes() -> None:
