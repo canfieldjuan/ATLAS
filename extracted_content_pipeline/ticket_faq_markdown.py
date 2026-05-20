@@ -347,6 +347,8 @@ def _source_label(row: Mapping[str, str]) -> str:
 
 def _date_window(*, window_days: int | None, as_of_date: Any) -> tuple[date, date] | None:
     if window_days is None:
+        if _clean(as_of_date):
+            raise ValueError("as_of_date requires window_days")
         return None
     days = int(window_days)
     if days < 1:
@@ -381,10 +383,15 @@ def _field_value(row: Mapping[str, Any], key: str) -> Any:
     if key in row:
         return row.get(key)
     target = _source_type_key(key)
+    compact_target = _compact_key(key)
     for raw_key, value in row.items():
-        if _source_type_key(raw_key) == target:
+        if _source_type_key(raw_key) == target or _compact_key(raw_key) == compact_target:
             return value
     return None
+
+
+def _compact_key(value: Any) -> str:
+    return _KEY_SEPARATOR_RE.sub("", _clean(value).lower())
 
 
 def _parse_source_date(value: Any) -> date | None:
@@ -409,10 +416,21 @@ def _parse_source_date(value: Any) -> date | None:
 def _parse_as_of_date(value: Any) -> date | None:
     if value in (None, ""):
         return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = _clean(value)
+    if not text:
+        return None
     parsed = _parse_source_date(value)
-    if parsed is None:
+    try:
+        strict = date.fromisoformat(text)
+    except ValueError:
         raise ValueError("as_of_date must be a valid ISO date")
-    return parsed
+    if parsed != strict:
+        raise ValueError("as_of_date must be a valid ISO date")
+    return strict
 
 
 def _date_window_metadata(*, window_days: int | None, as_of_date: Any) -> dict[str, Any]:

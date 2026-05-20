@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -82,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--max-text-chars must be positive")
     if args.window_days is not None and args.window_days < 1:
         raise SystemExit("--window-days must be positive")
+    if args.as_of_date and args.window_days is None:
+        raise SystemExit("--as-of-date requires --window-days")
+    if args.as_of_date:
+        try:
+            date.fromisoformat(args.as_of_date)
+        except ValueError:
+            raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
 
     loaded = load_source_campaign_opportunities_from_file(
         args.path,

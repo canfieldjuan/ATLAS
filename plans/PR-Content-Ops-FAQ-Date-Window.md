@@ -8,6 +8,11 @@ claim. Operators can pre-filter files outside Atlas, but the product seam should
 also enforce a recency window when requested so stale tickets do not influence
 FAQ entries.
 
+This PR is slightly above the 400-line target because review feedback required
+strict as-of-date validation at the library, plan, and CLI boundaries plus
+regression tests for each path. Keeping that validation with the date-window
+feature avoids shipping a reproducibility footgun.
+
 ## Scope (this PR)
 
 1. Add optional date-window filtering to the ticket FAQ Markdown builder and
@@ -64,28 +69,27 @@ campaign/source ingestion semantics.
 ## Verification
 
 - pytest tests/test_extracted_ticket_faq_markdown.py - 18 passed
-- pytest tests/test_extracted_ticket_faq_markdown.py tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py - 99 passed
+- pytest tests/test_extracted_ticket_faq_markdown.py tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py - 104 passed
 - python -m py_compile extracted_content_pipeline/ticket_faq_markdown.py extracted_content_pipeline/generation_plan.py extracted_content_pipeline/content_ops_execution.py scripts/build_extracted_ticket_faq_markdown.py tests/test_extracted_ticket_faq_markdown.py tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py - passed
 - bash scripts/validate_extracted_content_pipeline.sh - passed
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline - passed
 - python scripts/audit_extracted_standalone.py --fail-on-debt - passed
 - bash scripts/check_ascii_python.sh - passed
-- bash scripts/run_extracted_pipeline_checks.sh - 1496 passed, 1 existing torch/pynvml warning
-- bash scripts/local_pr_review.sh - pending after review fix
+- bash scripts/run_extracted_pipeline_checks.sh - 1502 passed, 1 existing torch/pynvml warning
 
 ## Estimated diff size
 
 | File | Estimated LOC |
 |---|---:|
-| `plans/PR-Content-Ops-FAQ-Date-Window.md` | +91 |
+| `plans/PR-Content-Ops-FAQ-Date-Window.md` | +95 |
 | `docs/extraction/coordination/inflight.md` | +2 / -2 |
-| `extracted_content_pipeline/ticket_faq_markdown.py` | +122 / -1 |
-| `extracted_content_pipeline/generation_plan.py` | +14 / -7 |
+| `extracted_content_pipeline/ticket_faq_markdown.py` | +140 / -1 |
+| `extracted_content_pipeline/generation_plan.py` | +24 / -7 |
 | `extracted_content_pipeline/content_ops_execution.py` | +2 |
 | `scripts/build_extracted_ticket_faq_markdown.py` | +13 |
-| `tests/test_extracted_ticket_faq_markdown.py` | +117 |
-| `tests/test_extracted_content_generation_plan.py` | +6 |
+| `tests/test_extracted_ticket_faq_markdown.py` | +138 |
+| `tests/test_extracted_content_generation_plan.py` | +31 |
 | `tests/test_extracted_content_ops_execution.py` | +12 |
 | `extracted_content_pipeline/README.md` | +4 / -1 |
 | `extracted_content_pipeline/docs/host_install_runbook.md` | +3 / -1 |
-| Total | ~396 |
+| Total | ~484 |

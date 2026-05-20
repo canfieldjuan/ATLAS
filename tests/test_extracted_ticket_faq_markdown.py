@@ -78,6 +78,35 @@ class _FAQRepository:
         return ("faq-uuid-1",)
 
 
+def _write_ticket_csv(tmp_path: Path, *rows: str) -> Path:
+    source = tmp_path / "tickets.csv"
+    source.write_text(
+        "\n".join((
+            "Ticket ID,Created At,Subject,Description,Pain Category",
+            *rows,
+            "",
+        )),
+        encoding="utf-8",
+    )
+    return source
+
+
+def _run_ticket_faq_cli(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--source-format",
+            "csv",
+            *args,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 
@@ -139,7 +168,7 @@ def test_build_ticket_faq_markdown_filters_to_requested_date_window() -> None:
         [
             {
                 "source_type": "support_ticket",
-                "created_at": "2026-05-01T12:00:00Z",
+                "createdAt": "2026-05-01T12:00:00Z",
                 "pain_points": ["login"],
                 "evidence": [{
                     "text": "How do I update my login email?",
@@ -178,7 +207,13 @@ def test_build_ticket_faq_markdown_filters_to_requested_date_window() -> None:
     with pytest.raises(ValueError, match="window_days must be positive"):
         build_ticket_faq_markdown([], window_days=0)
     with pytest.raises(ValueError, match="as_of_date must be a valid ISO date"):
+        build_ticket_faq_markdown([], window_days=90, as_of_date="not-a-date")
+    with pytest.raises(ValueError, match="as_of_date must be a valid ISO date"):
         build_ticket_faq_markdown([], window_days=90, as_of_date="2026-99-99")
+    with pytest.raises(ValueError, match="as_of_date must be a valid ISO date"):
+        build_ticket_faq_markdown([], window_days=90, as_of_date="2026-05-20abc")
+    with pytest.raises(ValueError, match="as_of_date requires window_days"):
+        build_ticket_faq_markdown([], as_of_date="2026-05-20")
 
 
 @pytest.mark.asyncio
@@ -433,68 +468,43 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
-    source = tmp_path / "tickets.csv"
-    source.write_text(
-        "\n".join([
-            "Ticket ID,Created At,Subject,Description,Pain Category",
+    source = _write_ticket_csv(
+        tmp_path,
             "ticket-new,2026-05-01,Login email,How do I change my login email?,login",
             "ticket-old,2026-01-01,Billing export,Billing export is confusing.,billing",
-            "",
-        ]),
-        encoding="utf-8",
     )
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(CLI),
-            str(source),
-            "--source-format",
-            "csv",
-            "--window-days",
-            "90",
-            "--as-of-date",
-            "2026-05-20",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    completed = _run_ticket_faq_cli(
+        source,
+        "--window-days",
+        "90",
+        "--as-of-date",
+        "2026-05-20",
     )
 
+    assert completed.returncode == 0
     assert "ticket-new" in completed.stdout
     assert "ticket-old" not in completed.stdout
     assert "Ticket evidence rows used: 1" in completed.stdout
 
 
-def test_ticket_faq_cli_rejects_invalid_as_of_date(tmp_path: Path) -> None:
-    source = tmp_path / "tickets.csv"
-    source.write_text(
-        "\n".join([
-            "Ticket ID,Created At,Subject,Description,Pain Category",
+@pytest.mark.parametrize("value", ("2026-99-99", "2026-05-20abc", "2026/05/20"))
+def test_ticket_faq_cli_rejects_invalid_as_of_date(tmp_path: Path, value: str) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
             "ticket-new,2026-05-01,Login email,How do I change my login email?,login",
-            "",
-        ]),
-        encoding="utf-8",
     )
 
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(CLI),
-            str(source),
-            "--source-format",
-            "csv",
-            "--window-days",
-            "90",
-            "--as-of-date",
-            "2026-99-99",
-        ],
-        capture_output=True,
-        text=True,
+    completed = _run_ticket_faq_cli(
+        source,
+        "--window-days",
+        "90",
+        "--as-of-date",
+        value,
     )
 
     assert completed.returncode != 0
-    assert "as_of_date must be a valid ISO date" in completed.stderr
+    assert "--as-of-date must use YYYY-MM-DD format" in completed.stderr
 
 
 def test_ticket_faq_cli_stdout_limits_and_result_serializes() -> None:
@@ -519,3 +529,14 @@ def test_ticket_faq_cli_stdout_limits_and_result_serializes() -> None:
     encoded = json.dumps(build_ticket_faq_markdown(loaded.opportunities).as_dict(), sort_keys=True)
     assert "action_items" in encoded
     assert "output_checks" in encoded
+
+
+def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+            "ticket-new,2026-05-01,Login email,How do I change my login email?,login",
+    )
+    completed = _run_ticket_faq_cli(source, "--as-of-date", "2026-05-20")
+
+    assert completed.returncode == 1
+    assert "--as-of-date requires --window-days" in completed.stderr
