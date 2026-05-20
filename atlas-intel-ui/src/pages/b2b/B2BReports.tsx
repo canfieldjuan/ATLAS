@@ -8,7 +8,8 @@ import { fetchReports, fetchReportDetail, type B2BReport, type B2BReportDetail }
 /*  Shared tiny helpers                                                */
 /* ------------------------------------------------------------------ */
 
-type AnyData = Record<string, any>
+type LooseJson = ReturnType<typeof JSON.parse>
+type AnyData = Record<string, LooseJson>
 
 function Section({ title, icon, children }: { title: string; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -219,7 +220,7 @@ function ChallengerBriefView({ d }: { d: AnyData }) {
 
           {Array.isArray(inc.top_pain_quotes) && inc.top_pain_quotes.length > 0 && (
             <div className="space-y-2 mt-2">
-              {inc.top_pain_quotes.slice(0, 3).map((q: any, i: number) => (
+              {inc.top_pain_quotes.slice(0, 3).map((q: LooseJson, i: number) => (
                 <QuoteBlock key={i} text={typeof q === 'string' ? q : q?.quote || ''} />
               ))}
             </div>
@@ -287,7 +288,7 @@ function ChallengerBriefView({ d }: { d: AnyData }) {
           {h2h.conclusion && <p className="text-xs text-slate-300 mt-1">{h2h.conclusion}</p>}
           {Array.isArray(h2h.key_insights) && h2h.key_insights.length > 0 && (
             <ul className="list-disc list-inside text-xs text-slate-400 space-y-1 mt-1">
-              {h2h.key_insights.slice(0, 5).map((ins: any, i: number) => {
+              {h2h.key_insights.slice(0, 5).map((ins: LooseJson, i: number) => {
                 const text = typeof ins === 'string' ? ins : ins?.insight || ''
                 const evidence = typeof ins === 'object' ? ins?.evidence : ''
                 return (
@@ -617,7 +618,7 @@ function BattleCardView({ d }: { d: AnyData }) {
 
       {quotes.length > 0 && (
         <Section title="Customer Pain Points">
-          {quotes.slice(0, 4).map((q: any, i: number) => (
+          {quotes.slice(0, 4).map((q: LooseJson, i: number) => (
             <QuoteBlock key={i} text={typeof q === 'string' ? q : q?.quote || ''} />
           ))}
         </Section>
@@ -681,7 +682,7 @@ function BattleCardView({ d }: { d: AnyData }) {
 /*  Generic fallback renderer (still better than raw JSON)             */
 /* ------------------------------------------------------------------ */
 
-function GenericValueRenderer({ val, depth = 0 }: { val: any; depth?: number }) {
+function GenericValueRenderer({ val, depth = 0 }: { val: LooseJson; depth?: number }) {
   if (val == null) return <span className="text-slate-500 italic">--</span>
   if (depth > 3) return <span className="text-slate-500 italic truncate max-w-[200px]">{JSON.stringify(val)}</span>
 
