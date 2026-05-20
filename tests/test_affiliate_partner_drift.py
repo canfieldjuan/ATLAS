@@ -243,3 +243,29 @@ def test_reconcile_fails_when_seeds_unparseable():
     }
     assert checks["migration_seeds_parseable"]["status"] == "fail"
     assert drift._exit_code(list(checks.values())) == 1
+
+
+def test_finds_partner_mutations():
+    assert drift.find_partner_mutations(SQL_326_STYLE) == []  # INSERT-only
+    assert drift.find_partner_mutations(
+        "UPDATE affiliate_partners SET affiliate_url = 'x' WHERE product_name = 'HubSpot';"
+    ) == ["UPDATE"]
+    both = drift.find_partner_mutations(
+        "DELETE FROM affiliate_partners WHERE enabled = false;\n"
+        "UPDATE affiliate_partners SET notes = NULL;"
+    )
+    assert set(both) == {"UPDATE", "DELETE"}
+
+
+def test_reconcile_warns_on_unmodeled_mutation_without_failing():
+    # A mutation migration is not an error, but the audit can't model its
+    # effect -- surface it as a warning, not a failure.
+    checks = {
+        c["name"]: c
+        for c in drift.reconcile(
+            [], {}, mutations=["340_fix_hubspot_url.sql: UPDATE affiliate_partners"]
+        )
+    }
+    assert checks["partner_mutations_modeled"]["status"] == "warn"
+    assert checks["migration_seeds_parseable"]["status"] == "pass"
+    assert drift._exit_code(list(checks.values())) == 0

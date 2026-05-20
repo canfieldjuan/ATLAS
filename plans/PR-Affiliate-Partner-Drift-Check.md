@@ -22,11 +22,16 @@ the partner definitions seeded by migrations, and fails when they diverge.
 1. Add `scripts/audit_affiliate_partner_drift.py` (matches the existing
    `scripts/audit_*` convention; same `_status`/`_exit_code`/JSON-report shape
    as `scripts/check_reasoning_rollout_readiness.py`).
-2. Reconcile live rows against migration seeds with four checks:
+2. Reconcile live rows against migration seeds with five checks:
    - `migration_seeds_parseable` -- **FAIL** if the parser cannot map a
      migration's `INSERT INTO affiliate_partners` (column/value mismatch or
      missing VALUES). A parse regression must not be silently dropped, since
      reconciliation would then run against an incomplete seed set.
+   - `partner_mutations_modeled` -- **WARN** if a migration `UPDATE`s or
+     `DELETE`s `affiliate_partners`. The audit models only INSERT seeds, so a
+     mutation may explain a divergence/orphan result for the affected partner;
+     surface it (pointing at the migration) rather than letting it look like
+     clean drift.
    - `all_live_partners_versioned` -- **FAIL** if a live partner's
      `product_name` is seeded by no migration.
    - `no_seed_value_divergence` -- **WARN** if a seeded partner's migration
@@ -84,6 +89,14 @@ post-seed edits and orphan seeds without blocking.
   DB may be a deliberate operational change; the audit surfaces it and lets
   the operator decide whether the DB or the migration is authoritative, rather
   than blocking deploys on a judgment call.
+- **WARN, not FAIL, on UPDATE/DELETE migrations.** Modeling only INSERT seeds
+  is sufficient today (every migration is INSERT-only). Rather than parse and
+  apply arbitrary UPDATE/DELETE -- a much larger, fragile parser -- the audit
+  detects their presence and warns, naming the migration. A legitimate
+  mutation migration is not an error, so it must not hard-fail the audit; but
+  it must not be silently ignored either, since it could otherwise masquerade
+  as clean value-divergence. Extending the parser to apply mutations is a
+  deferred follow-up if one is ever written.
 - **Hand-written tokenizer over a SQL library.** The seed format is small and
   fixed; a dependency-free tokenizer keeps the audit self-contained and its
   behavior fully covered by the fixture tests.
@@ -103,12 +116,13 @@ post-seed edits and orphan seeds without blocking.
 
 ## Verification
 
-- `python -m pytest tests/test_affiliate_partner_drift.py -q` -> `9 passed in
+- `python -m pytest tests/test_affiliate_partner_drift.py -q` -> `11 passed in
   0.06s` (parser on both 088 + 326 formats, multi-row VALUES,
-  empty-array/quote-escape, column/value-mismatch surfacing, and the clean /
-  unversioned-FAIL / value-divergence-WARN / unparseable-FAIL reconcile paths).
+  empty-array/quote-escape, column/value-mismatch surfacing, UPDATE/DELETE
+  mutation detection, and the clean / unversioned-FAIL / value-divergence-WARN
+  / unparseable-FAIL / unmodeled-mutation-WARN reconcile paths).
 - `scripts/audit_affiliate_partner_drift.py` run against live `:5433/atlas`
-  -> `summary` `{seeded_partners: 6, live_partners: 6, pass: 4, warn: 0,
+  -> `summary` `{seeded_partners: 6, live_partners: 6, pass: 5, warn: 0,
   fail: 0}`, exit `0`. Confirms the parser reads the real 088 + 326 seeds and
   that migration 326 fully reconciles with the live table (every live partner
   versioned, no value divergence).

@@ -248,25 +248,45 @@ def parse_seeded_partners(sql: str) -> tuple[list[dict[str, Any]], list[str]]:
     return rows, errors
 
 
+def find_partner_mutations(sql: str) -> list[str]:
+    """Return descriptors for UPDATE/DELETE statements targeting
+    affiliate_partners. The audit models only INSERT seeds, so a mutation
+    means a live row's value (or absence) may be the intended result of a
+    migration this parser does not apply -- the caller surfaces these so the
+    blind spot is visible rather than silently skewing reconciliation."""
+    found: list[str] = []
+    if re.search(r"\bUPDATE\s+affiliate_partners\b", sql, re.IGNORECASE):
+        found.append("UPDATE")
+    if re.search(r"\bDELETE\s+FROM\s+affiliate_partners\b", sql, re.IGNORECASE):
+        found.append("DELETE")
+    return found
+
+
 def parse_seeded_partners_dir(
     migrations_dir: pathlib.Path,
-) -> tuple[dict[str, dict[str, Any]], list[str]]:
+) -> tuple[dict[str, dict[str, Any]], list[str], list[str]]:
     """Parse every migration file, keyed by lower(product_name). Later
     migrations override earlier ones for the same product_name (mirrors the
     apply order; the last definition is the current intended seed). Returns
-    (seeded, errors); errors are prefixed with the originating filename."""
+    (seeded, errors, mutations); errors and mutations are prefixed with the
+    originating filename."""
     seeded: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
+    mutations: list[str] = []
     for path in sorted(migrations_dir.glob("*.sql")):
-        rows, errs = parse_seeded_partners(path.read_text())
+        text = path.read_text()
+        rows, errs = parse_seeded_partners(text)
         errors.extend(f"{path.name}: {e}" for e in errs)
+        mutations.extend(
+            f"{path.name}: {kind} affiliate_partners" for kind in find_partner_mutations(text)
+        )
         for row in rows:
             product = row.get("product_name")
             if not product:
                 continue
             row["__migration__"] = path.name
             seeded[str(product).lower()] = row
-    return seeded, errors
+    return seeded, errors, mutations
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +318,7 @@ def reconcile(
     db_partners: list[dict[str, Any]],
     seeded: dict[str, dict[str, Any]],
     parse_errors: list[str] | tuple[str, ...] = (),
+    mutations: list[str] | tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Compare live partners against migration-seeded definitions and return a
     list of status checks (same shape as the rollout-readiness audit).
@@ -305,7 +326,15 @@ def reconcile(
     `parse_errors` (migration INSERTs the parser could not map) are surfaced
     as a hard FAIL: if seed parsing regressed, the reconciliation below is
     comparing against an incomplete seed set and its pass/warn results cannot
-    be trusted, so the audit must not report success."""
+    be trusted, so the audit must not report success.
+
+    `mutations` (UPDATE/DELETE on affiliate_partners) are surfaced as a WARN,
+    not a FAIL: a legitimate migration may intentionally edit a partner, so its
+    presence is not an error -- but the audit only models INSERT seeds, so a
+    value-divergence or orphan result for an affected partner may be explained
+    by a mutation this parser does not apply. The warning points the operator
+    at the responsible migration rather than letting that case look like clean
+    drift."""
     unversioned: list[dict[str, Any]] = []
     divergent: list[dict[str, Any]] = []
 
@@ -350,6 +379,12 @@ def reconcile(
             "detail": {"parse_errors": list(parse_errors)},
         },
         {
+            "name": "partner_mutations_modeled",
+            "status": "pass" if not mutations else "warn",
+            "required": False,
+            "detail": {"unmodeled_mutations": list(mutations)},
+        },
+        {
             "name": "all_live_partners_versioned",
             "status": "pass" if not unversioned else "fail",
             "required": True,
@@ -380,7 +415,7 @@ def _exit_code(checks: list[dict[str, Any]]) -> int:
 
 
 async def _run() -> dict[str, Any]:
-    seeded, parse_errors = parse_seeded_partners_dir(MIGRATIONS_DIR)
+    seeded, parse_errors, mutations = parse_seeded_partners_dir(MIGRATIONS_DIR)
     await init_database()
     pool = get_db_pool()
     rows = await pool.fetch(
@@ -405,7 +440,7 @@ async def _run() -> dict[str, Any]:
         }
         for r in rows
     ]
-    checks = reconcile(db_partners, seeded, parse_errors)
+    checks = reconcile(db_partners, seeded, parse_errors, mutations)
     return {
         "checks": checks,
         "summary": {
