@@ -47,6 +47,7 @@ def _row_to_draft(row: Mapping[str, Any]) -> BlogPostDraft:
     metadata = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
     if row.get("llm_model") and "generation_model" not in metadata:
         metadata["generation_model"] = str(row.get("llm_model"))
+    _hydrate_seo_metadata(metadata, row)
 
     return BlogPostDraft(
         id=str(row.get("id") or ""),
@@ -74,6 +75,41 @@ def _source_report_date(value: Any) -> date | None:
     return None
 
 
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _metadata_json_list(metadata: Mapping[str, Any], key: str) -> tuple[bool, list[Any]]:
+    if key not in metadata:
+        return False, []
+    value = metadata.get(key)
+    if isinstance(value, str):
+        decoded = decode_jsonb_field(value, default=[])
+        value = decoded
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return True, list(value)
+    return True, []
+
+
+def _hydrate_seo_metadata(metadata: JsonDict, row: Mapping[str, Any]) -> None:
+    for key in ("seo_title", "seo_description", "target_keyword"):
+        value = _optional_text(row.get(key))
+        if value:
+            metadata[key] = value
+    for key in ("secondary_keywords", "faq"):
+        if key not in row:
+            continue
+        value = decode_jsonb_field(row.get(key), default=[])
+        items = (
+            list(value)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+            else []
+        )
+        if items or key not in metadata:
+            metadata[key] = items
+
+
 @dataclass(frozen=True)
 class PostgresBlogPostRepository:
     """Async Postgres adapter for generated blog-post drafts."""
@@ -90,17 +126,25 @@ class PostgresBlogPostRepository:
         account_id = scope.account_id or ""
         for draft in drafts:
             data_context = _draft_data_context(draft, scope)
+            has_secondary_keywords, secondary_keywords = _metadata_json_list(
+                draft.metadata,
+                "secondary_keywords",
+            )
+            has_faq, faq = _metadata_json_list(draft.metadata, "faq")
             blog_post_id = await self.pool.fetchval(
                 """
                 INSERT INTO blog_posts (
                     account_id, slug, title, description, topic_type,
                     tags, content, charts, data_context, status,
-                    llm_model, source_report_date
+                    llm_model, source_report_date,
+                    seo_title, seo_description, target_keyword,
+                    secondary_keywords, faq
                 )
                 VALUES (
                     $1, $2, $3, $4, $5,
                     $6::jsonb, $7, $8::jsonb, $9::jsonb, 'draft',
-                    $10, $11
+                    $10, $11,
+                    $12, $13, $14, $15::jsonb, $16::jsonb
                 )
                 ON CONFLICT (slug) DO UPDATE SET
                     account_id = EXCLUDED.account_id,
@@ -113,7 +157,24 @@ class PostgresBlogPostRepository:
                     data_context = EXCLUDED.data_context,
                     status = EXCLUDED.status,
                     llm_model = EXCLUDED.llm_model,
-                    source_report_date = EXCLUDED.source_report_date
+                    source_report_date = EXCLUDED.source_report_date,
+                    seo_title = COALESCE(EXCLUDED.seo_title, blog_posts.seo_title),
+                    seo_description = COALESCE(
+                        EXCLUDED.seo_description,
+                        blog_posts.seo_description
+                    ),
+                    target_keyword = COALESCE(
+                        EXCLUDED.target_keyword,
+                        blog_posts.target_keyword
+                    ),
+                    secondary_keywords = CASE
+                        WHEN $17 THEN EXCLUDED.secondary_keywords
+                        ELSE blog_posts.secondary_keywords
+                    END,
+                    faq = CASE
+                        WHEN $18 THEN EXCLUDED.faq
+                        ELSE blog_posts.faq
+                    END
                 WHERE blog_posts.status != 'published'
                   AND blog_posts.account_id = EXCLUDED.account_id
                 RETURNING id
@@ -129,6 +190,13 @@ class PostgresBlogPostRepository:
                 json_dump_jsonb(data_context),
                 str(draft.metadata.get("generation_model") or "") or None,
                 _source_report_date(data_context.get("source_report_date")),
+                _optional_text(draft.metadata.get("seo_title")),
+                _optional_text(draft.metadata.get("seo_description")),
+                _optional_text(draft.metadata.get("target_keyword")),
+                json_dump_jsonb(secondary_keywords),
+                json_dump_jsonb(faq),
+                has_secondary_keywords,
+                has_faq,
             )
             if blog_post_id:
                 saved.append(str(blog_post_id))
@@ -152,7 +220,8 @@ class PostgresBlogPostRepository:
             clauses.append(f"topic_type = ${len(params)}")
         sql = (
             "SELECT id, slug, title, description, topic_type, tags, content, "
-            "charts, data_context, llm_model, status "
+            "charts, data_context, llm_model, status, "
+            "seo_title, seo_description, target_keyword, secondary_keywords, faq "
             "FROM blog_posts WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )
