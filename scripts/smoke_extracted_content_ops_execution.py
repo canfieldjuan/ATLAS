@@ -253,7 +253,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--campaign-name", default="Content Ops smoke")
     parser.add_argument(
         "--source-material",
-        default="Pricing became hard to justify after renewal.",
+        default="I cannot reset my password from the login page.",
     )
     parser.add_argument("--source-id", default="source-smoke-1")
     parser.add_argument("--source-type", default="support_ticket")

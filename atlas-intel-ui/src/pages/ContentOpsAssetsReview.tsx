@@ -809,7 +809,7 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
   if (asset === 'faq_markdown') {
     return [
       row.target_mode,
-      numberLabel(row.ticket_source_count, 'ticket row'),
+      numberLabel(row.ticket_source_count, 'ticket source'),
       numberLabel(row.source_count, 'source row'),
     ].filter(Boolean).join(' | ')
   }
@@ -853,7 +853,7 @@ function addAssetSpecificFacts(
     return
   }
   if (asset === 'faq_markdown') {
-    addFact(facts, 'ticket rows', row.ticket_source_count)
+    addFact(facts, 'ticket sources', row.ticket_source_count)
     addFact(facts, 'source rows', row.source_count)
     addFact(facts, 'checks passed', row.passed_output_checks)
     return

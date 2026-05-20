@@ -121,8 +121,8 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     assert "**What to do next:**" in result.markdown
     assert "Check whether your plan and role include the needed export" in result.markdown
     assert result.output_checks == {
-        "uses_user_vocabulary": True,
-        "condensed": True,
+        "uses_user_vocabulary": False,
+        "condensed": False,
         "has_action_items": True,
     }
 
@@ -158,6 +158,7 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
     assert "How do I change my login email?" in result.markdown
     assert "I need to update the email on my account." in result.markdown
+    assert result.output_checks["uses_user_vocabulary"] is True
     assert result.output_checks["condensed"] is True
 
 
@@ -179,6 +180,7 @@ def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
     assert result.items[0]["topic"] == "reporting friction"
     assert result.items[0]["question"] == "What are customers asking about reporting friction?"
     assert result.items[0]["question_source"] == "topic_fallback"
+    assert result.output_checks["uses_user_vocabulary"] is False
 
 
 def test_build_ticket_faq_markdown_falls_back_from_long_customer_question() -> None:
@@ -239,6 +241,26 @@ def test_build_ticket_faq_markdown_normalizes_missing_question_mark() -> None:
 
     assert result.items[0]["question"] == "How do I reset my password?"
     assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_turns_first_person_issue_into_customer_question() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "I cannot reset my password from the login page.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password from the login page?"
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert result.output_checks["uses_user_vocabulary"] is True
 
 
 def test_build_ticket_faq_markdown_strips_customer_speaker_label() -> None:
@@ -443,8 +465,8 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
     )
     assert len(result.items) == 2
     assert result.output_checks == {
-        "uses_user_vocabulary": True,
-        "condensed": True,
+        "uses_user_vocabulary": False,
+        "condensed": False,
         "has_action_items": True,
     }
 
@@ -703,6 +725,11 @@ def test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits
 
     assert result.items == ()
     assert "No ticket FAQ items were generated." in result.markdown
+    assert result.output_checks == {
+        "uses_user_vocabulary": False,
+        "condensed": False,
+        "has_action_items": False,
+    }
     with pytest.raises(ValueError, match="max_items must be positive"):
         build_ticket_faq_markdown([], max_items=0)
     with pytest.raises(ValueError, match="max_evidence_per_item must be positive"):
@@ -738,7 +765,7 @@ def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified
     assert len(result.items) == 1
     assert result.ticket_source_count == 2
     assert result.items[0]["evidence_count"] == 2
-    assert result.items[0]["source_ids"] == ("row:1:evidence:1", "row:2:evidence:1")
+    assert result.items[0]["source_ids"] == ("row:1", "row:2")
     assert "Evidence comes from 2 ticket source(s)." in result.markdown
 
 
@@ -754,7 +781,69 @@ def test_build_ticket_faq_markdown_counts_distinct_source_ids_per_item() -> None
 
     assert result.items[0]["evidence_count"] == 2
     assert result.items[0]["source_ids"] == ("ticket-1",)
+    assert result.ticket_source_count == 1
     assert "Evidence comes from 1 ticket source(s)." in result.markdown
+
+
+def test_build_ticket_faq_markdown_counts_distinct_ticket_sources_for_output_checks() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "support_ticket",
+        "source_title": "Login reset",
+        "evidence": [
+            {
+                "text": "How do I reset my password?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            },
+            {
+                "text": "How do I update the account email?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "source_title": "Profile change question",
+            },
+        ],
+    }])
+
+    assert result.ticket_source_count == 1
+    assert result.items[0]["source_ids"] == ("ticket-1",)
+    assert result.output_checks["condensed"] is True
+
+
+def test_build_ticket_faq_markdown_counts_unidentified_source_rows_once() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "support_ticket",
+        "source_title": "Login reset",
+        "evidence": [
+            {"text": "How do I reset my password?", "source_type": "support_ticket"},
+            {"text": "How do I update the account email?", "source_type": "support_ticket"},
+        ],
+    }])
+
+    assert result.ticket_source_count == 1
+    assert result.items[0]["source_ids"] == ("row:1",)
+    assert result.output_checks["condensed"] is True
+
+
+def test_build_ticket_faq_markdown_does_not_treat_max_items_truncation_as_condensed() -> None:
+    opportunities = [
+        {
+            "source_type": "support_ticket",
+            "source_title": f"Unique issue {index}",
+            "evidence": [{
+                "text": f"How do I handle unique issue {index}?",
+                "source_id": f"ticket-{index}",
+                "source_type": "support_ticket",
+            }],
+        }
+        for index in range(1, 10)
+    ]
+
+    result = build_ticket_faq_markdown(opportunities, max_items=8)
+
+    assert len(result.items) == 8
+    assert result.ticket_source_count == 9
+    assert result.output_checks["uses_user_vocabulary"] is True
+    assert result.output_checks["condensed"] is False
 
 
 def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
@@ -780,7 +869,7 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert completed.stdout == ""
     markdown = output.read_text(encoding="utf-8")
     assert markdown.startswith("# Support FAQ")
-    assert "Ticket evidence rows used: 2" in markdown
+    assert "Ticket sources used: 2" in markdown
     assert "ticket-acme-1" in markdown
 
 
@@ -802,7 +891,7 @@ def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
     assert completed.returncode == 0
     assert "ticket-new" in completed.stdout
     assert "ticket-old" not in completed.stdout
-    assert "Ticket evidence rows used: 1" in completed.stdout
+    assert "Ticket sources used: 1" in completed.stdout
 
 
 @pytest.mark.parametrize("value", ("2026-99-99", "2026-05-20abc", "2026/05/20"))
