@@ -23,8 +23,8 @@ Currently wired:
   `PostgresBlogBlueprintRepository` (PR #458) +
   `PostgresBlogPostRepository` + LLM/Skill adapters. Slot
   stays `None` when LLM or pool is absent.
-- `faq_markdown`: deterministic ticket FAQ builder with no LLM or
-  database dependency, wired by default.
+- `faq_markdown`: deterministic ticket FAQ builder. It runs without
+  DB, and persists drafts when DB services are enabled.
 
 See `plans/PR-Content-Ops-Execution-Services-Wire-4.md`.
 """
@@ -80,6 +80,9 @@ from extracted_content_pipeline.signal_extraction import (
 )
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
+)
+from extracted_content_pipeline.ticket_faq_postgres import (
+    PostgresTicketFAQRepository,
 )
 
 
@@ -203,6 +206,14 @@ def _build_blog_post_service(
     )
 
 
+def _build_ticket_faq_service(*, pool: Any) -> TicketFAQMarkdownService | None:
+    """Build the persisted FAQ Markdown service when a DB pool is active."""
+
+    if pool is None:
+        return None
+    return TicketFAQMarkdownService(ticket_faqs=PostgresTicketFAQRepository(pool=pool))
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -259,6 +270,7 @@ def build_content_ops_execution_services(
     report = None
     sales_brief = None
     blog_post = None
+    faq_markdown = _FAQ_MARKDOWN_SERVICE
     if enable_db_services:
         llm = llm_factory()
         skills = skills_factory()
@@ -297,6 +309,7 @@ def build_content_ops_execution_services(
             skills=skills,
             pool=pool,
         )
+        faq_markdown = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
@@ -305,7 +318,7 @@ def build_content_ops_execution_services(
         report=report,
         sales_brief=sales_brief,
         blog_post=blog_post,
-        faq_markdown=_FAQ_MARKDOWN_SERVICE,
+        faq_markdown=faq_markdown,
     )
 
 

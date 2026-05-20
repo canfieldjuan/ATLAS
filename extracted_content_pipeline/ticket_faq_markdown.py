@@ -10,6 +10,7 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .campaign_source_adapters import source_rows_to_campaign_opportunities
+from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
 DEFAULT_TICKET_SOURCE_TYPES = (
@@ -48,6 +49,7 @@ class TicketFAQMarkdownResult:
     ticket_source_count: int
     output_checks: dict[str, bool]
     warnings: tuple[dict[str, Any], ...] = ()
+    saved_ids: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +60,7 @@ class TicketFAQMarkdownResult:
             "ticket_source_count": self.ticket_source_count,
             "output_checks": dict(self.output_checks),
             "warnings": [dict(warning) for warning in self.warnings],
+            "saved_ids": list(self.saved_ids),
         }
 
 
@@ -75,8 +78,14 @@ class TicketFAQMarkdownConfig:
 class TicketFAQMarkdownService:
     """Build FAQ Markdown from inline source material."""
 
-    def __init__(self, config: TicketFAQMarkdownConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: TicketFAQMarkdownConfig | None = None,
+        *,
+        ticket_faqs: TicketFAQRepository | None = None,
+    ) -> None:
         self.config = config or TicketFAQMarkdownConfig()
+        self._ticket_faqs = ticket_faqs
 
     async def generate(
         self,
@@ -91,7 +100,6 @@ class TicketFAQMarkdownService:
         max_text_chars: int | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
-        del scope
         del kwargs
         resolved_max_items = int(max_items) if max_items is not None else self.config.max_items
         resolved_max_evidence = (
@@ -116,17 +124,38 @@ class TicketFAQMarkdownService:
             if source_types is not None
             else self.config.source_types
         )
+        title_text = title or self.config.title
         result = build_ticket_faq_markdown(
             normalized.opportunities,
-            title=title or self.config.title,
+            title=title_text,
             max_items=resolved_max_items,
             max_evidence_per_item=resolved_max_evidence,
             source_types=resolved_source_types,
         )
-        return replace(
+        result = replace(
             result,
             warnings=tuple(warning.as_dict() for warning in normalized.warnings),
         )
+        if self._ticket_faqs is None or not result.items:
+            return result
+        saved_ids = await self._ticket_faqs.save_drafts(
+            [
+                TicketFAQDraft(
+                    target_id=_target_id(normalized.opportunities),
+                    target_mode=target_mode,
+                    title=title_text,
+                    markdown=result.markdown,
+                    items=result.items,
+                    source_count=result.source_count,
+                    ticket_source_count=result.ticket_source_count,
+                    output_checks=result.output_checks,
+                    warnings=result.warnings,
+                    metadata={"source_types": list(resolved_source_types)},
+                )
+            ],
+            scope=scope,
+        )
+        return replace(result, saved_ids=tuple(str(item) for item in saved_ids))
 
 
 def build_ticket_faq_markdown(
@@ -309,6 +338,15 @@ def _compact(value: Any) -> str:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _target_id(opportunities: Sequence[Mapping[str, Any]]) -> str:
+    for opportunity in opportunities:
+        for key in ("target_id", "source_id", "id", "company_name", "vendor_name"):
+            value = _clean(opportunity.get(key))
+            if value:
+                return value
+    return "ticket_faq_markdown"
 
 
 def _source_type_key(value: Any) -> str:

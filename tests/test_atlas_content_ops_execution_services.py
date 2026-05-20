@@ -22,7 +22,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (15 tests):
+Test inventory (16 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -40,13 +40,14 @@ Test inventory (15 tests):
     and `for_output("blog_post")` returns the service.
 12. `blog_post` skips when no LLM (E4 fallback).
 13. `faq_markdown` runs through the full executor.
-14. `configured_outputs()` with LLM + db enabled advertises
+14. `faq_markdown` persists when DB services are enabled.
+15. `configured_outputs()` with LLM + db enabled advertises
     all 7 outputs: `(email_campaign, blog_post, report,
     landing_page, sales_brief, signal_extraction, faq_markdown)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-15. `configured_outputs()` without an active LLM (even with
+16. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     `signal_extraction` and `faq_markdown`.
 """
@@ -89,6 +90,15 @@ def _make_pool_stub() -> Any:
     Bundle population doesn't trigger that."""
 
     return SimpleNamespace()
+
+
+class _FAQPoolStub:
+    def __init__(self) -> None:
+        self.fetchval_calls: list[dict[str, Any]] = []
+
+    async def fetchval(self, query: str, *args: Any) -> str:
+        self.fetchval_calls.append({"query": query, "args": args})
+        return "faq-uuid-1"
 
 
 def _no_llm() -> None:
@@ -158,6 +168,37 @@ async def test_faq_markdown_runs_through_host_bundle() -> None:
     assert step["status"] == "completed"
     assert step["result"]["generated"] == 1
     assert "How do I fix failed exports?" in step["result"]["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_faq_markdown_persists_when_db_services_enabled() -> None:
+    pool = _FAQPoolStub()
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": [{
+                    "ticket_id": "ticket-1",
+                    "source_type": "ticket",
+                    "message": "How do I fix failed exports?",
+                    "pain_category": "exports",
+                }]
+            },
+        },
+        services=services,
+    )
+
+    step = result["steps"][0]
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["faq-uuid-1"]
+    assert "INSERT INTO ticket_faq_markdown" in pool.fetchval_calls[0]["query"]
 
 
 def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:

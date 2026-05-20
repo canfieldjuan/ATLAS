@@ -64,7 +64,9 @@ source of truth for what remains.
   case, conversation, and complaint source-row evidence. The CLI
   `scripts/build_extracted_ticket_faq_markdown.py` writes or prints a grounded
   `.md` artifact for fast operator review. The same builder is also available
-  as `faq_markdown` in the AI Content Ops control-surface execution path.
+  as `faq_markdown` in the AI Content Ops control-surface execution path and can
+  persist drafts through `PostgresTicketFAQRepository` when DB services are
+  enabled.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.

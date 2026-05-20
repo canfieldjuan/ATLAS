@@ -23,6 +23,15 @@ SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_
 SUPPORT_TICKET_BUNDLE = ROOT / "extracted_content_pipeline/examples/support_ticket_bundle.json"
 
 
+class _FAQRepository:
+    def __init__(self) -> None:
+        self.saved = []
+
+    async def save_drafts(self, drafts, *, scope):
+        self.saved.append({"drafts": drafts, "scope": scope})
+        return ("faq-uuid-1",)
+
+
 def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 
@@ -134,6 +143,58 @@ async def test_ticket_faq_service_skips_empty_source_material_containers() -> No
 
     assert result.as_dict()["generated"] == 1
     assert "The dashboard export is not working." in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_saves_generated_markdown_when_repository_configured() -> None:
+    repository = _FAQRepository()
+    service = TicketFAQMarkdownService(ticket_faqs=repository)
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+        target_mode="vendor_retention",
+        source_material=[{
+            "ticket_id": "ticket-1",
+            "source_type": "ticket",
+            "message": "The attribution export is missing renewals.",
+            "pain_category": "exports",
+        }],
+        title="Renewal FAQ",
+    )
+
+    assert result.as_dict()["saved_ids"] == ["faq-uuid-1"]
+    assert len(repository.saved) == 1
+    draft = repository.saved[0]["drafts"][0]
+    assert draft.target_id == "ticket-1"
+    assert draft.target_mode == "vendor_retention"
+    assert draft.title == "Renewal FAQ"
+    assert "The attribution export is missing renewals." in draft.markdown
+    assert draft.metadata["source_types"] == [
+        "ticket",
+        "support_ticket",
+        "case",
+        "conversation",
+        "complaint",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_does_not_save_empty_results() -> None:
+    repository = _FAQRepository()
+    service = TicketFAQMarkdownService(ticket_faqs=repository)
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material=[{
+            "source_id": "review-1",
+            "source_type": "review",
+            "text": "Pricing is high.",
+        }],
+    )
+
+    assert result.as_dict()["saved_ids"] == []
+    assert repository.saved == []
 
 
 def test_build_ticket_faq_markdown_uses_nested_ticket_thread_text() -> None:
