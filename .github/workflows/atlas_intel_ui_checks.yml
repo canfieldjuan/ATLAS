@@ -1,0 +1,51 @@
+name: Atlas Intel UI Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_intel_ui_checks.yml"
+      - "atlas-intel-ui/package.json"
+      - "atlas-intel-ui/package-lock.json"
+      - "atlas-intel-ui/tsconfig*.json"
+      - "atlas-intel-ui/vite.config.ts"
+      - "atlas-intel-ui/public/**"
+      - "atlas-intel-ui/scripts/**"
+      - "atlas-intel-ui/src/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_intel_ui_checks.yml"
+      - "atlas-intel-ui/package.json"
+      - "atlas-intel-ui/package-lock.json"
+      - "atlas-intel-ui/tsconfig*.json"
+      - "atlas-intel-ui/vite.config.ts"
+      - "atlas-intel-ui/public/**"
+      - "atlas-intel-ui/scripts/**"
+      - "atlas-intel-ui/src/**"
+
+jobs:
+  atlas-intel-ui-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: atlas-intel-ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: atlas-intel-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify blog GEO prerender
+        run: npm run verify:blog-geo
