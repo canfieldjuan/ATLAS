@@ -886,6 +886,100 @@ def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_shaped_rows() -
     assert "https://www.consumerfinance.gov/complaint/" in markdown
 
 
+def test_build_ticket_faq_markdown_uses_debt_collection_steps_before_account_steps() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "complaint",
+            "pain_points": ["Attempts to collect debt not owed"],
+            "evidence": [{
+                "text": "I received a collection letter for a debt I do not owe.",
+                "source_id": "cfpb:3182593",
+                "source_type": "complaint",
+            }],
+        }],
+        support_contact="https://example.com/support",
+    )
+
+    markdown = result.markdown
+    assert result.items[0]["topic"] == "debt collection disputes"
+    assert "Ask the collector in writing to identify the original creditor" in markdown
+    assert "Compare the notice with your payment, settlement, insurance, or provider records" in markdown
+    assert "Open your profile, account settings, or login settings" not in markdown
+    assert "Open the reporting or analytics area" not in markdown
+
+
+def test_build_ticket_faq_markdown_uses_credit_report_steps_before_reporting_steps() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "complaint",
+            "pain_points": ["Incorrect information on your report"],
+            "evidence": [{
+                "text": "There are many mistakes appearing in my credit report.",
+                "source_id": "cfpb:3187954",
+                "source_type": "complaint",
+            }],
+        }],
+        support_contact="https://example.com/support",
+    )
+
+    markdown = result.markdown
+    assert result.items[0]["topic"] == "credit report disputes"
+    assert "Get your latest credit reports and mark the account" in markdown
+    assert "File a dispute with the credit bureau and the company that supplied the information" in markdown
+    assert "Open the reporting or analytics area" not in markdown
+
+
+def test_build_ticket_faq_markdown_replaces_vague_questions_with_source_policy_question() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "complaint",
+        "pain_points": ["Incorrect information on your report"],
+        "evidence": [{
+            "text": "Need help? There are mistakes appearing in my credit report.",
+            "source_id": "cfpb:3187954",
+            "source_type": "complaint",
+        }],
+    }])
+
+    assert result.items[0]["question"] == "What should I do if information on my credit report is wrong?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.output_checks["uses_user_vocabulary"] is True
+    assert "## 1. Need help?" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_substantive_question_after_vague_opener() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "support_ticket",
+        "pain_points": ["login reset"],
+        "evidence": [{
+            "text": "Need help? I cannot reset my password.",
+            "source_id": "ticket-1",
+            "source_type": "support_ticket",
+        }],
+    }])
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert result.output_checks["uses_user_vocabulary"] is True
+    assert "## 1. Need help?" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_does_not_classify_generic_investigation_as_credit_report() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "support_ticket",
+        "pain_points": ["reporting friction"],
+        "evidence": [{
+            "text": "Need help? I cannot export the investigation dashboard report.",
+            "source_id": "ticket-1",
+            "source_type": "support_ticket",
+        }],
+    }])
+
+    assert result.items[0]["topic"] == "reporting friction"
+    assert result.items[0]["question"] == "How do I export the investigation dashboard report?"
+    assert "Open the reporting or analytics area" in result.markdown
+    assert "credit bureau" not in result.markdown
+
+
 def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified_rows() -> None:
     result = build_ticket_faq_markdown([
         {
