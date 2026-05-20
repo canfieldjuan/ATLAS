@@ -285,9 +285,11 @@ def _render(
             _md(item["answer"]),
             "",
             "**What to do next:**",
+            "",
             *[f"- {_md(step)}" for step in item["action_items"]],
             "",
             "**Sources:**",
+            "",
             *[f"- {_md(label)}" for label in item["source_labels"]],
             "",
         ])
