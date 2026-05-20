@@ -65,7 +65,7 @@ The row exposes a `geo_readiness` object with the same shape as the existing
 
 ## Verification
 
-- Focused blog export and generated-asset API tests -> 8 passed.
+- Focused blog export and generated-asset API tests -> 10 passed.
 - Python compile check over edited modules/tests -> passed.
 - Diff whitespace check -> passed.
 - Full extracted pipeline checks -> 1531 passed, 1 existing torch/pynvml warning.
@@ -75,6 +75,6 @@ The row exposes a `geo_readiness` object with the same shape as the existing
 | Area | Estimated LOC |
 |---|---:|
 | Plan | ~80 |
-| Blog export helper | ~150 |
-| Tests | ~75 |
-| **Total** | **~305** |
+| Blog export helper | ~260 |
+| Tests | ~100 |
+| **Total** | **~440** |
