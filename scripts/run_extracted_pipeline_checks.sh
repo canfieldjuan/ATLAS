@@ -30,6 +30,7 @@ pytest \
   tests/test_smoke_content_ops_faq_lifecycle.py \
   tests/test_export_content_ops_review_sources.py \
   tests/test_export_content_ops_cfpb_sources.py \
+  tests/test_smoke_content_ops_cfpb_faq_markdown.py \
   tests/test_content_ops_source_postgres_smoke_helpers.py \
   tests/test_smoke_content_ops_source_file_postgres.py \
   tests/test_smoke_content_ops_review_source_postgres.py \

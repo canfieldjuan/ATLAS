@@ -132,6 +132,9 @@ source of truth for what remains.
   support-ticket-like source path the same Postgres import and draft
   persistence smoke, with offline default mode and optional `--llm pipeline`
   provider mode.
+- `scripts/smoke_content_ops_cfpb_faq_markdown.py` proves the same public CFPB
+  source path can produce a grounded FAQ Markdown artifact without a database
+  or provider credentials, and fails closed when FAQ output checks do not pass.
 - `ingestion_diagnostics` plus `scripts/inspect_extracted_content_ingestion.py`
   provide offline readiness reports for opportunity/source-row exports before
   import or generation. The hosted control-surface API also exposes
