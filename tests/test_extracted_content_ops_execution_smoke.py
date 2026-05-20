@@ -227,6 +227,39 @@ def test_content_ops_execution_smoke_cli_runs_signal_extraction_json() -> None:
     )
 
 
+def test_content_ops_execution_smoke_cli_runs_faq_markdown_json() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "--outputs",
+            "faq_markdown",
+            "--source-title",
+            "login reset",
+            "--source-material",
+            "I cannot reset my password from the login page.",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    step = payload["steps"][0]
+    result = step["result"]
+    assert payload["status"] == "completed"
+    assert step["output"] == "faq_markdown"
+    assert result["generated"] == 1
+    assert result["items"][0]["topic"] == "login reset"
+    assert result["output_checks"] == {
+        "condensed": True,
+        "has_action_items": True,
+        "uses_user_vocabulary": True,
+    }
+    assert "What to do next" in result["markdown"]
+
+
 def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> None:
     completed = subprocess.run(
         [
@@ -240,6 +273,8 @@ def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> No
             "Salesforce",
             "--source-contact-email",
             "ops@example.com",
+            "--source-type",
+            "case",
             "--source-max-text-chars",
             "11",
             "--source-material",
@@ -256,6 +291,7 @@ def test_content_ops_execution_smoke_cli_parameterizes_signal_source_row() -> No
     assert opportunity["target_id"] == "source-42"
     assert opportunity["vendor"] == "Salesforce"
     assert opportunity["contact_email"] == "ops@example.com"
+    assert opportunity["source_type"] == "case"
     assert opportunity["evidence"][0]["text"] == "The renewal"
 
 
@@ -322,3 +358,45 @@ def test_execution_errors_accepts_signal_extraction_opportunities() -> None:
             }
         ],
     }) == []
+
+
+def test_execution_errors_accepts_checked_faq_markdown_output() -> None:
+    smoke = _load_smoke_module()
+
+    assert smoke._execution_errors({
+        "status": "completed",
+        "steps": [
+            {
+                "output": "faq_markdown",
+                "status": "completed",
+                "result": {
+                    "markdown": "# FAQ",
+                    "items": [{"question": "How do I reset login?"}],
+                    "output_checks": {
+                        "uses_user_vocabulary": True,
+                        "condensed": True,
+                        "has_action_items": True,
+                    },
+                },
+            }
+        ],
+    }) == []
+
+
+def test_execution_errors_rejects_faq_markdown_without_passing_checks() -> None:
+    smoke = _load_smoke_module()
+
+    assert smoke._execution_errors({
+        "status": "completed",
+        "steps": [
+            {
+                "output": "faq_markdown",
+                "status": "completed",
+                "result": {
+                    "markdown": "# FAQ",
+                    "items": [{"question": "How do I reset login?"}],
+                    "output_checks": {"has_action_items": False},
+                },
+            }
+        ],
+    }) == ["step 1 missing output payload"]

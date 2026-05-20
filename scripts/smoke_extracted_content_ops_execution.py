@@ -20,6 +20,7 @@ from extracted_content_pipeline.content_ops_execution import (  # noqa: E402
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.signal_extraction import SignalExtractionService  # noqa: E402
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService  # noqa: E402
 
 
 _POSTGRES_FIXTURE_PAYLOAD: dict[str, Any] = {
@@ -255,6 +256,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="Pricing became hard to justify after renewal.",
     )
     parser.add_argument("--source-id", default="source-smoke-1")
+    parser.add_argument("--source-type", default="support_ticket")
+    parser.add_argument("--source-title", default="pricing after renewal")
     parser.add_argument("--source-vendor", default="HubSpot")
     parser.add_argument("--source-contact-email", default="buyer@example.com")
     parser.add_argument(
@@ -305,6 +308,8 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
                     "id": args.source_id,
                     "company": args.target_account,
                     "vendor": args.source_vendor,
+                    "source_type": args.source_type,
+                    "source_title": args.source_title,
                     "text": args.source_material,
                     "contact_email": args.source_contact_email,
                 }
@@ -344,6 +349,7 @@ def _services(
         landing_page=landing_page,
         sales_brief=opportunity_service("sales_brief"),
         signal_extraction=SignalExtractionService(),
+        faq_markdown=TicketFAQMarkdownService(),
     )
     if reasoning:
         provider = (
@@ -388,6 +394,15 @@ def _step_has_output_payload(
         return False
     if step.get("output") == "signal_extraction":
         return bool(result_payload.get("opportunities"))
+    if step.get("output") == "faq_markdown":
+        checks = result_payload.get("output_checks")
+        return (
+            bool(result_payload.get("markdown"))
+            and bool(result_payload.get("items"))
+            and isinstance(checks, Mapping)
+            and bool(checks)
+            and all(value is True for value in checks.values())
+        )
     return bool(result_payload.get("saved_ids"))
 
 

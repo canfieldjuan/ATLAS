@@ -914,10 +914,11 @@ python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --reasoning-provider postgres-fixture --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
+python scripts/smoke_extracted_content_ops_execution.py --outputs faq_markdown --source-type support_ticket --source-title "login reset" --json
 ```
 
 This validates the full campaign preset and the deterministic source-material
-normalization path through host-injected services without opening database,
+normalization and FAQ Markdown paths through host-injected services without opening database,
 network, sender, or LLM handles. `--no-quality-gates` is an execution-smoke
 override for checking the request wiring; production hosts should leave quality
 gates enabled unless they intentionally disable them in their own policy layer.
