@@ -213,6 +213,14 @@ function assertBreadcrumbs(node, canonical, slug) {
   }
 }
 
+function sitemapLastmod(sitemap, canonical) {
+  const pattern = new RegExp(
+    `<url>\\s*<loc>${escapeRegExp(canonical)}</loc>\\s*<lastmod>([^<]+)</lastmod>`,
+  )
+  const match = sitemap.match(pattern)
+  return match ? match[1] : ''
+}
+
 function verifyBlogPage(post, sitemap) {
   const { slug } = post
   const canonical = `${BASE_URL}/blog/${slug}`
@@ -255,6 +263,11 @@ function verifyBlogPage(post, sitemap) {
 
   if (!sitemap.includes(`<loc>${canonical}</loc>`)) {
     fail(`/blog/${slug} missing from sitemap.xml`)
+  }
+
+  const lastmod = sitemapLastmod(sitemap, canonical)
+  if (lastmod !== post.date) {
+    fail(`/blog/${slug} sitemap lastmod must be ${post.date}`)
   }
 }
 
