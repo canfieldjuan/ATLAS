@@ -47,14 +47,21 @@ def _draft(**overrides) -> BlogPostDraft:
         tags=("pricing", "retention"),
         content=(
             "## Why is Acme pricing pressure showing up?\n\n"
-            "Acme pricing pressure is visible in recent review patterns, "
-            "especially when buyers describe renewal friction, budget concerns, "
-            "and comparison shopping. This section starts with a direct answer "
-            "so reviewers can quickly understand the point before reading the "
-            "supporting detail."
+            "Acme pricing pressure is visible in the last 90 days of review "
+            "patterns, especially across 214 reviews where buyers describe "
+            "renewal friction, budget concerns, and comparison shopping. The "
+            "answer is that Acme buyers are not only comparing features; they "
+            "are checking whether the contract still fits the budget before "
+            "another renewal cycle starts.\n\n"
+            "## How should teams read the Acme pricing evidence?\n\n"
+            "Acme pricing evidence should be read as a renewal-risk signal, not "
+            "as proof that every buyer has the same problem. The useful pattern "
+            "is that customers keep using similar wording about budget pressure, "
+            "contract terms, and alternative comparisons when they explain why "
+            "pricing has become harder to justify."
         ),
         charts=({"id": "chart-1"},),
-        data_context={"vendor": "Acme"},
+        data_context={"vendor": "Acme", "review_period": "last 90 days"},
         metadata={
             "seo_title": "Acme Pricing Pressure 2026",
             "seo_description": "Acme pricing pressure from recent review data.",
@@ -159,6 +166,21 @@ async def test_export_blog_post_drafts_derives_review_summary_fields() -> None:
         "missing": [],
         "checks": row["output_checks"],
     }
+    assert row["geo_readiness"] == {
+        "status": "ready",
+        "passed": 7,
+        "total": 7,
+        "missing": [],
+        "checks": {
+            "entity_clarity": True,
+            "answer_first_sections": True,
+            "citable_section_structure": True,
+            "evidence_specificity": True,
+            "freshness_context": True,
+            "faq_coverage": True,
+            "citation_safety": True,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -186,6 +208,8 @@ async def test_export_blog_post_drafts_defaults_summary_fields_without_metadata(
         "faq_ready",
         "aeo_structure_detected",
     ]
+    assert row["geo_readiness"]["status"] == "needs_review"
+    assert row["geo_readiness"]["checks"]["citation_safety"] is True
 
 
 def test_blog_post_export_result_renders_csv() -> None:
@@ -206,9 +230,37 @@ def test_blog_post_export_result_renders_csv() -> None:
     csv_text = result.as_csv()
 
     assert csv_text.startswith("slug,title,description,topic_type")
-    assert "passed_output_checks,output_checks,seo_aeo_readiness" in csv_text
+    assert "passed_output_checks,output_checks,seo_aeo_readiness,geo_readiness" in csv_text
     assert "acme-pricing-pressure" in csv_text
     assert "{\"\"generation_parse_attempts\"\":2}" in csv_text
+
+
+@pytest.mark.asyncio
+async def test_export_blog_post_drafts_surfaces_incomplete_geo_readiness() -> None:
+    result = await export_blog_post_drafts(
+        _Repository(drafts=[
+            _draft(
+                title="",
+                content="## Overview\n\nNo clear answer yet. {{todo}}",
+                data_context={},
+                metadata={},
+            )
+        ]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    readiness = result.rows[0]["geo_readiness"]
+    assert readiness["status"] == "needs_review"
+    assert readiness["passed"] == 0
+    assert readiness["missing"] == [
+        "entity_clarity",
+        "answer_first_sections",
+        "citable_section_structure",
+        "evidence_specificity",
+        "freshness_context",
+        "faq_coverage",
+        "citation_safety",
+    ]
 
 
 @pytest.mark.asyncio
