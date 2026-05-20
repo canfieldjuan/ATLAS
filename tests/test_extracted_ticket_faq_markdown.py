@@ -121,8 +121,8 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     assert "**What to do next:**" in result.markdown
     assert "Check whether your plan and role include the needed export" in result.markdown
     assert result.output_checks == {
-        "uses_user_vocabulary": True,
-        "condensed": True,
+        "uses_user_vocabulary": False,
+        "condensed": False,
         "has_action_items": True,
     }
 
@@ -158,6 +158,7 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
     assert "How do I change my login email?" in result.markdown
     assert "I need to update the email on my account." in result.markdown
+    assert result.output_checks["uses_user_vocabulary"] is True
     assert result.output_checks["condensed"] is True
 
 
@@ -179,6 +180,7 @@ def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
     assert result.items[0]["topic"] == "reporting friction"
     assert result.items[0]["question"] == "What are customers asking about reporting friction?"
     assert result.items[0]["question_source"] == "topic_fallback"
+    assert result.output_checks["uses_user_vocabulary"] is False
 
 
 def test_build_ticket_faq_markdown_falls_back_from_long_customer_question() -> None:
@@ -443,8 +445,8 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
     )
     assert len(result.items) == 2
     assert result.output_checks == {
-        "uses_user_vocabulary": True,
-        "condensed": True,
+        "uses_user_vocabulary": False,
+        "condensed": False,
         "has_action_items": True,
     }
 
@@ -703,6 +705,11 @@ def test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits
 
     assert result.items == ()
     assert "No ticket FAQ items were generated." in result.markdown
+    assert result.output_checks == {
+        "uses_user_vocabulary": False,
+        "condensed": False,
+        "has_action_items": False,
+    }
     with pytest.raises(ValueError, match="max_items must be positive"):
         build_ticket_faq_markdown([], max_items=0)
     with pytest.raises(ValueError, match="max_evidence_per_item must be positive"):
