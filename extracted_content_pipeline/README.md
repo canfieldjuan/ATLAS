@@ -188,6 +188,19 @@ The same artifact can run through the Content Ops execution seam by selecting
 When the host wires `PostgresTicketFAQRepository`, execution also persists the
 Markdown document into `ticket_faq_markdown` and returns `saved_ids`.
 
+To prove the persisted review lifecycle in one command, run the FAQ lifecycle
+smoke. It generates from source rows, exports the saved draft, updates it to a
+host-defined review status, and exports the reviewed row:
+
+```bash
+python scripts/smoke_content_ops_faq_lifecycle.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --account-id acct_123 \
+  --review-status published \
+  --json
+```
+
 If Atlas already has scraped B2B review rows, export one reliable source as
 Content Ops source rows before generation. The G2 path is read-only, keeps only
 canonical enriched reviews, and exports the negative/mixed quote-grade phrase
@@ -918,6 +931,7 @@ python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --reasoning-provider postgres-fixture --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs faq_markdown --source-type support_ticket --source-title "login reset" --json
+python scripts/smoke_content_ops_faq_lifecycle.py --account-id acct_123 --review-status published --json
 ```
 
 This validates the full campaign preset and the deterministic source-material

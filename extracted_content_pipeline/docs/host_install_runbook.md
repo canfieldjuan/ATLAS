@@ -239,6 +239,18 @@ inspect grounding before choosing whether to generate campaigns or longer
 assets. Add `--as-of-date YYYY-MM-DD` with `--window-days` for reproducible
 canary runs.
 
+When `ticket_faq_markdown` migrations are installed, prove the persisted review
+loop with the FAQ lifecycle smoke:
+
+```bash
+python scripts/smoke_content_ops_faq_lifecycle.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --account-id acct_123 \
+  --review-status published \
+  --json
+```
+
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
 `description`, `summary`, `notes`, `feedback`, `feedback_text`,
 `response_text`, `comment_text`, `open_ended_response`, `content`, `body`,
@@ -1046,6 +1058,11 @@ python scripts/smoke_extracted_content_ops_execution.py \
   --outputs faq_markdown \
   --source-type support_ticket \
   --source-title "login reset" \
+  --json
+
+python scripts/smoke_content_ops_faq_lifecycle.py \
+  --account-id acct_123 \
+  --review-status published \
   --json
 ```
 

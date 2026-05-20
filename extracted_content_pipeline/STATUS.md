@@ -85,6 +85,9 @@ source of truth for what remains.
 - `ticket_faq_export` provides a read-only draft export path over generated
   ticket FAQ Markdown documents so hosts can review JSON/CSV outputs without
   handwritten SQL or a mounted FAQ API.
+- `scripts/smoke_content_ops_faq_lifecycle.py` proves the support-ticket FAQ
+  lifecycle in one host command: source rows -> persisted Markdown draft ->
+  export -> review/status update -> reviewed-status export.
 - `scripts/export_extracted_content_assets.py` exposes the report, blog post,
   landing page, sales brief, and FAQ Markdown export helpers as a host-facing
   JSON/CSV CLI backed by the product-owned Postgres repositories.
