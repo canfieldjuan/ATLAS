@@ -1,11 +1,10 @@
 # In-Flight PRs
 
-Last updated: 2026-05-20T16:48Z by codex-2026-05-20
+Last updated: 2026-05-20T17:08Z by codex-2026-05-20
 
 Add a row before opening a PR (session protocol step 2). Drop the row when the PR merges (step 4). See [`../COORDINATION.md`](../COORDINATION.md) for protocol details.
 
 | PR | Title | Touches | Owner | Don't conflict with |
 |---|---|---|---|---|
-| TBD | PR-Content-Ops-CFPB-FAQ-Live-Smoke | `plans/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md`; `docs/extraction/coordination/inflight.md`; `scripts/smoke_content_ops_cfpb_faq_markdown.py`; `tests/test_smoke_content_ops_cfpb_faq_markdown.py`; `scripts/run_extracted_pipeline_checks.sh`; `extracted_content_pipeline/README.md`; `extracted_content_pipeline/STATUS.md` | codex-2026-05-20 | Avoid concurrent edits to the CFPB-to-FAQ smoke command, extracted check list, and CFPB FAQ docs. |
 
 This table is for PRs we need to coordinate around, not a mirror of `gh pr list`. Use `gh pr list --state open` for the full inventory.
