@@ -22,7 +22,11 @@ the partner definitions seeded by migrations, and fails when they diverge.
 1. Add `scripts/audit_affiliate_partner_drift.py` (matches the existing
    `scripts/audit_*` convention; same `_status`/`_exit_code`/JSON-report shape
    as `scripts/check_reasoning_rollout_readiness.py`).
-2. Reconcile live rows against migration seeds with three checks:
+2. Reconcile live rows against migration seeds with four checks:
+   - `migration_seeds_parseable` -- **FAIL** if the parser cannot map a
+     migration's `INSERT INTO affiliate_partners` (column/value mismatch or
+     missing VALUES). A parse regression must not be silently dropped, since
+     reconciliation would then run against an incomplete seed set.
    - `all_live_partners_versioned` -- **FAIL** if a live partner's
      `product_name` is seeded by no migration.
    - `no_seed_value_divergence` -- **WARN** if a seeded partner's migration
@@ -47,12 +51,18 @@ tested everywhere -- CI included -- while only `_run` touches the live
 database (the same `:5433/atlas` the app uses, via `init_database()`).
 
 `parse_seeded_partners` finds each `INSERT INTO affiliate_partners (...)
-VALUES (...)` block with a quote- and bracket-aware tokenizer (not a naive
+VALUES ...` block with a quote- and bracket-aware tokenizer (not a naive
 regex), so it handles both seed formats already in the tree: the packed
 7-column 088 Amazon row and the 9-column 326 rows with `ARRAY[...]::text[]`
-and `'{...}'::text[]` aliases, `NULL`, and `true`/`false`. Values are
-normalized to Python types; later migrations override earlier ones for the
-same `product_name` (apply-order semantics).
+and `'{...}'::text[]` aliases, `NULL`, and `true`/`false`. It reads **every**
+value tuple in a multi-row `VALUES (...), (...)` insert, not just the first,
+so a future batched seed is not silently truncated. A column/value count
+mismatch (or a missing VALUES clause) is **not** silently skipped: it is
+returned as an error and surfaced by the `migration_seeds_parseable` FAIL
+check, because quietly dropping a seed would make the reconciliation compare
+against stale data and report a misleading pass. Values are normalized to
+Python types; later migrations override earlier ones for the same
+`product_name` (apply-order semantics).
 
 `reconcile` compares by `lower(product_name)`. Aliases are compared as sets
 (the matcher is order-insensitive, so a reordered array is not drift). `notes`
@@ -93,11 +103,12 @@ post-seed edits and orphan seeds without blocking.
 
 ## Verification
 
-- `python -m pytest tests/test_affiliate_partner_drift.py -q` -> `6 passed in
-  0.06s` (parser on both 088 + 326 formats, empty-array/quote-escape, and the
-  clean / unversioned-FAIL / value-divergence-WARN reconcile paths).
+- `python -m pytest tests/test_affiliate_partner_drift.py -q` -> `9 passed in
+  0.06s` (parser on both 088 + 326 formats, multi-row VALUES,
+  empty-array/quote-escape, column/value-mismatch surfacing, and the clean /
+  unversioned-FAIL / value-divergence-WARN / unparseable-FAIL reconcile paths).
 - `scripts/audit_affiliate_partner_drift.py` run against live `:5433/atlas`
-  -> `summary` `{seeded_partners: 6, live_partners: 6, pass: 3, warn: 0,
+  -> `summary` `{seeded_partners: 6, live_partners: 6, pass: 4, warn: 0,
   fail: 0}`, exit `0`. Confirms the parser reads the real 088 + 326 seeds and
   that migration 326 fully reconciles with the live table (every live partner
   versioned, no value divergence).

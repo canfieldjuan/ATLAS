@@ -67,7 +67,8 @@ INSERT INTO affiliate_partners (
 
 
 def test_parses_326_style_with_arrays_and_null():
-    rows = drift.parse_seeded_partners(SQL_326_STYLE)
+    rows, errors = drift.parse_seeded_partners(SQL_326_STYLE)
+    assert errors == []
     assert len(rows) == 2
     monday = next(r for r in rows if r["product_name"] == "Monday.com")
     assert monday["product_aliases"] == ["monday", "monday CRM", "monday work OS"]
@@ -87,7 +88,8 @@ def test_parses_326_style_with_arrays_and_null():
 
 
 def test_parses_088_style_packed_values_fewer_columns():
-    rows = drift.parse_seeded_partners(SQL_088_STYLE)
+    rows, errors = drift.parse_seeded_partners(SQL_088_STYLE)
+    assert errors == []
     assert len(rows) == 1
     amazon = rows[0]
     assert amazon["product_name"] == "Amazon"
@@ -105,12 +107,17 @@ def test_empty_array_and_quote_escape():
     assert drift._parse_value("true") is True
 
 
+def _seed_map(sql: str) -> dict:
+    rows, errors = drift.parse_seeded_partners(sql)
+    assert errors == []
+    return {
+        r["product_name"].lower(): {**r, "__migration__": "326_seed.sql"} for r in rows
+    }
+
+
 def test_reconcile_clean_when_all_match():
     # Build seeded map directly from parsed rows (avoid touching the filesystem).
-    parsed = {
-        r["product_name"].lower(): {**r, "__migration__": "326_seed.sql"}
-        for r in drift.parse_seeded_partners(SQL_326_STYLE)
-    }
+    parsed = _seed_map(SQL_326_STYLE)
     db = [
         {
             "name": "Monday.com",
@@ -144,10 +151,7 @@ def test_reconcile_clean_when_all_match():
 
 
 def test_reconcile_flags_unversioned_partner_as_fail():
-    parsed = {
-        r["product_name"].lower(): {**r, "__migration__": "326_seed.sql"}
-        for r in drift.parse_seeded_partners(SQL_088_STYLE)
-    }
+    parsed = _seed_map(SQL_088_STYLE)
     db = [
         {"product_name": "Amazon", "product_aliases": [], "name": "Amazon Associates",
          "category": "consumer", "affiliate_url": "https://www.amazon.com?tag=atlas0e9b-20",
@@ -165,10 +169,7 @@ def test_reconcile_flags_unversioned_partner_as_fail():
 
 
 def test_reconcile_warns_on_value_divergence():
-    parsed = {
-        r["product_name"].lower(): {**r, "__migration__": "326_seed.sql"}
-        for r in drift.parse_seeded_partners(SQL_326_STYLE)
-    }
+    parsed = _seed_map(SQL_326_STYLE)
     db = [
         {
             "name": "Monday.com",
@@ -196,3 +197,49 @@ def test_reconcile_warns_on_value_divergence():
     assert checks["no_orphan_seeds"]["status"] == "warn"
     # Warnings do not fail the audit.
     assert drift._exit_code(list(checks.values())) == 0
+
+
+# --- multi-row VALUES: every tuple must be read, not just the first ----------
+
+SQL_MULTI_ROW = """
+INSERT INTO affiliate_partners (
+    name, product_name, category, affiliate_url, commission_type,
+    commission_value, enabled
+) VALUES
+    ('A Co', 'Avendor', 'crm', 'https://a.example/?ref=x', 'cpa', '$10', true),
+    ('B Co', 'Bvendor', 'crm', 'https://b.example/?ref=x', 'cpa', '$20', false)
+ON CONFLICT ((lower(product_name))) DO NOTHING;
+"""
+
+
+def test_parses_multi_row_values():
+    rows, errors = drift.parse_seeded_partners(SQL_MULTI_ROW)
+    assert errors == []
+    assert [r["product_name"] for r in rows] == ["Avendor", "Bvendor"]
+    assert rows[0]["enabled"] is True
+    assert rows[1]["enabled"] is False
+
+
+def test_column_value_mismatch_is_surfaced_not_silently_dropped():
+    bad = (
+        "INSERT INTO affiliate_partners (name, product_name, category) "
+        "VALUES ('X', 'Xvendor', 'crm', 'EXTRA') "
+        "ON CONFLICT ((lower(product_name))) DO NOTHING;"
+    )
+    rows, errors = drift.parse_seeded_partners(bad)
+    assert rows == []  # the mismatched tuple is not mis-mapped
+    assert len(errors) == 1
+    assert "mismatch" in errors[0]
+
+
+def test_reconcile_fails_when_seeds_unparseable():
+    # A parse error must fail the audit: reconciliation below would be against
+    # an incomplete seed set, so a "pass" would be misleading.
+    checks = {
+        c["name"]: c
+        for c in drift.reconcile(
+            [], {}, parse_errors=["326_seed.sql: column/value count mismatch (9 vs 8)"]
+        )
+    }
+    assert checks["migration_seeds_parseable"]["status"] == "fail"
+    assert drift._exit_code(list(checks.values())) == 1

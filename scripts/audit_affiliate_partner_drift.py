@@ -200,40 +200,73 @@ def _parse_value(tok: str) -> Any:
     return tok
 
 
-def parse_seeded_partners(sql: str) -> list[dict[str, Any]]:
-    """Extract every `INSERT INTO affiliate_partners (...) VALUES (...)` row in
-    a migration's SQL text as a dict of column -> Python value."""
+def parse_seeded_partners(sql: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Extract every affiliate_partners row seeded in a migration's SQL.
+
+    Returns (rows, errors). Each row is a dict of column -> Python value.
+    Handles multi-row inserts (`VALUES (...), (...), ...`) -- every tuple is
+    read, not just the first. A column/value count mismatch is NOT silently
+    skipped: it is recorded in `errors` so the caller can surface it as a
+    failure rather than reconciling against silently-dropped definitions.
+    """
     rows: list[dict[str, Any]] = []
+    errors: list[str] = []
     for m in re.finditer(
         r"INSERT\s+INTO\s+affiliate_partners\s*\(", sql, re.IGNORECASE
     ):
         cols_str, after_cols = _read_paren_group(sql, m.end() - 1)
-        vm = re.compile(r"\s*VALUES\s*\(", re.IGNORECASE).match(sql, after_cols)
+        vm = re.compile(r"\s*VALUES\s*", re.IGNORECASE).match(sql, after_cols)
         if not vm:
+            errors.append("INSERT INTO affiliate_partners with no VALUES clause")
             continue
-        vals_str, _ = _read_paren_group(sql, vm.end() - 1)
         columns = [c.strip() for c in _split_top_level(cols_str)]
-        values = [_parse_value(v) for v in _split_top_level(vals_str)]
-        if len(columns) != len(values):
-            # Malformed / unexpected layout: skip rather than mis-map.
+        # Read one-or-more parenthesized value tuples separated by commas.
+        pos = vm.end()
+        while pos < len(sql) and sql[pos].isspace():
+            pos += 1
+        if pos >= len(sql) or sql[pos] != "(":
+            errors.append("VALUES clause with no value tuple")
             continue
-        rows.append(dict(zip(columns, values)))
-    return rows
+        while pos < len(sql) and sql[pos] == "(":
+            vals_str, pos = _read_paren_group(sql, pos)
+            values = [_parse_value(v) for v in _split_top_level(vals_str)]
+            if len(columns) != len(values):
+                errors.append(
+                    f"column/value count mismatch "
+                    f"({len(columns)} columns vs {len(values)} values)"
+                )
+            else:
+                rows.append(dict(zip(columns, values)))
+            while pos < len(sql) and sql[pos].isspace():
+                pos += 1
+            if pos < len(sql) and sql[pos] == ",":
+                pos += 1
+                while pos < len(sql) and sql[pos].isspace():
+                    pos += 1
+                continue
+            break
+    return rows, errors
 
 
-def parse_seeded_partners_dir(migrations_dir: pathlib.Path) -> dict[str, dict[str, Any]]:
+def parse_seeded_partners_dir(
+    migrations_dir: pathlib.Path,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
     """Parse every migration file, keyed by lower(product_name). Later
     migrations override earlier ones for the same product_name (mirrors the
-    apply order; the last definition is the current intended seed)."""
+    apply order; the last definition is the current intended seed). Returns
+    (seeded, errors); errors are prefixed with the originating filename."""
     seeded: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
     for path in sorted(migrations_dir.glob("*.sql")):
-        for row in parse_seeded_partners(path.read_text()):
+        rows, errs = parse_seeded_partners(path.read_text())
+        errors.extend(f"{path.name}: {e}" for e in errs)
+        for row in rows:
             product = row.get("product_name")
             if not product:
                 continue
             row["__migration__"] = path.name
             seeded[str(product).lower()] = row
-    return seeded
+    return seeded, errors
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +297,15 @@ def _field_equal(field: str, migration_val: Any, db_val: Any) -> bool:
 def reconcile(
     db_partners: list[dict[str, Any]],
     seeded: dict[str, dict[str, Any]],
+    parse_errors: list[str] | tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Compare live partners against migration-seeded definitions and return a
-    list of status checks (same shape as the rollout-readiness audit)."""
+    list of status checks (same shape as the rollout-readiness audit).
+
+    `parse_errors` (migration INSERTs the parser could not map) are surfaced
+    as a hard FAIL: if seed parsing regressed, the reconciliation below is
+    comparing against an incomplete seed set and its pass/warn results cannot
+    be trusted, so the audit must not report success."""
     unversioned: list[dict[str, Any]] = []
     divergent: list[dict[str, Any]] = []
 
@@ -305,6 +344,12 @@ def reconcile(
 
     return [
         {
+            "name": "migration_seeds_parseable",
+            "status": "pass" if not parse_errors else "fail",
+            "required": True,
+            "detail": {"parse_errors": list(parse_errors)},
+        },
+        {
             "name": "all_live_partners_versioned",
             "status": "pass" if not unversioned else "fail",
             "required": True,
@@ -335,7 +380,7 @@ def _exit_code(checks: list[dict[str, Any]]) -> int:
 
 
 async def _run() -> dict[str, Any]:
-    seeded = parse_seeded_partners_dir(MIGRATIONS_DIR)
+    seeded, parse_errors = parse_seeded_partners_dir(MIGRATIONS_DIR)
     await init_database()
     pool = get_db_pool()
     rows = await pool.fetch(
@@ -360,7 +405,7 @@ async def _run() -> dict[str, Any]:
         }
         for r in rows
     ]
-    checks = reconcile(db_partners, seeded)
+    checks = reconcile(db_partners, seeded, parse_errors)
     return {
         "checks": checks,
         "summary": {
