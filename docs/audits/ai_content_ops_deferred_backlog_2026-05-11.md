@@ -196,5 +196,8 @@ update -> reviewed export. PR #667 tightened the packaged support-ticket FAQ
 demo so it proves the three output checks operators care about: customer
 vocabulary, repeated-intent condensation, and action items. The FAQ Markdown
 CLI now has an opt-in `--require-output-checks` guard for host smoke runs. This
-does not create a new active implementation backlog; future FAQ/source work
-should be driven by a real customer help desk export or hosted UI need.
+does not create a new active implementation backlog. PR #673 upgraded the
+deterministic FAQ renderer from a thin evidence summary to article-style
+answers with grounded summaries, numbered next steps, support escalation
+guidance, and cited ticket quotes. Future FAQ/source work should be driven by a
+real customer help desk export or hosted UI need.
