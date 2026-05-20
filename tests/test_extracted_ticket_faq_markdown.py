@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
 import json
 import subprocess
 import sys
 from pathlib import Path
 
+import markdown
 import pytest
 
 from extracted_content_pipeline.campaign_source_adapters import (
@@ -21,6 +23,50 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
 SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
 SUPPORT_TICKET_BUNDLE = ROOT / "extracted_content_pipeline/examples/support_ticket_bundle.json"
+
+
+class _RenderedFAQHTML(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.h1: list[str] = []
+        self.h2: list[str] = []
+        self.paragraphs: list[str] = []
+        self.list_items: list[str] = []
+        self.strong: list[str] = []
+        self.ul_count = 0
+        self._stack: list[str] = []
+        self._buffers: dict[str, list[str]] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        self._stack.append(tag)
+        if tag == "ul":
+            self.ul_count += 1
+        if tag in {"h1", "h2", "p", "li", "strong"}:
+            self._buffers[tag] = []
+
+    def handle_data(self, data: str) -> None:
+        for tag in ("h1", "h2", "p", "li", "strong"):
+            if tag in self._stack and tag in self._buffers:
+                self._buffers[tag].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        text = " ".join("".join(self._buffers.pop(tag, [])).split())
+        if text:
+            if tag == "h1":
+                self.h1.append(text)
+            elif tag == "h2":
+                self.h2.append(text)
+            elif tag == "p":
+                self.paragraphs.append(text)
+            elif tag == "li":
+                self.list_items.append(text)
+            elif tag == "strong":
+                self.strong.append(text)
+        if self._stack and self._stack[-1] == tag:
+            self._stack.pop()
+        elif tag in self._stack:
+            self._stack.remove(tag)
 
 
 class _FAQRepository:
@@ -44,6 +90,43 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     assert "`ticket-acme-1` - Reporting export blocked before renewal" in result.markdown
     assert "**What to do next:**" in result.markdown
     assert "Check whether your plan and role include the needed export" in result.markdown
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+
+
+def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows() -> None:
+    loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities)
+    rendered = _RenderedFAQHTML()
+    rendered.feed(markdown.markdown(result.markdown))
+
+    assert rendered.h1 == ["Customer Ticket FAQ"]
+    assert rendered.h2 == [
+        "1. What are customers asking about manual follow-up?",
+        "2. What are customers asking about reporting friction?",
+    ]
+    assert rendered.strong.count("What to do next:") == 2
+    assert rendered.strong.count("Sources:") == 2
+    assert rendered.ul_count == 4
+    assert any(
+        "Support notes show campaign handoffs are still being reconciled manually"
+        in paragraph
+        for paragraph in rendered.paragraphs
+    )
+    assert any(
+        "Check the workflow or automation rule that should handle this step."
+        in item
+        for item in rendered.list_items
+    )
+    assert any(
+        "ticket-acme-1 - Reporting export blocked before renewal" in item
+        for item in rendered.list_items
+    )
+    assert len(result.items) == 2
     assert result.output_checks == {
         "uses_user_vocabulary": True,
         "condensed": True,

@@ -118,7 +118,7 @@ jobs:
         # pydantic-settings; this is purely the cross-boundary seam test.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml pydantic-settings
+          python -m pip install pytest pytest-asyncio beautifulsoup4 httpx PyJWT pyyaml pydantic-settings markdown
 
       - name: Run extracted pipeline checks
         run: bash scripts/run_extracted_pipeline_checks.sh
