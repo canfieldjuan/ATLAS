@@ -6,12 +6,17 @@
 -- left no git history, no code review, and no disaster-recovery path -- a
 -- restore from a stale backup would silently lose or mismatch partner data.
 --
--- Each row mirrors the live DB exactly (dumped 2026-05-19). product_aliases
--- is reproduced verbatim because it is load-bearing in two places: the
--- blog generator's vendor matcher (_pick_affiliate_partner_for_vendors) and
--- the /opportunities competitor JOIN -- both match competitor/vendor names
--- against product_name OR any alias. Dropping or altering aliases would
--- change which posts get an affiliate link on a rebuilt database.
+-- Each row reproduces the live DB business columns (dumped 2026-05-19):
+-- name, product_name, product_aliases, category, affiliate_url,
+-- commission_type, commission_value, notes, enabled. The identity/audit
+-- columns (id, created_at, updated_at) intentionally use schema DEFAULTs, so
+-- a fresh insert is row-equivalent but not byte-for-byte identical to a dump.
+-- product_aliases is reproduced verbatim because it is load-bearing in two
+-- places: the blog generator's vendor matcher
+-- (_pick_affiliate_partner_for_vendors) and the /opportunities competitor
+-- JOIN -- both match competitor/vendor names against product_name OR any
+-- alias. Dropping or altering aliases would change which posts get an
+-- affiliate link on a rebuilt database.
 --
 -- ON CONFLICT ((lower(product_name))) DO NOTHING matches the expression
 -- unique index idx_affiliate_partners_product and the 088 precedent: on the
