@@ -27,6 +27,12 @@ function parseStringField(content, field) {
   return match[1].replace(/\\'/g, "'")
 }
 
+function parseTemplateField(content, field) {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\`([\\s\\S]*?)\`\\s*,`, 'm')
+  const match = content.match(pattern)
+  return match ? match[1] : ''
+}
+
 function collectBlogPosts() {
   const posts = []
   for (const file of readdirSync(blogDir)) {
@@ -36,19 +42,25 @@ function collectBlogPosts() {
     const title = parseStringField(content, 'title')
     const description = parseStringField(content, 'description')
     const date = parseStringField(content, 'date')
+    const author = parseStringField(content, 'author')
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
+    const body = parseTemplateField(content, 'content')
     if (!slug) fail(`Missing slug in ${file}`)
     if (!title) fail(`Missing title in ${file}`)
     if (!description) fail(`Missing description in ${file}`)
     if (!date) fail(`Missing date in ${file}`)
+    if (!author) fail(`Missing author in ${file}`)
+    if (!body.trim()) fail(`Missing content in ${file}`)
     posts.push({
       slug,
       title,
       description,
       date,
+      author,
       seoTitle,
       seoDescription,
+      body,
     })
   }
   if (!posts.length) fail('No blog posts found')
@@ -79,6 +91,14 @@ function findTitle(html, slug) {
   return decodeHtml(matches[0][1].trim())
 }
 
+function findH1(html, slug) {
+  const matches = [...html.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi)]
+  if (matches.length !== 1) {
+    fail(`/blog/${slug} must have exactly one crawler-visible h1`)
+  }
+  return normalizedText(matches[0][1])
+}
+
 function decodeHtml(value) {
   return value
     .replace(/&amp;/g, '&')
@@ -86,6 +106,35 @@ function decodeHtml(value) {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+}
+
+function normalizedText(value) {
+  return decodeHtml(value)
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function sourceBodyText(value) {
+  return normalizedText(
+    value
+      .replace(/<p>\s*\{\{chart:[^}]+\}\}\s*<\/p>|\{\{chart:[^}]+\}\}/g, ' ')
+      .replace(/<h[1-6]\b[\s\S]*?<\/h[1-6]>/gi, ' ')
+      .replace(/^#{1,6}\s+.*$/gm, ' ')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/[#*_`|]+/g, ' '),
+  )
+}
+
+function expectedBodyPhrase(post) {
+  const text = sourceBodyText(post.body)
+  const sentence = text
+    .split(/(?<=[.!?])\s+/)
+    .find(item => item.length >= 60 && /[A-Za-z]/.test(item))
+  if (!sentence) fail(`/blog/${post.slug} source body needs a verifier phrase`)
+  return sentence.slice(0, 80).trim()
 }
 
 function parseJsonLd(html, slug) {
@@ -207,6 +256,33 @@ function assertSeoMeta(html, post) {
   }
 }
 
+function assertCrawlerVisibleArticle(html, post) {
+  if (!html.includes('data-prerendered-blog-article="true"')) {
+    fail(`/blog/${post.slug} missing prerendered article body`)
+  }
+  if (!html.includes('data-prerendered-blog-content="true"')) {
+    fail(`/blog/${post.slug} missing prerendered article content`)
+  }
+
+  const visibleText = normalizedText(html)
+  const h1 = findH1(html, post.slug)
+  if (h1 !== post.title) {
+    fail(`/blog/${post.slug} h1 must be ${post.title}`)
+  }
+  if (!visibleText.includes(post.author)) {
+    fail(`/blog/${post.slug} prerendered body missing source author`)
+  }
+
+  const phrase = expectedBodyPhrase(post)
+  if (!visibleText.includes(phrase)) {
+    fail(`/blog/${post.slug} prerendered body missing source phrase: ${phrase}`)
+  }
+
+  if (visibleText.length < 1000) {
+    fail(`/blog/${post.slug} prerendered body is too short for crawler-visible article content`)
+  }
+}
+
 function assertBreadcrumbs(node, canonical, slug) {
   const items = Array.isArray(node.itemListElement) ? node.itemListElement : []
   if (items.length < 3) fail(`/blog/${slug} breadcrumb list is incomplete`)
@@ -231,6 +307,7 @@ function verifyBlogPage(post, sitemap) {
   const html = readText(htmlPath)
 
   assertSeoMeta(html, post)
+  assertCrawlerVisibleArticle(html, post)
 
   const canonicalLink = findLink(html, 'canonical')
   if (attrValue(canonicalLink, 'href') !== canonical) {
