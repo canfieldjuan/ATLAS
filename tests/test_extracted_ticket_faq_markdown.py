@@ -193,6 +193,48 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     assert result.output_checks["condensed"] is True
 
 
+def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Checking account - Fees",
+                "pain_points": ["Fees"],
+                "evidence": [{
+                    "text": "I was charged overdraft fees after I closed the account.",
+                    "source_id": "cfpb:1",
+                    "source_type": "support_ticket",
+                    "source_title": "Checking account - Fees",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Loan payment issue",
+                "pain_points": ["Fees"],
+                "evidence": [{
+                    "text": "My payment was applied to the wrong loan balance.",
+                    "source_id": "cfpb:2",
+                    "source_type": "support_ticket",
+                    "source_title": "Loan payment issue",
+                }],
+            },
+        ],
+        support_contact="https://example.com/support",
+    )
+
+    assert result.items[0]["question"] == (
+        "What should I do if I was charged overdraft fees after I closed the account?"
+    )
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert "Open the bill, statement, payment history, or dispute record" in result.markdown
+    assert "contact support at https://example.com/support" in result.markdown
+
+
 def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
     result = build_ticket_faq_markdown(
         [
