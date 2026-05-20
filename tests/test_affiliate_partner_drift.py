@@ -257,6 +257,45 @@ def test_finds_partner_mutations():
     assert set(both) == {"UPDATE", "DELETE"}
 
 
+def test_parses_schema_qualified_and_quoted_inserts():
+    qualified = """
+    INSERT INTO public.affiliate_partners (name, product_name, category, affiliate_url, commission_type, commission_value, enabled)
+    VALUES ('Q Co', 'Qvendor', 'crm', 'https://q.example/?ref=x', 'cpa', '$5', true)
+    ON CONFLICT ((lower(product_name))) DO NOTHING;
+    """
+    quoted = """
+    INSERT INTO "affiliate_partners" (name, product_name, category, affiliate_url, commission_type, commission_value, enabled)
+    VALUES ('R Co', 'Rvendor', 'crm', 'https://r.example/?ref=x', 'cpa', '$5', true)
+    ON CONFLICT ((lower(product_name))) DO NOTHING;
+    """
+    rows_q, errs_q = drift.parse_seeded_partners(qualified)
+    assert errs_q == [] and [r["product_name"] for r in rows_q] == ["Qvendor"]
+    rows_r, errs_r = drift.parse_seeded_partners(quoted)
+    assert errs_r == [] and [r["product_name"] for r in rows_r] == ["Rvendor"]
+
+
+def test_does_not_match_prefixed_table_name():
+    # A different table whose name merely starts with affiliate_partners must
+    # not be treated as the partners table.
+    other = (
+        "INSERT INTO affiliate_partners_history (id, note) VALUES (1, 'x');"
+    )
+    rows, errs = drift.parse_seeded_partners(other)
+    assert rows == [] and errs == []
+    assert drift.find_partner_mutations(
+        "DELETE FROM affiliate_partners_history WHERE id = 1;"
+    ) == []
+
+
+def test_finds_qualified_and_quoted_mutations():
+    assert drift.find_partner_mutations(
+        "UPDATE public.affiliate_partners SET affiliate_url = 'x';"
+    ) == ["UPDATE"]
+    assert drift.find_partner_mutations(
+        'DELETE FROM "affiliate_partners" WHERE enabled = false;'
+    ) == ["DELETE"]
+
+
 def test_reconcile_warns_on_unmodeled_mutation_without_failing():
     # A mutation migration is not an error, but the audit can't model its
     # effect -- surface it as a warning, not a failure.
