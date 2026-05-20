@@ -70,7 +70,11 @@ def _blog_post_row():
         "description": "Pricing pressure dominates.",
         "topic_type": "vendor_alternative",
         "tags": ["pricing"],
-        "content": "body",
+        "content": (
+            "## Why is Acme pricing pressure showing up?\n\n"
+            "Acme pricing pressure is visible in recent review patterns when "
+            "buyers describe renewal friction and budget concerns."
+        ),
         "charts": [],
         "data_context": {
             "_metadata": {
@@ -79,6 +83,15 @@ def _blog_post_row():
             }
         },
         "llm_model": "fake-llm",
+        "seo_title": "Acme Pricing Pressure 2026",
+        "seo_description": "Acme pricing pressure from recent review data.",
+        "target_keyword": "acme pricing pressure",
+        "secondary_keywords": ["acme pricing"],
+        "faq": [
+            {"question": "Why is Acme pricing a concern?", "answer": "Pricing appears in reviews."},
+            {"question": "Who should compare alternatives?", "answer": "Teams under budget pressure."},
+            {"question": "What should buyers check?", "answer": "Renewal and support terms."},
+        ],
     }
 
 
@@ -202,6 +215,8 @@ def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     assert body["rows"][0]["status"] == "draft"
     assert body["rows"][0]["slug"] == "acme-pricing-pressure"
     assert body["rows"][0]["reasoning_wedge"] == "price_squeeze"
+    assert body["rows"][0]["passed_output_checks"] == 6
+    assert body["rows"][0]["seo_aeo_readiness"]["status"] == "ready"
     query, args = pool.fetch_calls[0]
     assert "FROM blog_posts" in query
     assert args == ("acct_1", "draft", "vendor_alternative", 5)

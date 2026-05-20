@@ -45,10 +45,35 @@ def _draft(**overrides) -> BlogPostDraft:
         description="Pricing pressure dominates.",
         topic_type="vendor_alternative",
         tags=("pricing", "retention"),
-        content="body",
+        content=(
+            "## Why is Acme pricing pressure showing up?\n\n"
+            "Acme pricing pressure is visible in recent review patterns, "
+            "especially when buyers describe renewal friction, budget concerns, "
+            "and comparison shopping. This section starts with a direct answer "
+            "so reviewers can quickly understand the point before reading the "
+            "supporting detail."
+        ),
         charts=({"id": "chart-1"},),
         data_context={"vendor": "Acme"},
         metadata={
+            "seo_title": "Acme Pricing Pressure 2026",
+            "seo_description": "Acme pricing pressure from recent review data.",
+            "target_keyword": "acme pricing pressure",
+            "secondary_keywords": ["acme pricing", "acme alternatives"],
+            "faq": [
+                {
+                    "question": "Why is Acme pricing a concern?",
+                    "answer": "Pricing pressure appears in review data.",
+                },
+                {
+                    "question": "Who should compare Acme alternatives?",
+                    "answer": "Teams with budget pressure should compare options.",
+                },
+                {
+                    "question": "What should buyers check?",
+                    "answer": "Buyers should check contract and support terms.",
+                },
+            ],
             "generation_usage": {
                 "input_tokens": 12,
                 "output_tokens": 6,
@@ -118,12 +143,28 @@ async def test_export_blog_post_drafts_derives_review_summary_fields() -> None:
     assert row["reasoning_context_used"] is True
     assert row["reasoning_wedge"] == "price_squeeze"
     assert row["reasoning_confidence"] == "high"
+    assert row["passed_output_checks"] == 6
+    assert row["output_checks"] == {
+        "seo_title_ready": True,
+        "seo_description_ready": True,
+        "target_keyword_present": True,
+        "secondary_keywords_present": True,
+        "faq_ready": True,
+        "aeo_structure_detected": True,
+    }
+    assert row["seo_aeo_readiness"] == {
+        "status": "ready",
+        "passed": 6,
+        "total": 6,
+        "missing": [],
+        "checks": row["output_checks"],
+    }
 
 
 @pytest.mark.asyncio
 async def test_export_blog_post_drafts_defaults_summary_fields_without_metadata() -> None:
     result = await export_blog_post_drafts(
-        _Repository(drafts=[_draft(metadata={})]),
+        _Repository(drafts=[_draft(content="body", metadata={})]),
         limit=1,
     )
 
@@ -135,6 +176,16 @@ async def test_export_blog_post_drafts_defaults_summary_fields_without_metadata(
     assert row["reasoning_context_used"] is False
     assert row["reasoning_wedge"] is None
     assert row["reasoning_confidence"] is None
+    assert row["passed_output_checks"] == 0
+    assert row["seo_aeo_readiness"]["status"] == "needs_review"
+    assert row["seo_aeo_readiness"]["missing"] == [
+        "seo_title_ready",
+        "seo_description_ready",
+        "target_keyword_present",
+        "secondary_keywords_present",
+        "faq_ready",
+        "aeo_structure_detected",
+    ]
 
 
 def test_blog_post_export_result_renders_csv() -> None:
@@ -155,8 +206,27 @@ def test_blog_post_export_result_renders_csv() -> None:
     csv_text = result.as_csv()
 
     assert csv_text.startswith("slug,title,description,topic_type")
+    assert "passed_output_checks,output_checks,seo_aeo_readiness" in csv_text
     assert "acme-pricing-pressure" in csv_text
     assert "{\"\"generation_parse_attempts\"\":2}" in csv_text
+
+
+@pytest.mark.asyncio
+async def test_export_blog_post_drafts_detects_answer_first_sections() -> None:
+    content = (
+        "## Acme Pricing Pattern\n\n"
+        "Acme pricing pressure appears in review data when buyers describe "
+        "renewal friction, budget pressure, and increased comparison shopping. "
+        "The point is not that every buyer has the same problem, but that the "
+        "article opens the section with a direct answer before detail."
+    )
+
+    result = await export_blog_post_drafts(
+        _Repository(drafts=[_draft(content=content)]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    assert result.rows[0]["output_checks"]["aeo_structure_detected"] is True
 
 
 @pytest.mark.asyncio
