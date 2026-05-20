@@ -37,7 +37,21 @@ DEFAULT_INTENT_RULES = (
     ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
     ("email and profile updates", ("change my email", "update the email", "email address", "profile")),
     ("login and account access", ("login", "account access")),
-    ("billing and payments", ("billing", "invoice", "payment", "receipt", "charge")),
+    ("billing and payments", (
+        "billing",
+        "invoice",
+        "payment",
+        "receipt",
+        "charge",
+        "charged",
+        "fee",
+        "fees",
+        "interest",
+        "loan",
+        "lease",
+        "statement",
+        "dispute",
+    )),
     ("integration setup", ("integration", "api", "webhook", "sync", "connection")),
     ("renewal and cancellation", ("renewal", "cancel", "cancellation", "contract")),
 )
@@ -497,6 +511,24 @@ def _first_person_issue_question_text(text: str) -> str:
         ("we're trying to ", "How do we "),
     )
     for prefix, question_prefix in patterns:
+        if lowered.startswith(prefix):
+            remainder = sentence[len(prefix):].strip()
+            normalized = _normalize_question_text(f"{question_prefix}{remainder}")
+            if _usable_question(normalized):
+                return normalized
+    complaint_patterns = (
+        ("i was ", "What should I do if I was "),
+        ("i got ", "What should I do if I got "),
+        ("i received ", "What should I do if I received "),
+        ("i paid ", "What should I do if I paid "),
+        ("my ", "What should I do if my "),
+        ("we were ", "What should we do if we were "),
+        ("we got ", "What should we do if we got "),
+        ("we received ", "What should we do if we received "),
+        ("we paid ", "What should we do if we paid "),
+        ("our ", "What should we do if our "),
+    )
+    for prefix, question_prefix in complaint_patterns:
         if lowered.startswith(prefix):
             remainder = sentence[len(prefix):].strip()
             normalized = _normalize_question_text(f"{question_prefix}{remainder}")
