@@ -118,7 +118,7 @@ post-seed edits and orphan seeds without blocking.
 
 | Area | Estimated LOC |
 |---|---:|
-| `scripts/audit_affiliate_partner_drift.py` (parser + reconciler + DB run) | ~340 |
-| `tests/test_affiliate_partner_drift.py` | ~225 |
-| Plan doc | ~135 |
-| **Total** | **~700** |
+| `scripts/audit_affiliate_partner_drift.py` (parser + reconciler + DB run) | ~390 |
+| `tests/test_affiliate_partner_drift.py` | ~270 |
+| Plan doc | ~145 |
+| **Total** | **~805** |
