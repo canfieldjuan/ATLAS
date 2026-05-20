@@ -609,10 +609,12 @@ def _output_checks(
     items: Sequence[Mapping[str, Any]],
     ticket_source_count: int,
 ) -> dict[str, bool]:
+    has_items = bool(items)
     return {
-        "uses_user_vocabulary": all(_clean(item.get("topic")) for item in items),
-        "condensed": len(items) <= ticket_source_count,
-        "has_action_items": all(bool(item.get("action_items")) for item in items),
+        "uses_user_vocabulary": has_items
+        and all(item.get("question_source") == "customer_wording" for item in items),
+        "condensed": has_items and (ticket_source_count <= 1 or len(items) < ticket_source_count),
+        "has_action_items": has_items and all(bool(item.get("action_items")) for item in items),
     }
 
 
