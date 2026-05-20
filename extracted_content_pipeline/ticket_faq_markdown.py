@@ -63,6 +63,10 @@ _ACTION_RULES = (
         "Find the workflow or automation rule that should handle this step.",
         "Check the last failed handoff, note which step stopped, and send that detail to support if it still needs manual cleanup.",
     )),
+    (("billing", "invoice", "payment", "receipt", "charge", "fee", "fees", "interest", "loan", "lease", "statement", "dispute"), (
+        "Open the bill, statement, payment history, or dispute record connected to the issue.",
+        "Compare the charge, fee, payment, or balance against your receipt, contract, or written confirmation.",
+    )),
     (("login", "email", "profile", "password", "account"), (
         "Open your profile, account settings, or login settings and find the email, password, or account field you need to change.",
         "Save the change, then check the old and new inboxes for a confirmation message.",
@@ -598,6 +602,11 @@ def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str
         return (
             f"{_support_sentence(support_contact)} if the export is missing, "
             "locked by plan or role, or still unavailable after an admin checks permissions."
+        )
+    if any(term in text for term in ("billing", "invoice", "payment", "receipt", "charge", "fee", "fees", "interest", "loan", "lease", "statement", "dispute")):
+        return (
+            f"{_support_sentence(support_contact)} if the charge, fee, payment, "
+            "balance, or dispute still looks wrong after you compare it with your records."
         )
     if any(term in text for term in ("login", "email", "profile", "password", "account")):
         return (

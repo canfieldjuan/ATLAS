@@ -801,6 +801,49 @@ def test_build_ticket_faq_markdown_accepts_ticket_source_type_alias() -> None:
     assert "I need help with billing." in result.markdown
 
 
+def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_shaped_rows() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Credit card or prepaid card - Fees or interest",
+                "pain_points": ["Fees or interest"],
+                "evidence": [{
+                    "text": (
+                        "I logged into my account and saw a foreign transaction "
+                        "fee that should not have been charged."
+                    ),
+                    "source_id": "cfpb:3559709",
+                    "source_type": "support_ticket",
+                    "source_title": "Credit card or prepaid card - Fees or interest",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Vehicle loan or lease - Managing the loan or lease",
+                "pain_points": ["Managing the loan or lease"],
+                "evidence": [{
+                    "text": (
+                        "My loan payoff balance and payment extension do not "
+                        "match what the representative told me."
+                    ),
+                    "source_id": "cfpb:3205066",
+                    "source_type": "support_ticket",
+                    "source_title": "Vehicle loan or lease - Managing the loan or lease",
+                }],
+            },
+        ],
+        support_contact="https://www.consumerfinance.gov/complaint/",
+    )
+
+    markdown = result.markdown
+    assert "Open the bill, statement, payment history, or dispute record connected to the issue." in markdown
+    assert "Compare the charge, fee, payment, or balance against your receipt, contract, or written confirmation." in markdown
+    assert "charge, fee, payment, balance, or dispute still looks wrong" in markdown
+    assert "Open your profile, account settings, or login settings" not in markdown
+    assert "https://www.consumerfinance.gov/complaint/" in markdown
+
+
 def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified_rows() -> None:
     result = build_ticket_faq_markdown([
         {
