@@ -60,6 +60,19 @@ _DIVERGENCE_FIELDS = (
 # SQL parsing (pure -- no DB)
 # ---------------------------------------------------------------------------
 
+# A reference to the affiliate_partners table that tolerates the valid SQL
+# forms a migration might use: an optional schema qualifier and double-quoted
+# identifiers -- e.g. `affiliate_partners`, `public.affiliate_partners`,
+# `"affiliate_partners"`, `public."affiliate_partners"`. The negative lookahead
+# on the unquoted form stops it matching a longer name like
+# `affiliate_partners_history`; the quoted form is matched exactly. Used by both
+# the INSERT parser and the UPDATE/DELETE mutation detector so neither silently
+# misses a qualified/quoted statement.
+_AFF_TABLE = (
+    r'(?:(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*)?'
+    r'(?:"affiliate_partners"|affiliate_partners(?![\w$]))'
+)
+
 
 def _read_paren_group(s: str, open_idx: int) -> tuple[str, int]:
     """Return (inner_text, index_after_close) for the parenthesized group whose
@@ -212,7 +225,7 @@ def parse_seeded_partners(sql: str) -> tuple[list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     for m in re.finditer(
-        r"INSERT\s+INTO\s+affiliate_partners\s*\(", sql, re.IGNORECASE
+        r"INSERT\s+INTO\s+" + _AFF_TABLE + r"\s*\(", sql, re.IGNORECASE
     ):
         cols_str, after_cols = _read_paren_group(sql, m.end() - 1)
         vm = re.compile(r"\s*VALUES\s*", re.IGNORECASE).match(sql, after_cols)
@@ -255,9 +268,9 @@ def find_partner_mutations(sql: str) -> list[str]:
     migration this parser does not apply -- the caller surfaces these so the
     blind spot is visible rather than silently skewing reconciliation."""
     found: list[str] = []
-    if re.search(r"\bUPDATE\s+affiliate_partners\b", sql, re.IGNORECASE):
+    if re.search(r"\bUPDATE\s+" + _AFF_TABLE, sql, re.IGNORECASE):
         found.append("UPDATE")
-    if re.search(r"\bDELETE\s+FROM\s+affiliate_partners\b", sql, re.IGNORECASE):
+    if re.search(r"\bDELETE\s+FROM\s+" + _AFF_TABLE, sql, re.IGNORECASE):
         found.append("DELETE")
     return found
 
