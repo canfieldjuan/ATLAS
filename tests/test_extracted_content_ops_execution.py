@@ -518,6 +518,7 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                 ],
                 "faq_window_days": 90,
                 "faq_as_of_date": "2026-05-20",
+                "faq_support_contact": "1-800-555-0100",
             },
         },
         services=ContentOpsExecutionServices(faq_markdown=TicketFAQMarkdownService()),
@@ -529,6 +530,7 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
     assert step["result"]["generated"] == 1
     assert step["result"]["markdown"].startswith("# Support FAQ")
     assert "How do I change my email address?" in step["result"]["markdown"]
+    assert "contact support at 1-800-555-0100" in step["result"]["markdown"]
     assert "Billing export is confusing." not in step["result"]["markdown"]
 
 

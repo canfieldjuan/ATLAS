@@ -414,6 +414,7 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
                 "source_max_text_chars": 80,
                 "faq_window_days": 90,
                 "faq_as_of_date": "2026-05-20",
+                "faq_support_contact": "1-800-555-0100",
             },
         }
     )
@@ -429,6 +430,7 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
         "max_text_chars": 80,
         "window_days": 90,
         "as_of_date": "2026-05-20",
+        "support_contact": "1-800-555-0100",
     }
 
 

@@ -114,7 +114,7 @@ def _run_ticket_faq_cli(path: Path, *args: str) -> subprocess.CompletedProcess[s
 def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 
-    result = build_ticket_faq_markdown(loaded.opportunities)
+    result = build_ticket_faq_markdown(loaded.opportunities, support_contact="1-800-555-0100")
 
     assert result.source_count == 4
     assert result.ticket_source_count == 4
@@ -127,11 +127,11 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "Customers are asking about email and profile updates across 2 ticket sources."
     )
     assert result.items[0]["steps"] == (
-        "Confirm the account details you are trying to change or access.",
-        "If self-service does not work, contact support with the affected email or account id.",
-        "Include the cited ticket details if you need support to investigate.",
+        "Open your profile, account settings, or login settings and find the email, password, or account field you need to change.",
+        "Save the change, then check the old and new inboxes for a confirmation message.",
+        "If it still does not work, contact support at 1-800-555-0100 and include the cited ticket details.",
     )
-    assert "email field is locked" in result.items[0]["when_to_contact_support"]
+    assert "the field is locked" in result.items[0]["when_to_contact_support"]
     assert result.items[0]["evidence_quotes"] == (
         '`ticket-acme-1` - Change login email: "How do I change my login email?"',
         '`ticket-acme-2` - Update account email: "I need to update the email on my account."',
@@ -140,12 +140,22 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     assert "How do we export campaign attribution data before renewal?" in result.markdown
     assert "`ticket-acme-1` - Change login email" in result.markdown
     assert "**What to do next:**" in result.markdown
-    assert "contact support with the affected email or account id." in result.markdown
+    assert "self-service" not in result.markdown.lower()
+    assert "contact support at 1-800-555-0100" in result.markdown
     assert result.output_checks == {
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
     }
+
+
+def test_build_ticket_faq_markdown_does_not_invent_support_contact() -> None:
+    loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
+
+    result = build_ticket_faq_markdown(loaded.opportunities)
+
+    assert "contact support at" not in result.markdown.lower()
+    assert "If it still does not work, contact support and include the cited ticket details." in result.markdown
 
 
 def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
@@ -496,9 +506,9 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
         in paragraph
         for paragraph in rendered.paragraphs
     )
-    assert any("email field is locked" in paragraph for paragraph in rendered.paragraphs)
+    assert any("the field is locked" in paragraph for paragraph in rendered.paragraphs)
     assert any(
-        "Check whether your plan and role include the needed export"
+        "Open the reporting or analytics area and choose the date range you need."
         in item
         for item in rendered.list_items
     )
@@ -901,6 +911,8 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
             "csv",
             "--title",
             "Support FAQ",
+            "--support-contact",
+            "1-800-555-0100",
             "--output",
             str(output),
         ],
@@ -914,6 +926,7 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert markdown.startswith("# Support FAQ")
     assert "Ticket sources used: 4" in markdown
     assert "ticket-acme-1" in markdown
+    assert "contact support at 1-800-555-0100" in markdown
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:

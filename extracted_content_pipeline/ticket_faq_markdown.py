@@ -56,16 +56,16 @@ _DATE_KEYS = (
 )
 _ACTION_RULES = (
     (("export", "report", "dashboard", "attribution"), (
-        "Check whether your plan and role include the needed export or reporting access.",
-        "If the option is missing, ask support or an admin to enable access or provide the export.",
+        "Open the reporting or analytics area and choose the date range you need.",
+        "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
     )),
     (("handoff", "follow-up", "workflow", "automation", "manual"), (
-        "Check the workflow or automation rule that should handle this step.",
-        "If the handoff still needs manual cleanup, document the exact step and escalate it.",
+        "Find the workflow or automation rule that should handle this step.",
+        "Check the last failed handoff, note which step stopped, and send that detail to support if it still needs manual cleanup.",
     )),
     (("login", "email", "profile", "password", "account"), (
-        "Confirm the account details you are trying to change or access.",
-        "If self-service does not work, contact support with the affected email or account id.",
+        "Open your profile, account settings, or login settings and find the email, password, or account field you need to change.",
+        "Save the change, then check the old and new inboxes for a confirmation message.",
     )),
 )
 
@@ -106,6 +106,7 @@ class TicketFAQMarkdownConfig:
     max_text_chars: int = 1200
     window_days: int | None = None
     as_of_date: str | None = None
+    support_contact: str | None = None
     intent_rules: tuple[tuple[str, tuple[str, ...]], ...] = DEFAULT_INTENT_RULES
 
 
@@ -134,6 +135,7 @@ class TicketFAQMarkdownService:
         max_text_chars: int | None = None,
         window_days: int | None = None,
         as_of_date: Any = None,
+        support_contact: str | None = None,
         intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
@@ -155,6 +157,11 @@ class TicketFAQMarkdownService:
             else self.config.window_days
         )
         resolved_as_of_date = as_of_date if as_of_date is not None else self.config.as_of_date
+        resolved_support_contact = (
+            support_contact
+            if support_contact is not None
+            else self.config.support_contact
+        )
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be positive")
         normalized = source_rows_to_campaign_opportunities(
@@ -181,6 +188,7 @@ class TicketFAQMarkdownService:
             source_types=resolved_source_types,
             window_days=resolved_window_days,
             as_of_date=resolved_as_of_date,
+            support_contact=resolved_support_contact,
             intent_rules=resolved_intent_rules,
         )
         result = replace(
@@ -203,6 +211,7 @@ class TicketFAQMarkdownService:
                     warnings=result.warnings,
                     metadata={
                         "source_types": list(resolved_source_types),
+                        **_support_contact_metadata(resolved_support_contact),
                         **_date_window_metadata(
                             window_days=resolved_window_days,
                             as_of_date=resolved_as_of_date,
@@ -224,6 +233,7 @@ def build_ticket_faq_markdown(
     source_types: Sequence[str] = DEFAULT_TICKET_SOURCE_TYPES,
     window_days: int | None = None,
     as_of_date: Any = None,
+    support_contact: str | None = None,
     intent_rules: Sequence[tuple[str, Sequence[str]]] = DEFAULT_INTENT_RULES,
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
@@ -275,7 +285,12 @@ def build_ticket_faq_markdown(
             })
 
     items = tuple(
-        _item(topic, rows, max_evidence_per_item=max_evidence_per_item)
+        _item(
+            topic,
+            rows,
+            max_evidence_per_item=max_evidence_per_item,
+            support_contact=support_contact,
+        )
         for topic, rows in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:max_items]
     )
     return TicketFAQMarkdownResult(
@@ -363,6 +378,7 @@ def _item(
     rows: Sequence[Mapping[str, str]],
     *,
     max_evidence_per_item: int,
+    support_contact: str | None,
 ) -> dict[str, Any]:
     display_rows = rows[:max_evidence_per_item]
     sources = tuple(_source_label(row) for row in display_rows)
@@ -371,8 +387,8 @@ def _item(
     snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
     question, question_source = _question(topic, display_rows)
     summary = _summary(topic=topic, rows=display_rows, source_count=len(source_ids))
-    steps = _article_steps(topic, snippets)
-    escalation = _escalation_guidance(topic, snippets)
+    steps = _article_steps(topic, snippets, support_contact=support_contact)
+    escalation = _escalation_guidance(topic, snippets, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     return {
         "topic": topic,
@@ -559,39 +575,56 @@ def _summary(*, topic: str, rows: Sequence[Mapping[str, str]], source_count: int
         return (
             f"Customers are asking about {issue} across {source_count} ticket sources. "
             f"The clearest customer wording is {example}, so this FAQ should answer "
-            "that request directly and then point users to support when self-service is blocked."
+            "that request directly and tell users exactly what to try next."
         )
     return (
         f"A customer asked about {issue}: {example}. This FAQ should answer the "
-        "request directly and then point the user to support when self-service is blocked."
+        "request directly and tell the user exactly what to try next."
     )
 
 
-def _article_steps(topic: str, evidence_text: str) -> tuple[str, ...]:
+def _article_steps(topic: str, evidence_text: str, *, support_contact: str | None) -> tuple[str, ...]:
     steps = _action_items(topic, evidence_text)
     return (
         steps[0],
         steps[1],
-        "Include the cited ticket details if you need support to investigate.",
+        _support_step(support_contact),
     )
 
 
-def _escalation_guidance(topic: str, evidence_text: str) -> str:
+def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str | None) -> str:
     text = f"{topic} {evidence_text}".lower()
     if any(term in text for term in ("export", "report", "dashboard", "attribution")):
         return (
-            "Contact support or an admin if the export is missing, locked by plan "
-            "or role, or still unavailable after permissions are checked."
+            f"{_support_sentence(support_contact)} if the export is missing, "
+            "locked by plan or role, or still unavailable after an admin checks permissions."
         )
     if any(term in text for term in ("login", "email", "profile", "password", "account")):
         return (
-            "Contact support if you cannot access the account, the email field is "
-            "locked, or the confirmation message never arrives."
+            f"{_support_sentence(support_contact)} if you cannot access the account, "
+            "the field is locked, or the confirmation message never arrives."
         )
     return (
-        "Contact support when the self-service path is unavailable or the issue "
-        "still affects the workflow after the steps above."
+        f"{_support_sentence(support_contact)} if the issue still affects the workflow "
+        "after you try the steps above."
     )
+
+
+def _support_step(support_contact: str | None) -> str:
+    contact = _clean(support_contact)
+    if contact:
+        return (
+            f"If it still does not work, contact support at {contact} and include "
+            "the cited ticket details."
+        )
+    return "If it still does not work, contact support and include the cited ticket details."
+
+
+def _support_sentence(support_contact: str | None) -> str:
+    contact = _clean(support_contact)
+    if contact:
+        return f"Contact support at {contact}"
+    return "Contact support"
 
 
 def _evidence_quote(row: Mapping[str, str]) -> str:
@@ -709,14 +742,21 @@ def _date_window_metadata(*, window_days: int | None, as_of_date: Any) -> dict[s
     return metadata
 
 
+def _support_contact_metadata(support_contact: str | None) -> dict[str, str]:
+    contact = _clean(support_contact)
+    if not contact:
+        return {}
+    return {"support_contact": contact}
+
+
 def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:
     text = f"{topic} {evidence_text}".lower()
     for terms, steps in _ACTION_RULES:
         if any(term in text for term in terms):
             return steps
     return (
-        "Check whether this issue affects your current account or workflow.",
-        "Contact support with the cited ticket details if the answer does not resolve it.",
+        "Review the account, page, or workflow named in the ticket.",
+        "Write down what you tried and the exact message or behavior you saw.",
     )
 
 
