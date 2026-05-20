@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 ## Purpose
 
@@ -189,3 +189,12 @@ without editing each source row. These close the known generic source-row
 ingestion friction. PR #630 added optional live-provider mode to the CFPB
 support-ticket-like Postgres smoke, matching the review-source path. Further
 source breadth should still wait for a real host export fixture.
+
+**FAQ output-contract update:** PR #666 proved the persisted support-ticket FAQ
+lifecycle: source rows -> generated Markdown draft -> export -> review/status
+update -> reviewed export. PR #667 tightened the packaged support-ticket FAQ
+demo so it proves the three output checks operators care about: customer
+vocabulary, repeated-intent condensation, and action items. The FAQ Markdown
+CLI now has an opt-in `--require-output-checks` guard for host smoke runs. This
+does not create a new active implementation backlog; future FAQ/source work
+should be driven by a real customer help desk export or hosted UI need.
