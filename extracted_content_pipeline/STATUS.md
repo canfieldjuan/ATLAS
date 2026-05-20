@@ -82,14 +82,17 @@ source of truth for what remains.
 - `sales_brief_export` provides a read-only draft export path over generated
   sales briefs so hosts can review JSON/CSV outputs without handwritten SQL or
   a mounted sales brief API.
+- `ticket_faq_export` provides a read-only draft export path over generated
+  ticket FAQ Markdown documents so hosts can review JSON/CSV outputs without
+  handwritten SQL or a mounted FAQ API.
 - `scripts/export_extracted_content_assets.py` exposes the report, blog post,
-  landing page, and sales brief export helpers as a host-facing JSON/CSV CLI
-  backed by the product-owned Postgres repositories.
+  landing page, sales brief, and FAQ Markdown export helpers as a host-facing
+  JSON/CSV CLI backed by the product-owned Postgres repositories.
 - `scripts/review_extracted_content_assets.py` exposes scoped status updates
-  for exported report, blog post, landing page, and sales brief drafts without
-  handwritten SQL.
+  for exported report, blog post, landing page, sales brief, and FAQ Markdown
+  drafts without handwritten SQL.
 - `api.generated_assets` provides a FastAPI router factory around generated
-  report, blog post, landing page, and sales brief list/export/review
+  report, blog post, landing page, sales brief, and FAQ Markdown list/export/review
   workflows. Hosts inject pool providers, tenant scope, and auth dependencies.
 - `api.reasoning_contexts` provides a FastAPI router factory around DB-backed
   campaign reasoning context list/upsert/delete workflows. Hosts inject pool

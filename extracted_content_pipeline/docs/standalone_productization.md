@@ -198,11 +198,17 @@ read-only review path for generated sales briefs. It calls the host-injected
 brief sections and metadata, and derives top-level generation and reasoning
 summary columns for operator review without requiring direct SQL access.
 
+`extracted_content_pipeline/ticket_faq_export.py` owns the equivalent read-only
+review path for generated ticket FAQ Markdown documents. It calls the
+host-injected `TicketFAQRepository.list_drafts()` port, emits JSON or CSV rows,
+and preserves the Markdown body, FAQ items, output checks, warnings, and
+metadata for operator review without requiring direct SQL access.
+
 `scripts/export_extracted_content_assets.py` exposes those generated-asset
 export helpers to operators. Hosts choose `--asset report`, `--asset
-landing_page`, or `--asset sales_brief`; the CLI creates the product-owned
-Postgres repository, applies the relevant filters, and writes JSON or CSV
-without requiring ad hoc SQL.
+landing_page`, `--asset sales_brief`, or `--asset faq_markdown`; the CLI
+creates the product-owned Postgres repository, applies the relevant filters,
+and writes JSON or CSV without requiring ad hoc SQL.
 
 `scripts/review_extracted_content_assets.py` owns the matching status-update
 loop for generated assets. Hosts pass `--asset`, `--id`, `--status`, and an
@@ -217,8 +223,9 @@ the blog-post generator.
 
 `extracted_content_pipeline/api/generated_assets.py` owns the host-mounted
 FastAPI surface for generated asset review workflows. It exposes list, CSV/JSON
-export, and status-update routes for reports, landing pages, and sales briefs
-while requiring the host to inject database, tenant scope, and auth providers.
+export, and status-update routes for reports, landing pages, sales briefs, and
+FAQ Markdown documents while requiring the host to inject database, tenant
+scope, and auth providers.
 
 `extracted_content_pipeline/campaign_postgres_review.py` owns the write side of
 that host review loop. It updates selected `b2b_campaigns` rows by explicit

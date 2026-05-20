@@ -28,12 +28,14 @@ from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
 from ..sales_brief_export import export_sales_brief_drafts
 from ..sales_brief_postgres import PostgresSalesBriefRepository
+from ..ticket_faq_export import export_ticket_faq_drafts
+from ..ticket_faq_postgres import PostgresTicketFAQRepository
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
 
-ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 
 
 def _require_fastapi() -> None:
@@ -368,6 +370,14 @@ async def _export_for_asset(
             brief_type=brief_type,
             limit=limit,
         )
+    if asset == "faq_markdown":
+        return await export_ticket_faq_drafts(
+            PostgresTicketFAQRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=target_mode,
+            limit=limit,
+        )
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
 
 
@@ -387,6 +397,8 @@ async def _update_asset_status(
         return await PostgresLandingPageRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_status(asset_id, status, scope=scope)
+    if asset == "faq_markdown":
+        return await PostgresTicketFAQRepository(pool).update_status(asset_id, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
 
 
@@ -406,6 +418,8 @@ async def _update_asset_statuses(
         return await PostgresLandingPageRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "faq_markdown":
+        return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
 
 
