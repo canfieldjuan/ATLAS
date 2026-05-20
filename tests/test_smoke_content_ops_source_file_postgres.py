@@ -128,19 +128,31 @@ async def test_source_file_postgres_smoke_imports_and_persists(monkeypatch):
     pool = _Pool(
         saved_draft_rows=[
             _saved_draft_row("ticket-acme-1"),
+            _saved_draft_row("ticket-acme-2"),
             _saved_draft_row("ticket-northstar-1"),
+            _saved_draft_row("ticket-northstar-2"),
         ],
     )
     monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
 
     async def fake_generate_imported_target_drafts(**kwargs):
-        assert kwargs["target_ids"] == ["ticket-acme-1", "ticket-northstar-1"]
+        assert kwargs["target_ids"] == [
+            "ticket-acme-1",
+            "ticket-acme-2",
+            "ticket-northstar-1",
+            "ticket-northstar-2",
+        ]
         return {
-            "requested": 2,
-            "generated": 2,
+            "requested": 4,
+            "generated": 4,
             "skipped": 0,
             "reasoning_contexts_used": 0,
-            "saved_ids": ["campaign-ticket-acme-1", "campaign-ticket-northstar-1"],
+            "saved_ids": [
+                "campaign-ticket-acme-1",
+                "campaign-ticket-acme-2",
+                "campaign-ticket-northstar-1",
+                "campaign-ticket-northstar-2",
+            ],
             "errors": [],
         }
 
@@ -154,12 +166,14 @@ async def test_source_file_postgres_smoke_imports_and_persists(monkeypatch):
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["source_rows"] == 2
-    assert payload["import"]["inserted"] == 2
-    assert payload["drafts"]["generated"] == 2
+    assert payload["source_rows"] == 4
+    assert payload["import"]["inserted"] == 4
+    assert payload["drafts"]["generated"] == 4
     assert [row["target_id"] for row in payload["saved_drafts"]] == [
         "ticket-acme-1",
+        "ticket-acme-2",
         "ticket-northstar-1",
+        "ticket-northstar-2",
     ]
     assert pool.closed is True
     assert "DELETE FROM \"campaign_opportunities\"" in pool.execute_calls[0]["query"]

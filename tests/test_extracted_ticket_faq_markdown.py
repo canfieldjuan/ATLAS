@@ -113,16 +113,21 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
 
     result = build_ticket_faq_markdown(loaded.opportunities)
 
-    assert result.source_count == 2
-    assert result.ticket_source_count == 2
-    assert [item["topic"] for item in result.items] == ["manual follow-up", "reporting friction"]
-    assert "campaign attribution data" in result.markdown
-    assert "`ticket-acme-1` - Reporting export blocked before renewal" in result.markdown
+    assert result.source_count == 4
+    assert result.ticket_source_count == 4
+    assert [item["topic"] for item in result.items] == [
+        "email and profile updates",
+        "reporting friction",
+    ]
+    assert [item["ticket_count"] for item in result.items] == [2, 2]
+    assert "How do I change my login email?" in result.markdown
+    assert "How do we export campaign attribution data before renewal?" in result.markdown
+    assert "`ticket-acme-1` - Change login email" in result.markdown
     assert "**What to do next:**" in result.markdown
-    assert "Check whether your plan and role include the needed export" in result.markdown
+    assert "contact support with the affected email or account id." in result.markdown
     assert result.output_checks == {
-        "uses_user_vocabulary": False,
-        "condensed": False,
+        "uses_user_vocabulary": True,
+        "condensed": True,
         "has_action_items": True,
     }
 
@@ -443,30 +448,30 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
 
     assert rendered.h1 == ["Customer Ticket FAQ"]
     assert rendered.h2 == [
-        "1. What are customers asking about manual follow-up?",
-        "2. What are customers asking about reporting friction?",
+        "1. How do I change my login email?",
+        "2. How do we export campaign attribution data before renewal?",
     ]
     assert rendered.strong.count("What to do next:") == 2
     assert rendered.strong.count("Sources:") == 2
     assert rendered.ul_count == 4
     assert any(
-        "Support notes show campaign handoffs are still being reconciled manually"
+        "I need to update the email on my account."
         in paragraph
         for paragraph in rendered.paragraphs
     )
     assert any(
-        "Check the workflow or automation rule that should handle this step."
+        "Check whether your plan and role include the needed export"
         in item
         for item in rendered.list_items
     )
     assert any(
-        "ticket-acme-1 - Reporting export blocked before renewal" in item
+        "ticket-acme-1 - Change login email" in item
         for item in rendered.list_items
     )
     assert len(result.items) == 2
     assert result.output_checks == {
-        "uses_user_vocabulary": False,
-        "condensed": False,
+        "uses_user_vocabulary": True,
+        "condensed": True,
         "has_action_items": True,
     }
 
@@ -869,7 +874,7 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert completed.stdout == ""
     markdown = output.read_text(encoding="utf-8")
     assert markdown.startswith("# Support FAQ")
-    assert "Ticket sources used: 2" in markdown
+    assert "Ticket sources used: 4" in markdown
     assert "ticket-acme-1" in markdown
 
 
@@ -935,6 +940,40 @@ def test_ticket_faq_cli_stdout_limits_and_result_serializes() -> None:
     encoded = json.dumps(build_ticket_faq_markdown(loaded.opportunities).as_dict(), sort_keys=True)
     assert "action_items" in encoded
     assert "output_checks" in encoded
+
+
+def test_ticket_faq_cli_requires_output_checks_for_packaged_rows() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(SUPPORT_TICKET_CSV),
+            "--source-format",
+            "csv",
+            "--require-output-checks",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "How do I change my login email?" in completed.stdout
+    assert "FAQ output checks failed" not in completed.stderr
+
+
+def test_ticket_faq_cli_fails_required_output_checks_for_weak_rows(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+            "ticket-1,2026-05-01,Unique one,The export button moved.,exports",
+            "ticket-2,2026-05-01,Unique two,Billing receipt is missing.,billing",
+    )
+
+    completed = _run_ticket_faq_cli(source, "--require-output-checks")
+
+    assert completed.returncode == 1
+    assert "FAQ output checks failed" in completed.stderr
+    assert "condensed" in completed.stderr
+    assert "uses_user_vocabulary" in completed.stderr
 
 
 def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> None:

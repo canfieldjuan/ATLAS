@@ -70,6 +70,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Write FAQ Markdown to this path instead of stdout.",
     )
+    parser.add_argument(
+        "--require-output-checks",
+        action="store_true",
+        help="Fail when generated FAQ output checks are not all true.",
+    )
     return parser.parse_args(argv)
 
 
@@ -105,11 +110,18 @@ def main(argv: list[str] | None = None) -> int:
         window_days=args.window_days,
         as_of_date=args.as_of_date,
     )
+    failed_checks = _failed_output_checks(result.output_checks)
+    if args.require_output_checks and failed_checks:
+        raise SystemExit(f"FAQ output checks failed: {', '.join(failed_checks)}")
     if args.output:
         args.output.write_text(result.markdown, encoding="utf-8")
     else:
         print(result.markdown, end="")
     return 0
+
+
+def _failed_output_checks(output_checks: dict[str, bool]) -> list[str]:
+    return [name for name, passed in sorted(output_checks.items()) if passed is not True]
 
 
 if __name__ == "__main__":
