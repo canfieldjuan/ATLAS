@@ -11,6 +11,20 @@ import { resolve, join } from 'node:path'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
+const ATLAS_SAME_AS = [
+  'https://twitter.com/atlasintel',
+  'https://www.linkedin.com/company/atlas-intelligence',
+]
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function parseStringField(content: string, field: string): string {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
+  const match = content.match(pattern)
+  return match ? match[1].replace(/\\'/g, "'") : ''
+}
 
 // ---------------------------------------------------------------------------
 // Sitemap plugin
@@ -135,17 +149,18 @@ function prerenderPlugin() {
       for (const file of readdirSync(blogDir)) {
         if (!file.endsWith('.ts') || file === 'index.ts') continue
         const content = readFileSync(join(blogDir, file), 'utf-8')
-        const slug = (content.match(/slug:\s*'([^']+)'/) || [])[1]
+        const slug = parseStringField(content, 'slug')
         if (!slug) continue
 
         const seoTitle =
-          (content.match(/seo_title:\s*'([^']+)'/) || [])[1] ||
-          (content.match(/title:\s*'([^']+)'/) || [])[1] ||
+          parseStringField(content, 'seo_title') ||
+          parseStringField(content, 'title') ||
           'Atlas Intelligence Blog'
         const seoDesc =
-          (content.match(/seo_description:\s*'([^']+)'/) || [])[1] ||
-          (content.match(/description:\s*'([^']+)'/) || [])[1] ||
+          parseStringField(content, 'seo_description') ||
+          parseStringField(content, 'description') ||
           'Amazon seller intelligence and competitive analysis insights.'
+        const date = parseStringField(content, 'date')
 
         blogRoutes.push({
           path: `/blog/${slug}`,
@@ -160,12 +175,19 @@ function prerenderPlugin() {
                 '@type': 'BlogPosting',
                 headline: seoTitle,
                 description: seoDesc,
+                datePublished: date || undefined,
+                dateModified: date || undefined,
                 image: DEFAULT_OG_IMAGE,
-                author: { '@type': 'Organization', name: 'Atlas Intelligence' },
+                author: {
+                  '@type': 'Organization',
+                  name: 'Atlas Intelligence',
+                  sameAs: ATLAS_SAME_AS,
+                },
                 publisher: {
                   '@type': 'Organization',
                   name: 'Atlas Intelligence',
                   url: BASE_URL,
+                  sameAs: ATLAS_SAME_AS,
                   logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
                 },
                 mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${slug}` },
