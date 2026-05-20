@@ -205,6 +205,49 @@ async def test_asset_review_cli_updates_sales_brief_status(monkeypatch, capsys) 
 
 
 @pytest.mark.asyncio
+async def test_asset_review_cli_updates_ticket_faq_status(monkeypatch, capsys) -> None:
+    cli = _load_cli_module()
+    pool = _Pool()
+
+    async def create_pool(database_url):
+        return pool
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "review",
+            "--database-url",
+            "postgres://example",
+            "--asset",
+            "faq_markdown",
+            "--id",
+            "faq-uuid-1",
+            "--status",
+            "approved",
+            "--account-id",
+            "acct_1",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    query, args = pool.execute_calls[0]
+    assert exit_code == 0
+    assert "UPDATE ticket_faq_markdown" in query
+    assert args == ("faq-uuid-1", "approved", "acct_1")
+    assert output == {
+        "account_id": "acct_1",
+        "asset": "faq_markdown",
+        "id": "faq-uuid-1",
+        "status": "approved",
+        "updated": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_asset_review_cli_allows_host_defined_status(monkeypatch, capsys) -> None:
     cli = _load_cli_module()
     pool = _Pool()

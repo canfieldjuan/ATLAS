@@ -118,6 +118,23 @@ def _sales_brief_row():
     }
 
 
+def _ticket_faq_row():
+    return {
+        "id": "faq-uuid-1",
+        "status": "draft",
+        "target_id": "acct_1",
+        "target_mode": "support_account",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ\n\n## How do I reset login?",
+        "items": [{"question": "How do I reset login?", "answer": "Use the reset link."}],
+        "source_count": 3,
+        "ticket_source_count": 2,
+        "output_checks": {"uses_user_vocabulary": True, "has_action_items": True},
+        "warnings": [{"code": "thin_evidence"}],
+        "metadata": {},
+    }
+
+
 def _client(
     pool,
     *,
@@ -226,6 +243,46 @@ def test_generated_asset_router_exports_sales_brief_json_without_status_filter()
     assert args == ("", "vendor_retention", "pre_call", 20)
 
 
+def test_generated_asset_router_lists_ticket_faq_drafts_with_filters() -> None:
+    pool = _Pool(rows=[_ticket_faq_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get(
+        "/content-assets/faq_markdown/drafts"
+        "?target_mode=support_account&limit=5"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["rows"][0]["id"] == "faq-uuid-1"
+    assert body["rows"][0]["title"] == "Support FAQ"
+    assert body["rows"][0]["passed_output_checks"] == 2
+    query, args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in query
+    assert args == ("acct_1", "draft", "support_account", 5)
+
+
+def test_generated_asset_router_exports_ticket_faq_csv() -> None:
+    pool = _Pool(rows=[_ticket_faq_row()])
+
+    response = _client(pool).get(
+        "/content-assets/faq_markdown/drafts/export"
+        "?format=csv&target_mode=support_account"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "content_assets_faq_markdown.csv" in response.headers["content-disposition"]
+    assert "target_id,target_mode,title" in response.text
+    assert "Support FAQ" in response.text
+    query, args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in query
+    assert args == ("", "draft", "support_account", 20)
+
+
 def test_generated_asset_router_reviews_report_with_host_defined_status() -> None:
     pool = _Pool()
 
@@ -249,6 +306,31 @@ def test_generated_asset_router_reviews_report_with_host_defined_status() -> Non
     query, args = pool.execute_calls[0]
     assert "UPDATE reports" in query
     assert args == ("report-uuid-1", "published", "acct_1")
+
+
+def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() -> None:
+    pool = _Pool()
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/faq_markdown/drafts/review",
+        json={"id": "11111111-1111-1111-1111-111111111111", "status": "approved"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "account_id": "acct_1",
+        "asset": "faq_markdown",
+        "id": "11111111-1111-1111-1111-111111111111",
+        "status": "approved",
+        "updated": True,
+    }
+    query, args = pool.execute_calls[0]
+    assert "UPDATE ticket_faq_markdown" in query
+    assert args == ("11111111-1111-1111-1111-111111111111", "approved", "acct_1")
 
 
 def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:

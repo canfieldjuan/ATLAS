@@ -663,17 +663,18 @@ python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id ac
 python scripts/review_extracted_campaign_drafts.py <campaign-id> --account-id acct_123 --status cancelled --reason "customer rejected"
 ```
 
-Generated reports, landing pages, and sales briefs use the matching asset
-review CLI:
+Generated reports, landing pages, sales briefs, and FAQ Markdown documents use
+the matching asset review CLI:
 
 ```bash
 python scripts/review_extracted_content_assets.py --asset report --id <report-id> --account-id acct_123 --status approved
 python scripts/review_extracted_content_assets.py --asset landing_page --id <landing-page-id> --account-id acct_123 --status queued
 python scripts/review_extracted_content_assets.py --asset sales_brief --id <brief-id> --account-id acct_123 --status rejected
+python scripts/review_extracted_content_assets.py --asset faq_markdown --id <faq-id> --account-id acct_123 --status approved
 ```
 
 FastAPI hosts can mount the generated asset router for the same report, landing
-page, and sales brief review loop:
+page, sales brief, and FAQ Markdown review loop:
 
 ```python
 from fastapi import Depends
@@ -1056,10 +1057,12 @@ Several small utility shims provide product-owned local behavior by default so t
 - `report_export.py`: read-only structured report export for host review flows
 - `landing_page_export.py`: read-only landing page export for host review flows
 - `sales_brief_export.py`: read-only sales brief export for host review flows
+- `ticket_faq_export.py`: read-only ticket FAQ Markdown export for host review
+  flows
 - `scripts/export_extracted_content_assets.py`: host-facing report, landing
-  page, and sales brief export CLI
+  page, sales brief, and FAQ Markdown export CLI
 - `scripts/review_extracted_content_assets.py`: host-facing report, landing
-  page, and sales brief status-update CLI
+  page, sales brief, and FAQ Markdown status-update CLI
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for
   Amazon seller campaign installs
 - `campaign_postgres_seller_opportunities.py`: prepares Amazon seller

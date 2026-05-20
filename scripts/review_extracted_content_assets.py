@@ -27,9 +27,12 @@ from extracted_content_pipeline.report_postgres import PostgresReportRepository 
 from extracted_content_pipeline.sales_brief_postgres import (  # noqa: E402
     PostgresSalesBriefRepository,
 )
+from extracted_content_pipeline.ticket_faq_postgres import (  # noqa: E402
+    PostgresTicketFAQRepository,
+)
 
 
-ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -102,6 +105,12 @@ async def _review_asset(args: argparse.Namespace, pool: Any) -> bool:
         )
     if args.asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_status(
+            args.asset_id,
+            args.status,
+            scope=scope,
+        )
+    if args.asset == "faq_markdown":
+        return await PostgresTicketFAQRepository(pool).update_status(
             args.asset_id,
             args.status,
             scope=scope,

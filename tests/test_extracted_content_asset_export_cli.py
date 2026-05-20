@@ -104,6 +104,23 @@ def _sales_brief_row():
     }
 
 
+def _ticket_faq_row():
+    return {
+        "id": "faq-uuid-1",
+        "status": "draft",
+        "target_id": "acct_1",
+        "target_mode": "support_account",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ\n\n## How do I reset login?",
+        "items": [{"question": "How do I reset login?", "answer": "Use the reset link."}],
+        "source_count": 3,
+        "ticket_source_count": 2,
+        "output_checks": {"uses_user_vocabulary": True, "has_action_items": True},
+        "warnings": [],
+        "metadata": {},
+    }
+
+
 @pytest.mark.asyncio
 async def test_asset_export_cli_outputs_report_json(monkeypatch, capsys) -> None:
     cli = _load_cli_module()
@@ -263,6 +280,44 @@ async def test_asset_export_cli_outputs_sales_brief_json(monkeypatch, capsys) ->
     assert args == ("", "vendor_retention", "pre_call", 3)
     assert output["rows"][0]["brief_type"] == "pre_call"
     assert output["rows"][0]["reasoning_wedge"] == "support_erosion"
+
+
+@pytest.mark.asyncio
+async def test_asset_export_cli_outputs_ticket_faq_json(monkeypatch, capsys) -> None:
+    cli = _load_cli_module()
+    pool = _Pool(rows=[_ticket_faq_row()])
+
+    async def create_pool(database_url):
+        return pool
+
+    monkeypatch.setattr(cli, "_create_pool", create_pool)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "export",
+            "--database-url",
+            "postgres://example",
+            "--asset",
+            "faq_markdown",
+            "--account-id",
+            "acct_1",
+            "--target-mode",
+            "support_account",
+            "--limit",
+            "2",
+        ],
+    )
+
+    exit_code = await cli._main()
+
+    output = json.loads(capsys.readouterr().out)
+    query, args = pool.fetch_calls[0]
+    assert exit_code == 0
+    assert "FROM ticket_faq_markdown" in query
+    assert args == ("acct_1", "draft", "support_account", 2)
+    assert output["rows"][0]["title"] == "Support FAQ"
+    assert output["rows"][0]["passed_output_checks"] == 2
 
 
 @pytest.mark.asyncio

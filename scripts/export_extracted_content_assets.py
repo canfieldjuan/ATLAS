@@ -35,9 +35,13 @@ from extracted_content_pipeline.sales_brief_export import (  # noqa: E402
 from extracted_content_pipeline.sales_brief_postgres import (  # noqa: E402
     PostgresSalesBriefRepository,
 )
+from extracted_content_pipeline.ticket_faq_export import export_ticket_faq_drafts  # noqa: E402
+from extracted_content_pipeline.ticket_faq_postgres import (  # noqa: E402
+    PostgresTicketFAQRepository,
+)
 
 
-ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief")
+ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -56,7 +60,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="draft",
         help="Status to export. Use empty string for all statuses.",
     )
-    parser.add_argument("--target-mode", default=None, help="Report/sales brief target_mode filter.")
+    parser.add_argument("--target-mode", default=None, help="Report/sales brief/FAQ target_mode filter.")
     parser.add_argument("--report-type", default=None, help="Report type filter.")
     parser.add_argument("--topic-type", default=None, help="Blog post topic_type filter.")
     parser.add_argument("--campaign-name", default=None, help="Landing page campaign_name filter.")
@@ -144,6 +148,14 @@ async def _export_for_asset(args: argparse.Namespace, pool: Any):
             status=status,
             target_mode=args.target_mode,
             brief_type=args.brief_type,
+            limit=args.limit,
+        )
+    if args.asset == "faq_markdown":
+        return await export_ticket_faq_drafts(
+            PostgresTicketFAQRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=args.target_mode,
             limit=args.limit,
         )
     raise ValueError(f"Unsupported asset: {args.asset}")

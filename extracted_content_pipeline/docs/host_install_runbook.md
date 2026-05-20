@@ -744,9 +744,9 @@ The mounted list/export routes use the same export helper as the CLI, so JSON
 and CSV responses include the generation-usage and reasoning summary fields
 documented above.
 
-Export generated reports, blog posts, landing pages, or sales briefs through
-the generated asset CLI when the host needs the same review loop for
-non-campaign outputs:
+Export generated reports, blog posts, landing pages, sales briefs, or FAQ
+Markdown documents through the generated asset CLI when the host needs the same
+review loop for non-campaign outputs:
 
 ```bash
 python scripts/export_extracted_content_assets.py \
@@ -776,6 +776,13 @@ python scripts/export_extracted_content_assets.py \
   --target-mode vendor_retention \
   --brief-type pre_call \
   --limit 20
+
+python scripts/export_extracted_content_assets.py \
+  --asset faq_markdown \
+  --account-id acct_123 \
+  --target-mode support_account \
+  --format csv \
+  --output ticket_faq_drafts.csv
 ```
 
 Move reviewed generated assets through host-defined lifecycle statuses without
@@ -805,6 +812,12 @@ python scripts/review_extracted_content_assets.py \
   --id <brief-id> \
   --account-id acct_123 \
   --status ready_for_call
+
+python scripts/review_extracted_content_assets.py \
+  --asset faq_markdown \
+  --id <faq-id> \
+  --account-id acct_123 \
+  --status approved
 ```
 
 Or mount the generated asset API router beside the campaign draft router:
@@ -832,9 +845,10 @@ The generated asset router exposes:
 | `GET` | `/content-assets/{asset}/drafts/export` | Export generated asset drafts as CSV or JSON. |
 | `POST` | `/content-assets/{asset}/drafts/review` | Update one generated asset status by id. |
 
-Supported `{asset}` values are `report`, `blog_post`, `landing_page`, and
-`sales_brief`. Review statuses are host-defined strings; the product does not
-impose a fixed status vocabulary for these generated asset tables.
+Supported `{asset}` values are `report`, `blog_post`, `landing_page`,
+`sales_brief`, and `faq_markdown`. Review statuses are host-defined strings;
+the product does not impose a fixed status vocabulary for these generated asset
+tables.
 
 Amazon seller installs can mount the seller-specific router:
 
