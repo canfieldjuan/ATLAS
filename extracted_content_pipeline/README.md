@@ -179,11 +179,12 @@ python scripts/build_extracted_ticket_faq_markdown.py \
 ```
 
 The FAQ builder is deterministic and extractive: it groups ticket evidence by
-pain point, quotes compact snippets from the source rows, and lists ticket
-source ids under each answer. The packaged support-ticket CSV is intentionally
-small but repeated: it proves customer-worded headings, intent condensation,
-and action items. Add `--as-of-date YYYY-MM-DD` with `--window-days` when you
-need a reproducible audit window instead of today's date. Pass
+pain point, writes article-style answers with numbered next steps, and cites
+ticket quotes under each answer. The packaged support-ticket CSV is
+intentionally small but repeated: it proves customer-worded headings, intent
+condensation, action items, and source grounding. Add `--as-of-date
+YYYY-MM-DD` with `--window-days` when you need a reproducible audit window
+instead of today's date. Pass
 `--require-output-checks` in host smoke runs when weak FAQ output should fail
 the command instead of producing a reviewable draft.
 

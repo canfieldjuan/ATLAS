@@ -35,6 +35,7 @@ class _RenderedFAQHTML(HTMLParser):
         self.list_items: list[str] = []
         self.strong: list[str] = []
         self.ul_count = 0
+        self.ol_count = 0
         self._stack: list[str] = []
         self._buffers: dict[str, list[str]] = {}
 
@@ -43,6 +44,8 @@ class _RenderedFAQHTML(HTMLParser):
         self._stack.append(tag)
         if tag == "ul":
             self.ul_count += 1
+        if tag == "ol":
+            self.ol_count += 1
         if tag in {"h1", "h2", "p", "li", "strong"}:
             self._buffers[tag] = []
 
@@ -120,6 +123,19 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "reporting friction",
     ]
     assert [item["ticket_count"] for item in result.items] == [2, 2]
+    assert result.items[0]["summary"].startswith(
+        "Customers are asking about email and profile updates across 2 ticket sources."
+    )
+    assert result.items[0]["steps"] == (
+        "Confirm the account details you are trying to change or access.",
+        "If self-service does not work, contact support with the affected email or account id.",
+        "Include the cited ticket details if you need support to investigate.",
+    )
+    assert "email field is locked" in result.items[0]["when_to_contact_support"]
+    assert result.items[0]["evidence_quotes"] == (
+        '`ticket-acme-1` - Change login email: "How do I change my login email?"',
+        '`ticket-acme-2` - Update account email: "I need to update the email on my account."',
+    )
     assert "How do I change my login email?" in result.markdown
     assert "How do we export campaign attribution data before renewal?" in result.markdown
     assert "`ticket-acme-1` - Change login email" in result.markdown
@@ -439,6 +455,25 @@ def test_build_ticket_faq_markdown_normalizes_intent_whitespace() -> None:
     assert [item["topic"] for item in result.items] == ["email and profile updates"]
 
 
+def test_build_ticket_faq_markdown_escapes_pipe_once_in_article_sections() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Export format",
+                "evidence": [{
+                    "text": "How do I export the A | B report?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert "A \\| B report" in result.markdown
+    assert "A \\\\| B report" not in result.markdown
+
+
 def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 
@@ -452,13 +487,16 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
         "2. How do we export campaign attribution data before renewal?",
     ]
     assert rendered.strong.count("What to do next:") == 2
+    assert rendered.strong.count("When to contact support:") == 2
     assert rendered.strong.count("Sources:") == 2
-    assert rendered.ul_count == 4
+    assert rendered.ol_count == 2
+    assert rendered.ul_count == 2
     assert any(
-        "I need to update the email on my account."
+        "Customers are asking about email and profile updates across 2 ticket sources."
         in paragraph
         for paragraph in rendered.paragraphs
     )
+    assert any("email field is locked" in paragraph for paragraph in rendered.paragraphs)
     assert any(
         "Check whether your plan and role include the needed export"
         in item
@@ -771,7 +809,7 @@ def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified
     assert result.ticket_source_count == 2
     assert result.items[0]["evidence_count"] == 2
     assert result.items[0]["source_ids"] == ("row:1", "row:2")
-    assert "Evidence comes from 2 ticket source(s)." in result.markdown
+    assert "across 2 ticket sources" in result.markdown
 
 
 def test_build_ticket_faq_markdown_counts_distinct_source_ids_per_item() -> None:
@@ -787,7 +825,7 @@ def test_build_ticket_faq_markdown_counts_distinct_source_ids_per_item() -> None
     assert result.items[0]["evidence_count"] == 2
     assert result.items[0]["source_ids"] == ("ticket-1",)
     assert result.ticket_source_count == 1
-    assert "Evidence comes from 1 ticket source(s)." in result.markdown
+    assert "A customer asked about reporting friction" in result.markdown
 
 
 def test_build_ticket_faq_markdown_counts_distinct_ticket_sources_for_output_checks() -> None:

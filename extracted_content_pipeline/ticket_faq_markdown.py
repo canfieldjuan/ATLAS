@@ -370,12 +370,20 @@ def _item(
     source_ids = tuple(dict.fromkeys(value for value in source_keys if value))
     snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
     question, question_source = _question(topic, display_rows)
+    summary = _summary(topic=topic, rows=display_rows, source_count=len(source_ids))
+    steps = _article_steps(topic, snippets)
+    escalation = _escalation_guidance(topic, snippets)
+    evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     return {
         "topic": topic,
         "question": question,
         "question_source": question_source,
         "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
         "action_items": _action_items(topic, snippets),
+        "summary": summary,
+        "steps": steps,
+        "when_to_contact_support": escalation,
+        "evidence_quotes": evidence_quotes,
         "source_ids": source_ids,
         "source_labels": sources,
         "evidence_count": len(display_rows),
@@ -518,15 +526,19 @@ def _render(
         lines.extend([
             f"## {index}. {_md(item['question'])}",
             "",
-            _md(item["answer"]),
+            _md(item.get("summary") or item["answer"]),
             "",
             "**What to do next:**",
             "",
-            *[f"- {_md(step)}" for step in item["action_items"]],
+            *[f"{step_index}. {_md(step)}" for step_index, step in enumerate(_list(item.get("steps") or item["action_items"]), start=1)],
+            "",
+            "**When to contact support:**",
+            "",
+            _md(item.get("when_to_contact_support") or "Contact support with the cited ticket details if the answer does not resolve it."),
             "",
             "**Sources:**",
             "",
-            *[f"- {_md(label)}" for label in item["source_labels"]],
+            *[f"- {_md(quote)}" for quote in _list(item.get("evidence_quotes"))],
             "",
         ])
     return "\n".join(lines)
@@ -538,6 +550,65 @@ def _source_label(row: Mapping[str, str]) -> str:
     if source_id and title:
         return f"`{source_id}` - {title}"
     return f"`{source_id or 'unknown'}`"
+
+
+def _summary(*, topic: str, rows: Sequence[Mapping[str, str]], source_count: int) -> str:
+    issue = _topic_label(topic)
+    example = _quote(rows[0].get("text", ""), limit=180) if rows else "the cited ticket evidence"
+    if source_count > 1:
+        return (
+            f"Customers are asking about {issue} across {source_count} ticket sources. "
+            f"The clearest customer wording is {example}, so this FAQ should answer "
+            "that request directly and then point users to support when self-service is blocked."
+        )
+    return (
+        f"A customer asked about {issue}: {example}. This FAQ should answer the "
+        "request directly and then point the user to support when self-service is blocked."
+    )
+
+
+def _article_steps(topic: str, evidence_text: str) -> tuple[str, ...]:
+    steps = _action_items(topic, evidence_text)
+    return (
+        steps[0],
+        steps[1],
+        "Include the cited ticket details if you need support to investigate.",
+    )
+
+
+def _escalation_guidance(topic: str, evidence_text: str) -> str:
+    text = f"{topic} {evidence_text}".lower()
+    if any(term in text for term in ("export", "report", "dashboard", "attribution")):
+        return (
+            "Contact support or an admin if the export is missing, locked by plan "
+            "or role, or still unavailable after permissions are checked."
+        )
+    if any(term in text for term in ("login", "email", "profile", "password", "account")):
+        return (
+            "Contact support if you cannot access the account, the email field is "
+            "locked, or the confirmation message never arrives."
+        )
+    return (
+        "Contact support when the self-service path is unavailable or the issue "
+        "still affects the workflow after the steps above."
+    )
+
+
+def _evidence_quote(row: Mapping[str, str]) -> str:
+    label = _source_label(row)
+    text = _quote(row.get("text", ""), limit=220)
+    return f"{label}: {text}"
+
+
+def _topic_label(topic: str) -> str:
+    text = _clean(topic).replace("_", " ")
+    return text or "this support issue"
+
+
+def _list(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(value)
+    return ()
 
 
 def _date_window(*, window_days: int | None, as_of_date: Any) -> tuple[date, date] | None:
@@ -680,7 +751,7 @@ def _quote(value: Any, *, limit: int = 220) -> str:
     text = _compact(value)
     if len(text) > limit:
         text = f"{text[:limit].rstrip()}..."
-    return f'"{_md(text)}"'
+    return f'"{text}"'
 
 
 def _compact(value: Any) -> str:
