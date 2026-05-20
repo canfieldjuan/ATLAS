@@ -73,6 +73,10 @@
       "target": "extracted_content_pipeline/storage/migrations/084_blog_posts.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/120_blog_seo.sql",
+      "target": "extracted_content_pipeline/storage/migrations/120_blog_seo.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/264_blog_post_rejection_count.sql",
       "target": "extracted_content_pipeline/storage/migrations/264_blog_post_rejection_count.sql"
     },

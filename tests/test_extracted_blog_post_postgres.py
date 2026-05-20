@@ -45,6 +45,14 @@ def _draft() -> BlogPostDraft:
         metadata={
             "generation_model": "fake-llm",
             "generation_usage": {"input_tokens": 12, "output_tokens": 6},
+            "seo_title": "Acme Pricing Pressure 2026",
+            "seo_description": "Acme pricing pressure from recent review data.",
+            "target_keyword": "acme pricing pressure",
+            "secondary_keywords": ["acme pricing", "acme alternatives"],
+            "faq": [{
+                "question": "Why are Acme customers frustrated by pricing?",
+                "answer": "Recent review evidence points to pricing pressure.",
+            }],
         },
     )
 
@@ -66,8 +74,22 @@ async def test_save_drafts_persists_scope_metadata_and_returns_ids() -> None:
     data_context = json.loads(args[8])
     assert data_context["scope"]["account_id"] == "acct-1"
     assert data_context["_metadata"]["generation_model"] == "fake-llm"
+    assert data_context["_metadata"]["target_keyword"] == "acme pricing pressure"
     assert args[9] == "fake-llm"
     assert args[10] == date(2026, 5, 9)
+    assert args[11] == "Acme Pricing Pressure 2026"
+    assert args[12] == "Acme pricing pressure from recent review data."
+    assert args[13] == "acme pricing pressure"
+    assert json.loads(args[14]) == ["acme pricing", "acme alternatives"]
+    assert json.loads(args[15]) == [{
+        "question": "Why are Acme customers frustrated by pricing?",
+        "answer": "Recent review evidence points to pricing pressure.",
+    }]
+    assert args[16] is True
+    assert args[17] is True
+    sql = pool.fetchval_calls[0]["query"]
+    assert "seo_title, seo_description, target_keyword" in sql
+    assert "secondary_keywords, faq" in sql
 
 
 @pytest.mark.asyncio
@@ -81,6 +103,40 @@ async def test_save_drafts_skips_cross_tenant_slug_conflict() -> None:
     assert saved == ()
     sql = pool.fetchval_calls[0]["query"]
     assert "blog_posts.account_id = EXCLUDED.account_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_save_drafts_preserves_existing_seo_on_conflict_when_metadata_omits_it() -> None:
+    pool = _Pool()
+    pool.fetchval_results = ["blog-post-uuid-1"]
+    repo = PostgresBlogPostRepository(pool)
+    base = _draft()
+    draft = BlogPostDraft(
+        slug=base.slug,
+        title=base.title,
+        description=base.description,
+        topic_type=base.topic_type,
+        tags=base.tags,
+        content=base.content,
+        charts=base.charts,
+        data_context=base.data_context,
+        metadata={"generation_model": "fake-llm"},
+    )
+
+    await repo.save_drafts([draft], scope=TenantScope(account_id="acct-1"))
+
+    args = pool.fetchval_calls[0]["args"]
+    assert args[11] is None
+    assert args[12] is None
+    assert args[13] is None
+    assert json.loads(args[14]) == []
+    assert json.loads(args[15]) == []
+    assert args[16] is False
+    assert args[17] is False
+    sql = pool.fetchval_calls[0]["query"]
+    assert "seo_title = COALESCE(EXCLUDED.seo_title, blog_posts.seo_title)" in sql
+    assert "WHEN $17 THEN EXCLUDED.secondary_keywords" in sql
+    assert "WHEN $18 THEN EXCLUDED.faq" in sql
 
 
 @pytest.mark.asyncio
@@ -100,6 +156,14 @@ async def test_list_drafts_filters_by_status_topic_and_scope() -> None:
                 "_metadata": {"generation_model": "fake-llm"},
             }),
             "llm_model": "fake-llm",
+            "seo_title": "Acme Pricing Pressure 2026",
+            "seo_description": "Acme pricing pressure from recent review data.",
+            "target_keyword": "acme pricing pressure",
+            "secondary_keywords": json.dumps(["acme pricing", "acme alternatives"]),
+            "faq": json.dumps([{
+                "question": "Why are Acme customers frustrated by pricing?",
+                "answer": "Recent review evidence points to pricing pressure.",
+            }]),
         }
     ]
     repo = PostgresBlogPostRepository(pool)
@@ -117,13 +181,62 @@ async def test_list_drafts_filters_by_status_topic_and_scope() -> None:
     assert drafts[0].charts == ({"id": "chart-1"},)
     assert drafts[0].data_context == {"vendor": "Acme"}
     assert drafts[0].metadata["generation_model"] == "fake-llm"
+    assert drafts[0].metadata["seo_title"] == "Acme Pricing Pressure 2026"
+    assert drafts[0].metadata["seo_description"] == (
+        "Acme pricing pressure from recent review data."
+    )
+    assert drafts[0].metadata["target_keyword"] == "acme pricing pressure"
+    assert drafts[0].metadata["secondary_keywords"] == [
+        "acme pricing",
+        "acme alternatives",
+    ]
+    assert drafts[0].metadata["faq"] == [{
+        "question": "Why are Acme customers frustrated by pricing?",
+        "answer": "Recent review evidence points to pricing pressure.",
+    }]
     sql = pool.fetch_calls[0]["query"]
     args = pool.fetch_calls[0]["args"]
+    assert "seo_title, seo_description, target_keyword" in sql
+    assert "secondary_keywords, faq" in sql
     assert "account_id = $1" in sql
     assert "status = $2" in sql
     assert "topic_type = $3" in sql
     assert "LIMIT $4" in sql
     assert args == ("acct-1", "draft", "vendor_alternative", 10)
+
+
+@pytest.mark.asyncio
+async def test_list_drafts_preserves_metadata_seo_arrays_when_columns_are_empty() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "slug": "acme-pricing-pressure",
+            "title": "Acme Pricing Pressure",
+            "description": "Pricing pressure dominates.",
+            "topic_type": "vendor_alternative",
+            "tags": json.dumps([]),
+            "content": "body",
+            "charts": json.dumps([]),
+            "data_context": json.dumps({
+                "_metadata": {
+                    "secondary_keywords": ["legacy keyword"],
+                    "faq": [{"question": "Legacy?", "answer": "Yes."}],
+                },
+            }),
+            "llm_model": None,
+            "seo_title": None,
+            "seo_description": None,
+            "target_keyword": None,
+            "secondary_keywords": json.dumps([]),
+            "faq": json.dumps([]),
+        }
+    ]
+    repo = PostgresBlogPostRepository(pool)
+
+    drafts = await repo.list_drafts(scope=TenantScope(account_id="acct-1"))
+
+    assert drafts[0].metadata["secondary_keywords"] == ["legacy keyword"]
+    assert drafts[0].metadata["faq"] == [{"question": "Legacy?", "answer": "Yes."}]
 
 
 @pytest.mark.asyncio
