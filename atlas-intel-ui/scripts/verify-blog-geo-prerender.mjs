@@ -16,23 +16,46 @@ function readText(path) {
   return readFileSync(path, 'utf-8')
 }
 
-function collectBlogSlugs() {
-  const slugs = []
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function parseStringField(content, field) {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
+  const match = content.match(pattern)
+  if (!match) return ''
+  return match[1].replace(/\\'/g, "'")
+}
+
+function collectBlogPosts() {
+  const posts = []
   for (const file of readdirSync(blogDir)) {
     if (!file.endsWith('.ts') || file === 'index.ts') continue
     const content = readText(join(blogDir, file))
-    const match = content.match(/slug:\s*'([^']+)'/)
-    if (!match) fail(`Missing slug in ${file}`)
-    slugs.push(match[1])
+    const slug = parseStringField(content, 'slug')
+    const title = parseStringField(content, 'title')
+    const description = parseStringField(content, 'description')
+    const seoTitle = parseStringField(content, 'seo_title')
+    const seoDescription = parseStringField(content, 'seo_description')
+    if (!slug) fail(`Missing slug in ${file}`)
+    if (!title) fail(`Missing title in ${file}`)
+    if (!description) fail(`Missing description in ${file}`)
+    posts.push({
+      slug,
+      title,
+      description,
+      seoTitle,
+      seoDescription,
+    })
   }
-  if (!slugs.length) fail('No blog slugs found')
-  return slugs.sort()
+  if (!posts.length) fail('No blog posts found')
+  return posts.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
 function attrValue(tag, attr) {
-  const pattern = new RegExp(`${attr}=["']([^"']+)["']`, 'i')
+  const pattern = new RegExp(`${escapeRegExp(attr)}=(["'])(.*?)\\1`, 'i')
   const match = tag.match(pattern)
-  return match ? match[1] : ''
+  return match ? match[2] : ''
 }
 
 function findLink(html, rel) {
@@ -43,6 +66,20 @@ function findLink(html, rel) {
 function findMeta(html, attr, key) {
   const metas = html.match(/<meta\b[^>]*>/gi) || []
   return metas.find(tag => attrValue(tag, attr) === key) || ''
+}
+
+function findTitle(html) {
+  const match = html.match(/<title>([\s\S]*?)<\/title>/i)
+  return match ? decodeHtml(match[1].trim()) : ''
+}
+
+function decodeHtml(value) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
 }
 
 function parseJsonLd(html, slug) {
@@ -97,6 +134,35 @@ function assertBlogPosting(node, canonical, slug) {
   }
 }
 
+function assertMetaContent(html, attr, key, expected, slug) {
+  const meta = findMeta(html, attr, key)
+  const actual = decodeHtml(attrValue(meta, 'content'))
+  if (actual !== expected) {
+    fail(`/blog/${slug} ${key} must be ${expected}`)
+  }
+}
+
+function assertSeoMeta(html, post) {
+  const title = `${post.seoTitle || post.title} | Atlas Intelligence`
+  const description = post.seoDescription || post.description
+
+  if (findTitle(html) !== title) {
+    fail(`/blog/${post.slug} title tag must be ${title}`)
+  }
+
+  assertMetaContent(html, 'name', 'description', description, post.slug)
+  assertMetaContent(html, 'property', 'og:title', title, post.slug)
+  assertMetaContent(html, 'property', 'og:description', description, post.slug)
+  assertMetaContent(html, 'name', 'twitter:title', title, post.slug)
+  assertMetaContent(html, 'name', 'twitter:description', description, post.slug)
+
+  const twitterImage = findMeta(html, 'name', 'twitter:image')
+  const twitterImageValue = attrValue(twitterImage, 'content')
+  if (!twitterImageValue || !twitterImageValue.startsWith(BASE_URL)) {
+    fail(`/blog/${post.slug} twitter:image must be an absolute Atlas URL`)
+  }
+}
+
 function assertBreadcrumbs(node, canonical, slug) {
   const items = Array.isArray(node.itemListElement) ? node.itemListElement : []
   if (items.length < 3) fail(`/blog/${slug} breadcrumb list is incomplete`)
@@ -106,10 +172,13 @@ function assertBreadcrumbs(node, canonical, slug) {
   }
 }
 
-function verifyBlogPage(slug, sitemap) {
+function verifyBlogPage(post, sitemap) {
+  const { slug } = post
   const canonical = `${BASE_URL}/blog/${slug}`
   const htmlPath = join(distDir, 'blog', slug, 'index.html')
   const html = readText(htmlPath)
+
+  assertSeoMeta(html, post)
 
   const canonicalLink = findLink(html, 'canonical')
   if (attrValue(canonicalLink, 'href') !== canonical) {
@@ -148,10 +217,10 @@ function verifyBlogPage(slug, sitemap) {
   }
 }
 
-const slugs = collectBlogSlugs()
+const posts = collectBlogPosts()
 const sitemap = readText(sitemapPath)
-for (const slug of slugs) {
-  verifyBlogPage(slug, sitemap)
+for (const post of posts) {
+  verifyBlogPage(post, sitemap)
 }
 
-console.log(`Verified GEO prerender metadata for ${slugs.length} blog pages`)
+console.log(`Verified GEO prerender metadata for ${posts.length} blog pages`)
