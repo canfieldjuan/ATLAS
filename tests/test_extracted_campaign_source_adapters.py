@@ -46,7 +46,7 @@ def test_source_type_precedence_table_matches_current_contract() -> None:
         (("renewal_id",), "renewal"),
         (("contract_id",), "contract"),
         (("subscription_id",), "subscription"),
-        (("complaint",), "complaint"),
+        (("complaint", "complaint_id", "complaint_narrative", "consumer_complaint_narrative"), "complaint"),
         (("ticket_id", "ticket_number", "request_id"), "support_ticket"),
         (("case_id", "case_number"), "case"),
         (("conversation_id", "conversation_number"), "conversation"),
@@ -160,6 +160,30 @@ def test_source_rows_normalize_and_warn_for_missing_text() -> None:
     assert first["target_mode"] == "vendor_retention"
     assert first["evidence"][0]["source_type"] == "transcript"
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
+
+
+def test_source_row_maps_provider_complaint_narrative_aliases() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Complaint ID": "3182593",
+        "Consumer complaint narrative": "I received a collection letter for a debt I do not owe.",
+        "Issue": "Attempts to collect debt not owed",
+        "Product": "Debt collection",
+        "Company": "Example Collector",
+        "Date received": "03/01/2019",
+    })
+
+    assert warnings == ()
+    assert opportunity["id"] == "3182593"
+    assert opportunity["target_id"] == "3182593"
+    assert opportunity["source_id"] == "3182593"
+    assert opportunity["source_type"] == "complaint"
+    assert opportunity["company_name"] == "Example Collector"
+    assert opportunity["pain_points"] == ["Attempts to collect debt not owed"]
+    assert opportunity["evidence"] == [{
+        "text": "I received a collection letter for a debt I do not owe.",
+        "source_id": "3182593",
+        "source_type": "complaint",
+    }]
 
 
 def test_source_rows_apply_default_fields_without_overriding_row_values() -> None:

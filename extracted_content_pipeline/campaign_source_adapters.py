@@ -71,6 +71,7 @@ _SOURCE_ID_KEYS = (
     "contract_id",
     "subscription_id",
     "document_id",
+    "complaint_id",
     "ticket_id",
     "ticket_number",
     "case_id",
@@ -90,6 +91,9 @@ _TEXT_KEYS = (
     "body",
     "quote",
     "complaint",
+    "complaint_narrative",
+    "consumer_complaint_narrative",
+    "narrative",
     "message",
     "description",
     "issue_description",
@@ -149,7 +153,7 @@ _SOURCE_TITLE_COLLISION_KEYS = (
     "title",
     "name",
 )
-_PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "topic", "category")
+_PAIN_KEYS = ("pain_points", "pain_categories", "pain_category", "issue", "topic", "category")
 _PARENT_EXCLUDE_KEYS = set(_ROW_LIST_KEYS) | set(_SOURCE_TITLE_COLLISION_KEYS)
 _COMPANY_KEYS = (
     "company_name",
@@ -222,7 +226,7 @@ _SOURCE_TYPE_PRECEDENCE = (
     (("renewal_id",), "renewal"),
     (("contract_id",), "contract"),
     (("subscription_id",), "subscription"),
-    (("complaint",), "complaint"),
+    (("complaint", "complaint_id", "complaint_narrative", "consumer_complaint_narrative"), "complaint"),
     (("ticket_id", "ticket_number", "request_id"), "support_ticket"),
     (("case_id", "case_number"), "case"),
     (("conversation_id", "conversation_number"), "conversation"),

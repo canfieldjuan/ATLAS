@@ -205,5 +205,11 @@ such as CFPB narratives can still satisfy the customer-vocabulary check without
 CFPB-specific renderer logic. PR #687 added a live CFPB-to-FAQ Markdown smoke
 that fetches public complaint rows, converts them through the generic
 source-row adapter, and fails closed when FAQ output checks do not pass.
-Future FAQ/source work should be driven by a real customer help desk export or
-hosted UI need.
+The local CFPB export at `/home/juan-canfield/Downloads/archive (1)/rows.csv`
+has 1,282,355 rows, 383,564 with usable complaint narratives. A 50-row debt
+collection sample exposed generic gaps: provider-style complaint narrative
+fields needed direct source-row aliases, and debt/credit-report complaints
+needed financial complaint action policy before SaaS-style reporting/account
+rules. PR-Content-Ops-FAQ-Complaint-Source-Policy owns that source-level fix.
+Future FAQ/source work should be driven by a real customer help desk export,
+hosted UI need, or another real dataset exposing a generic policy gap.

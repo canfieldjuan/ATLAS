@@ -31,7 +31,39 @@ _SPEAKER_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _CUSTOMER_SPEAKERS = {"customer", "user", "requester", "client"}
+_SUPPORTED_QUESTION_SOURCES = {"customer_wording", "source_policy"}
+_GENERIC_QUESTION_TEXTS = {
+    "help?",
+    "need help?",
+    "please help?",
+    "can you help?",
+    "what should i do?",
+    "what can i do?",
+}
 DEFAULT_INTENT_RULES = (
+    ("credit report disputes", (
+        "credit report",
+        "credit file",
+        "credit bureau",
+        "credit bureaus",
+        "credit reporting",
+        "incorrect information",
+    )),
+    ("debt collection disputes", (
+        "debt not owed",
+        "not owe",
+        "do not owe",
+        "collect debt",
+        "debt collection",
+        "collector",
+        "debt collector",
+        "collection letter",
+        "collection agency",
+        "debt validation",
+        "validation letter",
+        "medical debt",
+        "settled the debt",
+    )),
     ("reporting friction", ("export", "report", "dashboard", "attribution")),
     ("manual follow-up", ("handoff", "follow-up", "workflow", "automation", "manual")),
     ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
@@ -69,6 +101,14 @@ _DATE_KEYS = (
     "timestamp",
 )
 _ACTION_RULES = (
+    (("credit report", "credit file", "credit bureau", "credit bureaus", "credit reporting", "incorrect information"), (
+        "Get your latest credit reports and mark the account, date, balance, or status that looks wrong.",
+        "File a dispute with the credit bureau and the company that supplied the information, then keep the confirmation numbers and copies of your records.",
+    )),
+    (("debt not owed", "not owe", "do not owe", "collect debt", "debt collection", "collector", "debt collector", "collection letter", "collection agency", "debt validation", "validation letter", "medical debt", "settled the debt"), (
+        "Ask the collector in writing to identify the original creditor, the amount, the account, and why they say you owe it.",
+        "Compare the notice with your payment, settlement, insurance, or provider records before you pay or share more information.",
+    )),
     (("export", "report", "dashboard", "attribution"), (
         "Open the reporting or analytics area and choose the date range you need.",
         "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
@@ -431,18 +471,30 @@ def _question(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, str]:
         text = _question_text(row.get("text", ""))
         if text:
             return (text, "customer_wording")
+    policy_question = _policy_question(topic)
+    if policy_question:
+        return (policy_question, "source_policy")
     return (f"What are customers asking about {topic}?", "topic_fallback")
 
 
 def _question_text(value: Any) -> str:
     for text in _question_candidate_texts(value):
         if "?" in text:
-            prefix = text.split("?", 1)[0].strip()
+            prefix, remainder = text.split("?", 1)
+            prefix = prefix.strip()
             sentence_parts = [part.strip() for part in re.split(r"[.!:;]+", prefix) if part.strip()]
             candidate = sentence_parts[-1] if sentence_parts else prefix
             normalized = _normalize_question_text(candidate)
             if _usable_question(normalized):
                 return normalized
+            tail = _compact(remainder)
+            if tail:
+                normalized = _question_start_text(tail)
+                if normalized:
+                    return normalized
+                normalized = _first_person_issue_question_text(tail)
+                if normalized:
+                    return normalized
             continue
         normalized = _question_start_text(text)
         if normalized:
@@ -543,7 +595,8 @@ def _first_sentence(text: str) -> str:
 
 
 def _usable_question(value: str) -> bool:
-    return bool(value) and len(value) <= MAX_EXTRACTED_QUESTION_CHARS
+    lowered = _compact(value).lower()
+    return bool(value) and len(value) <= MAX_EXTRACTED_QUESTION_CHARS and lowered not in _GENERIC_QUESTION_TEXTS
 
 
 def _normalize_question_text(value: str) -> str:
@@ -551,6 +604,15 @@ def _normalize_question_text(value: str) -> str:
     if not candidate:
         return ""
     return f"{candidate}?"
+
+
+def _policy_question(topic: str) -> str:
+    normalized = _topic_label(topic).lower()
+    if normalized == "credit report disputes":
+        return "What should I do if information on my credit report is wrong?"
+    if normalized == "debt collection disputes":
+        return "What should I do if a collector says I owe a debt I do not recognize?"
+    return ""
 
 
 def _render(
@@ -630,6 +692,16 @@ def _article_steps(topic: str, evidence_text: str, *, support_contact: str | Non
 
 def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str | None) -> str:
     text = f"{topic} {evidence_text}".lower()
+    if any(term in text for term in ("credit report", "credit file", "credit bureau", "credit bureaus", "credit reporting", "incorrect information")):
+        return (
+            f"{_support_sentence(support_contact)} if the account still appears "
+            "incorrect after you dispute it or if the furnisher does not explain the record."
+        )
+    if any(term in text for term in ("debt not owed", "not owe", "do not owe", "collect debt", "debt collection", "collector", "debt collector", "collection letter", "collection agency", "debt validation", "validation letter", "medical debt", "settled the debt")):
+        return (
+            f"{_support_sentence(support_contact)} if the collector will not validate "
+            "the debt, keeps contacting you about a debt you do not recognize, or reports it again."
+        )
     if any(term in text for term in ("export", "report", "dashboard", "attribution")):
         return (
             f"{_support_sentence(support_contact)} if the export is missing, "
@@ -811,7 +883,7 @@ def _output_checks(
     covers_all_sources = rendered_ticket_source_count == ticket_source_count
     return {
         "uses_user_vocabulary": has_items
-        and all(item.get("question_source") == "customer_wording" for item in items),
+        and all(item.get("question_source") in _SUPPORTED_QUESTION_SOURCES for item in items),
         "condensed": has_items
         and covers_all_sources
         and (ticket_source_count <= 1 or len(items) < ticket_source_count),
