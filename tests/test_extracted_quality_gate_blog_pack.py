@@ -65,6 +65,33 @@ def _seo_aeo_context(**overrides) -> dict:
     return context
 
 
+def _geo_context(**overrides) -> dict:
+    context = _seo_aeo_context(
+        require_geo=True,
+        title="HubSpot Pricing Pressure Guide",
+        data_context={"vendor": "HubSpot", "review_period": "last 90 days"},
+    )
+    context.update(overrides)
+    return context
+
+
+_GEO_READY_BODY = (
+    "## How is HubSpot pricing pressure changing buyer shortlists?\n\n"
+    "HubSpot pricing pressure is visible in the last 90 days of review patterns, "
+    "especially across 214 reviews where buyers describe renewal friction, budget "
+    "concerns, and comparison shopping. The answer is that HubSpot buyers are not "
+    "only comparing features; they are checking whether the contract still fits "
+    "the budget before another renewal cycle starts.\n\n"
+    "## How should teams read the HubSpot pricing evidence?\n\n"
+    "HubSpot pricing evidence should be read as a renewal-risk signal, not as proof "
+    "that every buyer has the same problem. The useful pattern is that customers "
+    "keep using similar wording about budget pressure, contract terms, and "
+    "alternative comparisons when they explain why pricing has become harder to "
+    "justify.\n\n"
+    + _LONG_GOOD_BODY
+)
+
+
 # ---- Decision shape ----
 
 
@@ -200,6 +227,75 @@ def test_seo_aeo_detects_answer_first_section_opening():
     report = evaluate_blog_post(_make_input(body, **_seo_aeo_context()))
 
     assert "aeo_structure_missing" not in report.metadata["blocking_codes"]
+
+
+# ---- GEO draft contract ----
+
+
+def test_geo_context_passes_with_ready_draft_structure():
+    report = evaluate_blog_post(_make_input(_GEO_READY_BODY, **_geo_context()))
+
+    assert report.passed is True
+    assert not any(code.startswith("geo_") for code in report.metadata["blocking_codes"])
+
+
+def test_geo_context_blocks_missing_draft_contract_pieces():
+    body = "## Overview\n\nGeneric notes without evidence, freshness, or a usable answer."
+
+    report = evaluate_blog_post(
+        _make_input(
+            body,
+            **_geo_context(
+                title="Customer Retention Guide",
+                data_context={},
+                faq=(),
+            ),
+        )
+    )
+
+    assert set(report.metadata["blocking_codes"]) >= {
+        "geo_entity_clarity_missing",
+        "geo_answer_first_sections_missing",
+        "geo_citable_section_structure_missing",
+        "geo_evidence_specificity_missing",
+        "geo_freshness_context_missing",
+        "geo_faq_coverage_missing",
+    }
+
+
+def test_geo_context_blocks_citation_safety_when_existing_findings_fail():
+    body = _GEO_READY_BODY + "\n\nSee {{todo}} before publishing."
+
+    report = evaluate_blog_post(_make_input(body, **_geo_context()))
+
+    assert "unresolved_placeholders" in report.metadata["blocking_codes"]
+    assert "geo_citation_safety_failed" in report.metadata["blocking_codes"]
+
+
+def test_geo_context_honors_policy_min_faq_entries():
+    report = evaluate_blog_post(
+        _make_input(
+            _GEO_READY_BODY,
+            **_geo_context(
+                faq=(
+                    {
+                        "question": "Why does pricing pressure matter?",
+                        "answer": "It affects renewal decisions.",
+                    },
+                    {
+                        "question": "What should buyers review?",
+                        "answer": "Buyers should check renewal terms.",
+                    },
+                ),
+            ),
+        ),
+        policy=QualityPolicy(
+            name="blog_post",
+            thresholds={"min_faq_entries": 2},
+        ),
+    )
+
+    assert "geo_faq_coverage_missing" not in report.metadata["blocking_codes"]
 
 
 # ---- Chart placeholders ----

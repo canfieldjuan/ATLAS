@@ -485,6 +485,8 @@ def _quality_context(
         "required_vendors": _string_tuple(blueprint.get("required_vendors")),
         "grounded_vendors": frozenset(_string_tuple(blueprint.get("grounded_vendors"))),
         "require_seo_aeo": True,
+        "require_geo": True,
+        "title": parsed.get("title"),
         "seo_title": parsed.get("seo_title"),
         "seo_description": parsed.get("seo_description"),
         "target_keyword": parsed.get("target_keyword"),
