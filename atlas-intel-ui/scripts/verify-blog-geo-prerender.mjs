@@ -35,15 +35,18 @@ function collectBlogPosts() {
     const slug = parseStringField(content, 'slug')
     const title = parseStringField(content, 'title')
     const description = parseStringField(content, 'description')
+    const date = parseStringField(content, 'date')
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
     if (!slug) fail(`Missing slug in ${file}`)
     if (!title) fail(`Missing title in ${file}`)
     if (!description) fail(`Missing description in ${file}`)
+    if (!date) fail(`Missing date in ${file}`)
     posts.push({
       slug,
       title,
       description,
+      date,
       seoTitle,
       seoDescription,
     })
@@ -124,14 +127,52 @@ function assertNoNoindex(html, slug) {
   }
 }
 
-function assertBlogPosting(node, canonical, slug) {
+function expectedTitle(post) {
+  return post.seoTitle || post.title
+}
+
+function expectedDescription(post) {
+  return post.seoDescription || post.description
+}
+
+function assertSame(actual, expected, label, slug) {
+  if (actual !== expected) {
+    fail(`/blog/${slug} ${label} must be ${expected}`)
+  }
+}
+
+function assertOrganization(node, label, slug) {
+  if (!node || node['@type'] !== 'Organization') {
+    fail(`/blog/${slug} BlogPosting ${label} must be an Organization`)
+  }
+  assertSame(node.name, 'Atlas Intelligence', `BlogPosting ${label} name`, slug)
+  const sameAs = Array.isArray(node.sameAs) ? node.sameAs : []
+  if (!sameAs.includes('https://twitter.com/atlasintel')) {
+    fail(`/blog/${slug} BlogPosting ${label} missing Twitter sameAs`)
+  }
+  if (!sameAs.includes('https://www.linkedin.com/company/atlas-intelligence')) {
+    fail(`/blog/${slug} BlogPosting ${label} missing LinkedIn sameAs`)
+  }
+}
+
+function assertBlogPosting(node, post, canonical, ogImageValue) {
+  const { slug } = post
   for (const field of ['headline', 'description', 'image', 'author', 'publisher']) {
     if (!node[field]) fail(`/blog/${slug} BlogPosting missing ${field}`)
   }
+  assertSame(node.headline, expectedTitle(post), 'BlogPosting headline', slug)
+  assertSame(node.description, expectedDescription(post), 'BlogPosting description', slug)
+  assertSame(node.datePublished, post.date, 'BlogPosting datePublished', slug)
+  assertSame(node.dateModified, post.date, 'BlogPosting dateModified', slug)
+  assertSame(node.image, ogImageValue, 'BlogPosting image', slug)
+
   const mainEntity = node.mainEntityOfPage
   if (!mainEntity || mainEntity['@id'] !== canonical) {
     fail(`/blog/${slug} BlogPosting mainEntityOfPage must be ${canonical}`)
   }
+
+  assertOrganization(node.author, 'author', slug)
+  assertOrganization(node.publisher, 'publisher', slug)
 }
 
 function assertMetaContent(html, attr, key, expected, slug) {
@@ -143,8 +184,8 @@ function assertMetaContent(html, attr, key, expected, slug) {
 }
 
 function assertSeoMeta(html, post) {
-  const title = `${post.seoTitle || post.title} | Atlas Intelligence`
-  const description = post.seoDescription || post.description
+  const title = `${expectedTitle(post)} | Atlas Intelligence`
+  const description = expectedDescription(post)
 
   if (findTitle(html) !== title) {
     fail(`/blog/${post.slug} title tag must be ${title}`)
@@ -206,7 +247,7 @@ function verifyBlogPage(post, sitemap) {
   const nodes = flattenJsonLdTypes(parseJsonLd(html, slug))
   const blogPosting = nodes.find(node => typeMatches(node, 'BlogPosting'))
   if (!blogPosting) fail(`/blog/${slug} missing BlogPosting JSON-LD`)
-  assertBlogPosting(blogPosting, canonical, slug)
+  assertBlogPosting(blogPosting, post, canonical, ogImageValue)
 
   const breadcrumbs = nodes.find(node => typeMatches(node, 'BreadcrumbList'))
   if (!breadcrumbs) fail(`/blog/${slug} missing BreadcrumbList JSON-LD`)
