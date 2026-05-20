@@ -265,7 +265,7 @@ def build_ticket_faq_markdown(
             })
 
     items = tuple(
-        _item(topic, rows[:max_evidence_per_item])
+        _item(topic, rows, max_evidence_per_item=max_evidence_per_item)
         for topic, rows in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:max_items]
     )
     return TicketFAQMarkdownResult(
@@ -344,11 +344,17 @@ def _pain_text(opportunity: Mapping[str, Any]) -> str:
     return _compact(pain_points)
 
 
-def _item(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
-    sources = tuple(_source_label(row) for row in rows)
+def _item(
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+    *,
+    max_evidence_per_item: int,
+) -> dict[str, Any]:
+    display_rows = rows[:max_evidence_per_item]
+    sources = tuple(_source_label(row) for row in display_rows)
     source_keys = (row.get("source_key") or row.get("source_id", "") for row in rows)
     source_ids = tuple(dict.fromkeys(value for value in source_keys if value))
-    snippets = " / ".join(_quote(row.get("text", "")) for row in rows)
+    snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
     return {
         "topic": topic,
         "question": f"What are customers asking about {topic}?",
@@ -356,7 +362,9 @@ def _item(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
         "action_items": _action_items(topic, snippets),
         "source_ids": source_ids,
         "source_labels": sources,
-        "evidence_count": len(rows),
+        "evidence_count": len(display_rows),
+        "displayed_evidence_count": len(display_rows),
+        "ticket_count": len(source_ids),
     }
 
 

@@ -188,6 +188,35 @@ def test_build_ticket_faq_markdown_accepts_host_intent_rules() -> None:
     assert result.items[0]["evidence_count"] == 2
 
 
+def test_build_ticket_faq_markdown_keeps_total_volume_when_display_is_capped() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": f"Sync delay {index}",
+                "evidence": [{
+                    "text": f"The warehouse sync is delayed for team {index}.",
+                    "source_id": f"ticket-{index}",
+                    "source_type": "support_ticket",
+                }],
+            }
+            for index in range(1, 5)
+        ],
+        max_evidence_per_item=2,
+        intent_rules=(("data freshness", ("warehouse sync",)),),
+    )
+
+    item = result.items[0]
+    assert item["topic"] == "data freshness"
+    assert item["ticket_count"] == 4
+    assert item["evidence_count"] == 2
+    assert item["displayed_evidence_count"] == 2
+    assert item["source_ids"] == ("ticket-1", "ticket-2", "ticket-3", "ticket-4")
+    assert len(item["source_labels"]) == 2
+    assert "Evidence comes from 4 ticket source(s)." in item["answer"]
+    assert "ticket-3" not in result.markdown
+
+
 def test_build_ticket_faq_markdown_normalizes_intent_whitespace() -> None:
     result = build_ticket_faq_markdown(
         [
