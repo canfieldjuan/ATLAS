@@ -215,9 +215,6 @@ const post: BlogPost = {
 <p>-- IT Manager, Manufacturing (&lt;$50M USD), verified reviewer on gartner</p>
 </blockquote>
 <p>This verified review highlights Zoom's operational strengths. The IT Manager role and manufacturing industry context suggest enterprise or mid-market deployment. The emphasis on reliability and scalability reflects buyer priorities beyond feature lists.</p>
-<blockquote>
-<p>-- network security engineer, verified reviewer on g2</p>
-</blockquote>
 <p>This verified review describes UX friction around notification overload. The network security engineer role suggests a technical end user, not an economic buyer. The complaint focuses on usage fatigue, not product capability gaps.</p>
 <p>The witness highlight describing a CPTO "moving all the orgs I oversee as CPTO away from Zoom to Google Meet" due to support and account management issues represents the strongest switching signal in the Zoom dataset. The multi-org scope and executive role suggest high-value account risk, though this appears as an outlier rather than a common pattern.</p>
 <h3 id="comparison-table-slack-vs-zoom-at-a-glance">Comparison table: Slack vs Zoom at a glance</h3>

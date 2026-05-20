@@ -170,14 +170,7 @@ const post: BlogPost = {
 <h2 id="where-azure-users-feel-the-most-pain">Where Azure Users Feel the Most Pain</h2>
 <p>Pain concentrates in six categories: overall dissatisfaction, pricing, support, UX, integration, and policy/corporate decisions. The radar chart below shows relative complaint intensity.</p>
 <p>{{chart:pain-radar}}</p>
-<p>Pricing complaints are the most urgent. One Reddit reviewer facing a vSphere 7 license expiration noted:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Another Reddit user evaluating alternatives mentioned:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>Pricing complaints are the most urgent.</p>
 <p>These signals cluster around a 2-day deadline for vSphere 7 Standard license expiration, creating immediate decision pressure. Broadcom's pricing changes eliminated usable perpetual replacement paths, forcing organizations into subscription renewals or alternative evaluations.</p>
 <p>Support and UX complaints appear alongside integration gaps. One developer considering a switch to GitHub cited AI feature limitations in Azure DevOps:</p>
 <blockquote>
@@ -216,9 +209,6 @@ const post: BlogPost = {
 <p>Pressure is surfacing most strongly with <strong>evaluators</strong>. The timing window is immediate: organizations with vSphere 7 license expirations within 2 days face forced decisions, while a broader window exists for teams approaching Broadcom renewal cycles or evaluating VMware alternatives.</p>
 <p>The 12 evaluation-stage evaluators in the dataset represent the sharpest pain signal. These are not casual browsers—they are active buyers comparing alternatives under time pressure. The vSphere 7 expiration deadline (2 days) and Broadcom pricing changes create a forcing function that turns latent dissatisfaction into operational urgency.</p>
 <p>For teams not facing immediate VMware deadlines, the pressure is lower but still present. Azure's $200 trial credit offers a retention tool for new customers, but one Capterra reviewer noted:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
 <p>This suggests Azure uses promotional pricing to acquire customers, which may explain why pricing complaints persist even as trial credits appear in positive reviews. Once the trial credit expires (typically within 30 days), organizations face full pricing, which may trigger the pricing backlash signals visible in the dataset.</p>
 <h2 id="when-azure-friction-turns-into-action">When Azure Friction Turns Into Action</h2>
 <p>Timing signals cluster around three triggers:</p>
@@ -229,10 +219,7 @@ const post: BlogPost = {
 </ol>
 <p>The dataset shows 5 active evaluation signals right now, with 0 evaluation deadline signals, 0 contract end signals, 0 renewal signals, and 0 budget cycle signals. This suggests current Azure pressure is <strong>externally triggered</strong> (Broadcom VMware pricing, trial credit expiration, platform retirements) rather than driven by Azure's internal renewal cycles.</p>
 <p>Sentiment direction is neutral: 0% declining, 0% improving, with no stable sentiment count reported. This likely reflects the "unknown" role dominance in the buyer persona distribution—most reviewers are not disclosing enough context to establish sentiment trends.</p>
-<p>The immediate vSphere 7 deadline is the sharpest trigger. One Reddit reviewer noted:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>The immediate vSphere 7 deadline is the sharpest trigger.</p>
 <p>This is not a hypothetical complaint. It is a 2-day decision window with no viable perpetual license path, forcing organizations into subscription renewals or alternative evaluations. For vendors targeting Azure displacement, this is the highest-urgency window in the dataset.</p>
 <h2 id="where-azure-pressure-shows-up-in-accounts">Where Azure Pressure Shows Up in Accounts</h2>
 <p>Three high-intent accounts are visible: <strong>CDW</strong>, <strong>Snyk</strong>, and <strong>CSP</strong>. All three show intent scores between 0.7 and 1.0, all are in the evaluation buying stage, and none of the visible reviewers hold decision-maker roles.</p>

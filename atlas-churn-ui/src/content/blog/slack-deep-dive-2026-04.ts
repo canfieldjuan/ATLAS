@@ -167,14 +167,6 @@ const post: BlogPost = {
 <p>{{chart:pain-radar}}</p>
 <p>The pain radar shows UX, overall dissatisfaction, and pricing as the dominant friction areas. These categories connect to the workflow migration pattern visible in witness evidence.</p>
 <p>UX pain ties directly to the synchronous chat model. Real-time messaging creates FOMO and context switching as team members feel pressure to respond immediately. This pattern appears across multiple witness excerpts describing migration to async tools.</p>
-<p>One reviewer described the shift explicitly:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Another showed workflow substitution at the documentation level:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>Pricing complaints appear alongside workflow substitution. Teams cite cost as a factor when evaluating alternatives, though the data does not establish pricing as the sole driver. The witness evidence suggests workflow fit and operational model matter more than cost alone.</p>
 <p>Support and feature gaps round out the pain set. These categories show lower mention volume than UX and pricing but still surface in the review patterns.</p>
 <h2 id="the-slack-ecosystem-integrations-use-cases">The Slack Ecosystem: Integrations &amp; Use Cases</h2>

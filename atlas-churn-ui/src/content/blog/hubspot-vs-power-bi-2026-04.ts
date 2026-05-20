@@ -147,21 +147,11 @@ const post: BlogPost = {
 <p>-- reviewer on reddit</p>
 <p>-- reviewer on reddit</p>
 </blockquote>
-<p>One outlier signal shows cumulative subscription costs forcing CRM reevaluation:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
 <p>Power BI reviewers face licensing tier complexity rather than absolute cost shock. Pro at €400/month versus Pro+Fabric at €1,000/month decisions create immediate evaluation pressure, but the complaint pattern centers on forced migration costs tied to Microsoft deprecation deadlines rather than sticker price alone.</p>
 <p>Feature gaps appear in both datasets but with different contexts. HubSpot reviewers report limitations with customization at lower tiers, though counterevidence shows customers remain due to feature breadth:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
 <p>Power BI feature complaints cluster around SharePoint integration best practices and systematic update workflows, suggesting technical debt accumulation rather than missing core functionality.</p>
 <p>Integration complaints show contradictory evidence for both vendors. HubSpot signals include both integration strength mentions and integration weakness mentions, preventing confident assessment of net retention impact. Power BI shows similar contradiction—integration appears as both retention anchor (Microsoft ecosystem lock-in) and pain point (SharePoint update workflows).</p>
 <p>API limitations and competitive inferiority signals appear in the data but at lower volumes than pricing and feature complaints. HubSpot shows API limitation mentions alongside competitive inferiority signals, while Power BI shows active Tableau evaluation pressure:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>Contract lock-in and data migration complaints appear for both vendors but remain secondary to pricing and feature concerns. HubSpot shows contract lock-in mentions in recent review windows, while Power BI shows data migration complexity tied to forced deprecation migrations rather than voluntary switching.</p>
 <p>Performance and reliability complaints appear more frequently in Power BI signals than HubSpot signals, though both show recent mention activity. Power BI technical debt signals cluster around SharePoint integration performance, while HubSpot performance complaints remain lower in the pain category hierarchy.</p>
 <h2 id="who-is-churning-buyer-profile-breakdown">Who Is Churning? Buyer Profile Breakdown</h2>
@@ -195,25 +185,8 @@ const post: BlogPost = {
 <p>-- reviewer on reddit</p>
 </blockquote>
 <p>Cumulative subscription costs force reevaluation when add-ons and integrations compound base pricing:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
-<p>Counterevidence shows retention despite frustration:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
-<p>Power BI reviewer language centers on Fabric licensing complexity and Microsoft deprecation deadline pressure. Active Tableau evaluation appears:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
-<p>Pricing tier decisions create immediate evaluation pressure:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
+<p>Power BI reviewer language centers on Fabric licensing complexity and Microsoft deprecation deadline pressure.</p>
 <p>Counterevidence shows Microsoft ecosystem lock-in prevents switching despite pricing frustration:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
 <p>The contrast between HubSpot and Power BI reviewer language reflects different market pressures. HubSpot reviewers report voluntary evaluation triggered by pricing backlash when costs hit salary-level thresholds. Power BI reviewers report involuntary migration pressure triggered by Microsoft deprecation deadlines forcing technical debt resolution. Both show active evaluation activity without confirmed switches, suggesting retention anchors or switching costs exceed immediate pain.</p>
 <p>Reviewer sentiment mix differs significantly. HubSpot signals cluster around pricing backlash and feature gaps, with counterevidence showing feature breadth and integration ecosystem depth as retention anchors. Power BI signals cluster around Fabric licensing complexity and forced migration costs, with counterevidence showing Microsoft ecosystem integration and workflow lock-in as retention anchors. Neither vendor shows overwhelmingly positive sentiment—retention appears driven by switching costs and integration lock-in rather than product enthusiasm.</p>
 <p>The evidence supports immediate engagement windows for both vendors but with different triggers. HubSpot: engage during budget planning cycles when early-stage teams compare CRM costs to salary-level expenses and recognize feature-set mismatch. Power BI: engage during March-May 2026 forced migration windows when April 15, 2026 scorecard hierarchy removal and May 31, 2026 legacy import sunset force technical debt resolution during active Fabric pricing evaluation.</p>

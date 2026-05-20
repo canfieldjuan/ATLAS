@@ -101,10 +101,6 @@ const post: BlogPost = {
 <p>Urgency scores reflect how quickly reviewers signal they need a change. Higher urgency does not mean worse software—it means the pain point is acute enough to trigger active evaluation or switching behavior.</p>
 <p>Slack and RingCentral both show pricing as their top complaint category. Zoom's reliability issues cluster around connection quality. Microsoft Teams support complaints focus on access to help and resolution speed.</p>
 <p>The complaint distribution suggests no single vendor dominates the category on quality alone. Each tool trades off one dimension for strength in another. Reviewers remain with their chosen platform when the trade-off aligns with their priorities.</p>
-<p>One witness highlight from the analysis period captures the pricing pressure dynamic:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>That 10x cost delta appears in bundled suite consolidation discussions, where reviewers weigh standalone tool pricing against bundled alternatives already included in enterprise agreements.</p>
 <h2 id="slack-the-1-complaint-is-pricing">Slack: The #1 Complaint Is Pricing</h2>
 <p>Pricing is the dominant complaint in 213 Slack reviews analyzed from March to April 2026. Reviewers report that Slack's per-user costs become prohibitive as teams grow, especially when compared to Microsoft Teams bundled into Office 365 subscriptions.</p>
@@ -143,15 +139,8 @@ const post: BlogPost = {
 -- reviewer on Reddit</p>
 </blockquote>
 <p>That complaint reflects a common pattern: Microsoft's support structure is designed for enterprise accounts with dedicated account managers, but small and mid-sized buyers often lack direct access. Self-service documentation exists, but reviewers report it is fragmented across multiple Microsoft domains and difficult to navigate.</p>
-<p>Support complaints also intersect with the Windows 11 rollout in March 2026. One witness highlight captured the cost and performance trade-offs:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Support complaints also intersect with the Windows 11 rollout in March 2026.</p>
 <p>That quote reflects frustration with bundled ecosystem changes that introduce new support burdens. Reviewers mention that Windows 11 updates affected Microsoft Teams performance on older hardware, and support channels were slow to provide workarounds.</p>
-<p>Another witness highlight from a Solution Architect shows the counterevidence:</p>
-<blockquote>
-<p>-- Solution Architect, verified reviewer on G2</p>
-</blockquote>
 <p>That reviewer noted UX issues but also reported being more productive overall. The complaint is not that Microsoft Teams is unusable—it is that support is inadequate when configuration or performance issues arise.</p>
 <p><strong>What Microsoft Teams does well:</strong> Microsoft Teams benefits from deep integration with Office 365, SharePoint, and OneDrive. Reviewers praise the bundled economics, especially when they already pay for Microsoft 365. Teams also supports robust video conferencing, persistent chat, and file collaboration in a single interface.</p>
 <p>The trade-off: Microsoft Teams offers strong bundled value and integration, but support access is poor for smaller buyers. Organizations that have enterprise agreements with dedicated account managers experience fewer support issues. Those without direct support channels face longer resolution times and fragmented self-service resources.</p>
@@ -171,10 +160,6 @@ const post: BlogPost = {
 <p>No Communication tool is perfect. Slack has pricing issues. Zoom has reliability complaints. Microsoft Teams struggles with support. RingCentral faces pricing backlash. All four remain in use because their strengths align with specific buyer priorities.</p>
 <p>The analysis of 756 reviews across 4 vendors from March to April 2026 shows that complaint patterns cluster around predictable trade-offs. Pricing pressure is acute for standalone tools. Reliability and support issues surface when vendors scale or when buyers lack enterprise-grade support agreements.</p>
 <p>The Windows 11 rollout in March 2026 exposed cost and performance trade-offs in bundled Microsoft ecosystems. Reviewers report that bundled suite economics are forcing re-evaluation of standalone tool costs. That timing context explains why pricing complaints dominate Slack and RingCentral, while Microsoft Teams support complaints reflect the strain of rapid ecosystem changes.</p>
-<p>One witness highlight captured the consolidation dynamic:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
 <p>That quote reflects frustration with forced upgrades and bundled ecosystem lock-in. Reviewers mention evaluating whether to stay within a single vendor's ecosystem or switch to alternatives that offer more flexibility.</p>
 <p>The counterevidence is also clear: customers remain despite frustration. Deep Microsoft 365 integration, acceptable performance for well-resourced users, and feature breadth that serves diverse collaboration needs keep organizations from switching. The complaint is not that the tools are unusable—it is that the trade-offs are more visible after the Windows 11 rollout.</p>
 <p><strong>How to pick the right trade-off:</strong></p>

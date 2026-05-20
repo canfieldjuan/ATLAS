@@ -192,15 +192,9 @@ const post: BlogPost = {
 <p>{{chart:pain-radar}}</p>
 <p>The radar chart maps six primary pain categories. Overall dissatisfaction leads, followed by pricing, UX, contract lock-in, performance, and technical debt.</p>
 <p><strong>Overall dissatisfaction</strong> dominates the pain landscape. This suggests that when Close fails to meet expectations, the impact cascades across multiple aspects of the user experience rather than staying contained to a single workflow or feature.</p>
-<p><strong>Pricing pressure</strong> appears as the second-largest pain area. The complaints often surface during specific timing windows:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p><strong>Pricing pressure</strong> appears as the second-largest pain area.</p>
 <p>This pattern suggests that pricing dissatisfaction is not just about absolute cost but about perceived value relative to market benchmarks. When users conduct compensation reviews or performance evaluations—typically at month-end—they also reassess vendor value propositions.</p>
-<p><strong>UX friction</strong> ranks third. Interface complaints span navigation complexity, workflow inefficiency, and feature discoverability. One counterpoint from the data:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p><strong>UX friction</strong> ranks third. Interface complaints span navigation complexity, workflow inefficiency, and feature discoverability.</p>
 <p>While this quote references a different platform's UX improvement, it illustrates the type of relief users express when interface friction resolves—relief that Close users seeking UX improvements have not yet reported at scale.</p>
 <p><strong>Contract lock-in, performance, and technical debt</strong> round out the pain profile. These categories appear less frequently but still generate enough mentions to warrant attention from teams evaluating Close.</p>
 <p>The pain distribution suggests that Close's challenges are not primarily technical. They center on value perception, user experience polish, and flexibility.</p>
@@ -241,20 +235,12 @@ const post: BlogPost = {
 <p>The dominance of unknown-role reviewers limits persona precision. However, the presence of economic buyers in both active purchase and post-purchase stages reveals that decision-makers do engage with review platforms during evaluation and after deployment.</p>
 <p><strong>Buyer stage distribution:</strong></p>
 <p>Most reviews come from post-purchase users rather than active evaluators. This means the feedback reflects operational experience more than pre-purchase research sentiment. When economic buyers do appear in the data, they show higher intent scores and more concrete evaluation criteria.</p>
-<p>One outlier signal illustrates decision-maker pressure:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>While this quote references a financial planning context rather than Close CRM directly, it demonstrates the type of decision-maker pressure signal that appears in the dataset: explicit spend figures, transition questions, and urgency to change current state.</p>
 <p>The buyer profile suggests that Close review data is strongest for understanding post-purchase operational experience and weakest for mapping pre-purchase evaluation criteria. Teams using this data for competitive intelligence should supplement it with direct buyer interviews to capture evaluation-stage priorities.</p>
 <h2 id="which-teams-feel-close-pain-first">Which Teams Feel Close Pain First</h2>
 <p>Not all Close users experience friction at the same time or with the same intensity. The data reveals specific segments where pressure surfaces first.</p>
 <p><strong>Economic buyers show the strongest current pressure.</strong> Among the limited decision-maker signals in the dataset, economic buyers demonstrate higher intent scores and more concrete evaluation activity. This suggests that when Close fails to meet expectations, the dissatisfaction reaches budget holders and contract decision-makers.</p>
 <p><strong>Month-end timing windows amplify pressure.</strong> The analysis identified a recurring pattern: pricing complaints and compensation benchmarking discussions cluster around month-end periods when organizations conduct performance reviews and salary evaluations.</p>
-<p>One common pattern from the witness data:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>This compensation benchmarking behavior creates natural evaluation windows. When users research market rates for their role, they simultaneously reassess vendor value propositions. If Close's pricing does not align with perceived market value, month-end becomes a trigger point for alternative searches.</p>
 <p><strong>Segment targeting summary from the blueprint:</strong></p>
 <p>"Strongest current pressure is surfacing with economic buyers. Best tested during month end periods when compensation reviews and performance evaluations occur, creating natural windows for external opportunity consideration."</p>
@@ -276,10 +262,6 @@ const post: BlogPost = {
 <p>The absence of explicit renewal or contract-end mentions suggests that Close switching intent is driven more by ongoing operational friction than by scheduled contract milestones. This pattern differs from enterprise software where renewal cycles create predictable evaluation windows.</p>
 <p><strong>Month-end pressure windows:</strong></p>
 <p>The most robust timing pattern in the data is month-end compensation review cycles. When users benchmark their salary against market rates, they also benchmark vendor pricing against competitive alternatives. This creates recurring monthly windows where pricing dissatisfaction can escalate into evaluation activity.</p>
-<p>One witness highlight illustrates the mechanism:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>The language—"based on my research," "mid-point," "ripped off"—reveals active benchmarking behavior. When this mindset extends to vendor evaluation, it creates urgency.</p>
 <p><strong>Sentiment direction:</strong></p>
 <p>The dataset shows 0% declining sentiment and 0% improving sentiment. This flat sentiment profile suggests either stable satisfaction or insufficient longitudinal data to detect trends. Given the pricing pressure and overall dissatisfaction signals elsewhere in the data, the flat sentiment metric likely reflects measurement limitations rather than true stability.</p>

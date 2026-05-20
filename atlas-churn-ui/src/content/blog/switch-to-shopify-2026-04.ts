@@ -126,19 +126,12 @@ const post: BlogPost = {
 <p>Shopify attracts inbound migrations from 3 documented competitor platforms based on analysis of 2383 total reviews collected between March 3 and April 6, 2026. This analysis examined 1067 enriched reviews, including 72 with explicit churn intent signals, to identify the platforms teams are leaving, the pain categories driving those decisions, and the practical considerations that shape successful migrations.</p>
 <p>The data comes from verified review platforms including G2, Gartner Peer Insights, and PeerSpot (33 reviews), and community platforms including Reddit (1034 reviews). The analysis reflects self-selected reviewer feedback and represents perception patterns rather than universal product capabilities.</p>
 <p>Migration triggers cluster around pricing pressure, with reviewers reporting monthly app fees escalating from $29 to $87 and total costs breaching the $300/month threshold for small merchants. These increases coincide with complexity thresholds that require third-party integrations, compounding the cost burden. The timing pattern suggests merchants evaluate alternatives immediately following monthly billing cycles when app fees show month-over-month increases.</p>
-<p>One reviewer described the pricing trajectory explicitly:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>Despite pricing frustration, reviewers report staying on Shopify due to feature breadth and integration ecosystem depth, though both areas also appear in the weakness data, suggesting fragility in the retention model.</p>
 <p>This guide covers the three primary competitor sources, the pain categories that trigger migration decisions, and the practical steps teams should expect when switching to Shopify. The analysis is based on public review data and should be treated as sentiment and pattern evidence, not as definitive product truth.</p>
 <h2 id="where-are-shopify-users-coming-from">Where Are Shopify Users Coming From?</h2>
 <p>The three documented competitor platforms driving inbound migrations to Shopify are WooCommerce, Quickbooks POS, and commentsold. WooCommerce represents the largest migration source, followed by Quickbooks POS and commentsold. This distribution reflects Shopify's positioning as a consolidation target for merchants outgrowing open-source platforms or seeking to unify point-of-sale and e-commerce operations.</p>
 <p>{{chart:sources-bar}}</p>
-<p>WooCommerce migrations often involve merchants seeking to reduce technical overhead or escape plugin dependency chains. One reviewer evaluating alternatives set a clear budget constraint:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
+<p>WooCommerce migrations often involve merchants seeking to reduce technical overhead or escape plugin dependency chains.</p>
 <p>The $300/month threshold appears repeatedly in the data as a decision boundary. Merchants crossing that threshold due to app fees or integration costs begin evaluating alternatives, including returns to simpler platforms or moves to competitors with lower base costs.</p>
 <p>Quickbooks POS migrations suggest merchants consolidating financial and e-commerce operations. Reviewers mention QuickBooks integrations frequently (6 mentions), indicating that merchants moving from Quickbooks POS to Shopify often maintain the QuickBooks integration for accounting continuity.</p>
 <p>Commentsold migrations are less documented in the dataset but represent a third distinct source. The limited evidence suggests these migrations involve merchants seeking broader feature sets or more mature integration ecosystems.</p>
@@ -190,10 +183,7 @@ const post: BlogPost = {
 <p>The "user-friendly" framing suggests that workflow adaptation is easier on Shopify than on competing platforms, though this reflects reviewer perception rather than objective usability measurement.</p>
 <p>Merchants moving from Quickbooks POS must adapt to Shopify POS for brick-and-mortar operations. Reviewers mention POS integration with Clover, indicating that some merchants use third-party POS hardware rather than Shopify's native POS system.</p>
 <p><strong>Timeline Expectations</strong></p>
-<p>The dataset includes limited explicit timeline evidence. One reviewer mentioned a 6-month operational window:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
+<p>The dataset includes limited explicit timeline evidence.</p>
 <p>The October-to-present timeline (approximately 6 months from the April 2026 analysis date) suggests that merchants evaluate product quality and platform stability over a multi-month window before fully committing to the migration. Another reviewer noted:</p>
 <blockquote>
 <p>Edit: My LLC was formed in May so technically 7 months ago, and I dabbled in this for a few months prior

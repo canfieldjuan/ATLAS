@@ -176,21 +176,12 @@ const post: BlogPost = {
 <p>{{chart:category-pain-fit-map}}</p>
 <p>Overall dissatisfaction leads the pain chart, followed by pricing, UX, support, performance, and features. These patterns cluster around a few recurring themes:</p>
 <p><strong>Pricing pain</strong> often surfaces when teams outgrow starter tiers or hit paywalls for features they assumed were included. Reviewers report frustration when per-seat costs balloon or when add-ons stack up unexpectedly.</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>This pricing backlash tends to spike around month-end periods when compensation reviews and performance evaluations occur, creating natural windows for external opportunity consideration.</p>
 <p><strong>UX complaints</strong> center on clunky workflows, buried features, and steep learning curves. Teams expect a CRM to accelerate their process, not slow it down. When onboarding takes weeks instead of days, or when reps resist adoption, the CRM becomes a liability.</p>
 <p><strong>Support issues</strong> show up most during onboarding and scaling phases. Slow response times, generic help docs, and long ticket queues compound frustration when teams are already under pressure.</p>
-<p><strong>Overall dissatisfaction</strong> is the catch-all category, but it often reflects unmet expectations around value, flexibility, or vendor responsiveness. One reviewer noted:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
+<p><strong>Overall dissatisfaction</strong> is the catch-all category, but it often reflects unmet expectations around value, flexibility, or vendor responsiveness.</p>
 <p>This type of high-stakes evaluation context shows up when teams feel locked into a platform that no longer fits their needs.</p>
 <p>The counterevidence matters too. Some reviewers stay despite pricing frustration because the platform delivers on UX, reliability, or overall satisfaction:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>This suggests that retention anchors exist, but they're vulnerable to competitive pressure when pricing or support issues accumulate.</p>
 <h2 id="close-best-for-51-200-1000-teams">Close: Best For 51-200, 1000+ Teams</h2>
 <p>Close earns a 4.5 rating across 12 reviews and positions itself as a sales-focused CRM for teams that prioritize calling, emailing, and pipeline velocity over marketing automation or complex workflows.</p>

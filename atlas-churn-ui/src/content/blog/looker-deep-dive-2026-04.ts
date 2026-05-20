@@ -157,23 +157,12 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <p>On the strength side, overall satisfaction appears most frequently in positive mentions, followed closely by UX, pricing, and features. Integration and performance round out the top-tier strengths, with support and reliability mentioned less frequently but still positively.</p>
 <p>The weakness profile concentrates heavily in two areas: UX and overall dissatisfaction. This creates an interesting tension—UX appears in both strength and weakness lists, suggesting the platform delivers divergent experiences depending on user technical skill, use case complexity, or organizational context.</p>
-<p>One verified reviewer on Capterra captured the positive end of this spectrum:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
 <p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with that satisfaction:</p>
-<blockquote>
-<p>-- Mechanical Design Engineer, Mid-Market (51-1000 emp.), Design industry, verified reviewer on G2</p>
-</blockquote>
 <p>This duality—strong satisfaction among technical users who master LookML, alongside persistent learning curve complaints from those building advanced reports—defines Looker's current reviewer sentiment landscape.</p>
 <h2 id="where-looker-users-feel-the-most-pain">Where Looker Users Feel the Most Pain</h2>
 <p>Pain point analysis reveals where reviewer frustration clusters most intensely.</p>
 <p>{{chart:pain-radar}}</p>
 <p>UX dominates the pain radar, followed by technical debt, support, reliability, overall dissatisfaction, and features. The UX pain concentration aligns with the learning curve pattern identified in the strengths-weaknesses analysis.</p>
-<p>The same G2 reviewer who noted the learning curve added:</p>
-<blockquote>
-<p>-- Mechanical Design Engineer, Mid-Market (51-1000 emp.), Design industry, verified reviewer on G2</p>
-</blockquote>
 <p>This pattern suggests the pain is not about missing functionality but about the effort required to unlock that functionality. The phrase "not always intuitive to use at first" points to an onboarding and discoverability challenge rather than a fundamental capability gap.</p>
 <p>Technical debt appears as the second-highest pain area, which may reflect the complexity of maintaining LookML models as data sources evolve, schema changes accumulate, or business logic becomes more intricate over time.</p>
 <p>Support and reliability pain points appear at moderate levels, indicating these are not crisis-level issues but areas where some reviewers experience friction. The relatively low features pain score suggests Looker's feature set meets most user needs once they navigate the learning curve.</p>
@@ -247,9 +236,6 @@ const post: BlogPost = {
 <h2 id="how-looker-stacks-up-against-competitors">How Looker Stacks Up Against Competitors</h2>
 <p>Reviewers most frequently compare Looker to six alternatives: Tableau, Power BI, PowerBI (likely a variant mention of Power BI), Sitechecker, Looker Studio, and Metabase.</p>
 <p><strong>Tableau</strong> appears most often in competitive mentions. Reviewer evidence shows migration patterns in both directions. One Twitter reference highlighted a senior data analyst's experience switching from Power BI to Looker:</p>
-<blockquote>
-<p>-- reviewer on Twitter/X</p>
-</blockquote>
 <p>This migration-in-progress signal suggests Looker wins some head-to-head evaluations against Power BI, at least among technical data analysts who value semantic modeling.</p>
 <p>Tableau's strength profile based on available evidence includes security and onboarding, with weaknesses in reliability and data migration. This positions Tableau as a potential alternative for organizations prioritizing onboarding ease and security controls over semantic modeling depth.</p>
 <p>Power BI's strength profile emphasizes UX and integration, with weaknesses in contract lock-in and onboarding. This creates an interesting contrast—Power BI's UX strength may appeal to the same non-technical users who struggle with Looker's learning curve, but Power BI's onboarding weakness and contract concerns may offset that advantage.</p>

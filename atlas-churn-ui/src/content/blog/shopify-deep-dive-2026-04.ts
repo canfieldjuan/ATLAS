@@ -173,10 +173,7 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>But the weakness column is longer and more varied. The analysis identified ten distinct weakness categories: <strong>pricing</strong>, <strong>overall dissatisfaction</strong>, <strong>UX</strong>, <strong>support</strong>, <strong>features</strong>, <strong>integration</strong>, <strong>performance</strong>, <strong>reliability</strong>, <strong>security</strong>, and <strong>technical debt</strong>.</p>
-<p>Pricing appears most frequently in recent reviews. The witness evidence shows a specific pattern: app fees climbing from $29 to $87 per month over a six-month window, pushing total costs above $300/month. One merchant described the breaking point:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>Pricing appears most frequently in recent reviews. The witness evidence shows a specific pattern: app fees climbing from $29 to $87 per month over a six-month window, pushing total costs above $300/month.</p>
 <p>Integration appears in both the strength and weakness columns. The contradiction is not an error. Shopify's integration ecosystem is broad, but reviewers also report integration gaps, particularly around inventory sync accuracy, multi-channel stock management, and third-party app reliability. The data suggests integration breadth does not guarantee integration depth or reliability.</p>
 <p>Support complaints cluster around response time, resolution quality, and escalation friction. Technical debt and security complaints are less frequent but appear in both recent and historical review windows, suggesting persistent rather than episodic issues.</p>
 <h2 id="where-shopify-users-feel-the-most-pain">Where Shopify Users Feel the Most Pain</h2>
@@ -190,10 +187,7 @@ const post: BlogPost = {
 </blockquote>
 <p>The excerpt is incomplete, but the framing—"hear me out with the actual math"—suggests a detailed cost breakdown followed. The pattern is consistent: merchants are doing the math, finding the total cost of ownership higher than expected, and looking for alternatives.</p>
 <p><strong>Overall dissatisfaction</strong> is the second-largest pain category. This is a catch-all, but when paired with pricing, UX, and support complaints, it suggests cumulative frustration rather than a single blocking issue. Merchants are not leaving over one problem; they are leaving when multiple friction points compound.</p>
-<p><strong>UX complaints</strong> focus on mobile experience, admin interface complexity, and workflow inefficiency. One reviewer specified their mobile requirement explicitly:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p><strong>UX complaints</strong> focus on mobile experience, admin interface complexity, and workflow inefficiency.</p>
 <p>The phrasing—"or at least a usable mobile experience"—suggests mobile UX is table stakes, not a differentiator. When it is missing or inadequate, it becomes a disqualifying factor.</p>
 <p><strong>Support</strong> complaints are harder to quantify but surface consistently across review sources. The data does not support claims about official support policy, but it does show a pattern of reviewer frustration with response time and resolution quality.</p>
 <p><strong>Features</strong> and <strong>integration</strong> complaints are notable because they also appear in the strength column. This suggests a bifurcated experience: some workflows are well-supported, others are not. The data does not reveal which workflows fall into which category, but the contradiction itself is evidence of uneven product coverage.</p>

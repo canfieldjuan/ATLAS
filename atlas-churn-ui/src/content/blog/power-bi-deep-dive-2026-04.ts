@@ -226,9 +226,6 @@ const post: BlogPost = {
 <h3 id="tableau-the-primary-alternative-for-dissatisfied-teams">Tableau: The primary alternative for dissatisfied teams</h3>
 <p>Tableau appears in both common_pattern and counterevidence witness highlights. One reviewer noted "considering Tableau" as part of a consolidation decision, indicating Tableau is the default alternative when teams evaluate Power BI replacements. Another reviewer said they "had checked Tableau before choosing Microsoft Power BI" and saw ROI, indicating Tableau is a frequent comparison point even for teams that ultimately stay on Power BI.</p>
 <p>Tableau's 3.5 urgency score suggests active evaluation pressure, but counterevidence exists: some teams choose Power BI over Tableau for Excel workflow continuity and Microsoft 365 integration. That suggests Tableau wins on performance and UX but loses on ecosystem lock-in. The competitive dynamic is less about feature parity and more about whether teams value Microsoft integration over best-of-breed BI functionality.</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
 <p>That quote—truncated in the source data—suggests some teams see ROI from Power BI despite considering Tableau. The truncation limits interpretation, but the fact that Tableau was evaluated and rejected indicates Power BI's Microsoft integration creates enough value to offset Tableau's UX and performance advantages for some buyers.</p>
 <h3 id="looker-cloud-native-consolidation-alternative">Looker: Cloud-native consolidation alternative</h3>
 <p>Looker appears in the GCP switching example: one reviewer described their organization "moving from power bi f8 fabric to looker" after a GCP solution architect recommended single-source data architecture. That switching pattern suggests Looker is positioned as a cloud-native alternative for teams consolidating on Google Cloud Platform.</p>

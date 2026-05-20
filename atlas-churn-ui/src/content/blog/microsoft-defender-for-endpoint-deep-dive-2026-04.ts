@@ -150,14 +150,7 @@ const post: BlogPost = {
 <h2 id="where-microsoft-defender-for-endpoint-users-feel-the-most-pain">Where Microsoft Defender for Endpoint Users Feel the Most Pain</h2>
 <p>{{chart:pain-radar}}</p>
 <p>Integration emerges as the dominant pain category across reviews. Reviewers repeatedly cite the need for better visibility into developer environments, particularly as organizations adopt modern tooling. The gap is not about missing core security features but rather about incomplete coverage of the expanding attack surface in development workflows.</p>
-<p>One reviewer stated:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
-<p>This pattern repeats across multiple accounts. Another reviewer highlighted:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
+<p>This pattern repeats across multiple accounts.</p>
 <p>Feature gaps cluster around the same axis. Reviewers note that Microsoft Defender for Endpoint lacks native integration points for emerging development environments. The product was designed for traditional Windows endpoint protection; it does not natively extend into containerized, Linux, or AI-assisted development contexts without supplementary tools.</p>
 <p>Support and overall dissatisfaction also register in the pain analysis, though with lower frequency. When reviewers report frustration, it often stems from the integration gaps rather than from core security detection or response capabilities.</p>
 <h2 id="the-microsoft-defender-for-endpoint-ecosystem-integrations-use-cases">The Microsoft Defender for Endpoint Ecosystem: Integrations &amp; Use Cases</h2>

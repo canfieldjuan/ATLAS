@@ -144,23 +144,13 @@ const post: BlogPost = {
 <p>Complaint patterns diverge sharply between Metabase and Tableau, reflecting different buyer-fit challenges. Metabase reviewers report accumulated UX friction and overall dissatisfaction across evaluator and end-user roles. Tableau reviewers cluster complaints around pricing barriers for small teams and feature complexity misaligned with early-stage company maturity.</p>
 <p>{{chart:pain-comparison-bar}}</p>
 <p>Metabase's primary pain categories are overall dissatisfaction and UX friction. UX weakness mentions show a declining trend (prior count: 1, recent count: 0), suggesting the issue may be stabilizing. Overall dissatisfaction remains the highest-volume complaint category, though strength signals on ease-of-use and SQL accessibility substantially exceed weakness mentions. Pricing urgency appears as a secondary pressure point. One reviewer on Twitter mentioned UX friction in the context of building a chat feature during a Slack outage, suggesting experimentation rather than core workflow dissatisfaction.</p>
-<p>Tableau's primary pain categories are pricing and feature complexity. Reviewers explicitly warn against adoption for non-mature organizations. One reviewer on Capterra stated:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
-<p>A Mechanical Design Engineer on G2 noted:</p>
-<blockquote>
-<p>-- Mechanical Design Engineer, verified reviewer on G2</p>
-</blockquote>
+<p>Tableau's primary pain categories are pricing and feature complexity. Reviewers explicitly warn against adoption for non-mature organizations.</p>
 <p>Despite pricing complaints, the same reviewer reported productivity gains, indicating the pain is tolerable for teams extracting sufficient value. Overall satisfaction mentions (265) and UX quality signals (63) substantially outnumber pricing and complexity complaints, suggesting retention is driven by depth and performance for mature organizations.</p>
 <p>Competitive inferiority, data migration, ecosystem fatigue, features, integration, and onboarding complaints appear in the chart but at lower volumes than overall dissatisfaction, UX, and pricing categories. Neither vendor shows evidence of widespread displacement or switching activity. The stable market regime and low churn rates indicate most users remain anchored despite documented friction.</p>
 <p>Metabase's declining UX weakness trend suggests the vendor may be addressing friction points, though overall dissatisfaction remains elevated. Tableau's pricing and complexity complaints suggest a buyer-fit mismatch for small teams and early-stage companies, but retention remains strong for mature organizations willing to absorb the cost and learning curve.</p>
 <h2 id="who-is-churning-buyer-profile-breakdown">Who Is Churning? Buyer Profile Breakdown</h2>
 <p>Buyer role signals reveal distinct engagement patterns for Metabase and Tableau, though churn rates remain at 0% for both vendors across all roles. Metabase signals appear across evaluator (7 mentions), end-user (13 mentions), champion (4 mentions), and economic buyer (3 mentions) roles. Tableau signals appear primarily in end-user roles (4 mentions). The low churn rates indicate retention is stable despite documented complaint patterns.</p>
 <p>Metabase's evaluator and end-user signals suggest active consideration and usage across multiple decision-making layers. The presence of champion and economic buyer signals indicates the tool reaches budget-holder awareness, though the volume is modest. One reviewer noted Metabase 'solves fast extracting data, creating query and writing SQL' and is 'best to use in a Corporate especially if you are working in a Financial Institution,' suggesting fit for SQL-literate teams in regulated industries.</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>Tableau's end-user concentration (4 mentions) suggests engagement is driven by hands-on analysts and reporting specialists rather than evaluators or economic buyers. One reviewer on Reddit stated 'I lead a team of Data Analysts and Reporting specialists,' indicating usage in established analytics functions. The absence of evaluator and economic buyer signals in the supplied data limits visibility into Tableau's decision-making dynamics, though the large review volume (1053) and high urgency score (2.2) suggest broader engagement exists outside the enriched sample.</p>
 <p>Neither vendor shows decision-maker churn rate above 0%, indicating budget-holders are not actively fleeing. The stable churn rates align with the stable market regime and low displacement activity documented in the evidence. Complaint patterns exist, but they do not translate into widespread customer flight.</p>
 <p>Metabase's role distribution suggests the tool is evaluated and used across multiple organizational layers, with end-users and evaluators forming the majority of signals. Tableau's end-user concentration suggests the tool is embedded in established analytics workflows, with retention driven by depth and performance rather than ease-of-adoption. The buyer profile differences align with the complaint patterns: Metabase's UX and dissatisfaction signals appear across roles, while Tableau's pricing and complexity signals cluster around small teams and early-stage companies that may not have established analytics functions.</p>
@@ -173,20 +163,8 @@ const post: BlogPost = {
 <p>Neither vendor fares definitively better. The comparison depends on buyer maturity, team size, and feature depth requirements. Tableau's higher urgency indicates more acute pressure points, but retention remains strong for mature organizations. Metabase's lower urgency and declining UX trend suggest stabilizing friction, but overall dissatisfaction remains elevated. Both vendors maintain their user base despite documented complaints.</p>
 <h2 id="what-reviewers-say-about-metabase-and-tableau">What Reviewers Say About Metabase and Tableau</h2>
 <p>Direct reviewer language grounds the comparison in specific experiences rather than aggregate metrics. Metabase reviewers emphasize SQL accessibility and corporate fit. Tableau reviewers emphasize depth and performance for mature organizations, with explicit warnings about cost and complexity for small teams.</p>
-<p>One Metabase reviewer on Software Advice noted:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>This corporate and financial institution fit aligns with the low urgency score and declining UX weakness trend. The emphasis on SQL accessibility suggests the tool serves technically literate teams rather than self-service business users.</p>
-<p>One Tableau reviewer on Capterra explicitly advised:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
 <p>This maturity warning aligns with the high urgency score and pricing complaints. The emphasis on 'perfect dashboard' suggests the tool serves deep feature requirements rather than quick-start simplicity.</p>
-<p>A Mechanical Design Engineer on G2 noted:</p>
-<blockquote>
-<p>-- Mechanical Design Engineer, verified reviewer on G2</p>
-</blockquote>
 <p>Despite the pricing complaint and performance caveat, the same reviewer reported productivity gains, indicating the pain is tolerable for teams extracting sufficient value.</p>
 <p>One reviewer on Reddit stated:</p>
 <blockquote>

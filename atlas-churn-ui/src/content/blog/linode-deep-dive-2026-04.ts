@@ -158,14 +158,6 @@ const post: BlogPost = {
 <p>On the strength side, pricing emerges as the dominant positive signal. Technical debt management and integration capabilities also register as strengths, though with lower mention frequency. Features receive positive mentions, indicating core functionality meets baseline needs for many deployments.</p>
 <p>The weakness distribution shows broader spread. Overall dissatisfaction leads the category, followed by pricing (which appears in both strength and weakness categories, suggesting pricing satisfaction varies by use case or buyer segment). Support, contract lock-in, UX, performance, reliability, and security all register as pain points with measurable mention frequency.</p>
 <p>Recent mention patterns reveal where pressure is intensifying. Security mentions appear in recent feedback, as do performance, reliability, and support complaints. This temporal clustering suggests these aren't legacy issues but active friction points during the current operational period.</p>
-<p>One reviewer captured the pricing-service tension directly:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
-<p>Another framed the trade-off more positively:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
 <p>The data suggests pricing competitiveness functions as a retention anchor even when other dimensions underperform. Users explicitly acknowledge service gaps while simultaneously affirming cost-effectiveness as a reason to stay.</p>
 <h2 id="where-linode-users-feel-the-most-pain">Where Linode Users Feel the Most Pain</h2>
 <p>Pain distribution across categories reveals which operational dimensions generate the most friction. The radar chart below maps relative intensity across six primary pain areas.</p>
@@ -263,10 +255,6 @@ const post: BlogPost = {
 <p>AWS surfaces as a competitive alternative despite operating at a different scale and complexity level than Linode. The witness evidence shows at least one user explicitly considering Amazon SES, indicating AWS services compete for specific workloads even when the broader AWS platform might be overkill for Linode's typical use cases.</p>
 <p>Vultr and Hetzner appear in competitive mentions but without detailed strength/weakness profiles in the supplied data. Their presence indicates they're part of the consideration set for VPS buyers, but the evidence base isn't sufficient to characterize their competitive positioning relative to Linode.</p>
 <p>The competitive comparison data shows a critical gap: no head-to-head pricing comparison, no feature matrix, and no quantified performance benchmarks. Reviewers mention competitors by name but rarely provide the structured comparison data needed to definitively state "X is better than Y on dimension Z."</p>
-<p>One reviewer captured the competitive evaluation challenge:</p>
-<blockquote>
-<p>-- reviewer on Twitter</p>
-</blockquote>
 <p>This truncated quote reveals the cognitive trade-off buyers face: AWS may offer superior capability, but migration and operational complexity create friction. DigitalOcean and Linode appear grouped together as simpler alternatives, suggesting they compete in the same "easy VPS hosting" category rather than against AWS's full platform.</p>
 <p>For vendors competing against Linode, the competitive landscape suggests positioning around:</p>
 <ul>

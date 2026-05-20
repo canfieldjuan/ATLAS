@@ -129,10 +129,6 @@ const post: BlogPost = {
 - <strong>Asana</strong> complaints are fewer but more urgent. When reviewers mention Asana, they're often describing active evaluations of alternatives.
 - <strong>Monday.com</strong> sits in the middle with 51 reviews and 2.7 urgency. Pricing is the flashpoint—particularly unexpected annual renewals.
 - <strong>Trello</strong> has 138 reviews but only 1.2 urgency. Feature limitations are well-known and priced into adoption decisions.</p>
-<p>One Reddit reviewer captured the pricing comparison across tools:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>The rest of this article breaks down the #1 complaint for each major vendor, with supporting evidence and counterbalancing strengths.</p>
 <h2 id="jira-the-1-complaint-is-support">Jira: The #1 Complaint Is Support</h2>
 <p>Jira dominates enterprise project management, but 263 reviews in our sample contained complaints. The most frequent issue: support quality.</p>
@@ -166,10 +162,6 @@ const post: BlogPost = {
 </blockquote>
 <p>The positive framing suggests the reviewer values Notion's strengths but later describes feature limitations that constrain team workflows.</p>
 <p>Notion's urgency score is 2.8 out of 10—higher than Jira but still moderate. Feature gaps are known trade-offs. Teams adopt Notion for its flexibility and aesthetic, then hit scaling limits as projects grow.</p>
-<p>One counterevidence signal from PeerSpot:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
 <p>This suggests some reviewers see Notion's product velocity as a strength. However, the feature complaint volume indicates velocity hasn't closed critical gaps for project-heavy teams.</p>
 <p><strong>What Notion does well:</strong> Unified workspace for docs, wikis, and lightweight tasks. Strong collaboration features and a clean interface. For small teams prioritizing simplicity over depth, Notion delivers.</p>
 <h2 id="trello-the-1-complaint-is-features">Trello: The #1 Complaint Is Features</h2>
@@ -191,15 +183,8 @@ const post: BlogPost = {
 <p><strong>What Asana does well:</strong> Strong task hierarchy, timeline views, and portfolio management for mid-sized teams. For organizations that align with Asana's workflow model, it scales well. The issue is that "fit" is hard to predict before adoption.</p>
 <h2 id="mondaycom-the-1-complaint-is-pricing">Monday.com: The #1 Complaint Is Pricing</h2>
 <p>Monday.com has 51 reviews with complaints and a 2.7 urgency score. The top issue: pricing.</p>
-<p>Reviewers describe unexpected annual renewals, inflexible cancellation policies, and per-seat costs that escalate faster than anticipated. One Software Advice reviewer captured the pain point:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
+<p>Reviewers describe unexpected annual renewals, inflexible cancellation policies, and per-seat costs that escalate faster than anticipated.</p>
 <p>This is the single most concrete pricing complaint in the dataset. The reviewer mentions an annual plan, reduced usage, and an unexpected charge. The lack of prorated refunds turns billing into a churn trigger.</p>
-<p>Another reviewer on Software Advice described the same pattern:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
 <p>The repetition of the $265 figure across multiple reviews suggests a common plan tier. Annual billing without usage-based adjustments creates acute dissatisfaction when teams reduce seats or usage mid-cycle.</p>
 <p>The Reddit pricing comparison quoted earlier shows Monday.com at $9 per user—competitive with Jira and below Asana. The issue isn't sticker price. It's billing predictability and cancellation flexibility.</p>
 <p><strong>What Monday.com does well:</strong> Visual workflow builder, customizable dashboards, and strong automation. For teams that value aesthetics and flexibility, Monday.com delivers. The pricing model works when usage is stable and predictable.</p>

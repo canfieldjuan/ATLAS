@@ -156,10 +156,7 @@ const post: BlogPost = {
 <li>Notion for documentation</li>
 <li>Zapier for workflow automation</li>
 </ul>
-<p>...into ClickUp's unified environment. The consolidation creates efficiency gains but also introduces coordination complexity. One common pattern witness noted:</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
+<p>...into ClickUp's unified environment. The consolidation creates efficiency gains but also introduces coordination complexity.</p>
 <p>This scheduling visibility gap becomes more acute as teams consolidate workflows and increase task interdependencies. The same reviewer flagged notification overload as consolidation deepened.</p>
 <h3 id="competitive-context">Competitive Context</h3>
 <p>ClickUp competes in a stable market regime, according to the reasoning context. There is no widespread vendor displacement wave or category-wide churn spike. Instead, migration appears driven by incremental dissatisfaction with existing tools rather than systemic failure.</p>
@@ -175,16 +172,10 @@ const post: BlogPost = {
 <li>View limitations (lack of Gantt, Calendar, or Timeline views)</li>
 <li>Inflexible hierarchy structures</li>
 </ul>
-<p>ClickUp addresses these gaps with multiple view modes and customizable hierarchies. But the data also shows that ClickUp's flexibility introduces its own UX complexity. One counterevidence witness from TrustRadius noted:</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
+<p>ClickUp addresses these gaps with multiple view modes and customizable hierarchies. But the data also shows that ClickUp's flexibility introduces its own UX complexity.</p>
 <p>This suggests the migration trade-off: teams gain flexibility but must invest time learning ClickUp's folder/list/task hierarchy. The learning curve is steeper for teams consolidating multiple workflows.</p>
 <h3 id="pricing-friction">Pricing Friction</h3>
-<p>Pricing backlash appears in both outbound signals (teams leaving competitors) and inbound caution (teams evaluating ClickUp). One outlier witness on Trustpilot documented a sharp pricing increase:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Pricing backlash appears in both outbound signals (teams leaving competitors) and inbound caution (teams evaluating ClickUp).</p>
 <p>This 222% increase triggered explicit pricing backlash. While this is an outlier case, it highlights pricing volatility as a migration risk. Teams switching to ClickUp should validate current pricing and lock in contract terms before committing.</p>
 <p>The data does not support a claim that ClickUp is universally cheaper than competitors. Pricing complaints appear in 437 enriched reviews, but the rate is not quantified in the blueprint.</p>
 <h3 id="feature-gaps-and-integration-needs">Feature Gaps and Integration Needs</h3>
@@ -245,10 +236,6 @@ const post: BlogPost = {
 <p>This open-ended prompt reflects the platform's breadth, but also the challenge of configuring it to match existing workflows. Teams should expect a setup phase of days to weeks, depending on workflow complexity.</p>
 <h3 id="workflow-reconfiguration">Workflow Reconfiguration</h3>
 <p>ClickUp's folder/list/task hierarchy is more flexible than Trello's board/list/card structure or Asana's project/section/task model. This flexibility is a strength for teams with complex workflows, but a learning curve for teams expecting simpler structures.</p>
-<p>The counterevidence witness from TrustRadius flagged this directly:</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
 <p>This suggests teams should invest time in hierarchy planning before migration. Common patterns include:</p>
 <ul>
 <li>Folders for departments or clients</li>
@@ -258,15 +245,8 @@ const post: BlogPost = {
 <p>However, ClickUp also supports spaces, goals, and docs, which add additional hierarchy layers. Teams consolidating multiple tools should map workflows to ClickUp's structure before migrating data.</p>
 <h3 id="team-adoption-and-notification-management">Team Adoption and Notification Management</h3>
 <p>End-user adoption is the third migration phase. Reviewers report notification overload as a common friction point, particularly for teams consolidating workflows from multiple tools.</p>
-<p>The same TrustRadius reviewer noted:</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
 <p>This suggests default notification settings may not match team preferences. Admins should configure notification rules during setup to avoid overwhelming end users.</p>
-<p>The data also flags scheduling visibility gaps. The common pattern witness noted:</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
+<p>The data also flags scheduling visibility gaps.</p>
 <p>This gap becomes more acute as team size grows. Teams migrating from tools with built-in resource capacity planning (like Asana or Monday.com) may need to configure ClickUp's workload view or integrate a third-party capacity tool.</p>
 <h3 id="learning-curve-and-productivity-delta">Learning Curve and Productivity Delta</h3>
 <p>The reasoning context includes a <code>productivity_delta_claim</code> of "more_productive" for bundled suite consolidation cases. However, this claim is based on reviewer self-report, not measured productivity data.</p>

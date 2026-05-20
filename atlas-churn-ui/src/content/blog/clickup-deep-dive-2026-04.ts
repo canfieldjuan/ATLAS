@@ -340,17 +340,8 @@ const post: BlogPost = {
 <p>-- reviewer on reddit</p>
 </blockquote>
 <p>This is an explicit switching signal. The reviewer is ready to leave and wants to know which competitors make migration easy. The urgency score (10.0) reflects how far this reviewer has moved beyond dissatisfaction into active evaluation.</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
 <p>This is the UX complexity anchor. A Group Director—a senior role managing client operations—reports a basic visibility gap that undermines coordination. The complaint is specific, operational, and tied to daily workflow friction.</p>
-<blockquote>
-<p>-- Group Director, Client Operations, verified reviewer on TrustRadius</p>
-</blockquote>
 <p>The same Group Director expands the complaint: navigation confusion across the folder/list/task hierarchy, plus notification overload. This is counterevidence to ClickUp's UX strengths—the platform's flexibility creates complexity that even senior users struggle to master.</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
 <p>Pricing friction distilled into one sentence. The reviewer abandoned ClickUp after this increase, showing that pricing changes can cross the threshold where dissatisfaction converts to churn.</p>
 <p>These quotes reveal the pattern: ClickUp delivers feature breadth and customization depth that attract users, but navigation complexity, notification overload, and pricing friction accumulate as usage deepens. Some users accept the trade-off. Others—like the Reddit reviewer asking about import tools—decide the friction isn't worth it.</p>
 <h2 id="the-bottom-line-on-clickup">The Bottom Line on ClickUp</h2>

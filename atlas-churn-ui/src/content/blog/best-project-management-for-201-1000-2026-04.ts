@@ -181,15 +181,7 @@ const post: BlogPost = {
 <p>Before we get to vendor-specific recommendations, let's cover the tradeoffs that keep showing up across the category.</p>
 <p>{{chart:category-pain-fit-map}}</p>
 <p>Overall dissatisfaction leads the pain map, followed by UX friction, pricing complaints, support gaps, feature limitations, and performance issues.</p>
-<p>Here's what that looks like in practice:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
 <p>That's a pricing backlash signal tied to workflow substitution—the reviewer reduced usage but remained locked into an annual contract with no prorated refund.</p>
-<p>Another reviewer on Reddit shared a pricing comparison:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>Per-seat pricing scales unpredictably. A 200-person team paying $9/seat lands at $1800/month. At $10.99/seat, that's $2198/month. Annual contracts amplify the risk.</p>
 <p>UX friction shows up differently depending on the vendor. Jira reviewers cite complexity for non-technical users. Asana users report limited customization. Monday.com feedback clusters around feature bloat and navigation friction.</p>
 <p>One Wrike reviewer captured the IT consolidation pressure many mid-market teams face:</p>
@@ -198,10 +190,7 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>That's not a product problem—it's an operating model shift. But it still drives displacement.</p>
-<p>The counterevidence matters too. One PeerSpot reviewer noted:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
+<p>The counterevidence matters too.</p>
 <p>That's a feature gap signal tied to bundled suite consolidation. Some teams stay because the vendor keeps pace with their evolving workflow needs, even when pricing or UX friction exists.</p>
 <p>The category exhibits moderate displacement intensity with a stable market structure. ClickUp is experiencing significant outbound displacement (10 mentions to Asana, 2 to Monday.com) with UX cited as the primary driver. Jira shows end-user dissatisfaction with UX and faces displacement pressure toward both Asana (5 mentions) and ClickUp (3 mentions).</p>
 <p>Now let's look at vendor-specific fit.</p>
@@ -416,10 +405,6 @@ const post: BlogPost = {
 <p>-- Administrative Assistant, verified reviewer on G2</p>
 </blockquote>
 <p>That's positive sentiment from a non-technical user in a mid-market company. Notion isn't in the core comparison set, but the feedback suggests visual, flexible tools appeal to cross-functional teams.</p>
-<p>Finally, one Reddit reviewer compared pricing across vendors:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>Per-seat pricing scales unpredictably. The multiplier matters as much as the base rate.</p>
 <p>This analysis is based on 1464 reviews from verified platforms (G2, Gartner Peer Insights, PeerSpot, Software Advice) and community sources (Reddit, forums) covering February 28 to April 7, 2026. Sample size is high. Confidence is high. But remember: these are self-selected reviewers. Results reflect reviewer perception, not universal product truth.</p>`,
 }

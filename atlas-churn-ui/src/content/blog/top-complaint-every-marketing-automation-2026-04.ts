@@ -103,14 +103,6 @@ const post: BlogPost = {
 <p>We analyzed 743 reviews across 6 marketing automation vendors between February 28 and April 8, 2026. The sample includes 156 verified reviews from G2, Gartner, PeerSpot, and Software Advice, plus 1,432 community discussions from Reddit and other forums. We enriched 1,588 of the 2,534 total reviews collected.</p>
 <p>This is not a ranking. This is a breakdown of the single most common complaint category for each vendor, based on what reviewers actually report. Every tool discussed here also has documented strengths. The goal is to help you pick the trade-off you can manage, not to crown a winner.</p>
 <p>Pricing dominates. Four of the six vendors—HubSpot, Klaviyo, Brevo, and ActiveCampaign—show pricing as the top complaint. Mailchimp's primary issue is UX. GetResponse shows overall dissatisfaction as the leading category, though the sample size is small.</p>
-<p>One Reddit reviewer framed the cost tension clearly:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Another reviewer on Software Advice captured the retention anchor:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>The pattern is consistent: reviewers report satisfaction with core functionality while simultaneously evaluating alternatives due to cost or usability friction. These are not mutually exclusive.</p>
 <h2 id="the-landscape-at-a-glance">The Landscape at a Glance</h2>
 <p>HubSpot dominates the review volume with 296 reviews in the analysis window, followed by Klaviyo at 156. Mailchimp, Brevo, ActiveCampaign, and GetResponse have smaller but still substantive samples.</p>
@@ -141,10 +133,6 @@ const post: BlogPost = {
 <h2 id="klaviyo-the-1-complaint-is-pricing">Klaviyo: The #1 Complaint Is Pricing</h2>
 <p>Pricing is the top complaint in 156 Klaviyo reviews analyzed between February 28 and April 8, 2026. The average urgency is 2.8.</p>
 <p>Klaviyo's pricing model scales with contact volume and email sends, which reviewers report as a pain point when list size grows or when comparing costs to competitors. The complaint pattern mirrors HubSpot's: reviewers acknowledge strong e-commerce integration and segmentation capabilities, but cost becomes a friction point during growth or budget reviews.</p>
-<p>One reviewer on Software Advice described the tension:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>This is a common pattern. Reviewers report Klaviyo works well for e-commerce email marketing, particularly for Shopify and WooCommerce integrations. The pricing complaint appears when teams hit volume thresholds or when they compare Klaviyo's cost to alternatives like Mailchimp, Brevo, or ActiveCampaign.</p>
 <p>Klaviyo's strengths include deep e-commerce integrations, advanced segmentation, and predictive analytics. These are retention anchors. Teams that rely on Klaviyo's e-commerce-specific features tend to stay despite pricing concerns. Teams that need only basic email marketing or that hit volume-based pricing tiers tend to evaluate alternatives.</p>
 <p>The data suggests Klaviyo's pricing is not universally prohibitive—it's a fit question. If your use case requires Klaviyo's e-commerce depth, the cost may be justified. If you need only basic email marketing, the pricing model may push you toward simpler alternatives.</p>
@@ -173,10 +161,7 @@ const post: BlogPost = {
 <p>The small sample size means this finding is provisional. If you are considering GetResponse, treat the overall dissatisfaction signal as a yellow flag, not a red flag. Test the platform against your specific use case before committing.</p>
 <h2 id="activecampaign-the-1-complaint-is-pricing">ActiveCampaign: The #1 Complaint Is Pricing</h2>
 <p>Pricing is the top complaint in 18 ActiveCampaign reviews analyzed between February 28 and April 8, 2026. The average urgency is 2.2.</p>
-<p>Reviewers report ActiveCampaign's pricing is higher than expected, particularly when comparing to Mailchimp or other alternatives. One Reddit reviewer stated:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>Reviewers report ActiveCampaign's pricing is higher than expected, particularly when comparing to Mailchimp or other alternatives.</p>
 <p>This is a concrete comparison. The reviewer is not saying ActiveCampaign is bad—they are saying it costs significantly more than a direct alternative. Another Reddit reviewer framed the trade-off:</p>
 <blockquote>
 <p>ActiveCampaign is a fantastic email marketing service, but it's not for everyone</p>
@@ -188,15 +173,8 @@ const post: BlogPost = {
 <h2 id="every-tool-has-a-flaw-pick-the-one-you-can-live-with">Every Tool Has a Flaw -- Pick the One You Can Live With</h2>
 <p>There is no perfect marketing automation tool. Every platform in this analysis has a documented weakness.</p>
 <p>Pricing dominates the complaint landscape. HubSpot, Klaviyo, Brevo, and ActiveCampaign all show pricing as the #1 complaint. Mailchimp's top issue is UX. GetResponse shows overall dissatisfaction, though the sample is small.</p>
-<p>The data also shows retention anchors. Reviewers report satisfaction with core functionality, integration depth, and feature sets even while evaluating alternatives. One Software Advice reviewer captured this tension:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
+<p>The data also shows retention anchors. Reviewers report satisfaction with core functionality, integration depth, and feature sets even while evaluating alternatives.</p>
 <p>This is the pattern across the category. Teams stay because the platform works. They leave when the weakness becomes a decision-forcing event—a budget review, a UX friction point that blocks a critical workflow, or a support failure during a critical outage.</p>
-<p>The witness data includes one support complaint with immediate urgency:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>This is an outlier in the dataset—support is not the #1 complaint for any vendor analyzed. But it illustrates the decision-forcing dynamic. When a platform works, minor complaints are tolerable. When it fails at a critical moment, switching costs drop.</p>
 <p>The market regime is stable. Pricing pressure is present but not accelerating. Switching patterns suggest teams evaluate alternatives during budget cycles or when specific pain points accumulate, not as a result of sudden market shifts.</p>
 <p>If you are evaluating marketing automation tools, use this breakdown as a starting point:</p>

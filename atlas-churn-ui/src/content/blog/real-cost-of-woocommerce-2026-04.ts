@@ -90,14 +90,6 @@ const post: BlogPost = {
 <p>I've switched from woocommerce payments to stripe payments as the API to integration platforms doesn't send net payment info, but Stripe does. Stripe fees are more expensive though</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
-<p>A verified reviewer on Capterra captured the core tension:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
-<p>This week, one store owner posed a direct pricing reality check:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>The pattern isn't about a single vendor misstep. It's about the accumulation of hosting, payment processing, extensions, SSL certificates, and developer time required to run a production store. Reviewers report these costs become visible when calculating quarterly transaction fee totals or year-end profit margins.</p>
 <p>One entrepreneur who managed 9 webstores described their migration path:</p>
 <blockquote>

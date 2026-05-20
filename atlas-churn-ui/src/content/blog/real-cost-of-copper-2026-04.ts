@@ -78,20 +78,10 @@ const post: BlogPost = {
 <p>Pricing complaints cluster around three themes: value-for-money skepticism, feature gaps that make the cost feel unjustified, and contract lock-in friction. But the picture is not one-sided. Copper also maintains positive sentiment anchors that suggest some users find enough value to stay despite pricing concerns.</p>
 <p>This article unpacks what users actually say about Copper's pricing, how severe those complaints are, where Copper genuinely delivers value, and who should pay for it versus who should look elsewhere.</p>
 <h2 id="what-copper-users-actually-say-about-pricing">What Copper Users Actually Say About Pricing</h2>
-<p>Pricing complaints are not abstract. They come from real deployment experiences where the cost-to-capability ratio did not match expectations. Here's what 10 reviewers who specifically mentioned pricing frustrations had to say:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
+<p>Pricing complaints are not abstract. They come from real deployment experiences where the cost-to-capability ratio did not match expectations.</p>
 <p>This is the sharpest value-for-money critique in the dataset. The reviewer describes Copper as offering minimal functionality beyond what a free spreadsheet could provide, questioning why they should pay for a tool that does not meaningfully exceed baseline workflow capabilities.</p>
-<p>Another reviewer expanded on this theme:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
 <p>This excerpt introduces a second pain point: contract lock-in. The reviewer reports difficulty canceling their subscription, which compounds the value-for-money frustration. If you cannot easily exit when the product does not meet expectations, pricing friction becomes a retention trap rather than a simple cost decision.</p>
 <p>A third reviewer offered a cost comparison that initially appears relevant but may reflect data noise:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>This quote appears to reference physical materials rather than Copper CRM pricing. It surfaced in the pricing complaint corpus due to keyword matching, which highlights a limitation of review analysis: not every mention of "Copper" and "pricing" refers to the software product. However, the 3x cost differential does mirror the broader sentiment that Copper feels expensive relative to alternatives.</p>
 <p>Two additional high-urgency pricing complaints came from community platforms but lacked CRM-specific context:</p>
 <blockquote>
@@ -127,10 +117,6 @@ const post: BlogPost = {
 <li><strong>Silver plated copper cable is flexible and doesn't get tangled</strong>: Definitely audio equipment.</li>
 </ul>
 <p>These strength mentions do not help us understand what Copper CRM users value. However, the presence of "integration," "onboarding," "performance," "security," and "ux" as strength categories in the metric IDs suggests that when reviewers do discuss CRM-specific strengths, they cluster around those themes.</p>
-<p>The counterevidence witness highlight offers one retention signal:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>This quote is cryptic and may also reflect data noise ("28 day cycle" suggests a health or scheduling context rather than CRM usage). However, the phrase "the pain is manageable" does capture a retention dynamic: users who find a product frustrating but not intolerable often stay, especially if switching costs are high.</p>
 <p>The claim plan acknowledges that "contradictory evidence between weakness and strength signals prevents clear identification of specific retention mechanisms." That is an honest limitation. We know Copper retains users despite pricing concerns, but we cannot pinpoint which features or workflows create enough value to justify the cost.</p>
 <p>One plausible explanation: Copper's Google Workspace integration is a known strength in the CRM market. Teams already embedded in Gmail, Google Calendar, and Google Drive may find Copper's native integration valuable enough to tolerate pricing friction. However, that hypothesis is not directly supported by the review corpus in this dataset.</p>

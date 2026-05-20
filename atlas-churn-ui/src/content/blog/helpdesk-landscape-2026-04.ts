@@ -306,9 +306,6 @@ This is the most volatile pain point. Reviewers report that initial pricing is c
 <p>-- software reviewer on Reddit</p>
 </blockquote>
 <p>This specificity matters. Freshdesk's weakness isn't feature breadth—it's integration maintenance. If your tech stack relies on third-party connectors, integration lag becomes a real operational cost.</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
 <p>This counterevidence is important. Despite widespread dissatisfaction with pricing, support, and contract friction, reviewers acknowledge that helpdesk platforms deliver functional adequacy. The complaints are about experience, cost, and switching friction—not core capability. This explains why churn remains lower than pain levels suggest: the product works, and switching costs are high.</p>
 <hr />
 <h2 id="methodology-data-scope">Methodology &amp; Data Scope</h2>

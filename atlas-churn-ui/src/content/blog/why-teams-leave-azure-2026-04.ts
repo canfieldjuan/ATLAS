@@ -70,10 +70,7 @@ const post: BlogPost = {
 <p>I used Azure Web Apps with my previous company. Using Asp.Net and Sql backend, plus blob storage, I really liked the simplicity. However with my new company we were rejected for BizSpark, but granted</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
-<p>The most concrete switching signal involved Broadcom pricing and vSphere 7 license expiration. One reviewer wrote:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>The most concrete switching signal involved Broadcom pricing and vSphere 7 license expiration.</p>
 <p>This reviewer described vSphere 7 Standard licenses expiring within 2 days, with Broadcom pricing making a short renewal painful. The witness data shows this as a common pattern with a deadline signal and competitor switch replacement mode.</p>
 <p>Another reviewer described migrating clients off SOBR with Azure capacity tier extents:</p>
 <blockquote>
@@ -87,18 +84,10 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>Beyond pricing, reviewers mention feature gaps, integration challenges, and reliability concerns. The data does not support causal claims—review patterns suggest pricing pressure correlates with switching intent, but other factors like support quality, ecosystem fit, and migration complexity also appear in switching stories.</p>
-<p>One outlier described replacing Azure with a workflow substitution approach:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>This reviewer replaced Azure hosting with a $25/month alternative and Zoho mail for $10/year, illustrating workflow substitution as a replacement mode.</p>
 <p>The switching stories show pricing as the most visible trigger, but the underlying reasons include licensing complexity, cost unpredictability, and competitive pressure from AWS and GCP. The data does not prove Azure is universally more expensive—pricing complaints may be segment-specific, tied to Broadcom licensing changes, or reflect cost management challenges rather than list price differences.</p>
 <h2 id="where-are-they-going">Where Are They Going?</h2>
 <p>Reviewers mention AWS, Google Cloud Platform (GCP), Google Cloud, GitHub, and Microsoft Azure itself as comparison points. AWS appears most frequently as the alternative destination. The data does not include migration volume or completion rates—these are evaluation and consideration signals, not confirmed switches.</p>
-<p>One reviewer considering Azure wrote:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>This signal appeared in a context where the reviewer was evaluating Azure as an alternative to another vendor, showing Azure as both a departure point and a destination depending on the starting position.</p>
 <p>AWS appears in switching stories as the default alternative for teams leaving Azure. The data does not support claims about AWS being objectively better—reviewers report choosing AWS for cost management tools, ecosystem maturity, or familiarity, but those are self-selected preferences, not universal product superiority.</p>
 <p>GCP appears as an alternative for teams prioritizing Kubernetes, data analytics, or machine learning workloads. One reviewer noted that Apigee runs best on GCP, illustrating ecosystem lock-in as a switching driver.</p>
@@ -108,10 +97,6 @@ const post: BlogPost = {
 <p>The switching patterns suggest teams evaluate alternatives based on pricing transparency, cost management tools, ecosystem fit, and migration complexity. The data does not support claims that one vendor is universally better—alternative selection depends on workload type, team expertise, existing tooling, and risk tolerance.</p>
 <h2 id="what-youll-miss-azures-genuine-strengths">What You'll Miss: Azure's Genuine Strengths</h2>
 <p>Azure retains customers through technical debt reduction, feature breadth, security posture, and user experience. Reviewers cite these dimensions as retention anchors, though the data also shows contradictory pricing signals.</p>
-<p>One reviewer mentioned Azure's $200 trial credit:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
 <p>This signal appears as counterevidence in the pricing dimension, suggesting Azure uses promotional incentives to retain or acquire customers. The data does not clarify whether trial credits materially offset long-term cost concerns or represent a temporary retention tactic.</p>
 <p>Reviewers cite Azure's feature breadth as a strength, particularly for teams using .NET, SQL Server, or other Microsoft ecosystem tools. One reviewer described using Azure Web Apps with Asp.Net and SQL backend, praising the simplicity.</p>
 <p>Security appears as a retention anchor, though the data does not include specific security capabilities or compliance certifications. Reviewers mention security as a reason to stay, but the sample size is too small to support claims about Azure being objectively more secure than alternatives.</p>

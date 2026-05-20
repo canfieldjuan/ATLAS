@@ -163,10 +163,7 @@ const post: BlogPost = {
 <p>Onboarding complaints surface less frequently but carry weight. Training resources exist, but implementation challenges emerge after the initial setup period when teams attempt deeper customization.</p>
 <p>Pricing and UX complaints appear in the dataset but do not dominate. Insightly's visual contact management and dashboard functionality offset some usability concerns. Contract lock-in, integration, and performance complaints register minimal mentions.</p>
 <h3 id="zoho-crm-pain-categories">Zoho CRM Pain Categories</h3>
-<p>Zoho CRM's complaint profile centers on paid-tier support degradation. A Trustpilot reviewer described the shift explicitly:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Zoho CRM's complaint profile centers on paid-tier support degradation.</p>
 <p>The bot-gated ticketing workflow creates friction for customers who previously experienced functional free-tier support. This operational model shift—from immediate chat to ticket routing—appears repeatedly in recent complaints.</p>
 <p>Pricing friction emerges as the second category. One reviewer on Trustpilot mentioned paying over $80 and receiving inadequate support attention. The pricing backlash connects directly to perceived value erosion after upgrading from free tiers.</p>
 <p>Overall dissatisfaction and UX complaints appear but remain secondary. Zoho CRM's free tier functionality satisfies many users when support is not required. Features and integration complaints register minimal mentions in this analysis window.</p>
@@ -206,10 +203,7 @@ const post: BlogPost = {
 <h2 id="what-reviewers-say-about-insightly-and-zoho-crm">What Reviewers Say About Insightly and Zoho CRM</h2>
 <p>Direct reviewer language grounds the comparison in specific friction points and retention factors.</p>
 <h3 id="insightly-reviewer-voice">Insightly Reviewer Voice</h3>
-<p>Insightly reviewers cite dashboard functionality and contact management as primary strengths. One Software Advice reviewer described the value clearly:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
+<p>Insightly reviewers cite dashboard functionality and contact management as primary strengths.</p>
 <p>The visual elements and training resources create initial satisfaction. After one year, however, support friction surfaces. A G2 reviewer noted:</p>
 <blockquote>
 <p>What do you dislike about Insightly CRM? The Help function. We would ask a specific question, the a...</p>
@@ -218,10 +212,7 @@ const post: BlogPost = {
 <p>The help function fails to deliver specific answers when implementation challenges emerge. Storage limits compound frustration. A Capterra reviewer discontinued after running out of free space while managing contacts.</p>
 <p>Despite support complaints, some reviewers remain. One G2 reviewer mentioned liking the dashboard after one year, suggesting visual functionality offsets help inadequacy for certain use cases.</p>
 <h3 id="zoho-crm-reviewer-voice">Zoho CRM Reviewer Voice</h3>
-<p>Zoho CRM reviewers describe a sharp contrast between free-tier and paid-tier experiences. A Trustpilot reviewer captured the shift:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Zoho CRM reviewers describe a sharp contrast between free-tier and paid-tier experiences.</p>
 <p>The bot-mediated ticketing workflow creates friction for paying customers. Another Trustpilot reviewer described support indifference after paying over $80, suggesting value erosion drives pricing backlash.</p>
 <p>Free-tier satisfaction appears repeatedly. One Trustpilot reviewer noted no problems with Zoho free for years, indicating the platform delivers value when support escalation is not required.</p>
 <p>A Reddit reviewer sought migration feedback, asking for pros, cons, and war stories from teams switching Zoho CRM to Monday CRM. The signal suggests active evaluation but does not confirm switching intent.</p>
