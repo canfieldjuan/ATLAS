@@ -22,8 +22,15 @@ DEFAULT_TICKET_SOURCE_TYPES = (
     "complaint",
 )
 DEFAULT_TITLE = "Customer Ticket FAQ"
+MAX_EXTRACTED_QUESTION_CHARS = 140
 _WHITESPACE_RE = re.compile(r"\s+")
 _KEY_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
+_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+_SPEAKER_LABEL_RE = re.compile(
+    r"(?:^|\n|[.!?]\s+)\s*(customer|user|requester|client|agent|support|representative|rep|admin)\s*:",
+    re.IGNORECASE,
+)
+_CUSTOMER_SPEAKERS = {"customer", "user", "requester", "client"}
 DEFAULT_INTENT_RULES = (
     ("reporting friction", ("export", "report", "dashboard", "attribution")),
     ("manual follow-up", ("handoff", "follow-up", "workflow", "automation", "manual")),
@@ -355,9 +362,11 @@ def _item(
     source_keys = (row.get("source_key") or row.get("source_id", "") for row in rows)
     source_ids = tuple(dict.fromkeys(value for value in source_keys if value))
     snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
+    question, question_source = _question(topic, display_rows)
     return {
         "topic": topic,
-        "question": f"What are customers asking about {topic}?",
+        "question": question,
+        "question_source": question_source,
         "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
         "action_items": _action_items(topic, snippets),
         "source_ids": source_ids,
@@ -366,6 +375,77 @@ def _item(
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
     }
+
+
+def _question(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, str]:
+    for row in rows:
+        text = _question_text(row.get("text", ""))
+        if text:
+            return (text, "customer_wording")
+    return (f"What are customers asking about {topic}?", "topic_fallback")
+
+
+def _question_text(value: Any) -> str:
+    for text in _question_candidate_texts(value):
+        if "?" in text:
+            prefix = text.split("?", 1)[0].strip()
+            sentence_parts = [part.strip() for part in re.split(r"[.!:;]+", prefix) if part.strip()]
+            candidate = sentence_parts[-1] if sentence_parts else prefix
+            normalized = _normalize_question_text(candidate)
+            if _usable_question(normalized):
+                return normalized
+            continue
+        normalized = _question_start_text(text)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _question_candidate_texts(value: Any) -> tuple[str, ...]:
+    text = _clean(value)
+    if not text:
+        return ()
+    matches = list(_SPEAKER_LABEL_RE.finditer(text))
+    if not matches:
+        return (_compact(_URL_RE.sub("", text)),)
+
+    candidates = []
+    leading = _question_segment(text[:matches[0].start()])
+    if leading:
+        candidates.append(leading)
+    for index, match in enumerate(matches):
+        speaker = match.group(1).lower()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        if speaker in _CUSTOMER_SPEAKERS:
+            segment = _question_segment(text[match.end():end])
+            if segment:
+                candidates.append(segment)
+    return tuple(candidates)
+
+
+def _question_segment(value: str) -> str:
+    return _compact(_URL_RE.sub("", value))
+
+
+def _question_start_text(text: str) -> str:
+    question_starts = ("how ", "what ", "where ", "when ", "why ", "can ", "could ", "do ", "does ", "is ")
+    lowered = text.lower()
+    if lowered.startswith(question_starts):
+        normalized = _normalize_question_text(text)
+        if _usable_question(normalized):
+            return normalized
+    return ""
+
+
+def _usable_question(value: str) -> bool:
+    return bool(value) and len(value) <= MAX_EXTRACTED_QUESTION_CHARS
+
+
+def _normalize_question_text(value: str) -> str:
+    candidate = _compact(value).rstrip("?.!,;: ")
+    if not candidate:
+        return ""
+    return f"{candidate}?"
 
 
 def _render(
