@@ -1039,10 +1039,17 @@ python scripts/smoke_extracted_content_ops_execution.py \
   --outputs email_campaign,landing_page \
   --with-reasoning \
   --json
+
+python scripts/smoke_extracted_content_ops_execution.py \
+  --outputs faq_markdown \
+  --source-type support_ticket \
+  --source-title "login reset" \
+  --json
 ```
 
-The smoke uses fake generated-asset services and defaults to a `sample`
-offline provider object. It fails if the JSON result omits
+The smoke uses fake generated-asset services plus the deterministic FAQ
+Markdown service, and defaults to a `sample` offline provider object. It fails
+if the JSON result omits
 `result.reasoning_contexts_used`, the step-level `reasoning.contexts_used`
 audit field, or `reasoning.consumed_contexts` when the usage count is
 positive. That lets hosts verify the execution seam without opening database,
