@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 from pathlib import Path
 
 
@@ -77,6 +78,7 @@ def test_build_cfpb_query_keeps_filters_parametric():
     assert query["format"] == "csv"
     assert query["field"] == "all"
     assert query["no_aggs"] == "true"
+    assert query["has_narrative"] == "true"
     assert query["size"] == 3
     assert query["company"] == "Example Bank"
     assert query["product"] == "Credit card"
@@ -86,6 +88,12 @@ def test_build_cfpb_query_keeps_filters_parametric():
     assert query["date_received_max"] == "2026-02-01"
 
 
+def test_build_cfpb_query_can_disable_narrative_filter():
+    query = exporter.build_cfpb_query(search_term="fees", require_narrative=False)
+
+    assert "has_narrative" not in query
+
+
 def test_build_cfpb_url_preserves_existing_query_string():
     url = exporter.build_cfpb_url(
         "https://example.test/api?existing=1",
@@ -93,6 +101,25 @@ def test_build_cfpb_url_preserves_existing_query_string():
     )
 
     assert url == "https://example.test/api?existing=1&format=csv&search_term=late+fee"
+
+
+def test_build_cfpb_headers_uses_browser_compatible_defaults():
+    headers = exporter.build_cfpb_headers()
+
+    assert headers["User-Agent"].startswith("Mozilla/5.0")
+    assert "AtlasContentOps/1.0" in headers["User-Agent"]
+    assert headers["Accept"] == "text/csv,*/*"
+    assert headers["Referer"] == exporter.DEFAULT_REFERER
+
+
+def test_build_cfpb_headers_accepts_host_overrides():
+    headers = exporter.build_cfpb_headers(
+        user_agent="HostFetcher/2.0",
+        referer="https://host.example/source-export",
+    )
+
+    assert headers["User-Agent"] == "HostFetcher/2.0"
+    assert headers["Referer"] == "https://host.example/source-export"
 
 
 class _Response(io.BytesIO):
@@ -132,7 +159,75 @@ def test_fetch_cfpb_source_rows_streams_until_limit(monkeypatch):
     assert calls[0]["timeout"] == 7.5
     assert "company=Example+Bank" in calls[0]["url"]
     assert "search_term=fees" in calls[0]["url"]
-    assert calls[0]["headers"]["User-agent"] == "Atlas-Content-Ops-CFPB-Source/1.0"
+    assert "has_narrative=true" in calls[0]["url"]
+    assert calls[0]["headers"]["User-agent"].startswith("Mozilla/5.0")
+    assert calls[0]["headers"]["Accept"] == "text/csv,*/*"
+
+
+def test_fetch_cfpb_source_rows_threads_request_overrides(monkeypatch):
+    csv_payload = (
+        "Complaint ID,Company,Product,Issue,Consumer complaint narrative\n"
+        "2,Example Bank,Checking,Fees,First usable complaint.\n"
+    ).encode("utf-8")
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append({"url": request.full_url, "timeout": timeout, "headers": request.headers})
+        return _Response(csv_payload)
+
+    monkeypatch.setattr(exporter, "urlopen", fake_urlopen)
+
+    rows = exporter.fetch_cfpb_source_rows(
+        api_url="https://example.test/cfpb",
+        search_term="fees",
+        limit=1,
+        max_rows_scanned=1,
+        user_agent="HostFetcher/2.0",
+        referer="https://host.example/source-export",
+        require_narrative=False,
+    )
+
+    assert rows[0]["id"] == "cfpb:2"
+    assert "has_narrative=true" not in calls[0]["url"]
+    assert calls[0]["headers"]["User-agent"] == "HostFetcher/2.0"
+    assert calls[0]["headers"]["Referer"] == "https://host.example/source-export"
+
+
+def test_main_threads_cli_fetch_options(monkeypatch, tmp_path: Path):
+    output = tmp_path / "cfpb.jsonl"
+    calls = []
+
+    def fake_fetch(**kwargs):
+        calls.append(kwargs)
+        return [{"id": "cfpb:2", "source_type": "support_ticket"}]
+
+    monkeypatch.setattr(exporter, "fetch_cfpb_source_rows", fake_fetch)
+
+    result = exporter._main([
+        "--search-term",
+        "fees",
+        "--limit",
+        "1",
+        "--max-rows-scanned",
+        "2",
+        "--user-agent",
+        "HostFetcher/2.0",
+        "--referer",
+        "https://host.example/source-export",
+        "--include-rows-without-narrative",
+        "--output",
+        str(output),
+    ])
+
+    assert result == 0
+    assert calls[0]["search_term"] == "fees"
+    assert calls[0]["user_agent"] == "HostFetcher/2.0"
+    assert calls[0]["referer"] == "https://host.example/source-export"
+    assert calls[0]["require_narrative"] is False
+    assert json.loads(output.read_text(encoding="utf-8")) == {
+        "id": "cfpb:2",
+        "source_type": "support_ticket",
+    }
 
 
 def test_render_jsonl_outputs_one_sorted_json_object_per_row():
