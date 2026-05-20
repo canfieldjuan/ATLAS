@@ -7,6 +7,7 @@ import csv
 from dataclasses import dataclass
 from io import StringIO
 import json
+import re
 from typing import Any
 
 from .blog_ports import BlogPostDraft, BlogPostRepository
@@ -30,6 +31,9 @@ _EXPORT_COLUMNS = (
     "reasoning_context_used",
     "reasoning_wedge",
     "reasoning_confidence",
+    "passed_output_checks",
+    "output_checks",
+    "seo_aeo_readiness",
     "tags",
     "content",
     "charts",
@@ -103,6 +107,10 @@ def _draft_row(draft: BlogPostDraft) -> JsonDict:
     row["tag_count"] = len(draft.tags)
     row["chart_count"] = len(draft.charts)
     row.update(_metadata_summary(draft.metadata))
+    readiness = _seo_aeo_readiness(draft)
+    row["output_checks"] = readiness["checks"]
+    row["passed_output_checks"] = readiness["passed"]
+    row["seo_aeo_readiness"] = readiness
     return row
 
 
@@ -119,6 +127,83 @@ def _metadata_summary(value: Any) -> JsonDict:
         "reasoning_wedge": reasoning.get("wedge"),
         "reasoning_confidence": reasoning.get("confidence"),
     }
+
+
+_QUESTION_H2_RE = re.compile(
+    r"^##\s+(?:who|what|when|where|why|how|is|are|can|should|does|do|which)\b.*\?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+
+
+def _seo_aeo_readiness(draft: BlogPostDraft) -> JsonDict:
+    metadata = _metadata_mapping(draft.metadata)
+    checks = {
+        "seo_title_ready": _text_len_between(metadata.get("seo_title"), max_len=60),
+        "seo_description_ready": _text_len_between(
+            metadata.get("seo_description"),
+            max_len=155,
+        ),
+        "target_keyword_present": bool(_clean_text(metadata.get("target_keyword"))),
+        "secondary_keywords_present": len(_metadata_list(metadata.get("secondary_keywords"))) >= 1,
+        "faq_ready": len(_metadata_list(metadata.get("faq"))) >= 3,
+        "aeo_structure_detected": _aeo_structure_detected(draft.content),
+    }
+    missing = [key for key, value in checks.items() if not value]
+    passed = sum(1 for value in checks.values() if value)
+    return {
+        "status": "ready" if not missing else "needs_review",
+        "passed": passed,
+        "total": len(checks),
+        "missing": missing,
+        "checks": checks,
+    }
+
+
+def _text_len_between(value: Any, *, max_len: int) -> bool:
+    text = _clean_text(value)
+    return bool(text) and len(text) <= max_len
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _metadata_list(value: Any) -> list[Any]:
+    if isinstance(value, str) and value.strip():
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        value = decoded
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
+def _aeo_structure_detected(content: Any) -> bool:
+    body = str(content or "")
+    if _QUESTION_H2_RE.search(body):
+        return True
+    for match in _H2_RE.finditer(body):
+        section_start = match.end()
+        next_heading = _H2_RE.search(body, section_start)
+        section = body[section_start:next_heading.start() if next_heading else None]
+        first_paragraph = _first_paragraph(section)
+        word_count = len(first_paragraph.split())
+        if 40 <= word_count <= 80:
+            return True
+    return False
+
+
+def _first_paragraph(section: str) -> str:
+    for chunk in re.split(r"\n\s*\n", section.strip()):
+        text = re.sub(r"^[>\-\*\s]+", "", chunk.strip())
+        if text and not text.startswith("{{chart:") and not text.startswith("<table"):
+            return text
+    return ""
 
 
 def _metadata_mapping(value: Any) -> JsonDict:
