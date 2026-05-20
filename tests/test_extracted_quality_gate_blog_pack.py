@@ -48,6 +48,23 @@ _LONG_GOOD_BODY = (
 )
 
 
+def _seo_aeo_context(**overrides) -> dict:
+    context = {
+        "require_seo_aeo": True,
+        "seo_title": "HubSpot Pricing Pressure",
+        "seo_description": "A data-backed look at HubSpot pricing pressure.",
+        "target_keyword": "hubspot pricing pressure",
+        "secondary_keywords": ("hubspot alternatives",),
+        "faq": (
+            {"question": "Why does pricing pressure matter?", "answer": "It affects renewal decisions."},
+            {"question": "Who should compare alternatives?", "answer": "Teams facing higher renewal costs."},
+            {"question": "What should buyers review?", "answer": "Contract terms and support needs."},
+        ),
+    }
+    context.update(overrides)
+    return context
+
+
 # ---- Decision shape ----
 
 
@@ -110,6 +127,79 @@ def test_custom_min_words_via_policy():
     codes = {f.code for f in report.findings}
     assert "content_too_short" not in codes
     assert "content_below_seo_target" not in codes
+
+
+# ---- SEO/AEO metadata contract ----
+
+
+def test_seo_aeo_context_passes_with_metadata_and_question_h2():
+    body = "## How does HubSpot pricing pressure affect renewals?\n\n" + _LONG_GOOD_BODY
+
+    report = evaluate_blog_post(_make_input(body, **_seo_aeo_context()))
+
+    assert report.passed is True
+    assert report.decision == GateDecision.PASS
+
+
+def test_seo_aeo_context_blocks_missing_metadata():
+    body = "## How does HubSpot pricing pressure affect renewals?\n\n" + _LONG_GOOD_BODY
+
+    report = evaluate_blog_post(
+        _make_input(
+            body,
+            **_seo_aeo_context(
+                seo_title="",
+                seo_description="",
+                target_keyword="",
+                secondary_keywords=(),
+                faq=(),
+            ),
+        )
+    )
+
+    assert report.passed is False
+    assert set(report.metadata["blocking_codes"]) == {
+        "missing_seo_title",
+        "missing_seo_description",
+        "missing_target_keyword",
+        "missing_secondary_keywords",
+        "too_few_faq_entries",
+    }
+
+
+def test_seo_aeo_context_blocks_long_metadata_and_missing_structure():
+    report = evaluate_blog_post(
+        _make_input(
+            _LONG_GOOD_BODY,
+            **_seo_aeo_context(
+                seo_title="x" * 61,
+                seo_description="x" * 156,
+            ),
+        )
+    )
+
+    assert report.passed is False
+    assert set(report.metadata["blocking_codes"]) == {
+        "seo_title_too_long",
+        "seo_description_too_long",
+        "aeo_structure_missing",
+    }
+
+
+def test_seo_aeo_detects_answer_first_section_opening():
+    body = (
+        "## HubSpot Pricing Pressure\n\n"
+        "HubSpot pricing pressure is showing up earlier in renewal planning because "
+        "teams want to understand cost, implementation effort, support coverage, "
+        "and migration risk before they sign another contract. The opening section "
+        "answers the topic directly before adding supporting examples, which makes "
+        "the article easier for readers and answer engines to parse.\n\n"
+        + _LONG_GOOD_BODY
+    )
+
+    report = evaluate_blog_post(_make_input(body, **_seo_aeo_context()))
+
+    assert "aeo_structure_missing" not in report.metadata["blocking_codes"]
 
 
 # ---- Chart placeholders ----
