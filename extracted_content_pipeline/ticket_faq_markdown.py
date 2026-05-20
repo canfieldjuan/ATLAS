@@ -24,6 +24,16 @@ DEFAULT_TICKET_SOURCE_TYPES = (
 DEFAULT_TITLE = "Customer Ticket FAQ"
 _WHITESPACE_RE = re.compile(r"\s+")
 _KEY_SEPARATOR_RE = re.compile(r"[^a-z0-9]+")
+DEFAULT_INTENT_RULES = (
+    ("reporting friction", ("export", "report", "dashboard", "attribution")),
+    ("manual follow-up", ("handoff", "follow-up", "workflow", "automation", "manual")),
+    ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
+    ("email and profile updates", ("change my email", "update the email", "email address", "profile")),
+    ("login and account access", ("login", "account access")),
+    ("billing and payments", ("billing", "invoice", "payment", "receipt", "charge")),
+    ("integration setup", ("integration", "api", "webhook", "sync", "connection")),
+    ("renewal and cancellation", ("renewal", "cancel", "cancellation", "contract")),
+)
 _DATE_KEYS = (
     "created_at",
     "created",
@@ -89,6 +99,7 @@ class TicketFAQMarkdownConfig:
     max_text_chars: int = 1200
     window_days: int | None = None
     as_of_date: str | None = None
+    intent_rules: tuple[tuple[str, tuple[str, ...]], ...] = DEFAULT_INTENT_RULES
 
 
 class TicketFAQMarkdownService:
@@ -116,6 +127,7 @@ class TicketFAQMarkdownService:
         max_text_chars: int | None = None,
         window_days: int | None = None,
         as_of_date: Any = None,
+        intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
@@ -148,6 +160,11 @@ class TicketFAQMarkdownService:
             if source_types is not None
             else self.config.source_types
         )
+        resolved_intent_rules = (
+            tuple((topic, tuple(keywords)) for topic, keywords in intent_rules)
+            if intent_rules is not None
+            else self.config.intent_rules
+        )
         title_text = title or self.config.title
         result = build_ticket_faq_markdown(
             normalized.opportunities,
@@ -157,6 +174,7 @@ class TicketFAQMarkdownService:
             source_types=resolved_source_types,
             window_days=resolved_window_days,
             as_of_date=resolved_as_of_date,
+            intent_rules=resolved_intent_rules,
         )
         result = replace(
             result,
@@ -199,6 +217,7 @@ def build_ticket_faq_markdown(
     source_types: Sequence[str] = DEFAULT_TICKET_SOURCE_TYPES,
     window_days: int | None = None,
     as_of_date: Any = None,
+    intent_rules: Sequence[tuple[str, Sequence[str]]] = DEFAULT_INTENT_RULES,
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -238,7 +257,7 @@ def build_ticket_faq_markdown(
             if key in seen:
                 continue
             seen.add(key)
-            groups[_topic(opportunity, evidence)].append({
+            groups[_topic(opportunity, evidence, intent_rules=intent_rules)].append({
                 "text": text,
                 "source_id": source_id or "unknown",
                 "source_key": source_id or dedupe_id,
@@ -272,7 +291,15 @@ def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], .
     },)
 
 
-def _topic(opportunity: Mapping[str, Any], evidence: Mapping[str, Any]) -> str:
+def _topic(
+    opportunity: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    intent_rules: Sequence[tuple[str, Sequence[str]]],
+) -> str:
+    intent = _intent_topic(opportunity, evidence, intent_rules=intent_rules)
+    if intent:
+        return intent
     pain_points = opportunity.get("pain_points")
     if isinstance(pain_points, Sequence) and not isinstance(pain_points, (str, bytes, bytearray)):
         for value in pain_points:
@@ -280,6 +307,41 @@ def _topic(opportunity: Mapping[str, Any], evidence: Mapping[str, Any]) -> str:
             if text:
                 return text.lower()
     return (_compact(evidence.get("source_title") or opportunity.get("source_title")) or "customer support issues").lower()
+
+
+def _intent_topic(
+    opportunity: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+    *,
+    intent_rules: Sequence[tuple[str, Sequence[str]]],
+) -> str:
+    text = " ".join((
+        _compact(evidence.get("source_title") or opportunity.get("source_title")),
+        _compact(evidence.get("text")),
+        _compact(opportunity.get("text") or opportunity.get("description")),
+        _pain_text(opportunity),
+    )).lower()
+    if not text:
+        return ""
+    for topic, keywords in intent_rules:
+        if any(_keyword_matches(text, keyword) for keyword in keywords):
+            return _clean(topic).lower()
+    return ""
+
+
+def _keyword_matches(text: str, keyword: Any) -> bool:
+    value = _clean(keyword).lower()
+    if not value:
+        return False
+    pattern = rf"(?<![a-z0-9]){re.escape(value)}(?![a-z0-9])"
+    return re.search(pattern, text) is not None
+
+
+def _pain_text(opportunity: Mapping[str, Any]) -> str:
+    pain_points = opportunity.get("pain_points")
+    if isinstance(pain_points, Sequence) and not isinstance(pain_points, (str, bytes, bytearray)):
+        return " ".join(_compact(value) for value in pain_points if _compact(value))
+    return _compact(pain_points)
 
 
 def _item(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
@@ -526,6 +588,7 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
 
 
 __all__ = [
+    "DEFAULT_INTENT_RULES",
     "DEFAULT_TICKET_SOURCE_TYPES",
     "TicketFAQMarkdownConfig",
     "TicketFAQMarkdownResult",

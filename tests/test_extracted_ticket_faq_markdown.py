@@ -14,6 +14,7 @@ from extracted_content_pipeline.campaign_source_adapters import (
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.ticket_faq_markdown import (
+    TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
     build_ticket_faq_markdown,
 )
@@ -124,6 +125,85 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "condensed": True,
         "has_action_items": True,
     }
+
+
+def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Profile change question",
+                "evidence": [{
+                    "text": "How do I change my login email?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Account access issue",
+                "evidence": [{
+                    "text": "I need to update the email on my account.",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ]
+    )
+
+    assert [item["topic"] for item in result.items] == ["email and profile updates"]
+    assert result.items[0]["evidence_count"] == 2
+    assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
+    assert "How do I change my login email?" in result.markdown
+    assert "I need to update the email on my account." in result.markdown
+    assert result.output_checks["condensed"] is True
+
+
+def test_build_ticket_faq_markdown_accepts_host_intent_rules() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Data sync is behind",
+                "evidence": [{
+                    "text": "The warehouse sync is delayed every morning.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Connector lag",
+                "evidence": [{
+                    "text": "Our CRM connector does not finish before standup.",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ],
+        intent_rules=(("data freshness", ("warehouse sync", "connector lag")),),
+    )
+
+    assert [item["topic"] for item in result.items] == ["data freshness"]
+    assert result.items[0]["evidence_count"] == 2
+
+
+def test_build_ticket_faq_markdown_normalizes_intent_whitespace() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Profile update",
+                "evidence": [{
+                    "text": "How do I change\nmy\temail before renewal?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert [item["topic"] for item in result.items] == ["email and profile updates"]
 
 
 def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows() -> None:
@@ -240,6 +320,37 @@ async def test_ticket_faq_service_generates_from_inline_source_material() -> Non
     assert result.as_dict()["generated"] == 1
     assert "How do I change my email address?" in result.markdown
     assert "`ticket-1` - Login email change" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_uses_configured_intent_rules() -> None:
+    service = TicketFAQMarkdownService(
+        TicketFAQMarkdownConfig(intent_rules=(("access setup", ("invite link", "new user")),))
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "source_type": "support_ticket",
+                    "subject": "Invite link does not work",
+                    "message": "The invite link expired before the new user joined.",
+                },
+                {
+                    "ticket_id": "ticket-2",
+                    "source_type": "support_ticket",
+                    "subject": "New user cannot get in",
+                    "message": "A new user needs another invite link.",
+                },
+            ]
+        },
+    )
+
+    assert [item["topic"] for item in result.items] == ["access setup"]
+    assert result.items[0]["evidence_count"] == 2
 
 
 @pytest.mark.asyncio
