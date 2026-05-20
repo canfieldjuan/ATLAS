@@ -126,9 +126,14 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
 
     assert code == 0
     assert payload["ok"] is True
-    assert payload["source_rows"] == 2
+    assert payload["source_rows"] == 4
     assert payload["saved_ids"] == ["faq-uuid-1"]
     assert payload["generation"]["saved_ids"] == ["faq-uuid-1"]
+    assert payload["generation"]["output_checks"] == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
     assert payload["draft_export"]["rows"][0]["id"] == "faq-uuid-1"
     assert payload["draft_export"]["rows"][0]["status"] == "draft"
     assert payload["reviewed_export"]["rows"][0]["id"] == "faq-uuid-1"

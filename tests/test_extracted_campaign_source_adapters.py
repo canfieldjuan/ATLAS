@@ -877,23 +877,24 @@ def test_packaged_support_ticket_csv_example_loads_provider_labels() -> None:
 
     assert [row["target_id"] for row in loaded.opportunities] == [
         "ticket-acme-1",
+        "ticket-acme-2",
         "ticket-northstar-1",
+        "ticket-northstar-2",
     ]
     assert [row["source_type"] for row in loaded.opportunities] == [
+        "support_ticket",
+        "support_ticket",
         "support_ticket",
         "support_ticket",
     ]
     assert loaded.opportunities[0]["company_name"] == "Acme Logistics"
     assert loaded.opportunities[0]["vendor_name"] == "HubSpot"
-    assert loaded.opportunities[0]["source_title"] == "Reporting export blocked before renewal"
+    assert loaded.opportunities[0]["source_title"] == "Change login email"
     assert loaded.opportunities[0]["evidence"][0] == {
-        "text": (
-            "The operations team cannot export campaign attribution data without "
-            "upgrading to a higher tier."
-        ),
+        "text": "How do I change my login email?",
         "source_id": "ticket-acme-1",
         "source_type": "support_ticket",
-        "source_title": "Reporting export blocked before renewal",
+        "source_title": "Change login email",
     }
     assert loaded.warnings == ()
 
@@ -946,7 +947,9 @@ def test_build_sources_cli_converts_packaged_support_ticket_csv(tmp_path: Path) 
     assert result.stdout == ""
     assert [row["target_id"] for row in payload["opportunities"]] == [
         "ticket-acme-1",
+        "ticket-acme-2",
         "ticket-northstar-1",
+        "ticket-northstar-2",
     ]
     assert payload["opportunities"][0]["source_type"] == "support_ticket"
 
