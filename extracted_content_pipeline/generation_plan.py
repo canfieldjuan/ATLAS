@@ -9,6 +9,7 @@ call. Thrilling bureaucracy, but the useful kind.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Mapping, Sequence
 
 from .blog_generation import BlogPostGenerationConfig
@@ -204,6 +205,15 @@ def _signal_extraction_config_for_request(
 
 def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMarkdownConfig:
     defaults = TicketFAQMarkdownConfig()
+    window_days = _positive_int_input(request.inputs, "faq_window_days")
+    as_of_date = _text_input(request.inputs, "faq_as_of_date")
+    if as_of_date is not None and window_days is None:
+        raise ValueError("faq_as_of_date requires faq_window_days")
+    if as_of_date is not None:
+        try:
+            date.fromisoformat(as_of_date)
+        except ValueError:
+            raise ValueError("faq_as_of_date must use YYYY-MM-DD format") from None
     return TicketFAQMarkdownConfig(
         title=_text_input(request.inputs, "faq_title") or defaults.title,
         max_items=request.limit,
@@ -217,6 +227,8 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
             _positive_int_input(request.inputs, "source_max_text_chars")
             or defaults.max_text_chars
         ),
+        window_days=window_days,
+        as_of_date=as_of_date,
     )
 
 
@@ -356,17 +368,22 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         )
     if output == "faq_markdown":
         config = _faq_markdown_config_for_request(request)
+        step_config: dict[str, Any] = {
+            "title": config.title,
+            "max_items": config.max_items,
+            "max_evidence_per_item": config.max_evidence_per_item,
+            "source_types": list(config.source_types),
+            "max_text_chars": config.max_text_chars,
+        }
+        if config.window_days is not None:
+            step_config["window_days"] = config.window_days
+        if config.window_days is not None and config.as_of_date is not None:
+            step_config["as_of_date"] = config.as_of_date
         return GenerationPlanStep(
             output=output,
             runner="TicketFAQMarkdownService.generate",
             status="runnable",
-            config={
-                "title": config.title,
-                "max_items": config.max_items,
-                "max_evidence_per_item": config.max_evidence_per_item,
-                "source_types": list(config.source_types),
-                "max_text_chars": config.max_text_chars,
-            },
+            config=step_config,
         )
     return GenerationPlanStep(
         output=output,

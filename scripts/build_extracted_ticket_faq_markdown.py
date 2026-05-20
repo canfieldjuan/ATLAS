@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 import sys
 
@@ -44,6 +45,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-items", type=int, default=8)
     parser.add_argument("--max-evidence-per-item", type=int, default=3)
     parser.add_argument(
+        "--window-days",
+        type=int,
+        help="Keep only rows dated within this many days of --as-of-date or today.",
+    )
+    parser.add_argument(
+        "--as-of-date",
+        help="YYYY-MM-DD date used with --window-days for reproducible windows.",
+    )
+    parser.add_argument(
         "--max-text-chars",
         type=int,
         default=1200,
@@ -71,6 +81,15 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--max-evidence-per-item must be positive")
     if args.max_text_chars < 1:
         raise SystemExit("--max-text-chars must be positive")
+    if args.window_days is not None and args.window_days < 1:
+        raise SystemExit("--window-days must be positive")
+    if args.as_of_date and args.window_days is None:
+        raise SystemExit("--as-of-date requires --window-days")
+    if args.as_of_date:
+        try:
+            date.fromisoformat(args.as_of_date)
+        except ValueError:
+            raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
 
     loaded = load_source_campaign_opportunities_from_file(
         args.path,
@@ -83,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         title=args.title,
         max_items=args.max_items,
         max_evidence_per_item=args.max_evidence_per_item,
+        window_days=args.window_days,
+        as_of_date=args.as_of_date,
     )
     if args.output:
         args.output.write_text(result.markdown, encoding="utf-8")

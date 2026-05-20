@@ -412,6 +412,8 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
                 "faq_max_evidence_per_item": 2,
                 "faq_source_types": "ticket, support-ticket",
                 "source_max_text_chars": 80,
+                "faq_window_days": 90,
+                "faq_as_of_date": "2026-05-20",
             },
         }
     )
@@ -425,7 +427,36 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
         "max_evidence_per_item": 2,
         "source_types": ["ticket", "support-ticket"],
         "max_text_chars": 80,
+        "window_days": 90,
+        "as_of_date": "2026-05-20",
     }
+
+
+def test_plan_rejects_faq_as_of_date_without_window_days():
+    with pytest.raises(ValueError, match="faq_as_of_date requires faq_window_days"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": [{"source_type": "ticket", "text": "How do I change my email?"}],
+                    "faq_as_of_date": "2026-05-20",
+                },
+            }
+        )
+
+
+def test_plan_rejects_invalid_faq_as_of_date():
+    with pytest.raises(ValueError, match="faq_as_of_date must use YYYY-MM-DD format"):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": [{"source_type": "ticket", "text": "How do I change my email?"}],
+                    "faq_window_days": 90,
+                    "faq_as_of_date": "2026-05-20T00:00:00",
+                },
+            }
+        )
 
 
 def test_plan_threads_signal_extraction_source_text_cap():

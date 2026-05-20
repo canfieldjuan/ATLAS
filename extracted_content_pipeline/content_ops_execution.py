@@ -548,6 +548,8 @@ async def _dispatch_faq_markdown(
         max_evidence_per_item=_step_config_int(step.config, "max_evidence_per_item"),
         source_types=_step_config_sequence(step.config, "source_types"),
         max_text_chars=_step_config_int(step.config, "max_text_chars"),
+        window_days=_step_config_int(step.config, "window_days"),
+        as_of_date=_step_config_text(step.config, "as_of_date"),
     )
 
 

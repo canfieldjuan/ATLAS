@@ -230,12 +230,14 @@ Markdown FAQ:
 python scripts/build_extracted_ticket_faq_markdown.py \
   extracted_content_pipeline/examples/support_ticket_sources.csv \
   --source-format csv \
+  --window-days 90 \
   --output support_ticket_faq.md
 ```
 
 The FAQ file quotes source snippets and lists ticket ids, so operators can
 inspect grounding before choosing whether to generate campaigns or longer
-assets.
+assets. Add `--as-of-date YYYY-MM-DD` with `--window-days` for reproducible
+canary runs.
 
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
 `description`, `summary`, `notes`, `feedback`, `feedback_text`,
