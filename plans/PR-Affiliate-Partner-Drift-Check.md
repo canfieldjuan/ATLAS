@@ -96,7 +96,7 @@ post-seed edits and orphan seeds without blocking.
 - `python -m pytest tests/test_affiliate_partner_drift.py -q` -> `6 passed in
   0.06s` (parser on both 088 + 326 formats, empty-array/quote-escape, and the
   clean / unversioned-FAIL / value-divergence-WARN reconcile paths).
-- `python scripts/audit_affiliate_partner_drift.py` against live `:5433/atlas`
+- `scripts/audit_affiliate_partner_drift.py` run against live `:5433/atlas`
   -> `summary` `{seeded_partners: 6, live_partners: 6, pass: 3, warn: 0,
   fail: 0}`, exit `0`. Confirms the parser reads the real 088 + 326 seeds and
   that migration 326 fully reconciles with the live table (every live partner
@@ -107,7 +107,7 @@ post-seed edits and orphan seeds without blocking.
 
 | Area | Estimated LOC |
 |---|---:|
-| `scripts/audit_affiliate_partner_drift.py` (parser + reconciler + DB run) | ~300 |
-| `tests/test_affiliate_partner_drift.py` | ~190 |
-| Plan doc | ~125 |
-| **Total** | **~615** |
+| `scripts/audit_affiliate_partner_drift.py` (parser + reconciler + DB run) | ~340 |
+| `tests/test_affiliate_partner_drift.py` | ~225 |
+| Plan doc | ~135 |
+| **Total** | **~700** |
