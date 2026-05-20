@@ -7,7 +7,12 @@
 
 Atlas partially generates SEO and AEO-ready blog drafts today.
 
-It does not have a clean, explicit GEO contract yet, and at least one AI Content Ops persistence path does not appear to write the generated SEO fields into the public `blog_posts` columns that the public API and frontend read.
+It now has a first-pass GEO contract in
+`docs/audits/ai_content_ops_blog_geo_contract_2026-05-20.md`, but the contract
+is not fully implemented as a validator yet. At the time of the original audit,
+at least one AI Content Ops persistence path did not appear to write the
+generated SEO fields into the public `blog_posts` columns that the public API
+and frontend read.
 
 The safest current claim is:
 
@@ -93,15 +98,22 @@ This path also has fallback logic for missing SEO title, SEO description, and ta
 
 ### Gap 1: GEO Is Not a First-Class Contract
 
-The prompts mention AI answer engines and include AEO patterns that overlap with GEO, but there is no separate GEO field, checklist, score, or pass/fail gate.
+Status: definition added, implementation still pending.
 
-That means the system can produce GEO-friendly content, but the repo does not currently prove or enforce "GEO optimized" as a distinct output.
+The prompts mention AI answer engines and include AEO patterns that overlap with GEO. A first-class product definition now exists in:
+
+- `docs/audits/ai_content_ops_blog_geo_contract_2026-05-20.md`
+
+That contract defines GEO as Generative Engine Optimization: structuring a blog post so AI answer engines can understand the topic, extract a useful answer, identify the entities involved, and cite or summarize the page without needing hidden context.
+
+The system can produce GEO-friendly content, but the repo does not yet fully
+prove or enforce "GEO-ready" as a distinct output.
 
 Needed:
 
-- decide whether GEO is a separate contract or part of AEO
-- define a GEO checklist if it is separate
-- add validation or review output that says what passed
+- add `geo_readiness` to generated-asset review/export output
+- add draft-level GEO checks to the blog quality gate
+- add publish-level checks for crawler-visible HTML and structured data
 
 ### Gap 2: AI Content Ops Blog Persistence May Bury SEO Fields
 
@@ -187,7 +199,7 @@ The repo does not yet fully support this stronger claim:
 
 1. Which blog path powers the AI Content Ops Station experience we want to sell: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py` or `extracted_content_pipeline/blog_generation.py`?
 2. When a customer generates a blog post from the Station, does the draft get published through the DB/API path or exported to static frontend `.ts` content?
-3. Should GEO be a separate checklist, or should we treat GEO as part of AEO for now?
+3. Which GEO checks should block draft save versus only show in review output?
 4. What should the report show the customer: raw generated article, SEO fields, AEO checklist, GEO checklist, or all of those?
 5. What proof do we need before saying the output is SEO/GEO/AEO-ready?
 
@@ -196,9 +208,9 @@ The repo does not yet fully support this stronger claim:
 Before changing copy or selling this as SEO/GEO/AEO generation, tighten the product contract:
 
 1. Add first-class SEO fields to the extracted AI Content Ops `BlogPostDraft` persistence path, or map `metadata` into the existing public SEO columns.
-2. Add a small SEO/AEO/GEO readiness summary to blog draft export/review output.
+2. Add a small GEO readiness summary to blog draft export/review output.
 3. Add tests proving that a generated blog draft persists `seo_title`, `seo_description`, `target_keyword`, `secondary_keywords`, and `faq` into the fields read by the public API.
-4. Decide whether GEO gets its own named validator now or remains described as AEO/answer-engine readiness.
+4. Add publish-level GEO checks before claiming fully SEO/GEO/AEO-ready pages.
 
 ## Suggested Customer-Facing Language For Now
 
