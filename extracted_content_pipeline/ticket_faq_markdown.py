@@ -237,6 +237,7 @@ def build_ticket_faq_markdown(
     date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
+    source_keys: set[str] = set()
 
     for opportunity_index, opportunity in enumerate(opportunities, start=1):
         for evidence_index, evidence in enumerate(_evidence_rows(opportunity), start=1):
@@ -259,15 +260,17 @@ def build_ticket_faq_markdown(
                 or opportunity.get("target_id")
                 or opportunity.get("id")
             )
-            dedupe_id = source_id or f"row:{opportunity_index}:evidence:{evidence_index}"
+            source_key = source_id or f"row:{opportunity_index}"
+            dedupe_id = source_id or f"{source_key}:evidence:{evidence_index}"
             key = (dedupe_id, text)
             if key in seen:
                 continue
             seen.add(key)
+            source_keys.add(source_key)
             groups[_topic(opportunity, evidence, intent_rules=intent_rules)].append({
                 "text": text,
                 "source_id": source_id or "unknown",
-                "source_key": source_id or dedupe_id,
+                "source_key": source_key,
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
             })
 
@@ -276,11 +279,15 @@ def build_ticket_faq_markdown(
         for topic, rows in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:max_items]
     )
     return TicketFAQMarkdownResult(
-        markdown=_render(title=title, items=items, source_count=len(opportunities), ticket_source_count=len(seen)),
+        markdown=_render(title=title, items=items, source_count=len(opportunities), ticket_source_count=len(source_keys)),
         items=items,
         source_count=len(opportunities),
-        ticket_source_count=len(seen),
-        output_checks=_output_checks(items=items, ticket_source_count=len(seen)),
+        ticket_source_count=len(source_keys),
+        output_checks=_output_checks(
+            items=items,
+            ticket_source_count=len(source_keys),
+            rendered_ticket_source_count=_rendered_ticket_source_count(items),
+        ),
     )
 
 
@@ -398,6 +405,9 @@ def _question_text(value: Any) -> str:
         normalized = _question_start_text(text)
         if normalized:
             return normalized
+        normalized = _first_person_issue_question_text(text)
+        if normalized:
+            return normalized
     return ""
 
 
@@ -437,6 +447,41 @@ def _question_start_text(text: str) -> str:
     return ""
 
 
+def _first_person_issue_question_text(text: str) -> str:
+    sentence = _first_sentence(text)
+    lowered = sentence.lower()
+    patterns = (
+        ("i cannot ", "How do I "),
+        ("i can't ", "How do I "),
+        ("i can not ", "How do I "),
+        ("i need to ", "How do I "),
+        ("i want to ", "How do I "),
+        ("i have to ", "How do I "),
+        ("i am trying to ", "How do I "),
+        ("i'm trying to ", "How do I "),
+        ("we cannot ", "How do we "),
+        ("we can't ", "How do we "),
+        ("we can not ", "How do we "),
+        ("we need to ", "How do we "),
+        ("we want to ", "How do we "),
+        ("we have to ", "How do we "),
+        ("we are trying to ", "How do we "),
+        ("we're trying to ", "How do we "),
+    )
+    for prefix, question_prefix in patterns:
+        if lowered.startswith(prefix):
+            remainder = sentence[len(prefix):].strip()
+            normalized = _normalize_question_text(f"{question_prefix}{remainder}")
+            if _usable_question(normalized):
+                return normalized
+    return ""
+
+
+def _first_sentence(text: str) -> str:
+    parts = [part.strip() for part in re.split(r"[.!?;:\n]+", text, maxsplit=1) if part.strip()]
+    return parts[0] if parts else ""
+
+
 def _usable_question(value: str) -> bool:
     return bool(value) and len(value) <= MAX_EXTRACTED_QUESTION_CHARS
 
@@ -458,7 +503,7 @@ def _render(
     lines = [
         f"# {_md(title) or DEFAULT_TITLE}",
         "",
-        f"_Source rows analyzed: {source_count}. Ticket evidence rows used: {ticket_source_count}._",
+        f"_Source rows analyzed: {source_count}. Ticket sources used: {ticket_source_count}._",
         "",
     ]
     if not items:
@@ -608,14 +653,27 @@ def _output_checks(
     *,
     items: Sequence[Mapping[str, Any]],
     ticket_source_count: int,
+    rendered_ticket_source_count: int,
 ) -> dict[str, bool]:
     has_items = bool(items)
+    covers_all_sources = rendered_ticket_source_count == ticket_source_count
     return {
         "uses_user_vocabulary": has_items
         and all(item.get("question_source") == "customer_wording" for item in items),
-        "condensed": has_items and (ticket_source_count <= 1 or len(items) < ticket_source_count),
+        "condensed": has_items
+        and covers_all_sources
+        and (ticket_source_count <= 1 or len(items) < ticket_source_count),
         "has_action_items": has_items and all(bool(item.get("action_items")) for item in items),
     }
+
+
+def _rendered_ticket_source_count(items: Sequence[Mapping[str, Any]]) -> int:
+    source_ids: set[str] = set()
+    for item in items:
+        values = item.get("source_ids")
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+            source_ids.update(_clean(value) for value in values if _clean(value))
+    return len(source_ids)
 
 
 def _quote(value: Any, *, limit: int = 220) -> str:

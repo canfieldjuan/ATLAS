@@ -236,8 +236,6 @@ def test_content_ops_execution_smoke_cli_runs_faq_markdown_json() -> None:
             "faq_markdown",
             "--source-title",
             "login reset",
-            "--source-material",
-            "How do I reset my password from the login page?",
             "--json",
         ],
         check=True,
