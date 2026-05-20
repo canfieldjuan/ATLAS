@@ -40,6 +40,16 @@ type ReadinessSummary = {
   passed: number | null
   total: number | null
   missing: string[]
+  checks: ReadinessCheck[]
+}
+
+type ReadinessCheck = {
+  label: string
+  passed: boolean
+}
+
+type ReadinessPanel = ReadinessSummary & {
+  label: string
 }
 
 type FAQItemPreview = {
@@ -542,6 +552,7 @@ function AssetDetailDrawer({
   const sections = sectionList(row.sections)
   const references = valueList(row.reference_ids)
   const faqItems = asset === 'faq_markdown' ? faqItemList(row.items) : []
+  const readinessPanels = asset === 'blog_post' ? blogReadinessPanels(row) : []
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -661,6 +672,10 @@ function AssetDetailDrawer({
           </section>
         )}
 
+        {readinessPanels.length > 0 && (
+          <BlogReadinessBreakdown panels={readinessPanels} />
+        )}
+
         {sections.length > 0 && (
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-200">Sections</h3>
@@ -763,6 +778,68 @@ function AssetDetailDrawer({
         </section>
       </aside>
     </div>
+  )
+}
+
+function BlogReadinessBreakdown({ panels }: { panels: ReadinessPanel[] }) {
+  return (
+    <section className="mt-6">
+      <h3 className="text-sm font-semibold text-slate-200">Readiness</h3>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {panels.map((panel) => (
+          <div
+            key={panel.label}
+            className="rounded-md border border-slate-800 bg-slate-900/60 p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium text-white">{panel.label}</div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {readinessCountLabel(panel)}
+                </div>
+              </div>
+              <span className={clsx(
+                'rounded px-2 py-0.5 text-xs',
+                readinessStatusClass(panel.status),
+              )}>
+                {fmtLabel(panel.status || 'unknown')}
+              </span>
+            </div>
+
+            {panel.missing.length > 0 && (
+              <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/10 p-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-200">
+                  Missing
+                </div>
+                <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100/90">
+                  {panel.missing.map((item) => (
+                    <li key={item}>{fmtLabel(item)}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {panel.checks.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                {panel.checks.map((check) => (
+                  <div
+                    key={check.label}
+                    className="flex items-start gap-2 text-xs text-slate-300"
+                  >
+                    {check.passed ? (
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-300" />
+                    ) : (
+                      <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                    )}
+                    <span>{check.label}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -1058,13 +1135,51 @@ function readinessSummary(value: unknown): ReadinessSummary | null {
   const passed = finiteNumber(item.passed)
   const total = finiteNumber(item.total)
   const missing = valueList(item.missing)
-  if (!status && passed == null && total == null && missing.length === 0) return null
+  const checks = readinessChecks(item.checks)
+  if (!status && passed == null && total == null && missing.length === 0 && checks.length === 0) {
+    return null
+  }
   return {
     status,
     passed,
     total,
     missing,
+    checks,
   }
+}
+
+function blogReadinessPanels(row: GeneratedAssetDraft): ReadinessPanel[] {
+  return [
+    readinessPanel('SEO/AEO', row.seo_aeo_readiness),
+    readinessPanel('GEO', row.geo_readiness),
+  ].filter((panel): panel is ReadinessPanel => Boolean(panel))
+}
+
+function readinessPanel(label: string, value: unknown): ReadinessPanel | null {
+  const summary = readinessSummary(value)
+  return summary ? { label, ...summary } : null
+}
+
+function readinessChecks(value: unknown): ReadinessCheck[] {
+  const checks = recordValue(value)
+  if (!checks) return []
+  return Object.entries(checks)
+    .filter(([, passed]) => typeof passed === 'boolean')
+    .map(([key, passed]) => ({
+      label: fmtLabel(key),
+      passed: passed === true,
+    }))
+}
+
+function readinessCountLabel(summary: ReadinessSummary): string {
+  if (summary.passed == null || summary.total == null) return 'No count reported'
+  return `${summary.passed} of ${summary.total} checks passed`
+}
+
+function readinessStatusClass(status: string): string {
+  if (status === 'ready') return 'bg-emerald-500/10 text-emerald-200'
+  if (status === 'needs_review') return 'bg-amber-500/10 text-amber-200'
+  return 'bg-slate-800 text-slate-300'
 }
 
 function finiteNumber(value: unknown): number | null {
