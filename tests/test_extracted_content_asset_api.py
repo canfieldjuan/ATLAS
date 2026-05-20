@@ -72,11 +72,23 @@ def _blog_post_row():
         "tags": ["pricing"],
         "content": (
             "## Why is Acme pricing pressure showing up?\n\n"
-            "Acme pricing pressure is visible in recent review patterns when "
-            "buyers describe renewal friction and budget concerns."
+            "Acme pricing pressure is visible in the last 90 days of review "
+            "patterns, especially across 214 reviews where buyers describe "
+            "renewal friction, budget concerns, and comparison shopping. The "
+            "answer is that Acme buyers are not only comparing features; they "
+            "are checking whether the contract still fits the budget before "
+            "another renewal cycle starts.\n\n"
+            "## How should teams read the Acme pricing evidence?\n\n"
+            "Acme pricing evidence should be read as a renewal-risk signal, not "
+            "as proof that every buyer has the same problem. The useful pattern "
+            "is that customers keep using similar wording about budget pressure, "
+            "contract terms, and alternative comparisons when they explain why "
+            "pricing has become harder to justify."
         ),
         "charts": [],
         "data_context": {
+            "vendor": "Acme",
+            "review_period": "last 90 days",
             "_metadata": {
                 "generation_usage": {"input_tokens": 9, "output_tokens": 4},
                 "reasoning_context": {"wedge": "price_squeeze", "confidence": "high"},
@@ -217,6 +229,8 @@ def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     assert body["rows"][0]["reasoning_wedge"] == "price_squeeze"
     assert body["rows"][0]["passed_output_checks"] == 6
     assert body["rows"][0]["seo_aeo_readiness"]["status"] == "ready"
+    assert body["rows"][0]["geo_readiness"]["status"] == "ready"
+    assert body["rows"][0]["geo_readiness"]["passed"] == 7
     query, args = pool.fetch_calls[0]
     assert "FROM blog_posts" in query
     assert args == ("acct_1", "draft", "vendor_alternative", 5)

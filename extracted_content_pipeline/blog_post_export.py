@@ -34,6 +34,7 @@ _EXPORT_COLUMNS = (
     "passed_output_checks",
     "output_checks",
     "seo_aeo_readiness",
+    "geo_readiness",
     "tags",
     "content",
     "charts",
@@ -111,6 +112,7 @@ def _draft_row(draft: BlogPostDraft) -> JsonDict:
     row["output_checks"] = readiness["checks"]
     row["passed_output_checks"] = readiness["passed"]
     row["seo_aeo_readiness"] = readiness
+    row["geo_readiness"] = _geo_readiness(draft)
     return row
 
 
@@ -134,6 +136,83 @@ _QUESTION_H2_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+_UNRESOLVED_TOKEN_RE = re.compile(r"\{\{([^{}]+)\}\}")
+_BLOCKQUOTE_RE = re.compile(r"^\s*>\s*(.+)$", re.MULTILINE)
+_FRESHNESS_RE = re.compile(
+    r"\b(?:20\d{2}|Q[1-4]\s+20\d{2}|last\s+\d+\s+(?:days?|weeks?|months?|years?)|"
+    r"past\s+\d+\s+(?:days?|weeks?|months?|years?))\b",
+    re.IGNORECASE,
+)
+_EVIDENCE_RE = re.compile(
+    r"\b(?:\d+[\d,]*(?:\.\d+)?%?|\d+\s+(?:reviews?|tickets?|responses?|"
+    r"customers?|users?|accounts?)|review(?:s| data| patterns)?|ticket(?:s| data)?|"
+    r"customer wording|source(?:s)?|survey(?:s)?)\b",
+    re.IGNORECASE,
+)
+_VAGUE_H2_RE = re.compile(
+    r"^##\s+(?:overview|introduction|conclusion|key takeaways|final thoughts|summary)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_VISIBLE_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]{2,}|[A-Z]{2,})\b"
+)
+_GENERIC_ENTITY_WORDS = frozenset(
+    {
+        "account",
+        "accounts",
+        "analysis",
+        "answer",
+        "article",
+        "blog",
+        "buyer",
+        "buyers",
+        "category",
+        "company",
+        "comparison",
+        "content",
+        "contract",
+        "customer",
+        "customers",
+        "data",
+        "draft",
+        "evidence",
+        "faq",
+        "feature",
+        "features",
+        "final",
+        "geo",
+        "guide",
+        "help",
+        "how",
+        "overview",
+        "pricing",
+        "product",
+        "question",
+        "questions",
+        "report",
+        "retention",
+        "review",
+        "reviews",
+        "risk",
+        "section",
+        "source",
+        "support",
+        "team",
+        "teams",
+        "the",
+        "thoughts",
+        "ticket",
+        "tickets",
+        "user",
+        "users",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "why",
+    }
+)
 
 
 def _seo_aeo_readiness(draft: BlogPostDraft) -> JsonDict:
@@ -148,6 +227,31 @@ def _seo_aeo_readiness(draft: BlogPostDraft) -> JsonDict:
         "secondary_keywords_present": len(_metadata_list(metadata.get("secondary_keywords"))) >= 1,
         "faq_ready": len(_metadata_list(metadata.get("faq"))) >= 3,
         "aeo_structure_detected": _aeo_structure_detected(draft.content),
+    }
+    missing = [key for key, value in checks.items() if not value]
+    passed = sum(1 for value in checks.values() if value)
+    return {
+        "status": "ready" if not missing else "needs_review",
+        "passed": passed,
+        "total": len(checks),
+        "missing": missing,
+        "checks": checks,
+    }
+
+
+def _geo_readiness(draft: BlogPostDraft) -> JsonDict:
+    metadata = _metadata_mapping(draft.metadata)
+    data_context = _metadata_mapping(draft.data_context)
+    body = str(draft.content or "")
+    topic_terms = _topic_terms(draft, metadata=metadata, data_context=data_context)
+    checks = {
+        "entity_clarity": _entity_clarity(draft, body, topic_terms=topic_terms),
+        "answer_first_sections": _aeo_structure_detected(body),
+        "citable_section_structure": _citable_section_structure(body, topic_terms=topic_terms),
+        "evidence_specificity": _evidence_specificity(body),
+        "freshness_context": _freshness_context(body, data_context),
+        "faq_coverage": len(_metadata_list(metadata.get("faq"))) >= 3,
+        "citation_safety": _citation_safety(body),
     }
     missing = [key for key, value in checks.items() if not value]
     passed = sum(1 for value in checks.values() if value)
@@ -196,6 +300,126 @@ def _aeo_structure_detected(content: Any) -> bool:
         if 40 <= word_count <= 80:
             return True
     return False
+
+
+def _topic_terms(
+    draft: BlogPostDraft,
+    *,
+    metadata: Mapping[str, Any],
+    data_context: Mapping[str, Any],
+) -> tuple[str, ...]:
+    candidates = (
+        data_context.get("vendor"),
+        data_context.get("vendor_name"),
+        data_context.get("product"),
+        data_context.get("product_name"),
+        data_context.get("category"),
+        data_context.get("topic"),
+        metadata.get("target_keyword"),
+    )
+    terms: list[str] = []
+    for candidate in candidates:
+        text = _clean_text(candidate)
+        if len(text) >= 3 and text.lower() not in {item.lower() for item in terms}:
+            terms.append(text)
+    return tuple(terms)
+
+
+def _entity_clarity(
+    draft: BlogPostDraft,
+    body: str,
+    *,
+    topic_terms: tuple[str, ...],
+) -> bool:
+    if _VAGUE_H2_RE.search(body):
+        return False
+    searchable = f"{draft.title}\n{body[:600]}".lower()
+    if not topic_terms:
+        return _visible_entity_present(draft.title, body[:600])
+    return any(term.lower() in searchable for term in topic_terms)
+
+
+def _visible_entity_present(title: str, opening: str) -> bool:
+    title_entities = _visible_entity_tokens(title)
+    if title_entities:
+        return True
+    opening_entities = _visible_entity_tokens(opening)
+    return any(opening_entities.count(entity) >= 2 for entity in set(opening_entities))
+
+
+def _visible_entity_tokens(value: str) -> list[str]:
+    entities: list[str] = []
+    for match in _VISIBLE_ENTITY_RE.finditer(value):
+        token = match.group(0).strip()
+        if token.lower() not in _GENERIC_ENTITY_WORDS:
+            entities.append(token.lower())
+    return entities
+
+
+def _citable_section_structure(body: str, *, topic_terms: tuple[str, ...]) -> bool:
+    sections = _h2_sections(body)
+    if len(sections) < 2:
+        return False
+    return sum(
+        1
+        for heading, section in sections
+        if _self_contained_section(heading, section, topic_terms=topic_terms)
+    ) >= 2
+
+
+def _h2_sections(body: str) -> list[tuple[str, str]]:
+    matches = list(_H2_RE.finditer(body))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else None
+        heading = match.group(0).removeprefix("##").strip()
+        sections.append((heading, body[match.end():next_start]))
+    return sections
+
+
+def _self_contained_section(
+    heading: str,
+    section: str,
+    *,
+    topic_terms: tuple[str, ...],
+) -> bool:
+    first_paragraph = _first_paragraph(section)
+    word_count = len(first_paragraph.split())
+    if not 40 <= word_count <= 120:
+        return False
+    if not topic_terms:
+        return True
+    searchable = f"{heading} {first_paragraph}".lower()
+    return any(term.lower() in searchable for term in topic_terms)
+
+
+def _evidence_specificity(body: str) -> bool:
+    if _BLOCKQUOTE_RE.search(body):
+        return True
+    return bool(_EVIDENCE_RE.search(body))
+
+
+def _freshness_context(body: str, data_context: Mapping[str, Any]) -> bool:
+    for key in ("review_period", "source_report_date", "published_at", "date"):
+        if _clean_text(data_context.get(key)):
+            return True
+    return bool(_FRESHNESS_RE.search(body))
+
+
+def _citation_safety(body: str) -> bool:
+    if 'href="#"' in body or "href='#'" in body:
+        return False
+    unresolved_tokens = [
+        token.strip()
+        for token in _UNRESOLVED_TOKEN_RE.findall(body)
+        if not token.strip().startswith("chart:")
+    ]
+    if unresolved_tokens:
+        return False
+    lower_body = body.lower()
+    if "lorem ipsum" in lower_body or "/blog/placeholder" in lower_body:
+        return False
+    return True
 
 
 def _first_paragraph(section: str) -> str:
