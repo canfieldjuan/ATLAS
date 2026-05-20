@@ -153,6 +153,66 @@ _VAGUE_H2_RE = re.compile(
     r"^##\s+(?:overview|introduction|conclusion|key takeaways|final thoughts|summary)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_VISIBLE_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]{2,}|[A-Z]{2,})\b"
+)
+_GENERIC_ENTITY_WORDS = frozenset(
+    {
+        "account",
+        "accounts",
+        "analysis",
+        "answer",
+        "article",
+        "blog",
+        "buyer",
+        "buyers",
+        "category",
+        "company",
+        "comparison",
+        "content",
+        "contract",
+        "customer",
+        "customers",
+        "data",
+        "draft",
+        "evidence",
+        "faq",
+        "feature",
+        "features",
+        "final",
+        "geo",
+        "guide",
+        "help",
+        "how",
+        "overview",
+        "pricing",
+        "product",
+        "question",
+        "questions",
+        "report",
+        "retention",
+        "review",
+        "reviews",
+        "risk",
+        "section",
+        "source",
+        "support",
+        "team",
+        "teams",
+        "the",
+        "thoughts",
+        "ticket",
+        "tickets",
+        "user",
+        "users",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "why",
+    }
+)
 
 
 def _seo_aeo_readiness(draft: BlogPostDraft) -> JsonDict:
@@ -275,8 +335,25 @@ def _entity_clarity(
         return False
     searchable = f"{draft.title}\n{body[:600]}".lower()
     if not topic_terms:
-        return False
+        return _visible_entity_present(draft.title, body[:600])
     return any(term.lower() in searchable for term in topic_terms)
+
+
+def _visible_entity_present(title: str, opening: str) -> bool:
+    title_entities = _visible_entity_tokens(title)
+    if title_entities:
+        return True
+    opening_entities = _visible_entity_tokens(opening)
+    return any(opening_entities.count(entity) >= 2 for entity in set(opening_entities))
+
+
+def _visible_entity_tokens(value: str) -> list[str]:
+    entities: list[str] = []
+    for match in _VISIBLE_ENTITY_RE.finditer(value):
+        token = match.group(0).strip()
+        if token.lower() not in _GENERIC_ENTITY_WORDS:
+            entities.append(token.lower())
+    return entities
 
 
 def _citable_section_structure(body: str, *, topic_terms: tuple[str, ...]) -> bool:

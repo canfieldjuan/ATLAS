@@ -289,6 +289,29 @@ async def test_export_blog_post_drafts_does_not_treat_generic_title_as_entity() 
 
 
 @pytest.mark.asyncio
+async def test_export_blog_post_drafts_uses_visible_entity_without_metadata() -> None:
+    result = await export_blog_post_drafts(
+        _Repository(drafts=[
+            _draft(
+                title="Acme Pricing Pressure Guide",
+                content=(
+                    "## How should teams read Acme pricing pressure?\n\n"
+                    "Acme pricing pressure is visible in recent review patterns "
+                    "when buyers describe renewal friction, budget concerns, and "
+                    "comparison shopping. This visible draft text names the entity "
+                    "directly even when metadata has not been populated yet."
+                ),
+                data_context={},
+                metadata={},
+            )
+        ]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    assert result.rows[0]["geo_readiness"]["checks"]["entity_clarity"] is True
+
+
+@pytest.mark.asyncio
 async def test_export_blog_post_drafts_detects_answer_first_sections() -> None:
     content = (
         "## Acme Pricing Pattern\n\n"
