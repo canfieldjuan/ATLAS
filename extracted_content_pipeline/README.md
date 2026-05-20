@@ -294,6 +294,20 @@ python scripts/export_content_ops_cfpb_sources.py \
   --output cfpb_sources.jsonl
 ```
 
+To prove the public CFPB source can produce a grounded FAQ Markdown artifact
+without a database or provider credentials, run the FAQ smoke. It fetches live
+complaint narratives, converts them through the generic source-row adapter, and
+fails if the FAQ output checks do not pass:
+
+```bash
+python scripts/smoke_content_ops_cfpb_faq_markdown.py \
+  --search-term fees \
+  --limit 3 \
+  --support-contact "https://support.example.com" \
+  --output-markdown cfpb_faq.md \
+  --json
+```
+
 ```bash
 python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --company "Example Bank" \
