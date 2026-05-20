@@ -23,6 +23,16 @@ interface SitemapUrl {
   changefreq: string
 }
 
+interface BlogSourceMetadata {
+  file: string
+  slug: string
+  title: string
+  description: string
+  date: string
+  seoTitle: string
+  seoDescription: string
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -33,6 +43,40 @@ function parseStringField(content: string, field: string): string {
   return match ? match[1].replace(/\\'/g, "'") : ''
 }
 
+function collectBlogSourceMetadata(): BlogSourceMetadata[] {
+  const blogDir = resolve(import.meta.dirname, 'src/content/blog')
+  if (!existsSync(blogDir)) return []
+
+  const posts: BlogSourceMetadata[] = []
+  for (const file of readdirSync(blogDir).sort()) {
+    if (!file.endsWith('.ts') || file === 'index.ts') continue
+    const content = readFileSync(join(blogDir, file), 'utf-8')
+    const slug = parseStringField(content, 'slug')
+    const title = parseStringField(content, 'title')
+    const description = parseStringField(content, 'description')
+    const date = parseStringField(content, 'date')
+    const seoTitle = parseStringField(content, 'seo_title')
+    const seoDescription = parseStringField(content, 'seo_description')
+
+    if (!slug) throw new Error(`Missing slug in blog source: ${file}`)
+    if (!title) throw new Error(`Missing title in blog source: ${file}`)
+    if (!description) throw new Error(`Missing description in blog source: ${file}`)
+    if (!date) throw new Error(`Missing date in blog source: ${file}`)
+
+    posts.push({
+      file,
+      slug,
+      title,
+      description,
+      date,
+      seoTitle,
+      seoDescription,
+    })
+  }
+
+  return posts.sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
 // ---------------------------------------------------------------------------
 // Sitemap plugin
 // ---------------------------------------------------------------------------
@@ -40,36 +84,15 @@ function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
     closeBundle() {
-      const indexPath = resolve(import.meta.dirname, 'src/content/blog/index.ts')
-      if (!existsSync(indexPath)) return
-
-      const indexContent = readFileSync(indexPath, 'utf-8')
-      const slugRegex = /slug:\s*'([^']+)'/g
-      const slugs: string[] = []
-      let match
-      while ((match = slugRegex.exec(indexContent)) !== null) {
-        slugs.push(match[1])
-      }
-
-      const blogDir = resolve(import.meta.dirname, 'src/content/blog')
-      const blogDates = new Map<string, string>()
-      for (const file of readdirSync(blogDir)) {
-        if (file.endsWith('.ts') && file !== 'index.ts') {
-          const content = readFileSync(join(blogDir, file), 'utf-8')
-          const slug = parseStringField(content, 'slug')
-          const date = parseStringField(content, 'date')
-          if (slug && !slugs.includes(slug)) slugs.push(slug)
-          if (slug && date) blogDates.set(slug, date)
-        }
-      }
+      const posts = collectBlogSourceMetadata()
 
       const today = new Date().toISOString().split('T')[0]
       const urls: SitemapUrl[] = [
         { loc: `${BASE_URL}/landing`, priority: '1.0', changefreq: 'weekly' },
         { loc: `${BASE_URL}/blog`, priority: '0.9', changefreq: 'daily' },
-        ...slugs.map(slug => ({
-          loc: `${BASE_URL}/blog/${slug}`,
-          lastmod: blogDates.get(slug) || today,
+        ...posts.map(post => ({
+          loc: `${BASE_URL}/blog/${post.slug}`,
+          lastmod: post.date,
           priority: '0.7',
           changefreq: 'monthly',
         })),
@@ -119,7 +142,6 @@ interface PrerenderedRoute {
 function buildHeadHtml(route: PrerenderedRoute): string {
   const { title, description, canonical, ogType, jsonLd } = route
   const lines = [
-    `<title>${title}</title>`,
     `<meta name="description" content="${description}" />`,
     `<link rel="canonical" href="${canonical}" />`,
     `<meta property="og:title" content="${title}" />`,
@@ -153,31 +175,15 @@ function prerenderPlugin() {
 
       const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
 
-      // Collect blog post metadata from content files
-      const blogDir = resolve(import.meta.dirname, 'src/content/blog')
       const blogRoutes: PrerenderedRoute[] = []
-
-      for (const file of readdirSync(blogDir)) {
-        if (!file.endsWith('.ts') || file === 'index.ts') continue
-        const content = readFileSync(join(blogDir, file), 'utf-8')
-        const slug = parseStringField(content, 'slug')
-        if (!slug) continue
-
-        const seoTitle =
-          parseStringField(content, 'seo_title') ||
-          parseStringField(content, 'title') ||
-          'Atlas Intelligence Blog'
-        const seoDesc =
-          parseStringField(content, 'seo_description') ||
-          parseStringField(content, 'description') ||
-          'Amazon seller intelligence and competitive analysis insights.'
-        const date = parseStringField(content, 'date')
-
+      for (const post of collectBlogSourceMetadata()) {
+        const seoTitle = post.seoTitle || post.title
+        const seoDesc = post.seoDescription || post.description
         blogRoutes.push({
-          path: `/blog/${slug}`,
+          path: `/blog/${post.slug}`,
           title: `${seoTitle} | Atlas Intelligence`,
           description: seoDesc,
-          canonical: `${BASE_URL}/blog/${slug}`,
+          canonical: `${BASE_URL}/blog/${post.slug}`,
           ogType: 'article',
           jsonLd: {
             '@context': 'https://schema.org',
@@ -186,8 +192,8 @@ function prerenderPlugin() {
                 '@type': 'BlogPosting',
                 headline: seoTitle,
                 description: seoDesc,
-                datePublished: date || undefined,
-                dateModified: date || undefined,
+                datePublished: post.date,
+                dateModified: post.date,
                 image: DEFAULT_OG_IMAGE,
                 author: {
                   '@type': 'Organization',
@@ -201,14 +207,14 @@ function prerenderPlugin() {
                   sameAs: ATLAS_SAME_AS,
                   logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
                 },
-                mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${slug}` },
+                mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
               },
               {
                 '@type': 'BreadcrumbList',
                 itemListElement: [
                   { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
                   { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
-                  { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${slug}` },
+                  { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
                 ],
               },
             ],
