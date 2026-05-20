@@ -256,7 +256,6 @@ def _topic_terms(
         data_context.get("category"),
         data_context.get("topic"),
         metadata.get("target_keyword"),
-        draft.title,
     )
     terms: list[str] = []
     for candidate in candidates:
@@ -276,7 +275,7 @@ def _entity_clarity(
         return False
     searchable = f"{draft.title}\n{body[:600]}".lower()
     if not topic_terms:
-        return bool(_clean_text(draft.title))
+        return False
     return any(term.lower() in searchable for term in topic_terms)
 
 

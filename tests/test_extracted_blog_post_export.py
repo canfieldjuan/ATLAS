@@ -264,6 +264,31 @@ async def test_export_blog_post_drafts_surfaces_incomplete_geo_readiness() -> No
 
 
 @pytest.mark.asyncio
+async def test_export_blog_post_drafts_does_not_treat_generic_title_as_entity() -> None:
+    result = await export_blog_post_drafts(
+        _Repository(drafts=[
+            _draft(
+                title="Customer Retention Guide",
+                content=(
+                    "## How should teams reduce retention risk?\n\n"
+                    "Teams should reduce retention risk by reading recent support "
+                    "patterns, identifying repeated confusion, and turning repeated "
+                    "questions into clear help-center answers. The useful answer is "
+                    "not hidden in a generic title; it needs a real entity, product, "
+                    "vendor, or category signal before this can count as GEO entity "
+                    "clarity for review."
+                ),
+                data_context={},
+                metadata={},
+            )
+        ]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    assert result.rows[0]["geo_readiness"]["checks"]["entity_clarity"] is False
+
+
+@pytest.mark.asyncio
 async def test_export_blog_post_drafts_detects_answer_first_sections() -> None:
     content = (
         "## Acme Pricing Pattern\n\n"
