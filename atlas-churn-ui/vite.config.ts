@@ -6,6 +6,26 @@ import { resolve, join } from 'node:path'
 const BASE_URL = 'https://churnsignals.co'
 const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
 
+// FTC affiliate disclosure for no-JS agents -- AEO crawlers (GPTBot,
+// PerplexityBot, ClaudeBot, Bingbot) and social unfurl bots that never run the
+// React app. BlogArticleView renders the same disclosure for human readers via
+// useEffect, but a crawler sees only the prerendered shell, so without this the
+// FTC notice is invisible to exactly the audience the prerender exists for.
+// The block sits OUTSIDE #root (React never touches it) and inside <noscript>
+// (JS browsers never render it -- no flash, no duplicate of the React copy).
+// Copy is kept in sync with BlogArticleView.tsx's disclosure text.
+const AFFILIATE_DISCLOSURE_NOSCRIPT =
+  '<noscript>' +
+  '<div style="max-width:48rem;margin:0 auto;padding:0.75rem 1rem;' +
+  'font-size:0.75rem;color:#64748b;border:1px solid #334155;border-radius:0.5rem">' +
+  '<strong>Disclosure:</strong> This article may contain affiliate links. ' +
+  'If you purchase through these links, we may earn a commission at no ' +
+  'additional cost to you. Our analysis and recommendations are based on ' +
+  'verified review data, not affiliate relationships. ' +
+  'See our <a href="/methodology">methodology</a>.' +
+  '</div>' +
+  '</noscript>'
+
 function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
@@ -71,6 +91,8 @@ interface PrerenderedRoute {
   jsonLd?: object
   faqJsonLd?: object
   breadcrumbJsonLd?: object
+  // Static HTML injected into <body> before #root (no-JS-only via <noscript>).
+  bodyHtml?: string
 }
 
 function htmlEscape(s: string): string {
@@ -199,6 +221,14 @@ function prerenderPlugin() {
           ],
         }
 
+        // Parity with BlogArticleView.hasAffiliateContent: a non-empty
+        // data_context.affiliate_url, or Monday.com's affiliate URL inlined in
+        // the body. Posts that carry an affiliate link must ship the FTC
+        // disclosure in the static HTML so no-JS crawlers see it.
+        const hasAffiliate =
+          /"affiliate_url"\s*:\s*"[^"]+"/.test(content) ||
+          content.includes('try.monday.com')
+
         const faqItems = extractFaq(content)
         const faqJsonLd = faqItems.length > 0 ? {
           '@context': 'https://schema.org',
@@ -219,6 +249,7 @@ function prerenderPlugin() {
           jsonLd: blogPosting,
           faqJsonLd,
           breadcrumbJsonLd,
+          bodyHtml: hasAffiliate ? AFFILIATE_DISCLOSURE_NOSCRIPT : undefined,
         })
       }
 
@@ -288,10 +319,19 @@ function prerenderPlugin() {
         // Inject the route's own title + the rest of the head block
         // before </head>. The base shell no longer has a <title> to
         // replace, so the new one lands inside the head HTML block.
-        const rendered = baseHtmlStripped.replace(
+        let rendered = baseHtmlStripped.replace(
           '</head>',
           `    <title>${htmlEscape(route.title)}</title>\n${headHtml}\n  </head>`,
         )
+        // Inject the no-JS disclosure (when present) just before #root, so it
+        // lives outside React's render tree and is visible only to no-JS
+        // agents.
+        if (route.bodyHtml) {
+          rendered = rendered.replace(
+            '<div id="root"></div>',
+            `${route.bodyHtml}\n    <div id="root"></div>`,
+          )
+        }
         const segments = route.path.split('/').filter(Boolean)
         const outDir = segments.length === 0 ? distDir : join(distDir, ...segments)
         if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true })
