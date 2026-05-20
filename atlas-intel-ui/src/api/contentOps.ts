@@ -308,8 +308,19 @@ export interface GeneratedAssetDraft {
   ticket_source_count?: number
   output_checks?: Record<string, unknown> | string
   passed_output_checks?: number
+  seo_aeo_readiness?: GeneratedAssetReadiness | string
+  geo_readiness?: GeneratedAssetReadiness | string
   persona?: string
   value_prop?: string
+  [key: string]: unknown
+}
+
+export interface GeneratedAssetReadiness {
+  status?: string
+  passed?: number
+  total?: number
+  missing?: string[]
+  checks?: Record<string, unknown>
   [key: string]: unknown
 }
 

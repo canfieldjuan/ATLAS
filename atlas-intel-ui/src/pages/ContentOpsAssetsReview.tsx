@@ -35,6 +35,13 @@ type AssetFact = {
   value: string
 }
 
+type ReadinessSummary = {
+  status: string
+  passed: number | null
+  total: number | null
+  missing: string[]
+}
+
 type FAQItemPreview = {
   question: string
   answer: string
@@ -845,6 +852,8 @@ function addAssetSpecificFacts(
   }
   if (asset === 'blog_post') {
     addFact(facts, 'topic', row.topic_type)
+    addFact(facts, 'SEO/AEO', readinessLabel(row.seo_aeo_readiness))
+    addFact(facts, 'GEO', readinessLabel(row.geo_readiness))
     return
   }
   if (asset === 'landing_page') {
@@ -890,7 +899,10 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
     return previewOrNull({
       heading: textValue(row.title) || textValue(row.description),
       body: excerpt(textValue(row.content)),
-      meta: tags,
+      meta: [
+        ...readinessMeta(row),
+        ...tags,
+      ],
     })
   }
   if (asset === 'landing_page') {
@@ -1015,6 +1027,52 @@ function outputCheckLabels(value: unknown): string[] {
   return Object.entries(checks)
     .filter(([, passed]) => passed === true)
     .map(([key]) => key.replace(/_/g, ' '))
+}
+
+function readinessMeta(row: GeneratedAssetDraft): string[] {
+  return [
+    readinessLabel(row.seo_aeo_readiness, 'SEO/AEO'),
+    readinessLabel(row.geo_readiness, 'GEO'),
+  ].filter(Boolean)
+}
+
+function readinessLabel(value: unknown, prefix?: string): string {
+  const summary = readinessSummary(value)
+  if (!summary) return ''
+  const status = fmtLabel(summary.status || 'unknown')
+  const count =
+    summary.passed != null && summary.total != null
+      ? ` (${summary.passed}/${summary.total})`
+      : ''
+  const missing =
+    summary.status === 'needs_review' && summary.missing.length > 0
+      ? ` missing ${summary.missing.slice(0, 2).map(fmtLabel).join(', ')}`
+      : ''
+  return `${prefix ? `${prefix}: ` : ''}${status}${count}${missing}`
+}
+
+function readinessSummary(value: unknown): ReadinessSummary | null {
+  const item = recordValue(value)
+  if (!item) return null
+  const status = textValue(item.status)
+  const passed = finiteNumber(item.passed)
+  const total = finiteNumber(item.total)
+  const missing = valueList(item.missing)
+  if (!status && passed == null && total == null && missing.length === 0) return null
+  return {
+    status,
+    passed,
+    total,
+    missing,
+  }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function fmtLabel(value: string): string {
+  return value.replace(/_/g, ' ')
 }
 
 function numberLabel(value: unknown, label: string): string {
