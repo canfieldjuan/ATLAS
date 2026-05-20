@@ -63,11 +63,12 @@ source of truth for what remains.
 - `ticket_faq_markdown` builds deterministic FAQ Markdown from support-ticket,
   case, conversation, and complaint source-row evidence. The CLI
   `scripts/build_extracted_ticket_faq_markdown.py` writes or prints a grounded
-  `.md` artifact for fast operator review, and `--require-output-checks`
-  fails the command when customer vocabulary, condensation, or action-item
-  checks do not pass. The same builder is also available as `faq_markdown` in
-  the AI Content Ops control-surface execution path and can persist drafts
-  through `PostgresTicketFAQRepository` when DB services are enabled.
+  `.md` article with numbered next steps, escalation guidance, and cited ticket
+  quotes. `--require-output-checks` fails the command when customer
+  vocabulary, condensation, or action-item checks do not pass. The same builder
+  is also available as `faq_markdown` in the AI Content Ops control-surface
+  execution path and can persist drafts through `PostgresTicketFAQRepository`
+  when DB services are enabled.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.
