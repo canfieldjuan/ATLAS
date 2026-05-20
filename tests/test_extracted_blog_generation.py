@@ -100,6 +100,26 @@ def _blueprint():
 
 def _valid_content() -> str:
     body = " ".join([
+        "## How is HubSpot pricing pressure changing buyer shortlists?\n\n"
+        "HubSpot",
+        "pricing",
+        "pressure",
+        "is",
+        "changing",
+        "buyer",
+        "shortlists",
+        "because",
+        "teams",
+        "are",
+        "checking",
+        "renewal",
+        "costs",
+        "before",
+        "they",
+        "commit",
+        "to",
+        "another",
+        "contract.",
         "Teams",
         "describe",
         "pricing",
@@ -138,6 +158,20 @@ def _valid_blog_json(**overrides):
         "seo_description": "A data-backed look at HubSpot pricing pressure.",
         "target_keyword": "hubspot pricing pressure",
         "secondary_keywords": ["hubspot alternatives", "crm renewal pricing"],
+        "faq": [
+            {
+                "question": "Why is HubSpot pricing pressure changing shortlists?",
+                "answer": "Teams are comparing renewal costs earlier.",
+            },
+            {
+                "question": "Who should review alternatives?",
+                "answer": "Teams facing budget pressure should compare options.",
+            },
+            {
+                "question": "What should buyers check?",
+                "answer": "Buyers should check renewal terms and support needs.",
+            },
+        ],
         "topic_type": "vendor_alternative",
         "content": _valid_content(),
         "charts": [{"chart_id": "pricing", "title": "Pricing"}],
@@ -283,6 +317,42 @@ async def test_generate_blocks_low_quality_posts_without_saving() -> None:
     assert result.generated == 0
     assert result.skipped == 1
     assert result.errors[0]["reason"] == "quality_blocked"
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_missing_seo_aeo_fields_without_saving() -> None:
+    payload = json.loads(_valid_blog_json())
+    for key in (
+        "seo_title",
+        "seo_description",
+        "target_keyword",
+        "secondary_keywords",
+        "faq",
+    ):
+        payload.pop(key)
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[json.dumps(payload)],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            )
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert set(result.errors[0]["blockers"]) == {
+        "missing_seo_title",
+        "missing_seo_description",
+        "missing_target_keyword",
+        "missing_secondary_keywords",
+        "too_few_faq_entries:0_need_3",
+    }
     assert blog_posts.saved == []
 
 

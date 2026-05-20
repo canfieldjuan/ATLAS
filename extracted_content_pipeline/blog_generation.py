@@ -484,6 +484,12 @@ def _quality_context(
         "source_quotes": _source_quote_tuple(blueprint.get("quotable_phrases")),
         "required_vendors": _string_tuple(blueprint.get("required_vendors")),
         "grounded_vendors": frozenset(_string_tuple(blueprint.get("grounded_vendors"))),
+        "require_seo_aeo": True,
+        "seo_title": parsed.get("seo_title"),
+        "seo_description": parsed.get("seo_description"),
+        "target_keyword": parsed.get("target_keyword"),
+        "secondary_keywords": parsed.get("secondary_keywords"),
+        "faq": parsed.get("faq"),
     }
 
 

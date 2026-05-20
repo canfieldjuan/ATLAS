@@ -42,6 +42,11 @@ Recognised ``input.context`` keys:
   - ``grounded_vendors``: set[str] -- vendor names supported by chart
     data; sentences naming an ungrounded vendor become an
     ``unsupported_data_claim`` warning.
+  - ``require_seo_aeo``: bool -- when true, validate blog SEO metadata,
+    FAQ output, and simple answer-engine-friendly section structure.
+  - ``seo_title`` / ``seo_description`` / ``target_keyword``:
+    generated SEO fields.
+  - ``secondary_keywords`` / ``faq``: generated SEO/AEO list fields.
 
 Recognised ``policy.thresholds`` keys (all optional, all have defaults):
   - ``min_words``: int (default 1500)
@@ -49,6 +54,9 @@ Recognised ``policy.thresholds`` keys (all optional, all have defaults):
   - ``pass_score``: int (default 70)
   - ``blocking_penalty``: int (default 18) -- score deducted per blocker
   - ``warning_penalty``: int (default 6) -- score deducted per warning
+  - ``seo_title_max_chars``: int (default 60)
+  - ``seo_description_max_chars``: int (default 155)
+  - ``min_faq_entries``: int (default 3)
 """
 
 from __future__ import annotations
@@ -70,6 +78,11 @@ _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>\s*(.+)$")
 _CHART_REF_RE = re.compile(r"\{\{chart:([a-zA-Z0-9\-_]+)\}\}")
 _INTERNAL_LINK_RE = re.compile(r"/blog/([a-z0-9\-]+)")
+_QUESTION_H2_RE = re.compile(
+    r"^##\s+(?:who|what|when|where|why|how|is|are|can|should|does|do|which)\b.*\?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
 
 # Markers that turn an otherwise-neutral sentence into a "data claim".
 # A sentence containing one of these is subject to vendor-grounding
@@ -170,6 +183,9 @@ _DEFAULT_THRESHOLDS: Mapping[str, int] = {
     "pass_score": 70,
     "blocking_penalty": 18,
     "warning_penalty": 6,
+    "seo_title_max_chars": 60,
+    "seo_description_max_chars": 155,
+    "min_faq_entries": 3,
 }
 
 
@@ -522,6 +538,9 @@ def evaluate_blog_post(
                     )
                 )
 
+    if context.get("require_seo_aeo"):
+        findings.extend(_seo_aeo_findings(body, context, policy=policy))
+
     return _build_report(
         findings=findings,
         word_count=word_count,
@@ -530,6 +549,124 @@ def evaluate_blog_post(
         quote_count=len(blockquotes),
         policy=policy,
     )
+
+
+def _seo_aeo_findings(
+    body: str,
+    context: Mapping[str, Any],
+    *,
+    policy: QualityPolicy | None,
+) -> list[GateFinding]:
+    findings: list[GateFinding] = []
+    seo_title = _clean_text(context.get("seo_title"))
+    seo_description = _clean_text(context.get("seo_description"))
+    target_keyword = _clean_text(context.get("target_keyword"))
+    secondary_keywords = _sequence_items(context.get("secondary_keywords"))
+    faq = _sequence_items(context.get("faq"))
+    seo_title_max = _threshold(policy, "seo_title_max_chars")
+    seo_description_max = _threshold(policy, "seo_description_max_chars")
+    min_faq_entries = _threshold(policy, "min_faq_entries")
+
+    if not seo_title:
+        findings.append(_seo_blocker("missing_seo_title", field_name="seo_title"))
+    elif len(seo_title) > seo_title_max:
+        findings.append(
+            _seo_blocker(
+                "seo_title_too_long",
+                message=f"seo_title_too_long:{len(seo_title)}_chars_max_{seo_title_max}",
+                field_name="seo_title",
+                metadata={"length": len(seo_title), "max_chars": seo_title_max},
+            )
+        )
+
+    if not seo_description:
+        findings.append(
+            _seo_blocker("missing_seo_description", field_name="seo_description")
+        )
+    elif len(seo_description) > seo_description_max:
+        findings.append(
+            _seo_blocker(
+                "seo_description_too_long",
+                message=(
+                    f"seo_description_too_long:{len(seo_description)}_chars_max_"
+                    f"{seo_description_max}"
+                ),
+                field_name="seo_description",
+                metadata={"length": len(seo_description), "max_chars": seo_description_max},
+            )
+        )
+
+    if not target_keyword:
+        findings.append(
+            _seo_blocker("missing_target_keyword", field_name="target_keyword")
+        )
+    if not secondary_keywords:
+        findings.append(
+            _seo_blocker(
+                "missing_secondary_keywords",
+                field_name="secondary_keywords",
+            )
+        )
+    if len(faq) < min_faq_entries:
+        findings.append(
+            _seo_blocker(
+                "too_few_faq_entries",
+                message=f"too_few_faq_entries:{len(faq)}_need_{min_faq_entries}",
+                field_name="faq",
+                metadata={"count": len(faq), "min_count": min_faq_entries},
+            )
+        )
+    if not _aeo_structure_detected(body):
+        findings.append(_seo_blocker("aeo_structure_missing", field_name="content"))
+    return findings
+
+
+def _seo_blocker(
+    code: str,
+    *,
+    message: str | None = None,
+    field_name: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> GateFinding:
+    return GateFinding(
+        code=code,
+        message=message or code,
+        severity=GateSeverity.BLOCKER,
+        field_name=field_name,
+        metadata=dict(metadata or {}),
+    )
+
+
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _sequence_items(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return tuple(item for item in value if item)
+    return ()
+
+
+def _aeo_structure_detected(body: str) -> bool:
+    if _QUESTION_H2_RE.search(body):
+        return True
+    for match in _H2_RE.finditer(body):
+        section_start = match.end()
+        next_heading = _H2_RE.search(body, section_start)
+        section = body[section_start:next_heading.start() if next_heading else None]
+        first_paragraph = _first_paragraph(section)
+        word_count = len(first_paragraph.split())
+        if 40 <= word_count <= 80:
+            return True
+    return False
+
+
+def _first_paragraph(section: str) -> str:
+    for chunk in re.split(r"\n\s*\n", section.strip()):
+        text = re.sub(r"^[>\-\*\s]+", "", chunk.strip())
+        if text and not text.startswith("{{chart:") and not text.startswith("<table"):
+            return text
+    return ""
 
 
 def _find_unsupported_claims(
