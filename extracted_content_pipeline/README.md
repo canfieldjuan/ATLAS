@@ -174,6 +174,7 @@ python scripts/build_extracted_ticket_faq_markdown.py \
   extracted_content_pipeline/examples/support_ticket_sources.csv \
   --source-format csv \
   --window-days 90 \
+  --support-contact "1-800-555-0100" \
   --require-output-checks \
   --output support_ticket_faq.md
 ```
@@ -184,9 +185,10 @@ ticket quotes under each answer. The packaged support-ticket CSV is
 intentionally small but repeated: it proves customer-worded headings, intent
 condensation, action items, and source grounding. Add `--as-of-date
 YYYY-MM-DD` with `--window-days` when you need a reproducible audit window
-instead of today's date. Pass
-`--require-output-checks` in host smoke runs when weak FAQ output should fail
-the command instead of producing a reviewable draft.
+instead of today's date. Pass `--support-contact` when the published FAQ should
+show a support phone number, email, or help URL; the builder never invents one.
+Pass `--require-output-checks` in host smoke runs when weak FAQ output should
+fail the command instead of producing a reviewable draft.
 
 The same artifact can run through the Content Ops execution seam by selecting
 `faq_markdown` and passing inline `source_material`. It remains zero-provider.

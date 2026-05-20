@@ -71,6 +71,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Write FAQ Markdown to this path instead of stdout.",
     )
     parser.add_argument(
+        "--support-contact",
+        help="Phone, email, or URL shown when the FAQ tells users to contact support.",
+    )
+    parser.add_argument(
         "--require-output-checks",
         action="store_true",
         help="Fail when generated FAQ output checks are not all true.",
@@ -109,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         max_evidence_per_item=args.max_evidence_per_item,
         window_days=args.window_days,
         as_of_date=args.as_of_date,
+        support_contact=args.support_contact,
     )
     failed_checks = _failed_output_checks(result.output_checks)
     if args.require_output_checks and failed_checks:

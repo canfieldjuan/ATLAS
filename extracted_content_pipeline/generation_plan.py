@@ -229,6 +229,8 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
         ),
         window_days=window_days,
         as_of_date=as_of_date,
+        support_contact=_text_input(request.inputs, "faq_support_contact")
+        or defaults.support_contact,
     )
 
 
@@ -379,6 +381,8 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             step_config["window_days"] = config.window_days
         if config.window_days is not None and config.as_of_date is not None:
             step_config["as_of_date"] = config.as_of_date
+        if config.support_contact:
+            step_config["support_contact"] = config.support_contact
         return GenerationPlanStep(
             output=output,
             runner="TicketFAQMarkdownService.generate",
