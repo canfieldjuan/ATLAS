@@ -269,6 +269,7 @@ export type GeneratedAssetType =
   | 'report'
   | 'landing_page'
   | 'sales_brief'
+  | 'faq_markdown'
 
 export interface GeneratedAssetDraft {
   id?: string
@@ -285,6 +286,8 @@ export interface GeneratedAssetDraft {
   summary?: string
   headline?: string
   content?: string
+  markdown?: string
+  items?: Array<Record<string, unknown>> | string
   tags?: string[] | string
   hero?: Record<string, unknown>
   sections?: Array<Record<string, unknown>> | string
@@ -301,6 +304,10 @@ export interface GeneratedAssetDraft {
   reference_count?: number
   tag_count?: number
   chart_count?: number
+  source_count?: number
+  ticket_source_count?: number
+  output_checks?: Record<string, unknown> | string
+  passed_output_checks?: number
   persona?: string
   value_prop?: string
   [key: string]: unknown

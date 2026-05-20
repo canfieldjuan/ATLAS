@@ -35,6 +35,13 @@ type AssetFact = {
   value: string
 }
 
+type FAQItemPreview = {
+  question: string
+  answer: string
+  actionItems: string[]
+  sourceLabels: string[]
+}
+
 const ASSETS: Array<{
   id: GeneratedAssetType
   label: string
@@ -59,6 +66,11 @@ const ASSETS: Array<{
     id: 'sales_brief',
     label: 'Sales Briefs',
     description: 'Pre-call and account-facing sales enablement assets.',
+  },
+  {
+    id: 'faq_markdown',
+    label: 'FAQ Markdown',
+    description: 'Grounded FAQ documents generated from support-ticket evidence.',
   },
 ]
 
@@ -218,7 +230,7 @@ export default function ContentOpsAssetsReview() {
         </div>
       </header>
 
-      <section className="grid gap-3 md:grid-cols-4">
+      <section className="grid gap-3 md:grid-cols-5">
         {ASSETS.map((item) => (
           <button
             key={item.id}
@@ -522,6 +534,7 @@ function AssetDetailDrawer({
   const facts = assetFacts(row, asset)
   const sections = sectionList(row.sections)
   const references = valueList(row.reference_ids)
+  const faqItems = asset === 'faq_markdown' ? faqItemList(row.items) : []
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -664,6 +677,58 @@ function AssetDetailDrawer({
           </section>
         )}
 
+        {faqItems.length > 0 && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">FAQ Items</h3>
+            <div className="mt-3 space-y-3">
+              {faqItems.map((item, index) => (
+                <div
+                  key={`${item.question}-${index}`}
+                  className="rounded-md border border-slate-800 bg-slate-900/60 p-4"
+                >
+                  <div className="text-sm font-medium text-white">
+                    {item.question || `Question ${index + 1}`}
+                  </div>
+                  {item.answer && (
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      {item.answer}
+                    </p>
+                  )}
+                  {item.actionItems.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        What to do next
+                      </div>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
+                        {item.actionItems.map((action, actionIndex) => (
+                          <li key={`${action}-${actionIndex}`}>{action}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {item.sourceLabels.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Sources
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {item.sourceLabels.map((source, sourceIndex) => (
+                          <span
+                            key={`${source}-${sourceIndex}`}
+                            className="rounded bg-slate-800 px-2 py-0.5 text-xs text-slate-300"
+                          >
+                            {source}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {references.length > 0 && (
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-200">References</h3>
@@ -741,6 +806,13 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
       .filter(Boolean)
       .join(' | ')
   }
+  if (asset === 'faq_markdown') {
+    return [
+      row.target_mode,
+      numberLabel(row.ticket_source_count, 'ticket row'),
+      numberLabel(row.source_count, 'source row'),
+    ].filter(Boolean).join(' | ')
+  }
   return [row.target_mode, row.report_type, row.summary]
     .map(textValue)
     .filter(Boolean)
@@ -778,6 +850,12 @@ function addAssetSpecificFacts(
   if (asset === 'landing_page') {
     addFact(facts, 'campaign', row.campaign_name)
     addFact(facts, 'persona', row.persona)
+    return
+  }
+  if (asset === 'faq_markdown') {
+    addFact(facts, 'ticket rows', row.ticket_source_count)
+    addFact(facts, 'source rows', row.source_count)
+    addFact(facts, 'checks passed', row.passed_output_checks)
     return
   }
   addFact(facts, 'brief', row.brief_type)
@@ -829,6 +907,21 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
       ].filter(Boolean),
     })
   }
+  if (asset === 'faq_markdown') {
+    const items = faqItemList(row.items)
+    const first = items[0]
+    const checks = outputCheckLabels(row.output_checks)
+    const sourceMeta =
+      first?.sourceLabels.slice(0, 2).map((source) => `source: ${source}`) ?? []
+    return previewOrNull({
+      heading: first?.question || textValue(row.title),
+      body: excerpt(first?.answer || textValue(row.markdown)),
+      meta: [
+        ...sourceMeta,
+        ...checks.slice(0, 3).map((check) => `check: ${check}`),
+      ],
+    })
+  }
   const section = firstSection(row.sections)
   const sectionTitles = sectionList(row.sections)
     .map((item) => item.title)
@@ -857,23 +950,35 @@ function firstSection(value: unknown): { title: string; body: string } {
 }
 
 function sectionList(value: unknown): Array<{ title: string; body: string }> {
-  let sections = Array.isArray(value) ? value : []
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value)
-      sections = Array.isArray(parsed) ? parsed : []
-    } catch {
-      sections = []
-    }
-  }
-  return sections
-    .filter((item): item is Record<string, unknown> =>
-      Boolean(item && typeof item === 'object' && !Array.isArray(item)),
-    )
+  return recordList(value)
     .map((section) => ({
       title: textValue(section.title) || textValue(section.heading),
       body: textValue(section.body_markdown) || textValue(section.body),
     }))
+}
+
+function faqItemList(value: unknown): FAQItemPreview[] {
+  return recordList(value).map((item) => ({
+    question: textValue(item.question) || textValue(item.topic),
+    answer: textValue(item.answer),
+    actionItems: valueList(item.action_items),
+    sourceLabels: valueList(item.source_labels),
+  })).filter((item) => item.question || item.answer)
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  let rows = Array.isArray(value) ? value : []
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      rows = Array.isArray(parsed) ? parsed : []
+    } catch {
+      rows = []
+    }
+  }
+  return rows.filter((item): item is Record<string, unknown> =>
+    Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+  )
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
@@ -902,6 +1007,19 @@ function valueList(value: unknown): string[] {
   const text = textValue(value)
   if (!text) return []
   return text.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function outputCheckLabels(value: unknown): string[] {
+  const checks = recordValue(value)
+  if (!checks) return []
+  return Object.entries(checks)
+    .filter(([, passed]) => passed === true)
+    .map(([key]) => key.replace(/_/g, ' '))
+}
+
+function numberLabel(value: unknown, label: string): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return ''
+  return `${value} ${label}${value === 1 ? '' : 's'}`
 }
 
 function excerpt(value: string, limit = 260): string {
