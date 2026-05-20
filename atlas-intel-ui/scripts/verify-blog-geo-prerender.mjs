@@ -71,9 +71,12 @@ function findMeta(html, attr, key) {
   return metas.find(tag => attrValue(tag, attr) === key) || ''
 }
 
-function findTitle(html) {
-  const match = html.match(/<title>([\s\S]*?)<\/title>/i)
-  return match ? decodeHtml(match[1].trim()) : ''
+function findTitle(html, slug) {
+  const matches = [...html.matchAll(/<title>([\s\S]*?)<\/title>/gi)]
+  if (matches.length !== 1) {
+    fail(`/blog/${slug} must have exactly one title tag`)
+  }
+  return decodeHtml(matches[0][1].trim())
 }
 
 function decodeHtml(value) {
@@ -187,7 +190,7 @@ function assertSeoMeta(html, post) {
   const title = `${expectedTitle(post)} | Atlas Intelligence`
   const description = expectedDescription(post)
 
-  if (findTitle(html) !== title) {
+  if (findTitle(html, post.slug) !== title) {
     fail(`/blog/${post.slug} title tag must be ${title}`)
   }
 

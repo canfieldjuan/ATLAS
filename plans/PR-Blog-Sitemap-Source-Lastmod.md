@@ -17,25 +17,28 @@ Rebuilding the site should not make every blog post look newly modified.
 2. Keep non-blog sitemap entries on the build date.
 3. Extend `atlas-intel-ui/scripts/verify-blog-geo-prerender.mjs` to assert each
    blog sitemap `lastmod` matches the source post date.
-4. Keep route rendering, blog content, and generated metadata unchanged.
+4. Keep blog content unchanged while tightening the source metadata path used
+   by sitemap and prerender generation.
 
 ### Files touched
 
 | File | Change |
 |---|---|
 | `plans/PR-Blog-Sitemap-Source-Lastmod.md` | Plan doc for this slice. |
-| `atlas-intel-ui/vite.config.ts` | Use source post dates for blog sitemap lastmod. |
-| `atlas-intel-ui/scripts/verify-blog-geo-prerender.mjs` | Verify sitemap lastmod against source post dates. |
+| `atlas-intel-ui/vite.config.ts` | Use required source post metadata for blog sitemap lastmod and prerender output. |
+| `atlas-intel-ui/scripts/verify-blog-geo-prerender.mjs` | Verify sitemap lastmod against source post dates and reject duplicate title tags. |
 
 ## Mechanism
 
-The sitemap plugin already scans each blog source file. It now records the
-source `date` alongside each slug and writes that date into the blog URL
-`lastmod` field.
+The Vite build now collects blog metadata from the actual source post files and
+requires `slug`, `title`, `description`, and `date` before emitting crawler
+metadata. The sitemap and prerender plugins share that collection path, so the
+blog URLs, sitemap `lastmod`, title metadata, and BlogPosting JSON-LD all come
+from the same source fields.
 
 The publish verifier already parses the same source date for BlogPosting checks.
 It now also reads each sitemap URL block and compares `lastmod` to the source
-date.
+date. It also rejects duplicate title tags in prerendered blog pages.
 
 ## Intentional
 
@@ -61,7 +64,7 @@ date.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan | ~60 |
-| Sitemap plugin | ~25 |
-| Publish verifier | ~20 |
-| Total | ~105 |
+| Plan | ~25 |
+| Sitemap and prerender source metadata path | ~95 |
+| Publish verifier | ~25 |
+| Total | ~145 |
