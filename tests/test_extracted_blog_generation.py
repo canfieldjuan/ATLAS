@@ -99,53 +99,20 @@ def _blueprint():
 
 
 def _valid_content() -> str:
-    body = " ".join([
+    body = (
         "## How is HubSpot pricing pressure changing buyer shortlists?\n\n"
-        "HubSpot",
-        "pricing",
-        "pressure",
-        "is",
-        "changing",
-        "buyer",
-        "shortlists",
-        "because",
-        "teams",
-        "are",
-        "checking",
-        "renewal",
-        "costs",
-        "before",
-        "they",
-        "commit",
-        "to",
-        "another",
-        "contract.",
-        "Teams",
-        "describe",
-        "pricing",
-        "pressure",
-        "during",
-        "renewals",
-        "and",
-        "compare",
-        "alternatives",
-        "against",
-        "implementation",
-        "effort",
-        "support",
-        "needs",
-        "and",
-        "budget",
-        "planning",
-        "cycles",
-        "before",
-        "migration",
-        "decisions",
-        "are",
-        "made",
-        "carefully",
-        "today",
-    ])
+        "HubSpot pricing pressure is visible in the last 90 days of review patterns, "
+        "especially across 214 reviews where buyers describe renewal friction, budget "
+        "concerns, and comparison shopping. The answer is changing buyer shortlists "
+        "because teams are checking renewal costs before they commit to another "
+        "contract.\n\n"
+        "## How should teams read the HubSpot pricing evidence?\n\n"
+        "HubSpot pricing evidence should be read as a renewal-risk signal, not as "
+        "proof that every buyer has the same problem. The useful pattern is that "
+        "customers keep using similar wording about budget pressure, contract terms, "
+        "and alternative comparisons when they explain why pricing has become harder "
+        "to justify."
+    )
     return body + "\n\n{{chart:pricing}}\n"
 
 
@@ -346,12 +313,43 @@ async def test_generate_blocks_missing_seo_aeo_fields_without_saving() -> None:
     assert result.generated == 0
     assert result.skipped == 1
     assert result.errors[0]["reason"] == "quality_blocked"
-    assert set(result.errors[0]["blockers"]) == {
+    assert set(result.errors[0]["blockers"]) >= {
         "missing_seo_title",
         "missing_seo_description",
         "missing_target_keyword",
         "missing_secondary_keywords",
         "too_few_faq_entries:0_need_3",
+    }
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_missing_geo_contract_without_saving() -> None:
+    payload = json.loads(_valid_blog_json())
+    payload["content"] = (
+        "## How is HubSpot pricing pressure changing shortlists?\n\n"
+        "HubSpot pricing pressure changes shortlists because buyers compare "
+        "renewal terms before they commit to another contract."
+    )
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[json.dumps(payload)],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            )
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert set(result.errors[0]["blockers"]) >= {
+        "geo_citable_section_structure_missing",
+        "geo_evidence_specificity_missing",
+        "geo_freshness_context_missing",
     }
     assert blog_posts.saved == []
 

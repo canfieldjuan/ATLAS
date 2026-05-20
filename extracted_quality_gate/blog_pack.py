@@ -44,9 +44,12 @@ Recognised ``input.context`` keys:
     ``unsupported_data_claim`` warning.
   - ``require_seo_aeo``: bool -- when true, validate blog SEO metadata,
     FAQ output, and simple answer-engine-friendly section structure.
+  - ``require_geo``: bool -- when true, validate draft-level GEO readiness
+    for generated blog posts.
   - ``seo_title`` / ``seo_description`` / ``target_keyword``:
     generated SEO fields.
   - ``secondary_keywords`` / ``faq``: generated SEO/AEO list fields.
+  - ``title``: str -- generated title for visible GEO entity checks.
 
 Recognised ``policy.thresholds`` keys (all optional, all have defaults):
   - ``min_words``: int (default 1500)
@@ -83,6 +86,46 @@ _QUESTION_H2_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
+_FRESHNESS_RE = re.compile(
+    r"\b(?:20\d{2}|Q[1-4]\s+20\d{2}|last\s+\d+\s+(?:days?|weeks?|months?|years?)|"
+    r"past\s+\d+\s+(?:days?|weeks?|months?|years?))\b",
+    re.IGNORECASE,
+)
+_EVIDENCE_RE = re.compile(
+    r"\b(?:\d+[\d,]*(?:\.\d+)?%?|\d+\s+(?:reviews?|tickets?|responses?|"
+    r"customers?|users?|accounts?)|review(?:s| data| patterns)?|ticket(?:s| data)?|"
+    r"customer wording|source(?:s)?|survey(?:s)?)\b",
+    re.IGNORECASE,
+)
+_VAGUE_H2_RE = re.compile(
+    r"^##\s+(?:overview|introduction|conclusion|key takeaways|final thoughts|summary)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_VISIBLE_ENTITY_RE = re.compile(
+    r"\b(?:[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]{2,}|[A-Z]{2,})\b"
+)
+_GENERIC_ENTITY_WORDS = frozenset(
+    {
+        "account", "accounts", "analysis", "answer", "article", "blog",
+        "buyer", "buyers", "category", "company", "comparison", "content",
+        "contract", "customer", "customers", "data", "draft", "evidence",
+        "faq", "feature", "features", "final", "geo", "guide", "help",
+        "how", "overview", "pricing", "product", "question", "questions",
+        "report", "retention", "review", "reviews", "risk", "section",
+        "source", "support", "team", "teams", "the", "thoughts", "ticket",
+        "tickets", "user", "users", "what", "when", "where", "which",
+        "while", "why",
+    }
+)
+_GEO_CITATION_SAFETY_CODES = frozenset(
+    {
+        "nonexistent_internal_links",
+        "placeholder_links_href_hash",
+        "unresolved_placeholders",
+        "unsupported_data_claim",
+        "unknown_chart_placeholders",
+    }
+)
 
 # Markers that turn an otherwise-neutral sentence into a "data claim".
 # A sentence containing one of these is subject to vendor-grounding
@@ -540,6 +583,10 @@ def evaluate_blog_post(
 
     if context.get("require_seo_aeo"):
         findings.extend(_seo_aeo_findings(body, context, policy=policy))
+    if context.get("require_geo"):
+        findings.extend(
+            _geo_findings(body, context, policy=policy, existing_findings=findings)
+        )
 
     return _build_report(
         findings=findings,
@@ -548,6 +595,164 @@ def evaluate_blog_post(
         target_words=target_words,
         quote_count=len(blockquotes),
         policy=policy,
+    )
+
+
+def _geo_findings(
+    body: str,
+    context: Mapping[str, Any],
+    *,
+    policy: QualityPolicy | None,
+    existing_findings: Sequence[GateFinding],
+) -> list[GateFinding]:
+    findings: list[GateFinding] = []
+    data_context = _mapping_dict(context.get("data_context"))
+    topic_terms = _geo_topic_terms(context, data_context)
+    title = _clean_text(context.get("title") or context.get("suggested_title"))
+    faq = _sequence_items(context.get("faq"))
+    if not _geo_entity_clarity(title, body, topic_terms=topic_terms):
+        findings.append(_geo_blocker("geo_entity_clarity_missing", field_name="title"))
+    if not _aeo_structure_detected(body):
+        findings.append(_geo_blocker("geo_answer_first_sections_missing", field_name="content"))
+    if not _geo_citable_section_structure(body, topic_terms=topic_terms):
+        findings.append(_geo_blocker("geo_citable_section_structure_missing", field_name="content"))
+    if not _geo_evidence_specificity(body):
+        findings.append(_geo_blocker("geo_evidence_specificity_missing", field_name="content"))
+    if not _geo_freshness_context(body, data_context):
+        findings.append(_geo_blocker("geo_freshness_context_missing", field_name="content"))
+    min_faq_entries = _threshold(policy, "min_faq_entries")
+    if len(faq) < min_faq_entries:
+        findings.append(_geo_blocker("geo_faq_coverage_missing", field_name="faq"))
+    if not _geo_citation_safety(body, existing_findings):
+        findings.append(_geo_blocker("geo_citation_safety_failed", field_name="content"))
+    return findings
+
+
+def _geo_topic_terms(
+    context: Mapping[str, Any],
+    data_context: Mapping[str, Any],
+) -> tuple[str, ...]:
+    candidates = (
+        data_context.get("vendor"),
+        data_context.get("vendor_name"),
+        data_context.get("product"),
+        data_context.get("product_name"),
+        data_context.get("category"),
+        data_context.get("topic"),
+        context.get("target_keyword"),
+    )
+    terms: list[str] = []
+    for candidate in candidates:
+        text = _clean_text(candidate)
+        if len(text) >= 3 and text.lower() not in {item.lower() for item in terms}:
+            terms.append(text)
+    return tuple(terms)
+
+
+def _geo_entity_clarity(
+    title: str,
+    body: str,
+    *,
+    topic_terms: tuple[str, ...],
+) -> bool:
+    if _VAGUE_H2_RE.search(body):
+        return False
+    searchable = f"{title}\n{body[:600]}".lower()
+    if topic_terms:
+        return any(term.lower() in searchable for term in topic_terms)
+    return _visible_entity_present(title, body[:600])
+
+
+def _visible_entity_present(title: str, opening: str) -> bool:
+    title_entities = _visible_entity_tokens(title)
+    if title_entities:
+        return True
+    opening_entities = _visible_entity_tokens(opening)
+    return any(opening_entities.count(entity) >= 2 for entity in set(opening_entities))
+
+
+def _visible_entity_tokens(value: str) -> list[str]:
+    entities: list[str] = []
+    for match in _VISIBLE_ENTITY_RE.finditer(value):
+        token = match.group(0).strip()
+        if token.lower() not in _GENERIC_ENTITY_WORDS:
+            entities.append(token.lower())
+    return entities
+
+
+def _geo_citable_section_structure(
+    body: str,
+    *,
+    topic_terms: tuple[str, ...],
+) -> bool:
+    sections = _h2_sections(body)
+    if len(sections) < 2:
+        return False
+    return sum(
+        1
+        for heading, section in sections
+        if _geo_self_contained_section(heading, section, topic_terms=topic_terms)
+    ) >= 2
+
+
+def _h2_sections(body: str) -> list[tuple[str, str]]:
+    matches = list(_H2_RE.finditer(body))
+    sections: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else None
+        heading = match.group(0).removeprefix("##").strip()
+        sections.append((heading, body[match.end():next_start]))
+    return sections
+
+
+def _geo_self_contained_section(
+    heading: str,
+    section: str,
+    *,
+    topic_terms: tuple[str, ...],
+) -> bool:
+    first_paragraph = _first_paragraph(section)
+    word_count = len(first_paragraph.split())
+    if not 40 <= word_count <= 120:
+        return False
+    if topic_terms:
+        searchable = f"{heading} {first_paragraph}".lower()
+        if any(term.lower() in searchable for term in topic_terms):
+            return True
+    return _visible_entity_present(heading, first_paragraph)
+
+
+def _geo_evidence_specificity(body: str) -> bool:
+    if _extract_blockquotes(body):
+        return True
+    return bool(_EVIDENCE_RE.search(body))
+
+
+def _geo_freshness_context(body: str, data_context: Mapping[str, Any]) -> bool:
+    for key in ("review_period", "source_report_date", "published_at", "date"):
+        if _clean_text(data_context.get(key)):
+            return True
+    return bool(_FRESHNESS_RE.search(body))
+
+
+def _geo_citation_safety(
+    body: str,
+    existing_findings: Sequence[GateFinding],
+) -> bool:
+    if any(finding.code in _GEO_CITATION_SAFETY_CODES for finding in existing_findings):
+        return False
+    lower_body = body.lower()
+    if "lorem ipsum" in lower_body or "/blog/placeholder" in lower_body:
+        return False
+    return True
+
+
+def _geo_blocker(code: str, *, field_name: str | None = None) -> GateFinding:
+    return GateFinding(
+        code=code,
+        message=code,
+        severity=GateSeverity.BLOCKER,
+        field_name=field_name,
     )
 
 
@@ -645,6 +850,10 @@ def _sequence_items(value: Any) -> tuple[Any, ...]:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return tuple(item for item in value if item)
     return ()
+
+
+def _mapping_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
 
 
 def _aeo_structure_detected(body: str) -> bool:
