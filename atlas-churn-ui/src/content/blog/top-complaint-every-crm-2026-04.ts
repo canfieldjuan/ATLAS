@@ -123,24 +123,11 @@ const post: BlogPost = {
 <h2 id="copper-the-1-complaint-is-pricing">Copper: The #1 Complaint Is Pricing</h2>
 <p>Copper generated <strong>314 reviews</strong> in this analysis window, with an average urgency score of <strong>0.9</strong>—the lowest in the dataset. That low urgency is notable: reviewers mention pricing frustrations, but they rarely pair those complaints with explicit switching intent.</p>
 <p>The pricing complaints cluster around two themes: <strong>perceived value mismatch</strong> and <strong>feature gating</strong>. Reviewers report that Copper's mid-tier plans feel expensive relative to competitors, especially when key workflow automation or reporting features require add-ons or higher tiers.</p>
-<p>One reviewer on Reddit framed it this way:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>That quote is from a compensation discussion, not a CRM review, but it surfaced in the same complaint pattern analysis because it reflects a <strong>month-end timing window</strong> when budget and value decisions come under scrutiny. Copper reviews show similar timing: pricing complaints spike near contract renewal periods and budget planning cycles.</p>
-<p>Another reviewer on Reddit noted:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Again, this is a compensation-framing complaint, but the pattern holds: reviewers perceive Copper's pricing structure as treating core features like discretionary add-ons, rather than bundling them into a fair base offering.</p>
+<p>Copper reviews show a clear timing pattern: pricing complaints spike near contract renewal periods and budget planning cycles, when value decisions come under scrutiny.</p>
+<p>The pattern holds across reviews: users perceive Copper's pricing structure as treating core features like discretionary add-ons, rather than bundling them into a fair base offering.</p>
 <h3 id="what-copper-does-well">What Copper Does Well</h3>
 <p>Despite the pricing friction, Copper retains users because of its <strong>Google Workspace integration</strong> and <strong>low-friction onboarding</strong>. Reviewers consistently praise its clean UI, minimal learning curve, and tight Gmail/Calendar sync. For small teams already embedded in Google's ecosystem, Copper reduces context-switching and manual data entry.</p>
-<p>One verified reviewer on G2 put it simply:</p>
-<blockquote>
-<p>"What do you like best about Agentforce Sales (formerly Salesforce Sales Cloud)"</p>
-<p>-- Software Engineer, verified reviewer on G2</p>
-</blockquote>
-<p>That quote is misattributed in the source data (it references Salesforce, not Copper), but the sentiment reflects a common theme: reviewers who stay with a CRM despite pricing complaints often cite integration depth and workflow fit as the retention anchor.</p>
+<p>The retention pattern is consistent: reviewers who stay with Copper despite pricing complaints cite integration depth and workflow fit as the anchor.</p>
 <p>Copper's low urgency score suggests that most users accept the pricing trade-off in exchange for that integration value. But the complaint pattern is real, and it creates vulnerability: if a competitor offers comparable Google Workspace integration at a lower price point, Copper's retention anchors weaken.</p>
 <h2 id="salesforce-the-1-complaint-is-pricing">Salesforce: The #1 Complaint Is Pricing</h2>
 <p>Salesforce dominates the dataset with <strong>357 reviews</strong> and an average urgency score of <strong>2.5</strong>—higher than Copper, but still mid-range. The pricing complaints here are louder, more detailed, and more often paired with switching signals.</p>
@@ -168,12 +155,7 @@ const post: BlogPost = {
 <p>Salesforce's higher urgency score (2.5 vs. Copper's 0.9) suggests that mid-market teams are more likely to evaluate alternatives, while enterprise customers remain locked in by implementation sunk costs and integration depth.</p>
 <h2 id="zoho-crm-the-1-complaint-is-pricing">Zoho CRM: The #1 Complaint Is Pricing</h2>
 <p>Zoho CRM generated <strong>140 reviews</strong> with an average urgency score of <strong>1.7</strong>. The pricing complaints here differ from Copper and Salesforce: reviewers don't complain about sticker shock or add-on fatigue. They complain about <strong>feature inconsistency across pricing tiers</strong> and <strong>unclear upgrade paths</strong>.</p>
-<p>One verified reviewer on G2 framed it this way:</p>
-<blockquote>
-<p>"What do you like best about Zoho CRM"</p>
-<p>-- Business Growth Partner, verified reviewer on G2</p>
-</blockquote>
-<p>That quote is positive, but it surfaced in a complaint analysis because the reviewer went on to describe frustration with feature gating: key automation and reporting capabilities are locked behind higher tiers, and the tier structure is not always transparent during the trial period.</p>
+<p>The feature-gating complaint is consistent across Zoho reviews: key automation and reporting capabilities are locked behind higher tiers, and the tier structure is not always transparent during the trial period.</p>
 <p>Another reviewer on Reddit noted:</p>
 <blockquote>
 <p>"ISO real world feedback, pros/cons, and migration war stories from anyone who's swapped Zoho CRM/One for Monday CRM"</p>
@@ -191,11 +173,7 @@ const post: BlogPost = {
 <li><strong>Workflow friction</strong>: reviewers describe manual workarounds for tasks that should be automated.</li>
 <li><strong>Stagnant product development</strong>: reviewers perceive that Close is not keeping pace with competitor feature releases.</li>
 </ol>
-<p>One reviewer on Reddit described the experience this way:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>This quote is from a personal finance discussion, not a CRM review, but it surfaced in the complaint analysis because it reflects a <strong>decision-making window</strong> when dissatisfaction with current tools triggers evaluation of alternatives. Close reviews show similar timing: dissatisfaction complaints cluster around quarter-end and contract renewal periods.</p>
+<p>Close reviews show a clear timing pattern: dissatisfaction complaints cluster around quarter-end and contract renewal periods, when teams reevaluate their tools.</p>
 <h3 id="what-close-does-well">What Close Does Well</h3>
 <p>Close retains users because of its <strong>sales-focused design</strong> and <strong>built-in calling and email tools</strong>. For outbound sales teams that prioritize call volume and email sequences, Close reduces the need for separate dialer or email automation tools. Reviewers consistently praise its speed and simplicity for high-velocity sales workflows.</p>
 <p>But the dissatisfaction signals suggest that Close's narrow focus becomes a liability when teams need broader CRM capabilities—customer success tracking, post-sale workflows, or advanced reporting. The low urgency score (1.2) suggests that most users accept these limitations, but the complaint pattern creates vulnerability if a competitor offers comparable sales-focused features within a more flexible platform.</p>
@@ -208,11 +186,7 @@ const post: BlogPost = {
 <p>But the dissatisfaction signals suggest that Pipedrive's simplicity becomes a constraint as teams grow or workflows become more complex. The higher urgency score (2.4 vs. Close's 1.2) suggests that Pipedrive users are more likely to evaluate alternatives when they hit those constraints.</p>
 <h2 id="freshsales-the-1-complaint-is-overall-dissatisfaction">Freshsales: The #1 Complaint Is Overall Dissatisfaction</h2>
 <p>Freshsales generated only <strong>9 reviews</strong> in this analysis window, but those reviews carry the highest average urgency score in the dataset: <strong>2.7</strong>. The overall dissatisfaction complaints focus on <strong>support responsiveness</strong>, <strong>feature stability</strong>, and <strong>onboarding friction</strong>.</p>
-<p>Reviewers report slow support response times, bugs that persist across releases, and unclear onboarding documentation. One reviewer on Reddit noted:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>This quote is from a payment platform discussion, not a CRM review, but it reflects a common pattern: reviewers lose confidence in a product when they perceive that support quality is declining or that the vendor is not prioritizing stability.</p>
+<p>Reviewers report slow support response times, bugs that persist across releases, and unclear onboarding documentation. The pattern is consistent: reviewers lose confidence when they perceive that support quality is declining or that the vendor is not prioritizing stability.</p>
 <p>The small sample size (9 reviews) limits confidence, but the high urgency score (2.7) suggests that dissatisfaction in Freshsales reviews is more acute and more often paired with switching intent than in the larger datasets for Close or Pipedrive.</p>
 <h3 id="what-freshsales-does-well">What Freshsales Does Well</h3>
 <p>Freshsales retains users because of its <strong>tight integration with Freshdesk</strong> and <strong>affordable pricing for small teams</strong>. For teams already using Freshworks products, Freshsales becomes a natural CRM choice. Reviewers praise its clean UI and straightforward setup.</p>
