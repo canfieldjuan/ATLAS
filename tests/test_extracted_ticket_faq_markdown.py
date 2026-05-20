@@ -152,11 +152,188 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     )
 
     assert [item["topic"] for item in result.items] == ["email and profile updates"]
+    assert result.items[0]["question"] == "How do I change my login email?"
+    assert result.items[0]["question_source"] == "customer_wording"
     assert result.items[0]["evidence_count"] == 2
     assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
     assert "How do I change my login email?" in result.markdown
     assert "I need to update the email on my account." in result.markdown
     assert result.output_checks["condensed"] is True
+
+
+def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Export issue",
+                "evidence": [{
+                    "text": "The dashboard export button disappears for analysts.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["topic"] == "reporting friction"
+    assert result.items[0]["question"] == "What are customers asking about reporting friction?"
+    assert result.items[0]["question_source"] == "topic_fallback"
+
+
+def test_build_ticket_faq_markdown_falls_back_from_long_customer_question() -> None:
+    long_question = "How do I " + ("change every nested account setting " * 8).strip() + "?"
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Profile update",
+                "evidence": [{
+                    "text": long_question,
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert len(long_question) > 140
+    assert result.items[0]["topic"] == "email and profile updates"
+    assert result.items[0]["question"] == "What are customers asking about email and profile updates?"
+    assert result.items[0]["question_source"] == "topic_fallback"
+
+
+def test_build_ticket_faq_markdown_extracts_question_sentence_from_ticket_text() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "For context, I tried updating profile settings all morning. How do I reset my password?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_normalizes_missing_question_mark() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "How do I reset my password",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_strips_customer_speaker_label() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "Customer: How do I reset my password",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_ignores_agent_questions() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "Customer: Login is broken. Agent: Can you share a screenshot?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "What are customers asking about login reset?"
+    assert result.items[0]["question_source"] == "topic_fallback"
+
+
+def test_build_ticket_faq_markdown_uses_unlabeled_customer_text_before_agent_label() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "How do I reset my password?\nAgent: Can you share a screenshot?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_keeps_inline_support_colon_as_customer_text() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "evidence": [{
+                    "text": "I copied this from support: How do I reset my password?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "How do I reset my password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_ignores_url_query_markers() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Help article",
+                "evidence": [{
+                    "text": "I opened https://example.com/help?article=123 and the page is blank.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == "What are customers asking about help article?"
+    assert result.items[0]["question_source"] == "topic_fallback"
 
 
 def test_build_ticket_faq_markdown_accepts_host_intent_rules() -> None:
