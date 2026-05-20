@@ -16,6 +16,13 @@ const ATLAS_SAME_AS = [
   'https://www.linkedin.com/company/atlas-intelligence',
 ]
 
+interface SitemapUrl {
+  loc: string
+  lastmod?: string
+  priority: string
+  changefreq: string
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -45,20 +52,24 @@ function sitemapPlugin() {
       }
 
       const blogDir = resolve(import.meta.dirname, 'src/content/blog')
+      const blogDates = new Map<string, string>()
       for (const file of readdirSync(blogDir)) {
         if (file.endsWith('.ts') && file !== 'index.ts') {
           const content = readFileSync(join(blogDir, file), 'utf-8')
-          const m = content.match(/slug:\s*'([^']+)'/)
-          if (m && !slugs.includes(m[1])) slugs.push(m[1])
+          const slug = parseStringField(content, 'slug')
+          const date = parseStringField(content, 'date')
+          if (slug && !slugs.includes(slug)) slugs.push(slug)
+          if (slug && date) blogDates.set(slug, date)
         }
       }
 
       const today = new Date().toISOString().split('T')[0]
-      const urls = [
+      const urls: SitemapUrl[] = [
         { loc: `${BASE_URL}/landing`, priority: '1.0', changefreq: 'weekly' },
         { loc: `${BASE_URL}/blog`, priority: '0.9', changefreq: 'daily' },
         ...slugs.map(slug => ({
           loc: `${BASE_URL}/blog/${slug}`,
+          lastmod: blogDates.get(slug) || today,
           priority: '0.7',
           changefreq: 'monthly',
         })),
@@ -69,7 +80,7 @@ function sitemapPlugin() {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.map(u => `  <url>
     <loc>${u.loc}</loc>
-    <lastmod>${today}</lastmod>
+    <lastmod>${u.lastmod || today}</lastmod>
     <changefreq>${u.changefreq}</changefreq>
     <priority>${u.priority}</priority>
   </url>`).join('\n')}
