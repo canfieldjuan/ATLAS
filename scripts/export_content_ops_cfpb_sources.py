@@ -28,6 +28,8 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_ROWS_SCANNED = 500
 DEFAULT_SOURCE_SYSTEM = "cfpb"
 DEFAULT_SOURCE_TYPE = "support_ticket"
+DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; AtlasContentOps/1.0)"
+DEFAULT_REFERER = "https://www.consumerfinance.gov/data-research/consumer-complaints/"
 
 
 FIELD_COMPLAINT_ID = "Complaint ID"
@@ -129,6 +131,7 @@ def build_cfpb_query(
     date_received_min: str | None = None,
     date_received_max: str | None = None,
     limit: int = DEFAULT_LIMIT,
+    require_narrative: bool = True,
 ) -> dict[str, Any]:
     """Build CFPB complaint API query params."""
 
@@ -139,6 +142,8 @@ def build_cfpb_query(
         "sort": "created_date_desc",
         "size": max(int(limit), 1),
     }
+    if require_narrative:
+        params["has_narrative"] = "true"
     for key, value in (
         ("company", company),
         ("product", product),
@@ -158,6 +163,21 @@ def build_cfpb_url(api_url: str, params: Mapping[str, Any]) -> str:
     return f"{api_url}{separator}{urlencode(params, doseq=True)}"
 
 
+def build_cfpb_headers(
+    *,
+    user_agent: str = DEFAULT_USER_AGENT,
+    referer: str = DEFAULT_REFERER,
+) -> dict[str, str]:
+    headers = {
+        "User-Agent": _clean_text(user_agent) or DEFAULT_USER_AGENT,
+        "Accept": "text/csv,*/*",
+    }
+    clean_referer = _clean_text(referer)
+    if clean_referer:
+        headers["Referer"] = clean_referer
+    return headers
+
+
 def fetch_cfpb_source_rows(
     *,
     api_url: str = DEFAULT_API_URL,
@@ -173,6 +193,9 @@ def fetch_cfpb_source_rows(
     source_system: str = DEFAULT_SOURCE_SYSTEM,
     source_type: str = DEFAULT_SOURCE_TYPE,
     detail_url_base: str = DEFAULT_DETAIL_URL_BASE,
+    user_agent: str = DEFAULT_USER_AGENT,
+    referer: str = DEFAULT_REFERER,
+    require_narrative: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch CFPB complaint rows and return Content Ops source rows."""
 
@@ -184,10 +207,11 @@ def fetch_cfpb_source_rows(
         date_received_min=date_received_min,
         date_received_max=date_received_max,
         limit=max(limit, max_rows_scanned),
+        require_narrative=require_narrative,
     )
     request = Request(
         build_cfpb_url(api_url, params),
-        headers={"User-Agent": "Atlas-Content-Ops-CFPB-Source/1.0"},
+        headers=build_cfpb_headers(user_agent=user_agent, referer=referer),
     )
     rows: list[dict[str, Any]] = []
     with urlopen(request, timeout=timeout) as response:
@@ -228,6 +252,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-system", default=DEFAULT_SOURCE_SYSTEM)
     parser.add_argument("--source-type", default=DEFAULT_SOURCE_TYPE)
     parser.add_argument("--detail-url-base", default=DEFAULT_DETAIL_URL_BASE)
+    parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+    parser.add_argument("--referer", default=DEFAULT_REFERER)
+    parser.add_argument(
+        "--include-rows-without-narrative",
+        action="store_true",
+        help="Do not add CFPB's has_narrative=true query filter.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     return parser.parse_args(argv)
 
@@ -260,6 +291,9 @@ def _main(argv: list[str] | None = None) -> int:
         source_system=str(args.source_system),
         source_type=str(args.source_type),
         detail_url_base=str(args.detail_url_base),
+        user_agent=str(args.user_agent),
+        referer=str(args.referer),
+        require_narrative=not bool(args.include_rows_without_narrative),
     )
     payload = render_jsonl(rows)
     if args.output:
