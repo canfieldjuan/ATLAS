@@ -26,6 +26,7 @@ export interface OutputDefinitionView {
   implemented: boolean
   estimatedUnitCostUsd: number
   defaultParseRetryAttempts: number
+  defaultQualityRepairAttempts: number
   estimatedRetryAdjustedUnitCostUsd: number
   requiredInputs: string[]
   defaultMaxItems: number

@@ -98,6 +98,7 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
                 "implemented": item.implemented,
                 "estimated_unit_cost_usd": item.estimated_unit_cost_usd,
                 "default_parse_retry_attempts": item.default_parse_retry_attempts,
+                "default_quality_repair_attempts": item.default_quality_repair_attempts,
                 "estimated_retry_adjusted_unit_cost_usd": round(
                     retry_adjusted_unit_cost_usd(item),
                     4,
