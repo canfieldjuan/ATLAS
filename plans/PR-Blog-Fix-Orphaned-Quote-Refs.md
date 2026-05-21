@@ -79,6 +79,6 @@ prerender, sitemap, and FTC-disclosure wiring are unaffected.
 
 | Area | Estimated LOC |
 |---|---:|
-| 5 blog `.ts` posts (7 surgical clause edits) | ~14 |
-| Plan doc | ~95 |
-| **Total** | **~110** |
+| 5 blog `.ts` posts (7 surgical clause edits) | ~12 |
+| Plan doc | ~86 |
+| **Total** | **~98** |
