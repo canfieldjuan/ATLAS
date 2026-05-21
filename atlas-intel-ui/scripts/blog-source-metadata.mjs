@@ -112,7 +112,9 @@ function assertKnownChartPlaceholders(content, charts, slug) {
 
 export function collectBlogSourceMetadata(rootDir) {
   const blogDir = join(rootDir, 'src/content/blog')
-  if (!existsSync(blogDir)) return []
+  if (!existsSync(blogDir)) {
+    throw new Error(`Missing blog source directory: ${blogDir}`)
+  }
 
   const posts = []
   for (const file of readdirSync(blogDir).sort()) {
