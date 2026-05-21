@@ -308,6 +308,30 @@ python scripts/smoke_content_ops_cfpb_faq_markdown.py \
   --json
 ```
 
+For a larger confidence run, raise both the requested source count and the scan
+cap, and write every artifact to disk:
+
+```bash
+python scripts/smoke_content_ops_cfpb_faq_markdown.py \
+  --search-term fees \
+  --limit 1000 \
+  --max-rows-scanned 5000 \
+  --max-items 20 \
+  --support-contact "https://support.example.com" \
+  --output-source-rows cfpb_sources_1000.jsonl \
+  --output-markdown cfpb_faq_1000.md \
+  --json > cfpb_faq_1000.summary.json
+```
+
+The JSON summary includes `source_profile` so operators can separate source
+prep from FAQ generation. Check `usable_source_count` against the requested
+limit first. If it is low while `raw_row_count` is high, inspect
+`missing_narrative_count`, `missing_complaint_id_count`, and
+`skipped_row_count` before changing the generator. If
+`stop_reason="max_rows_scanned"`, increase `--max-rows-scanned` or narrow the
+CFPB filters. If `usable_source_count` is healthy but FAQ output checks fail,
+investigate the FAQ grouping/output path.
+
 ```bash
 python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --company "Example Bank" \

@@ -560,6 +560,29 @@ python scripts/export_content_ops_cfpb_sources.py \
   --output cfpb_sources.jsonl
 ```
 
+To prove large FAQ generation before importing into a database, run the CFPB FAQ
+smoke with a production-sized request and keep the summary payload:
+
+```bash
+python scripts/smoke_content_ops_cfpb_faq_markdown.py \
+  --search-term fees \
+  --limit 1000 \
+  --max-rows-scanned 5000 \
+  --max-items 20 \
+  --support-contact "https://support.example.com" \
+  --output-source-rows cfpb_sources_1000.jsonl \
+  --output-markdown cfpb_faq_1000.md \
+  --json > cfpb_faq_1000.summary.json
+```
+
+Read `source_profile` in the summary before debugging the FAQ generator.
+`raw_row_count` is the number of CFPB CSV rows scanned,
+`usable_source_count` is the number that became source rows, and
+`skipped_row_count` is explained by `missing_narrative_count`,
+`missing_complaint_id_count`, and `skipped_other_count`. A
+`stop_reason` of `max_rows_scanned` means the scan cap stopped extraction before
+enough usable rows were found.
+
 The DB smoke fetches CFPB rows, inspects source-row ingestion, imports them
 under the provided account id, and persists generated drafts through the
 Postgres runner. It defaults to offline generation; pass `--llm pipeline` to
