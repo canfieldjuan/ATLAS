@@ -72,6 +72,29 @@ def test_packaged_landing_page_prompt_frames_support_tickets_as_service_evidence
     assert "evaluating, buying, switching, or considering" in prompt
 
 
+def test_packaged_landing_page_prompt_matches_readiness_gate_contract() -> None:
+    prompt = get_skill_registry().get_prompt("digest/landing_page_generation")
+
+    assert prompt is not None
+    assert "Do not use generic slugs" in prompt
+    assert "`meta.title_tag`: always include" in prompt
+    assert "Do not output placeholder URLs" in prompt
+    assert "Do not use generic headings" in prompt
+    assert "first viewport must make it clear" in prompt
+    assert "Include a clear problem section" in prompt
+    assert "Include objection coverage" in prompt
+    assert "Do not leave unresolved placeholders" in prompt
+
+
+def test_packaged_landing_page_prompt_prevents_fake_proof() -> None:
+    prompt = get_skill_registry().get_prompt("digest/landing_page_generation")
+
+    assert prompt is not None
+    assert "Do not invent reference ids" in prompt
+    assert "If the campaign does not provide proof" in prompt
+    assert "fake social proof" in prompt
+
+
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:
     skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
     skill_path.parent.mkdir()
