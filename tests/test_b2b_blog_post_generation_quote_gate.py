@@ -36,6 +36,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pricing_reality_check,
     _blueprint_vendor_showdown,
     _is_placeholder_partner,
+    _looks_like_orphan_quote_reference,
     _pick_affiliate_partner_for_vendors,
     _quote_grade_blueprint_phrases,
     _remove_unmatched_quote_lines,
@@ -594,6 +595,67 @@ def test_offtopic_pattern_does_not_sweep_nondisclaimer_following_prose():
     assert "ungrounded quote" not in out  # block stripped (fail-closed)
     # Not disclaimer-shaped -> preserved.
     assert "Buyers value simplicity rather than feature depth" in out
+
+
+def test_orphan_quote_reference_swept_with_block():
+    """A stripped blockquote followed by a paragraph that back-references the
+    quote ("This quote ...", "The excerpt ...", "quoted earlier") is swept
+    with the block -- the reference dangles once the quote is gone."""
+    for follow in (
+        "This quote shows an active evaluation in progress.",
+        "The excerpt cuts off, but the signal is clear: teams compare costs.",
+        "The Reddit reviewer quoted earlier described it as the worst so far.",
+        # "the witness" prefix must NOT suppress a genuine orphan ref -- the
+        # guard only excludes the aggregate-noun forms (Codex review on #728).
+        "The witness quoted earlier described the rollout as a disaster.",
+    ):
+        markdown = (
+            "## Section\n\n"
+            "> a quote that gets stripped (empty source pool)\n\n"
+            f"{follow}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "gets stripped" not in out
+        assert follow not in out, follow
+        assert "## Section" in out
+
+
+def test_quote_reference_after_kept_block_survives():
+    """A quote-reference-shaped follow-on after a KEPT (grounded) block must
+    survive -- the quote it references is present, so the reference is
+    legitimate (the #723 close-vs-zoho 176/205 / slack 67/110 case). The line
+    DOES match the matcher, so the only thing protecting it is the sweep
+    firing on STRIPPED blocks alone; this pins that protection."""
+    follow = "This quote reflects the evaluation fatigue common in a high-churn category."
+    assert _looks_like_orphan_quote_reference(follow)  # matcher would flag it...
+    source = ["evaluation fatigue is common in this high-churn category"]
+    markdown = (
+        "## Section\n\n"
+        "> evaluation fatigue is common in this high-churn category\n\n"
+        f"{follow}\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 0                       # block grounds -> nothing stripped
+    assert "evaluation fatigue is common" in out  # the quote is kept
+    assert follow in out                      # ...but the reference legitimately survives
+
+
+def test_quote_reference_does_not_sweep_generic_or_witness_followon():
+    """False-positive guard: a generic follow-on or an aggregate
+    "The witness evidence ..." reference after a stripped block is preserved
+    -- neither is an orphaned quote back-reference."""
+    for follow in (
+        "This pattern recurs across the dataset.",
+        "The witness evidence shows workflow migration at the team level.",
+    ):
+        markdown = (
+            "## Section\n\n"
+            "> an ungrounded quote\n\n"
+            f"{follow}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "ungrounded quote" not in out  # block still stripped
+        assert follow in out, follow          # follow-on preserved
 
 
 def test_orphan_prose_preserved_for_kept_blocks():
