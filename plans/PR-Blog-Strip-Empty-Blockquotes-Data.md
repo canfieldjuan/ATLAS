@@ -173,6 +173,6 @@ No generator code changes -- the producer already does this for new posts.
 
 | Area | Estimated LOC |
 |---|---:|
-| 43 blog `.ts` posts (170 blockquotes + lead-ins removed) | ~710 |
-| Plan doc | ~150 |
-| **Total** | **~860** |
+| 43 blog `.ts` posts (170 blockquotes + 12 lead-in trims + copper repair) | ~780 |
+| Plan doc | ~165 |
+| **Total** | **~945** |
