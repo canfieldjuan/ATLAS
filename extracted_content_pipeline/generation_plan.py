@@ -8,7 +8,7 @@ call. Thrilling bureaucracy, but the useful kind.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any, Mapping, Sequence
 
@@ -31,6 +31,9 @@ from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
 from .ticket_faq_markdown import TicketFAQMarkdownConfig
+
+
+_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
 
 
 @dataclass(frozen=True)
@@ -159,20 +162,23 @@ def _validate_reasoning_runtime_request(
 
 
 def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageGenerationConfig:
-    """Return defaults; the request is intentionally not consumed.
+    """Return landing-page generation config for a control-surface request.
 
-    Other ``_*_config_for_request`` helpers thread ``request.inputs``
-    or ``request.limit`` into their config. Landing pages are
-    per-campaign single-shot (one MarketingCampaign in, one draft
-    out) so ``limit`` doesn't apply, and per-call inputs land on the
+    Landing pages are per-campaign single-shot (one MarketingCampaign in, one
+    draft out) so ``limit`` doesn't apply, and per-call copy inputs land on the
     ``MarketingCampaign`` payload built by
     ``content_ops_execution._marketing_campaign_from_inputs`` rather
-    than on the config dataclass. Discarding the request here is
-    deliberate -- documented to close the audit-trail gap on the
-    helper-shape asymmetry (PR-Audit-MINOR-Batch-3).
+    than on the config dataclass.
     """
-    del request  # intentional; see docstring
-    return LandingPageGenerationConfig()
+    defaults = LandingPageGenerationConfig()
+    repair_attempts = _nonnegative_int_input(
+        request.inputs,
+        "landing_page_quality_repair_attempts",
+        max_value=_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
+    )
+    if repair_attempts is None:
+        return defaults
+    return replace(defaults, quality_repair_attempts=repair_attempts)
 
 
 def _sales_brief_config_for_request(request: ContentOpsRequest) -> SalesBriefGenerationConfig:
@@ -246,6 +252,28 @@ def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
         raise ValueError(f"{key} must be an integer") from None
     if value < 1:
         raise ValueError(f"{key} must be at least 1; got {value}")
+    return value
+
+
+def _nonnegative_int_input(
+    inputs: Mapping[str, Any],
+    key: str,
+    *,
+    max_value: int | None = None,
+) -> int | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, (bool, float)):
+        raise ValueError(f"{key} must be an integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be an integer") from None
+    if value < 0:
+        raise ValueError(f"{key} must be at least 0; got {value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"{key} must be at most {max_value}; got {value}")
     return value
 
 

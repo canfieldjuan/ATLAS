@@ -349,6 +349,75 @@ def test_plan_maps_landing_page_to_landing_page_generation_service():
     }
 
 
+def test_plan_threads_landing_page_quality_repair_attempt_override_zero():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 0,
+            },
+        }
+    )
+
+    assert plan["steps"][0]["config"]["quality_repair_attempts"] == 0
+
+
+def test_plan_threads_landing_page_quality_repair_attempt_override_string():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": "2",
+            },
+        }
+    )
+
+    assert plan["steps"][0]["config"]["quality_repair_attempts"] == 2
+
+
+def test_plan_threads_landing_page_quality_repair_attempt_override_max():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 10,
+            },
+        }
+    )
+
+    assert plan["steps"][0]["config"]["quality_repair_attempts"] == 10
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (-1, "landing_page_quality_repair_attempts must be at least 0"),
+        (11, "landing_page_quality_repair_attempts must be at most 10"),
+        (True, "landing_page_quality_repair_attempts must be an integer"),
+        (1.5, "landing_page_quality_repair_attempts must be an integer"),
+        ("many", "landing_page_quality_repair_attempts must be an integer"),
+    ],
+)
+def test_plan_rejects_invalid_landing_page_quality_repair_attempt_override(value, message):
+    with pytest.raises(ValueError, match=message):
+        build_generation_plan_from_mapping(
+            {
+                "outputs": ["landing_page"],
+                "inputs": {
+                    "offer": "Churn audit",
+                    "audience": "B2B SaaS founders",
+                    "landing_page_quality_repair_attempts": value,
+                },
+            }
+        )
+
+
 def test_plan_maps_sales_brief_to_sales_brief_generation_service():
     plan = build_generation_plan_from_mapping(
         {

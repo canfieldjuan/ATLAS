@@ -1026,6 +1026,27 @@ async def test_execute_threads_quality_repair_attempts_into_landing_page() -> No
 
 
 @pytest.mark.asyncio
+async def test_execute_threads_quality_repair_attempt_override_into_landing_page() -> None:
+    landing = _LandingPageService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "campaign_name": "Q3",
+                "offer": "Audit",
+                "audience": "VPs",
+                "landing_page_quality_repair_attempts": 0,
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    call = landing.calls[0]
+    assert call["quality_repair_attempts"] == 0
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
 async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> None:
     """Audit MAJOR fix: prior shape dumped every non-{name, persona,
     value_prop, vendors, categories, tags} input field into
