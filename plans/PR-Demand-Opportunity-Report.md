@@ -22,17 +22,22 @@ Pilot category: **CRM** (1,959 enriched reviews).
 ## Scope (this PR)
 
 This PR checks in the plan only; the implementation follows in a second PR so
-the report shape can be reviewed first.
+the report shape was reviewed first. The plan was checked in via #708; this
+PR adds the implementation:
 
-1. **This plan doc**, `plans/PR-Demand-Opportunity-Report.md`.
-
-The implementation (next PR) is an on-demand script -- proposed
-`scripts/demand_opportunity_report.py --category=CRM` -- following the
-existing `scripts/audit_*` / `scripts/check_*` convention (reads the live DB
-via `init_database()`, prints a markdown report; no cron task, no writes).
+1. `scripts/demand_opportunity_report.py --category=<cat> [--json]` -- the
+   on-demand, read-only report (reads the live DB via `init_database()`,
+   prints markdown or JSON; no cron task, no writes), following the existing
+   `scripts/audit_*` / `scripts/check_*` convention.
+2. `tests/test_demand_opportunity_report.py` -- unit tests for the pure
+   aggregation, the relevance filter, the baseline exclusion, and the rollups.
+3. Plan-doc update recording the relevance filter (added after the first CRM
+   run surfaced the contamination) and the real verification results.
 
 ### Files touched
 
+- `scripts/demand_opportunity_report.py`
+- `tests/test_demand_opportunity_report.py`
 - `plans/PR-Demand-Opportunity-Report.md`
 
 ## Mechanism
@@ -65,18 +70,53 @@ multi-fields:
 cross-vendor breadth = the share of distinct category vendors whose reviews
 show the theme. A pain that is widespread, intense, AND unsolved by every
 vendor in the category is a market gap (high opportunity); a pain isolated to
-one weak vendor is just that vendor's problem (low opportunity). Themes are
-discounted when the same vendors show strong `positive_aspects` on the
-adjacent capability.
+one weak vendor is just that vendor's problem (low opportunity). `positive_aspects`
+are not folded into the numeric score (mapping a positive to the pain theme it
+offsets is fuzzy); instead they are surfaced verbatim in a "what already works
+well" section as a do-NOT-build counter-signal the operator weighs by hand.
+
+**Competitor normalization.** `competitors_mentioned[].name` is tallied by a
+normalized key (case-folded, trailing " CRM" stripped) so variants like
+`HubSpot` / `Hubspot` / `HubSpot CRM` collapse to one entry (HubSpot: 49, not
+a split 37/7/4/1); the most frequent raw spelling is shown. A small curated
+`_VENDOR_ALIASES` map additionally folds a bare common-word spelling into its
+canonical product name where the corpus uses both interchangeably -- e.g.
+`Monday` -> `Monday.com` (PM smoke test: merges 19+17 into one 36x entry),
+while a distinct variant like `Monday dev` stays separate. Extend the map as
+new split-variant vendors surface per category.
 
 **Output (the structured report).** Markdown, per category, with:
 - Ranked opportunity table (theme, frequency, mean urgency, vendor breadth,
   opportunity score).
 - Top feature gaps (verbatim, de-duplicated, with counts).
+- What already works well (top `positive_aspects`, de-duplicated) -- a
+  do-NOT-build counter-signal.
 - Pricing-pain summary (price-increase mentions, spend ranges).
 - Per-theme evidence: 2-3 `quotable_phrases` / complaint spans with the
   review source, so every claim is traceable (no fabricated numbers).
 - Competitor map: which alternatives are cited and in what context.
+
+**Relevance filter (added after the first CRM run).** The corpus carries the
+common-word-vendor contamination (see memory: common-word-vendor-contamination):
+the first CRM run surfaced video-game crafting quotes ("30 stone axes", "150
+durability", "silver per day") in the pricing-pain evidence, from the "Copper"
+and "Close" vendors keyword-matching unrelated content. A high-confidence
+off-topic marker set (gaming/crafting/physical-material terms that never occur
+in genuine SaaS reviews) excludes a contaminated review *before* any counting,
+so it neither inflates themes nor surfaces as evidence; the count and affected
+vendors are reported in the header for transparency. The markers are
+deliberately specific to avoid false-dropping legitimate reviews (a "Silver
+plan" tier or a "durable workflow" survive). The real fix is upstream
+vendor-name disambiguation; this keeps the report honest until then.
+
+**Filter limitation (known).** The markers are tuned to the contamination
+*shapes* actually observed for CRM (gaming/crafting, physical materials,
+audio) -- they are not a general off-topic classifier. A different off-topic
+domain can still leak (e.g. a stray medical "Mirena" mention surfaced in the
+CRM competitor list from a "Close"-keyword match). Per-category review of the
+output, plus marker additions when a new shape appears, is expected until the
+upstream disambiguation lands; the report header's dropped-count makes the
+filter's reach visible.
 
 **Human-in-the-loop.** Run on demand per category; the operator reads the
 report and refines or re-scopes -- nothing is auto-published. This matches the
@@ -94,6 +134,19 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
 - **Multi-field, not `pain_category`.** Ranking the coarse single field would
   return "overall_dissatisfaction" as the top "opportunity", which is useless.
   The structured fields give actionable themes.
+- **Baseline counts only sole-catch-all reviews.** A review is added to the
+  `overall_dissatisfaction` baseline only when that is its *sole* pain; if it
+  also carries an actionable theme it is ranked there instead, so a review is
+  never counted in both the baseline and a theme (the "carry only" wording
+  stays true; baseline + distinct ranked reviews == total).
+- **Vendorless reviews are excluded, not counted.** A review with no primary
+  vendor cannot contribute to cross-vendor breadth (core to the heuristic), so
+  it is dropped up front with a reported count rather than inflating a theme's
+  volume against unchanged breadth; the breadth denominator is the real vendor
+  count, never coerced to 1.
+- **Strict urgency guard in SQL.** The numeric filter is `^[0-9]+(\.[0-9]+)?$`
+  so a malformed value (`.`, `1.2.3`) falls to NULL instead of passing the
+  guard and aborting the whole `SELECT` on the cast.
 - **Read-only, on-demand script.** No cron registration, no DB writes, no new
   tables -- it is an analysis tool, not a pipeline stage. Lives in `scripts/`.
 - **Evidence-traceable.** Every ranked theme carries real review quotes/spans;
@@ -114,16 +167,29 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
 
 ## Verification
 
-- This PR: `scripts/local_pr_review.sh` -> plan shape, plan/code consistency,
+- `tests/test_demand_opportunity_report.py` run via pytest -> `8 passed`
+  (off-topic detection + false-positive guard, off-topic exclusion + count,
+  baseline excludes mixed reviews, vendorless exclusion, breadth/urgency
+  ranking with a pinned numeric `opportunity_score` (16.0), gap/competitor +
+  vendor-alias rollup, and a `render_markdown` section check).
+- `scripts/demand_opportunity_report.py --category=CRM` against the live DB ->
+  1,954 reviews / 8 vendors (5 off-topic dropped: Copper:4, Close:1). Ranked
+  themes match known CRM pains: pricing (365 reviews, urgency 4.35, 8/8
+  vendors, top opportunity), support, ux, then features/integration/onboarding;
+  contract_lock_in surfaces as the most *intense* (urgency 6.68).
+  "overall_dissatisfaction" is held out as a baseline, not ranked. Pricing-pain
+  evidence is clean SaaS pricing after the filter (no video-game quotes).
+  Competitor map is normalized (HubSpot 49, merged from 4 spelling variants);
+  the "what works well" section surfaces top positive_aspects (Easy to use 11x,
+  customization, clean interface).
+- `scripts/local_pr_review.sh` -> plan shape, plan/code consistency,
   `git diff --check`.
-- Implementation PR: run `--category=CRM` against the live DB; sanity-check the
-  ranked output against known CRM pains (pricing, UX, support surface as real
-  themes; "overall_dissatisfaction" does NOT dominate the actionable list);
-  confirm every ranked theme cites a real review span.
 
 ## Estimated diff size
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~120 |
-| **Total** | **~120** |
+| `scripts/demand_opportunity_report.py` | ~410 |
+| `tests/test_demand_opportunity_report.py` | ~175 |
+| Plan doc (this update) | ~120 |
+| **Total** | **~705** |
