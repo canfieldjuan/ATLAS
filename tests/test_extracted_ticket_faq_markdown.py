@@ -630,6 +630,125 @@ def test_build_ticket_faq_markdown_preserves_top_group_when_single_item_cap_over
     }
 
 
+def test_build_ticket_faq_markdown_handles_1000_cfpb_style_rows_without_archive() -> None:
+    rows = []
+    next_id = 1
+
+    def add_rows(count: int, *, source_title: str, text: str, pain_point: str | None = None) -> None:
+        nonlocal next_id
+        for index in range(count):
+            source_id = f"cfpb:{next_id}"
+            next_id += 1
+            row = {
+                "source_type": "support_ticket",
+                "source_title": source_title,
+                "evidence": [{
+                    "text": text.format(index=index + 1),
+                    "source_id": source_id,
+                    "source_type": "support_ticket",
+                    "source_title": source_title,
+                }],
+            }
+            if pain_point:
+                row["pain_points"] = [pain_point]
+            rows.append(row)
+
+    add_rows(
+        600,
+        source_title="Credit reporting, credit repair services, or other personal consumer reports - Incorrect information on your report",
+        text="My credit report has incorrect information on account {index}.",
+    )
+    add_rows(
+        150,
+        source_title="Debt collection - Attempts to collect debt not owed",
+        text="A debt collector says I owe a debt I do not recognize for account {index}.",
+    )
+    add_rows(
+        100,
+        source_title="Credit card or prepaid card - Fees or interest",
+        text="I paid the XX/XX/2019 credit card installment of {{$100.00}} but it was not credited.",
+    )
+    add_rows(
+        50,
+        source_title="Mortgage - Trouble during payment process",
+        text="My mortgage servicer will not explain the payment issue for loan {index}.",
+    )
+    add_rows(
+        30,
+        source_title="Checking or savings account - Opening an account",
+        text="I was trying to open an account and the bank declined me because of early warning services.",
+    )
+    add_rows(
+        20,
+        source_title="Checking or savings account - Closing an account",
+        text="I need to close an account and recover the remaining balance.",
+    )
+    add_rows(
+        15,
+        source_title="Credit card or prepaid card - Getting a credit card",
+        text="I applied for a credit card and the issuer could not confirm my identity.",
+    )
+    add_rows(
+        10,
+        source_title="Credit card or prepaid card - Advertising",
+        text="The advertising offer for this prepaid card seems wrong.",
+    )
+    add_rows(
+        8,
+        source_title="Checking or savings account - Managing an account",
+        text="The bank website malfunction blocked my account activity.",
+        pain_point="Managing an account",
+    )
+    add_rows(
+        7,
+        source_title="Checking or savings account - Customer service",
+        text="I am not \" allowed '' to speak to a human.",
+        pain_point="Customer service",
+    )
+    add_rows(
+        5,
+        source_title="Money transfer, virtual currency, or money service - Other transaction problem",
+        text="A transaction was scheduled incorrectly and the company will not explain it.",
+    )
+    add_rows(
+        3,
+        source_title="Money transfer, virtual currency, or money service - Other service problem",
+        text="I received an email with another customer's information.",
+    )
+    add_rows(
+        2,
+        source_title="Money transfer, virtual currency, or money service - Wire transfer problem",
+        text="The transfer was delayed and no one explained the status.",
+        pain_point="Wire transfer problem",
+    )
+
+    assert len(rows) == 1000
+
+    result = build_ticket_faq_markdown(
+        rows,
+        max_items=12,
+        max_evidence_per_item=5,
+    )
+
+    questions = [item["question"] for item in result.items]
+    opening = next(item for item in result.items if item["topic"] == "opening an account")
+
+    assert result.ticket_source_count == 1000
+    assert len(result.items) == 12
+    assert sum(item["ticket_count"] for item in result.items) == 1000
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert all(item["question_source"] != "topic_fallback" for item in result.items)
+    assert all("XX/XX/2019" not in question for question in questions)
+    assert all("allowed ''" not in question for question in questions)
+    assert opening["steps"][0].startswith("Gather the application")
+    assert "Export or Download" not in " ".join(opening["steps"])
+    assert "export is missing" not in opening["when_to_contact_support"]
+
+
 def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_account_topics() -> None:
     result = build_ticket_faq_markdown(
         [
