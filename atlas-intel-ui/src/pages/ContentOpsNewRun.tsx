@@ -39,6 +39,13 @@ import {
   type GenerationPlan,
   type GenerationPlanStep,
 } from '../domain/contentOps'
+import {
+  INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE,
+  LANDING_PAGE_QUALITY_REPAIR_INPUT,
+  LANDING_PAGE_QUALITY_REPAIR_OPTIONS,
+  MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
+  normalizeLandingPageRepairAttemptValue,
+} from '../domain/contentOps/repairAttempts'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
 
@@ -92,15 +99,6 @@ const DEFAULT_INGESTION_DEFAULT_FIELDS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_SOURCE = 'manual'
 const INGESTION_SAMPLE_LIMIT = 5
 const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
-const LANDING_PAGE_QUALITY_REPAIR_INPUT =
-  'landing_page_quality_repair_attempts'
-const MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
-const INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE = '__invalid__'
-const LANDING_PAGE_QUALITY_REPAIR_OPTIONS = Array.from(
-  { length: MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS + 1 },
-  (_, index) => String(index),
-)
-
 export default function ContentOpsNewRun() {
   const {
     data: wireCatalog,
@@ -1457,37 +1455,6 @@ function updateLandingPageRepairAttemptsInputJson(
   }
 
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
-}
-
-function normalizeLandingPageRepairAttemptValue(
-  value: unknown,
-): { ok: true; value: number } | { ok: false } {
-  if (
-    typeof value === 'boolean' ||
-    (typeof value === 'number' && !Number.isInteger(value))
-  ) {
-    return { ok: false }
-  }
-
-  let normalized: number
-  if (typeof value === 'number') {
-    normalized = value
-  } else if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if (!/^\d+$/.test(trimmed)) return { ok: false }
-    normalized = Number(trimmed)
-  } else {
-    return { ok: false }
-  }
-
-  if (
-    !Number.isSafeInteger(normalized) ||
-    normalized < 0 ||
-    normalized > MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS
-  ) {
-    return { ok: false }
-  }
-  return { ok: true, value: normalized }
 }
 
 function parseIngestionRowsJson(value: string): ParsedIngestionRows {

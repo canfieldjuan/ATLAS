@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
-_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
-_LANDING_PAGE_QUALITY_REPAIR_INPUT = "landing_page_quality_repair_attempts"
+LANDING_PAGE_QUALITY_REPAIR_INPUT = "landing_page_quality_repair_attempts"
+MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
 
 
 @dataclass(frozen=True)
@@ -31,8 +31,8 @@ class OutputDefinition:
     # Must mirror each *GenerationConfig.parse_retry_attempts default used in
     # generation_plan.py. If a service raises retries, update this field too.
     default_parse_retry_attempts: int = 1
-    # Must mirror each GenerationConfig quality-repair default. Only landing
-    # pages currently have a quality-repair LLM loop.
+    # Contract-tested against the landing-page generation config default.
+    # Only landing pages currently have a quality-repair LLM loop.
     default_quality_repair_attempts: int = 0
 
 
@@ -306,6 +306,16 @@ def _nonnegative_int_input(
     return value
 
 
+def landing_page_quality_repair_attempt_input(inputs: Mapping[str, Any]) -> int | None:
+    """Return the landing-page quality repair-attempt override, if present."""
+
+    return _nonnegative_int_input(
+        inputs,
+        LANDING_PAGE_QUALITY_REPAIR_INPUT,
+        max_value=MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
+    )
+
+
 def _quality_repair_attempts_for_output(
     output_id: str,
     definition: OutputDefinition,
@@ -319,11 +329,7 @@ def _quality_repair_attempts_for_output(
         return 0
     repair_attempts = definition.default_quality_repair_attempts
     if output_id == "landing_page":
-        override = _nonnegative_int_input(
-            inputs,
-            _LANDING_PAGE_QUALITY_REPAIR_INPUT,
-            max_value=_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
-        )
+        override = landing_page_quality_repair_attempt_input(inputs)
         if override is not None:
             repair_attempts = override
     return max(0, int(repair_attempts))

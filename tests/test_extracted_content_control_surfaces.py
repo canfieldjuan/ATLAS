@@ -1,9 +1,23 @@
+from pathlib import Path
+import re
+
 import pytest
 
 from extracted_content_pipeline.control_surfaces import (
+    LANDING_PAGE_QUALITY_REPAIR_INPUT,
+    MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
+    OUTPUT_CATALOG,
+    landing_page_quality_repair_attempt_input,
     normalize_outputs,
     preview_from_mapping,
     request_from_mapping,
+)
+from extracted_content_pipeline.landing_page_generation import LandingPageGenerationConfig
+
+
+ROOT = Path(__file__).resolve().parents[1]
+UI_REPAIR_ATTEMPTS_CONTRACT = (
+    ROOT / "atlas-intel-ui/src/domain/contentOps/repairAttempts.ts"
 )
 
 
@@ -222,6 +236,27 @@ def test_preview_landing_page_cost_accepts_quality_repair_attempt_override_max()
 
     assert preview["can_run"] is True
     assert preview["estimated_cost_usd"] == 14.3
+
+
+def test_landing_page_repair_attempt_contract_matches_generation_and_ui():
+    ui_contract = UI_REPAIR_ATTEMPTS_CONTRACT.read_text(encoding="utf-8")
+    match = re.search(
+        r"MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS\s*=\s*(\d+)",
+        ui_contract,
+    )
+    assert match is not None
+    assert int(match.group(1)) == MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS
+    assert LANDING_PAGE_QUALITY_REPAIR_INPUT in ui_contract
+    assert (
+        landing_page_quality_repair_attempt_input({
+            LANDING_PAGE_QUALITY_REPAIR_INPUT: str(MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS)
+        })
+        == MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS
+    )
+    assert (
+        OUTPUT_CATALOG["landing_page"].default_quality_repair_attempts
+        == LandingPageGenerationConfig().quality_repair_attempts
+    )
 
 
 def test_preview_landing_page_repair_cost_can_block_budget():

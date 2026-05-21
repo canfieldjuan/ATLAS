@@ -17,6 +17,7 @@ from .campaign_generation import CampaignGenerationConfig
 from .control_surfaces import (
     ContentOpsRequest,
     ControlSurfacePreview,
+    landing_page_quality_repair_attempt_input,
     preview_control_surface,
     request_from_mapping,
 )
@@ -31,9 +32,6 @@ from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
 from .ticket_faq_markdown import TicketFAQMarkdownConfig
-
-
-_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
 
 
 @dataclass(frozen=True)
@@ -171,11 +169,7 @@ def _landing_page_config_for_request(request: ContentOpsRequest) -> LandingPageG
     than on the config dataclass.
     """
     defaults = LandingPageGenerationConfig()
-    repair_attempts = _nonnegative_int_input(
-        request.inputs,
-        "landing_page_quality_repair_attempts",
-        max_value=_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
-    )
+    repair_attempts = landing_page_quality_repair_attempt_input(request.inputs)
     if repair_attempts is None:
         return defaults
     return replace(defaults, quality_repair_attempts=repair_attempts)
@@ -252,28 +246,6 @@ def _positive_int_input(inputs: Mapping[str, Any], key: str) -> int | None:
         raise ValueError(f"{key} must be an integer") from None
     if value < 1:
         raise ValueError(f"{key} must be at least 1; got {value}")
-    return value
-
-
-def _nonnegative_int_input(
-    inputs: Mapping[str, Any],
-    key: str,
-    *,
-    max_value: int | None = None,
-) -> int | None:
-    raw = inputs.get(key)
-    if raw is None:
-        return None
-    if isinstance(raw, (bool, float)):
-        raise ValueError(f"{key} must be an integer")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"{key} must be an integer") from None
-    if value < 0:
-        raise ValueError(f"{key} must be at least 0; got {value}")
-    if max_value is not None and value > max_value:
-        raise ValueError(f"{key} must be at most {max_value}; got {value}")
     return value
 
 
