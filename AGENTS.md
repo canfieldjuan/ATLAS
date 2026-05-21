@@ -71,10 +71,12 @@ overage in **Why this slice exists**.
 `claude/pr-<slice-name>` for builder branches.
 `claude/<topic>` for non-PR scratch.
 
-### 1f. Open as draft
+### 1f. Open ready for review
 
-Open the PR as **draft** until reviewer LGTM. Mark ready for review
-just before merge.
+Open the PR as **ready for review** by default. Do not open draft PRs
+unless the operator explicitly asks for a draft. Automated review tools
+do not review draft PRs, so draft mode burns review time and hides
+feedback until the PR is manually marked ready.
 
 ---
 
