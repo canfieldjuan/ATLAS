@@ -184,7 +184,7 @@ const post: BlogPost = {
 <p><strong>Overall dissatisfaction</strong> appears in reviews that cite multiple pain points without isolating a single root cause. These reviews often describe a gradual erosion of satisfaction rather than a single breaking point.</p>
 <p><strong>UX friction</strong> clusters around navigation complexity, feature discoverability, and learning curve. Jira and ClickUp face the most intense UX complaints, while Basecamp and Teamwork receive relatively positive UX mentions.</p>
 <p><strong>Pricing backlash</strong> takes two forms: unexpected renewal charges and feature lock-out after free trials.</p>
-<p>The quote illustrates a common pattern: annual contracts with no prorated refunds create acute dissatisfaction when usage drops or teams attempt to cancel mid-cycle.</p>
+<p>Annual contracts with no prorated refunds create acute dissatisfaction when usage drops or teams attempt to cancel mid-cycle.</p>
 <p><strong>Support quality</strong> complaints focus on slow response times, limited availability, and unhelpful resolutions. Smartsheet and Monday.com face the most support-related churn signals.</p>
 <p><strong>Feature gaps</strong> appear when teams outgrow a tool's native capabilities or discover missing functionality during onboarding.</p>
 <p>The comment reflects a broader pattern: teams expect continuous feature development, not static feature sets.</p>

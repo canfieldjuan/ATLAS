@@ -186,7 +186,7 @@ const post: BlogPost = {
 <p>Reviewers describe unexpected annual renewals, inflexible cancellation policies, and per-seat costs that escalate faster than anticipated.</p>
 <p>This is the single most concrete pricing complaint in the dataset. The reviewer mentions an annual plan, reduced usage, and an unexpected charge. The lack of prorated refunds turns billing into a churn trigger.</p>
 <p>The repetition of the $265 figure across multiple reviews suggests a common plan tier. Annual billing without usage-based adjustments creates acute dissatisfaction when teams reduce seats or usage mid-cycle.</p>
-<p>The Reddit pricing comparison quoted earlier shows Monday.com at $9 per user—competitive with Jira and below Asana. The issue isn't sticker price. It's billing predictability and cancellation flexibility.</p>
+<p>Monday.com's entry-level per-user pricing can look competitive next to other project management tools. The issue isn't only sticker price. It's billing predictability, annual renewals, and cancellation flexibility.</p>
 <p><strong>What Monday.com does well:</strong> Visual workflow builder, customizable dashboards, and strong automation. For teams that value aesthetics and flexibility, Monday.com delivers. The pricing model works when usage is stable and predictable.</p>
 <h2 id="clickup-the-1-complaint-is-overall-dissatisfaction">ClickUp: The #1 Complaint Is Overall Dissatisfaction</h2>
 <p>ClickUp has 24 reviews with complaints and a 2.6 urgency score. Like Asana, the top complaint is overall dissatisfaction.</p>
