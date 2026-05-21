@@ -31,6 +31,7 @@ def _load_cfpb_exporter_module():
 
 _cfpb = _load_cfpb_exporter_module()
 fetch_cfpb_source_rows = _cfpb.fetch_cfpb_source_rows
+fetch_cfpb_source_rows_with_profile = _cfpb.fetch_cfpb_source_rows_with_profile
 render_jsonl = _cfpb.render_jsonl
 
 
@@ -78,9 +79,10 @@ def run_cfpb_faq_markdown_smoke(
 ) -> tuple[int, dict[str, Any]]:
     errors: list[str] = []
     rows: list[dict[str, Any]] = []
+    source_profile: dict[str, Any] = {"status": "not_started"}
     faq: dict[str, Any] | None = None
     try:
-        rows = fetch_cfpb_source_rows(
+        rows, source_profile = fetch_cfpb_source_rows_with_profile(
             api_url=str(args.api_url),
             company=args.company,
             product=args.product,
@@ -121,11 +123,14 @@ def run_cfpb_faq_markdown_smoke(
                 args.output_markdown.parent.mkdir(parents=True, exist_ok=True)
                 args.output_markdown.write_text(result.markdown, encoding="utf-8")
     except Exception as exc:  # pragma: no cover - exercised by live hosts
+        if source_profile.get("status") == "not_started":
+            source_profile = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
         errors.append(f"{type(exc).__name__}: {exc}")
     return (0 if not errors else 1), {
         "ok": not errors,
         "source": "cfpb",
         "source_rows": len(rows),
+        "source_profile": source_profile,
         "source_rows_path": str(source_rows_path),
         "markdown_path": str(args.output_markdown) if args.output_markdown else None,
         "faq": faq,

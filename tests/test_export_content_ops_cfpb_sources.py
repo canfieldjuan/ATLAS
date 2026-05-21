@@ -164,6 +164,46 @@ def test_fetch_cfpb_source_rows_streams_until_limit(monkeypatch):
     assert calls[0]["headers"]["Accept"] == "text/csv,*/*"
 
 
+def test_fetch_cfpb_source_rows_with_profile_counts_skipped_rows(monkeypatch):
+    csv_payload = (
+        "Complaint ID,Company,Product,Issue,Consumer complaint narrative\n"
+        ",Example Bank,Checking,Fees,Missing id complaint.\n"
+        "2,Example Bank,Checking,Fees,\n"
+        "3,Example Bank,Checking,Fees,First usable complaint.\n"
+        "4,Example Bank,Checking,Access,Second usable complaint.\n"
+        "5,Example Bank,Checking,Access,Third usable complaint.\n"
+    ).encode("utf-8")
+
+    def fake_urlopen(_request, timeout):
+        assert timeout == exporter.DEFAULT_TIMEOUT_SECONDS
+        return _Response(csv_payload)
+
+    monkeypatch.setattr(exporter, "urlopen", fake_urlopen)
+
+    rows, profile = exporter.fetch_cfpb_source_rows_with_profile(
+        api_url="https://example.test/cfpb",
+        limit=2,
+        max_rows_scanned=5,
+    )
+
+    assert [row["id"] for row in rows] == ["cfpb:3", "cfpb:4"]
+    assert profile == {
+        "status": "ok",
+        "raw_row_count": 4,
+        "raw_row_count_source": "cfpb_csv_rows_scanned",
+        "usable_source_count": 2,
+        "skipped_row_count": 2,
+        "missing_complaint_id_count": 1,
+        "missing_narrative_count": 1,
+        "skipped_other_count": 0,
+        "usable_source_ratio": 0.5,
+        "requested_source_count": 2,
+        "max_rows_scanned": 5,
+        "stop_reason": "limit",
+        "require_narrative": True,
+    }
+
+
 def test_fetch_cfpb_source_rows_threads_request_overrides(monkeypatch):
     csv_payload = (
         "Complaint ID,Company,Product,Issue,Consumer complaint narrative\n"

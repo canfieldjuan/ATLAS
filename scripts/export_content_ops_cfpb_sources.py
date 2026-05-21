@@ -199,6 +199,48 @@ def fetch_cfpb_source_rows(
 ) -> list[dict[str, Any]]:
     """Fetch CFPB complaint rows and return Content Ops source rows."""
 
+    rows, _profile = fetch_cfpb_source_rows_with_profile(
+        api_url=api_url,
+        company=company,
+        product=product,
+        issue=issue,
+        search_term=search_term,
+        date_received_min=date_received_min,
+        date_received_max=date_received_max,
+        limit=limit,
+        max_rows_scanned=max_rows_scanned,
+        timeout=timeout,
+        source_system=source_system,
+        source_type=source_type,
+        detail_url_base=detail_url_base,
+        user_agent=user_agent,
+        referer=referer,
+        require_narrative=require_narrative,
+    )
+    return rows
+
+
+def fetch_cfpb_source_rows_with_profile(
+    *,
+    api_url: str = DEFAULT_API_URL,
+    company: str | None = None,
+    product: str | None = None,
+    issue: str | None = None,
+    search_term: str | None = None,
+    date_received_min: str | None = None,
+    date_received_max: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+    max_rows_scanned: int = DEFAULT_MAX_ROWS_SCANNED,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    source_system: str = DEFAULT_SOURCE_SYSTEM,
+    source_type: str = DEFAULT_SOURCE_TYPE,
+    detail_url_base: str = DEFAULT_DETAIL_URL_BASE,
+    user_agent: str = DEFAULT_USER_AGENT,
+    referer: str = DEFAULT_REFERER,
+    require_narrative: bool = True,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch CFPB source rows and return extraction visibility metadata."""
+
     params = build_cfpb_query(
         company=company,
         product=product,
@@ -214,21 +256,51 @@ def fetch_cfpb_source_rows(
         headers=build_cfpb_headers(user_agent=user_agent, referer=referer),
     )
     rows: list[dict[str, Any]] = []
+    scanned = 0
+    skipped_without_id = 0
+    skipped_without_narrative = 0
+    skipped_other = 0
+    stop_reason = "exhausted"
     with urlopen(request, timeout=timeout) as response:
         stream = io.TextIOWrapper(response, encoding="utf-8-sig", newline="")
         reader = csv.DictReader(stream)
         for scanned, row in enumerate(reader, start=1):
+            complaint_id = _clean_text(row.get(FIELD_COMPLAINT_ID))
+            narrative = _clean_text(row.get(FIELD_NARRATIVE))
             source_row = cfpb_row_to_source_row(
                 row,
                 source_system=source_system,
                 source_type=source_type,
                 detail_url_base=detail_url_base,
             )
-            if source_row:
+            if not complaint_id:
+                skipped_without_id += 1
+            elif not narrative:
+                skipped_without_narrative += 1
+            elif source_row:
                 rows.append(source_row)
+            else:
+                skipped_other += 1
             if len(rows) >= limit or scanned >= max_rows_scanned:
+                stop_reason = "limit" if len(rows) >= limit else "max_rows_scanned"
                 break
-    return rows
+    skipped_rows = skipped_without_id + skipped_without_narrative + skipped_other
+    profile: dict[str, Any] = {
+        "status": "ok",
+        "raw_row_count": scanned,
+        "raw_row_count_source": "cfpb_csv_rows_scanned",
+        "usable_source_count": len(rows),
+        "skipped_row_count": skipped_rows,
+        "missing_complaint_id_count": skipped_without_id,
+        "missing_narrative_count": skipped_without_narrative,
+        "skipped_other_count": skipped_other,
+        "usable_source_ratio": round(len(rows) / scanned, 6) if scanned else None,
+        "requested_source_count": int(limit),
+        "max_rows_scanned": int(max_rows_scanned),
+        "stop_reason": stop_reason,
+        "require_narrative": bool(require_narrative),
+    }
+    return rows, profile
 
 
 def render_jsonl(rows: Sequence[Mapping[str, Any]]) -> str:
