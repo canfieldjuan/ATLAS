@@ -20,6 +20,8 @@ DEFAULT_TICKET_SOURCE_TYPES = (
     "case",
     "conversation",
     "complaint",
+    "search_log",
+    "search_query",
 )
 DEFAULT_TITLE = "Customer Ticket FAQ"
 MAX_EXTRACTED_QUESTION_CHARS = 140
@@ -1140,6 +1142,11 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
             "cases",
             "conversations",
             "complaints",
+            "search_logs",
+            "site_searches",
+            "search_queries",
+            "zero_result_searches",
+            "zero_result_queries",
             "sources",
             "rows",
             "data",
