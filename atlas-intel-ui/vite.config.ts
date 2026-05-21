@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { marked } from 'marked'
 import {
   existsSync,
   mkdirSync,
@@ -29,8 +30,10 @@ interface BlogSourceMetadata {
   title: string
   description: string
   date: string
+  author: string
   seoTitle: string
   seoDescription: string
+  content: string
 }
 
 function escapeRegExp(value: string): string {
@@ -41,6 +44,12 @@ function parseStringField(content: string, field: string): string {
   const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
   const match = content.match(pattern)
   return match ? match[1].replace(/\\'/g, "'") : ''
+}
+
+function parseTemplateField(content: string, field: string): string {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\`([\\s\\S]*?)\`\\s*,`, 'm')
+  const match = content.match(pattern)
+  return match ? match[1] : ''
 }
 
 function collectBlogSourceMetadata(): BlogSourceMetadata[] {
@@ -55,13 +64,17 @@ function collectBlogSourceMetadata(): BlogSourceMetadata[] {
     const title = parseStringField(content, 'title')
     const description = parseStringField(content, 'description')
     const date = parseStringField(content, 'date')
+    const author = parseStringField(content, 'author')
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
+    const postContent = parseTemplateField(content, 'content')
 
     if (!slug) throw new Error(`Missing slug in blog source: ${file}`)
     if (!title) throw new Error(`Missing title in blog source: ${file}`)
     if (!description) throw new Error(`Missing description in blog source: ${file}`)
     if (!date) throw new Error(`Missing date in blog source: ${file}`)
+    if (!author) throw new Error(`Missing author in blog source: ${file}`)
+    if (!postContent.trim()) throw new Error(`Missing content in blog source: ${file}`)
 
     posts.push({
       file,
@@ -69,8 +82,10 @@ function collectBlogSourceMetadata(): BlogSourceMetadata[] {
       title,
       description,
       date,
+      author,
       seoTitle,
       seoDescription,
+      content: postContent,
     })
   }
 
@@ -137,6 +152,37 @@ interface PrerenderedRoute {
   canonical: string
   ogType: string
   jsonLd?: object
+  bodyHtml?: string
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function stripChartPlaceholders(content: string): string {
+  return content.replace(/<p>\s*\{\{chart:[^}]+\}\}\s*<\/p>|\{\{chart:[^}]+\}\}/g, '')
+}
+
+function buildBlogBodyHtml(post: BlogSourceMetadata): string {
+  const articleHtml = marked.parse(stripChartPlaceholders(post.content), { async: false }) as string
+  return `
+    <article data-prerendered-blog-article="true">
+      <header>
+        <h1>${escapeHtml(post.title)}</h1>
+        <p>
+          <time datetime="${escapeHtml(post.date)}">${escapeHtml(post.date)}</time>
+          <span>${escapeHtml(post.author)}</span>
+        </p>
+      </header>
+      <section data-prerendered-blog-content="true">
+        ${articleHtml}
+      </section>
+    </article>`
 }
 
 function buildHeadHtml(route: PrerenderedRoute): string {
@@ -185,6 +231,7 @@ function prerenderPlugin() {
           description: seoDesc,
           canonical: `${BASE_URL}/blog/${post.slug}`,
           ogType: 'article',
+          bodyHtml: buildBlogBodyHtml(post),
           jsonLd: {
             '@context': 'https://schema.org',
             '@graph': [
@@ -290,6 +337,7 @@ function prerenderPlugin() {
             `<title>${route.title}</title>`,
           )
           .replace('</head>', `${headHtml}\n  </head>`)
+          .replace('<div id="root"></div>', `<div id="root">${route.bodyHtml || ''}</div>`)
 
         // Write to dist/<path>/index.html
         const outDir = join(distDir, ...route.path.split('/').filter(Boolean))
