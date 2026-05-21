@@ -1272,6 +1272,26 @@ def test_build_ticket_faq_markdown_does_not_classify_generic_investigation_as_cr
     assert "credit bureau" not in result.markdown
 
 
+def test_build_ticket_faq_markdown_does_not_treat_cfpb_report_as_saas_reporting() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "complaint",
+        "pain_points": ["Opening an account"],
+        "evidence": [{
+            "text": (
+                "I was trying to open an account and the bank declined me after I sent "
+                "my identity theft report."
+            ),
+            "source_id": "cfpb:3173042",
+            "source_type": "complaint",
+        }],
+    }])
+
+    assert result.items[0]["topic"] == "opening an account"
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert "Open the reporting or analytics area" not in result.markdown
+    assert "Gather the application, account-opening notice" in result.markdown
+
+
 def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_credit_report_rows(tmp_path: Path) -> None:
     source = _write_source_csv(
         tmp_path,
