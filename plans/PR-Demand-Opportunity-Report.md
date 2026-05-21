@@ -134,6 +134,19 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
 - **Multi-field, not `pain_category`.** Ranking the coarse single field would
   return "overall_dissatisfaction" as the top "opportunity", which is useless.
   The structured fields give actionable themes.
+- **Baseline counts only sole-catch-all reviews.** A review is added to the
+  `overall_dissatisfaction` baseline only when that is its *sole* pain; if it
+  also carries an actionable theme it is ranked there instead, so a review is
+  never counted in both the baseline and a theme (the "carry only" wording
+  stays true; baseline + distinct ranked reviews == total).
+- **Vendorless reviews are excluded, not counted.** A review with no primary
+  vendor cannot contribute to cross-vendor breadth (core to the heuristic), so
+  it is dropped up front with a reported count rather than inflating a theme's
+  volume against unchanged breadth; the breadth denominator is the real vendor
+  count, never coerced to 1.
+- **Strict urgency guard in SQL.** The numeric filter is `^[0-9]+(\.[0-9]+)?$`
+  so a malformed value (`.`, `1.2.3`) falls to NULL instead of passing the
+  guard and aborting the whole `SELECT` on the cast.
 - **Read-only, on-demand script.** No cron registration, no DB writes, no new
   tables -- it is an analysis tool, not a pipeline stage. Lives in `scripts/`.
 - **Evidence-traceable.** Every ranked theme carries real review quotes/spans;
@@ -154,9 +167,11 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
 
 ## Verification
 
-- `tests/test_demand_opportunity_report.py` run via pytest -> `5 passed`
-  (off-topic detection incl. false-positive guard, off-topic exclusion +
-  count, baseline exclusion, breadth/urgency ranking, gap/competitor rollup).
+- `tests/test_demand_opportunity_report.py` run via pytest -> `8 passed`
+  (off-topic detection + false-positive guard, off-topic exclusion + count,
+  baseline excludes mixed reviews, vendorless exclusion, breadth/urgency
+  ranking with a pinned numeric `opportunity_score` (16.0), gap/competitor +
+  vendor-alias rollup, and a `render_markdown` section check).
 - `scripts/demand_opportunity_report.py --category=CRM` against the live DB ->
   1,954 reviews / 8 vendors (5 off-topic dropped: Copper:4, Close:1). Ranked
   themes match known CRM pains: pricing (365 reviews, urgency 4.35, 8/8

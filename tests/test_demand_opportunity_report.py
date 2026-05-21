@@ -63,17 +63,56 @@ def test_aggregate_excludes_offtopic_and_counts_them():
     assert pricing["reviews"] == 2  # only the two clean reviews counted
 
 
-def test_overall_dissatisfaction_is_baseline_not_a_theme():
+def test_overall_dissatisfaction_baseline_excludes_mixed_reviews():
+    # Baseline counts ONLY reviews whose sole pain is the catch-all. A review
+    # that also carries an actionable theme is ranked there, not double-counted
+    # in the baseline (so baseline + ranked never exceeds total).
     reviews = [
-        _review("Close", 3, ["overall_dissatisfaction"]),
-        _review("Close", 3, ["overall_dissatisfaction"]),
+        _review("Close", 3, ["overall_dissatisfaction"]),                  # baseline-only
+        _review("Close", 3, ["overall_dissatisfaction", "pricing"]),       # mixed -> NOT baseline
         _review("Pipedrive", 5, ["support"]),
     ]
     data = dor.aggregate(reviews)
-    assert data["baseline_overall_dissatisfaction"] == 2
-    themes = {t["theme"] for t in data["themes"]}
+    assert data["baseline_overall_dissatisfaction"] == 1
+    themes = {t["theme"]: t for t in data["themes"]}
     assert "overall_dissatisfaction" not in themes
+    assert themes["pricing"]["reviews"] == 1   # the mixed review ranked here
     assert "support" in themes
+    # baseline (1) + distinct ranked reviews (pricing:1 + support:1) == total (3)
+    assert data["baseline_overall_dissatisfaction"] + sum(
+        t["reviews"] for t in data["themes"]) == data["total_reviews"]
+
+
+def test_vendorless_reviews_excluded_from_scoring():
+    reviews = [
+        _review("Salesforce", 8, ["pricing"]),
+        _review(None, 9, ["pricing"]),  # no primary vendor -> excluded
+    ]
+    data = dor.aggregate(reviews)
+    assert data["excluded_no_vendor"] == 1
+    assert data["total_reviews"] == 1
+    pricing = next(t for t in data["themes"] if t["theme"] == "pricing")
+    assert pricing["reviews"] == 1  # vendorless review did not inflate volume
+
+
+def test_render_markdown_has_key_sections():
+    reviews = [
+        _review("Salesforce", 8, ["pricing"], feature_gaps=["deeper reporting"],
+                positive_aspects=["easy to use"], quotable_phrases=["pricing is brutal"],
+                competitors=[{"name": "HubSpot", "context": "compared"}]),
+    ]
+    md = dor.render_markdown("CRM", dor.aggregate(reviews))
+    for needle in (
+        "# Demand-Opportunity Report: CRM",
+        "## Ranked opportunity themes",
+        "| pricing |",
+        "## Top unmet needs / feature gaps",
+        "deeper reporting",
+        "## What already works well",
+        "## Competitors cited",
+        "HubSpot",
+    ):
+        assert needle in md, needle
 
 
 def test_opportunity_ranking_rewards_breadth_and_urgency():
@@ -88,6 +127,9 @@ def test_opportunity_ranking_rewards_breadth_and_urgency():
     assert ranked[0] == "pricing"  # broader + more urgent -> higher score
     pricing = next(t for t in data["themes"] if t["theme"] == "pricing")
     assert pricing["vendor_breadth"] == "2/2"
+    # Pin the formula: 2 reviews x mean urgency 8 x breadth (2/2) = 16.0.
+    # Guards against a regression that drops a factor or flips x -> +.
+    assert pricing["opportunity_score"] == 16.0
 
 
 def test_feature_gaps_and_competitors_rollup():

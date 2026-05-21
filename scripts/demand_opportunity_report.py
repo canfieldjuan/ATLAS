@@ -117,17 +117,25 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     # counting, so off-topic reviews neither inflate themes nor surface as
     # evidence. Track what was dropped for transparency.
     filtered_vendors: dict[str, int] = defaultdict(int)
+    filtered_offtopic = 0
+    excluded_no_vendor = 0
     clean: list[dict[str, Any]] = []
     for r in reviews:
         if _review_is_offtopic(r):
+            filtered_offtopic += 1
             filtered_vendors[r.get("vendor") or "unknown"] += 1
+        elif not r.get("vendor"):
+            # No primary vendor -> cannot contribute to cross-vendor breadth,
+            # which is core to the opportunity heuristic. Excluded so it neither
+            # inflates theme volume against unchanged breadth nor distorts the
+            # denominator. Counted for transparency.
+            excluded_no_vendor += 1
         else:
             clean.append(r)
-    filtered_offtopic = len(reviews) - len(clean)
     reviews = clean
 
-    all_vendors = {r["vendor"] for r in reviews if r.get("vendor")}
-    total_vendors = len(all_vendors) or 1
+    all_vendors = {r["vendor"] for r in reviews}
+    total_vendors = len(all_vendors)
 
     # Pain theme -> {reviews, urgency_sum, urgency_n, vendors, quotes}
     pain: dict[str, dict[str, Any]] = defaultdict(
@@ -149,10 +157,13 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         vendor = r.get("vendor")
         urg = r.get("urgency")
         cats = {str(pc.get("category")) for pc in _as_list(r.get("pain_categories")) if isinstance(pc, dict) and pc.get("category")}
-        for cat in cats:
-            if cat in _NON_ACTIONABLE:
-                baseline_count += 1
-                continue
+        actionable = cats - _NON_ACTIONABLE
+        # Baseline = reviews whose ONLY pain is the non-actionable catch-all;
+        # a review that also has an actionable theme is ranked there, not in
+        # the baseline (so baseline + ranked never double-counts a review).
+        if not actionable and (cats & _NON_ACTIONABLE):
+            baseline_count += 1
+        for cat in actionable:
             slot = pain[cat]
             slot["reviews"] += 1
             if urg is not None:
@@ -203,7 +214,7 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     themes = []
     for cat, s in pain.items():
         mean_urg = (s["urgency_sum"] / s["urgency_n"]) if s["urgency_n"] else 0.0
-        breadth = len(s["vendors"]) / total_vendors
+        breadth = (len(s["vendors"]) / total_vendors) if total_vendors else 0.0
         score = s["reviews"] * mean_urg * breadth
         themes.append({
             "theme": cat,
@@ -242,6 +253,7 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         "vendors": sorted(all_vendors),
         "filtered_offtopic": filtered_offtopic,
         "filtered_vendors": dict(sorted(filtered_vendors.items(), key=lambda x: -x[1])),
+        "excluded_no_vendor": excluded_no_vendor,
         "baseline_overall_dissatisfaction": baseline_count,
         "themes": themes,
         "feature_gaps": gaps,
@@ -267,6 +279,11 @@ def render_markdown(category: str, data: dict[str, Any]) -> str:
         out.append(
             f"Relevance filter dropped {data['filtered_offtopic']} off-topic "
             f"(common-word-vendor contamination) reviews before analysis [{fv}]."
+        )
+    if data.get("excluded_no_vendor"):
+        out.append(
+            f"Excluded {data['excluded_no_vendor']} reviews with no primary "
+            f"vendor (cannot contribute to cross-vendor breadth)."
         )
     out.append(
         f"Baseline: {data['baseline_overall_dissatisfaction']} reviews carry only "
@@ -336,7 +353,10 @@ async def _fetch(pool, category: str) -> list[dict[str, Any]]:
         """
         SELECT r.id, r.source,
                vm.vendor_name AS vendor,
-               CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9.]+$'
+               -- Strict numeric guard: a single decimal point only, so values
+               -- like '.', '1.2.3', '..' fall to NULL instead of passing the
+               -- guard and aborting the whole SELECT on the ::numeric cast.
+               CASE WHEN r.enrichment->>'urgency_score' ~ '^[0-9]+(\\.[0-9]+)?$'
                     THEN (r.enrichment->>'urgency_score')::numeric END AS urgency,
                r.enrichment->'pain_categories'      AS pain_categories,
                r.enrichment->'feature_gaps'         AS feature_gaps,
