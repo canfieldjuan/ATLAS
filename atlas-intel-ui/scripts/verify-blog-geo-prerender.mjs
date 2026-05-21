@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { collectBlogSourceMetadata } from './blog-source-metadata.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const rootDir = resolve(import.meta.dirname, '..')
-const blogDir = join(rootDir, 'src/content/blog')
 const distDir = join(rootDir, 'dist')
 const sitemapPath = join(distDir, 'sitemap.xml')
 
@@ -16,122 +16,16 @@ function readText(path) {
   return readFileSync(path, 'utf-8')
 }
 
+function collectBlogPosts() {
+  try {
+    return collectBlogSourceMetadata(rootDir)
+  } catch (error) {
+    fail(error.message)
+  }
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function parseStringField(content, field) {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
-  const match = content.match(pattern)
-  if (!match) return ''
-  return match[1].replace(/\\'/g, "'")
-}
-
-function parseTemplateField(content, field) {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\`([\\s\\S]*?)\`\\s*,`, 'm')
-  const match = content.match(pattern)
-  return match ? match[1] : ''
-}
-
-function parseArrayField(content, field) {
-  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
-  if (!fieldMatch) return ''
-
-  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
-  let depth = 0
-  let quote = ''
-  let escaped = false
-
-  for (let index = start; index < content.length; index += 1) {
-    const char = content[index]
-
-    if (quote) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === quote) {
-        quote = ''
-      }
-      continue
-    }
-
-    if (char === '"' || char === "'" || char === '`') {
-      quote = char
-      continue
-    }
-
-    if (char === '[') depth += 1
-    if (char === ']') depth -= 1
-
-    if (depth === 0) {
-      return content.slice(start, index + 1)
-    }
-  }
-
-  fail(`Unclosed array field in blog source: ${field}`)
-}
-
-function parseChartsField(content, file) {
-  const chartsLiteral = parseArrayField(content, 'charts')
-  if (!chartsLiteral) return []
-
-  try {
-    return JSON.parse(chartsLiteral)
-  } catch (error) {
-    fail(`Invalid charts JSON in ${file}: ${error.message}`)
-  }
-}
-
-function chartPlaceholderIds(content) {
-  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
-    .map(match => (match[1] || match[2] || '').trim())
-    .filter(Boolean)
-}
-
-function assertKnownChartPlaceholders(body, charts, slug) {
-  const chartIds = new Set(charts.map(chart => chart.chart_id))
-  const unknownChartIds = [...new Set(chartPlaceholderIds(body).filter(chartId => !chartIds.has(chartId)))]
-  if (unknownChartIds.length) {
-    fail(`/blog/${slug} source references missing chart fallback data: ${unknownChartIds.join(', ')}`)
-  }
-}
-
-function collectBlogPosts() {
-  const posts = []
-  for (const file of readdirSync(blogDir)) {
-    if (!file.endsWith('.ts') || file === 'index.ts') continue
-    const content = readText(join(blogDir, file))
-    const slug = parseStringField(content, 'slug')
-    const title = parseStringField(content, 'title')
-    const description = parseStringField(content, 'description')
-    const date = parseStringField(content, 'date')
-    const author = parseStringField(content, 'author')
-    const seoTitle = parseStringField(content, 'seo_title')
-    const seoDescription = parseStringField(content, 'seo_description')
-    const body = parseTemplateField(content, 'content')
-    const charts = parseChartsField(content, file)
-    if (!slug) fail(`Missing slug in ${file}`)
-    if (!title) fail(`Missing title in ${file}`)
-    if (!description) fail(`Missing description in ${file}`)
-    if (!date) fail(`Missing date in ${file}`)
-    if (!author) fail(`Missing author in ${file}`)
-    if (!body.trim()) fail(`Missing content in ${file}`)
-    assertKnownChartPlaceholders(body, charts, slug)
-    posts.push({
-      slug,
-      title,
-      description,
-      date,
-      author,
-      seoTitle,
-      seoDescription,
-      body,
-      charts,
-    })
-  }
-  if (!posts.length) fail('No blog posts found')
-  return posts.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
 function attrValue(tag, attr) {
@@ -196,7 +90,7 @@ function sourceBodyText(value) {
 }
 
 function expectedBodyPhrase(post) {
-  const text = sourceBodyText(post.body)
+  const text = sourceBodyText(post.content)
   const sentence = text
     .split(/(?<=[.!?])\s+/)
     .find(item => item.length >= 60 && /[A-Za-z]/.test(item))
@@ -352,6 +246,20 @@ function assertCrawlerVisibleArticle(html, post) {
     }
   }
 
+  if (post.faq.length) {
+    if (!html.includes('data-prerendered-blog-faq="true"')) {
+      fail(`/blog/${post.slug} missing prerendered FAQ section`)
+    }
+    for (const item of post.faq) {
+      if (!visibleText.includes(item.question)) {
+        fail(`/blog/${post.slug} prerendered FAQ missing question: ${item.question}`)
+      }
+      if (!visibleText.includes(item.answer)) {
+        fail(`/blog/${post.slug} prerendered FAQ missing answer for: ${item.question}`)
+      }
+    }
+  }
+
   const phrase = expectedBodyPhrase(post)
   if (!visibleText.includes(phrase)) {
     fail(`/blog/${post.slug} prerendered body missing source phrase: ${phrase}`)
@@ -368,6 +276,25 @@ function assertBreadcrumbs(node, canonical, slug) {
   const last = items[items.length - 1]
   if (!last || last.item !== canonical) {
     fail(`/blog/${slug} breadcrumb final item must be ${canonical}`)
+  }
+}
+
+function assertFaqPage(node, post) {
+  const { slug } = post
+  const entities = Array.isArray(node.mainEntity) ? node.mainEntity : []
+  if (entities.length !== post.faq.length) {
+    fail(`/blog/${slug} FAQPage must include ${post.faq.length} questions`)
+  }
+
+  for (const item of post.faq) {
+    const question = entities.find(entity => entity && entity.name === item.question)
+    if (!question || !typeMatches(question, 'Question')) {
+      fail(`/blog/${slug} FAQPage missing question: ${item.question}`)
+    }
+    const answer = question.acceptedAnswer
+    if (!answer || !typeMatches(answer, 'Answer') || answer.text !== item.answer) {
+      fail(`/blog/${slug} FAQPage answer mismatch for: ${item.question}`)
+    }
   }
 }
 
@@ -415,6 +342,12 @@ function verifyBlogPage(post, sitemap) {
   const blogPosting = nodes.find(node => typeMatches(node, 'BlogPosting'))
   if (!blogPosting) fail(`/blog/${slug} missing BlogPosting JSON-LD`)
   assertBlogPosting(blogPosting, post, canonical, ogImageValue)
+
+  if (post.faq.length) {
+    const faqPage = nodes.find(node => typeMatches(node, 'FAQPage'))
+    if (!faqPage) fail(`/blog/${slug} missing FAQPage JSON-LD`)
+    assertFaqPage(faqPage, post)
+  }
 
   const breadcrumbs = nodes.find(node => typeMatches(node, 'BreadcrumbList'))
   if (!breadcrumbs) fail(`/blog/${slug} missing BreadcrumbList JSON-LD`)

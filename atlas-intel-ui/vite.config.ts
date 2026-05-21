@@ -5,10 +5,17 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   writeFileSync,
 } from 'node:fs'
 import { resolve, join } from 'node:path'
+import {
+  chartPlaceholderIds,
+  collectBlogSourceMetadata,
+  type BlogSourceMetadata,
+  type ChartSpec,
+  type ChartValue,
+  type FaqItem,
+} from './scripts/blog-source-metadata.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
@@ -24,145 +31,6 @@ interface SitemapUrl {
   changefreq: string
 }
 
-interface BlogSourceMetadata {
-  file: string
-  slug: string
-  title: string
-  description: string
-  date: string
-  author: string
-  seoTitle: string
-  seoDescription: string
-  content: string
-  charts: ChartSpec[]
-}
-
-type ChartValue = string | number | null | undefined
-type ChartDatum = Record<string, ChartValue>
-
-interface ChartSeries {
-  dataKey: string
-}
-
-interface ChartSpec {
-  chart_id: string
-  title: string
-  data: ChartDatum[]
-  config: {
-    bars?: ChartSeries[]
-    x_key?: string
-  }
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function parseStringField(content: string, field: string): string {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
-  const match = content.match(pattern)
-  return match ? match[1].replace(/\\'/g, "'") : ''
-}
-
-function parseTemplateField(content: string, field: string): string {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\`([\\s\\S]*?)\`\\s*,`, 'm')
-  const match = content.match(pattern)
-  return match ? match[1] : ''
-}
-
-function parseArrayField(content: string, field: string): string {
-  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
-  if (!fieldMatch) return ''
-
-  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
-  let depth = 0
-  let quote = ''
-  let escaped = false
-
-  for (let index = start; index < content.length; index += 1) {
-    const char = content[index]
-
-    if (quote) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === quote) {
-        quote = ''
-      }
-      continue
-    }
-
-    if (char === '"' || char === "'" || char === '`') {
-      quote = char
-      continue
-    }
-
-    if (char === '[') depth += 1
-    if (char === ']') depth -= 1
-
-    if (depth === 0) {
-      return content.slice(start, index + 1)
-    }
-  }
-
-  throw new Error(`Unclosed array field in blog source: ${field}`)
-}
-
-function parseChartsField(content: string, file: string): ChartSpec[] {
-  const chartsLiteral = parseArrayField(content, 'charts')
-  if (!chartsLiteral) return []
-
-  try {
-    return JSON.parse(chartsLiteral) as ChartSpec[]
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`Invalid charts JSON in blog source ${file}: ${message}`)
-  }
-}
-
-function collectBlogSourceMetadata(): BlogSourceMetadata[] {
-  const blogDir = resolve(import.meta.dirname, 'src/content/blog')
-  if (!existsSync(blogDir)) return []
-
-  const posts: BlogSourceMetadata[] = []
-  for (const file of readdirSync(blogDir).sort()) {
-    if (!file.endsWith('.ts') || file === 'index.ts') continue
-    const content = readFileSync(join(blogDir, file), 'utf-8')
-    const slug = parseStringField(content, 'slug')
-    const title = parseStringField(content, 'title')
-    const description = parseStringField(content, 'description')
-    const date = parseStringField(content, 'date')
-    const author = parseStringField(content, 'author')
-    const seoTitle = parseStringField(content, 'seo_title')
-    const seoDescription = parseStringField(content, 'seo_description')
-    const postContent = parseTemplateField(content, 'content')
-    const charts = parseChartsField(content, file)
-
-    if (!slug) throw new Error(`Missing slug in blog source: ${file}`)
-    if (!title) throw new Error(`Missing title in blog source: ${file}`)
-    if (!description) throw new Error(`Missing description in blog source: ${file}`)
-    if (!date) throw new Error(`Missing date in blog source: ${file}`)
-    if (!author) throw new Error(`Missing author in blog source: ${file}`)
-    if (!postContent.trim()) throw new Error(`Missing content in blog source: ${file}`)
-
-    posts.push({
-      file,
-      slug,
-      title,
-      description,
-      date,
-      author,
-      seoTitle,
-      seoDescription,
-      content: postContent,
-      charts,
-    })
-  }
-
-  return posts.sort((a, b) => a.slug.localeCompare(b.slug))
-}
-
 // ---------------------------------------------------------------------------
 // Sitemap plugin
 // ---------------------------------------------------------------------------
@@ -170,7 +38,7 @@ function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
     closeBundle() {
-      const posts = collectBlogSourceMetadata()
+      const posts = collectBlogSourceMetadata(import.meta.dirname)
 
       const today = new Date().toISOString().split('T')[0]
       const urls: SitemapUrl[] = [
@@ -261,12 +129,6 @@ ${rows}
       </figure>`
 }
 
-function chartPlaceholderIds(content: string): string[] {
-  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
-    .map(match => (match[1] || match[2] || '').trim())
-    .filter(Boolean)
-}
-
 function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
   const chartMap = new Map(charts.map(chart => [chart.chart_id, chart]))
   const unknownChartIds = [...new Set(chartPlaceholderIds(content).filter(chartId => !chartMap.has(chartId)))]
@@ -287,8 +149,26 @@ function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
   )
 }
 
+function buildFaqHtml(faq: FaqItem[]): string {
+  if (!faq.length) return ''
+
+  const items = faq
+    .map(item => `        <div>
+          <h3>${escapeHtml(item.question)}</h3>
+          <p>${escapeHtml(item.answer)}</p>
+        </div>`)
+    .join('\n')
+
+  return `
+      <section data-prerendered-blog-faq="true">
+        <h2>Frequently Asked Questions</h2>
+${items}
+      </section>`
+}
+
 function buildBlogBodyHtml(post: BlogSourceMetadata): string {
   const articleHtml = marked.parse(renderChartFallbacks(post.content, post.charts), { async: false }) as string
+  const faqHtml = buildFaqHtml(post.faq)
   return `
     <article data-prerendered-blog-article="true">
       <header>
@@ -301,7 +181,24 @@ function buildBlogBodyHtml(post: BlogSourceMetadata): string {
       <section data-prerendered-blog-content="true">
         ${articleHtml}
       </section>
+      ${faqHtml}
     </article>`
+}
+
+function buildFaqJsonLd(faq: FaqItem[]): object | null {
+  if (!faq.length) return null
+
+  return {
+    '@type': 'FAQPage',
+    mainEntity: faq.map(item => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: item.answer,
+      },
+    })),
+  }
 }
 
 function buildHeadHtml(route: PrerenderedRoute): string {
@@ -341,9 +238,43 @@ function prerenderPlugin() {
       const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
 
       const blogRoutes: PrerenderedRoute[] = []
-      for (const post of collectBlogSourceMetadata()) {
+      for (const post of collectBlogSourceMetadata(import.meta.dirname)) {
         const seoTitle = post.seoTitle || post.title
         const seoDesc = post.seoDescription || post.description
+        const faqJsonLd = buildFaqJsonLd(post.faq)
+        const graph: object[] = [
+          {
+            '@type': 'BlogPosting',
+            headline: seoTitle,
+            description: seoDesc,
+            datePublished: post.date,
+            dateModified: post.date,
+            image: DEFAULT_OG_IMAGE,
+            author: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+              sameAs: ATLAS_SAME_AS,
+            },
+            publisher: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+              url: BASE_URL,
+              sameAs: ATLAS_SAME_AS,
+              logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
+            },
+            mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
+          },
+          {
+            '@type': 'BreadcrumbList',
+            itemListElement: [
+              { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
+              { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
+              { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
+            ],
+          },
+        ]
+        if (faqJsonLd) graph.push(faqJsonLd)
+
         blogRoutes.push({
           path: `/blog/${post.slug}`,
           title: `${seoTitle} | Atlas Intelligence`,
@@ -353,37 +284,7 @@ function prerenderPlugin() {
           bodyHtml: buildBlogBodyHtml(post),
           jsonLd: {
             '@context': 'https://schema.org',
-            '@graph': [
-              {
-                '@type': 'BlogPosting',
-                headline: seoTitle,
-                description: seoDesc,
-                datePublished: post.date,
-                dateModified: post.date,
-                image: DEFAULT_OG_IMAGE,
-                author: {
-                  '@type': 'Organization',
-                  name: 'Atlas Intelligence',
-                  sameAs: ATLAS_SAME_AS,
-                },
-                publisher: {
-                  '@type': 'Organization',
-                  name: 'Atlas Intelligence',
-                  url: BASE_URL,
-                  sameAs: ATLAS_SAME_AS,
-                  logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
-                },
-                mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
-              },
-              {
-                '@type': 'BreadcrumbList',
-                itemListElement: [
-                  { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
-                  { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
-                  { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
-                ],
-              },
-            ],
+            '@graph': graph,
           },
         })
       }
