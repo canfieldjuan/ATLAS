@@ -40,6 +40,24 @@ _GENERIC_QUESTION_TEXTS = {
     "what should i do?",
     "what can i do?",
 }
+_GENERIC_QUESTION_PHRASES = (
+    "submitted several complaints",
+    "filed several complaints",
+    "submitted a complaint",
+    "filing this complaint",
+    "this complaint is about",
+)
+_MORTGAGE_INTENT_TERMS = (
+    "mortgage",
+    "home loan",
+    "foreclosure",
+    "reverse mortgage",
+    "mortgage servicer",
+)
+_MORTGAGE_ACTION_STEPS = (
+    "Gather the mortgage statement, payment history, escrow record, payoff quote, or loss-mitigation notice tied to the issue.",
+    "Send the servicer a written request or dispute with the dates, amounts, account number, and copies of the records you want reviewed.",
+)
 DEFAULT_INTENT_RULES = (
     ("credit report disputes", (
         "credit report",
@@ -64,6 +82,7 @@ DEFAULT_INTENT_RULES = (
         "medical debt",
         "settled the debt",
     )),
+    ("mortgage servicing issues", _MORTGAGE_INTENT_TERMS),
     ("reporting friction", ("export", "report", "dashboard", "attribution")),
     ("manual follow-up", ("handoff", "follow-up", "workflow", "automation", "manual")),
     ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
@@ -100,6 +119,13 @@ _DATE_KEYS = (
     "date",
     "timestamp",
 )
+_SOURCE_CONTEXT_KEYS = (
+    "product",
+    "category",
+    "sub_product",
+    "issue",
+    "sub_issue",
+)
 _ACTION_RULES = (
     (("credit report", "credit file", "credit bureau", "credit bureaus", "credit reporting", "incorrect information"), (
         "Get your latest credit reports and mark the account, date, balance, or status that looks wrong.",
@@ -109,6 +135,7 @@ _ACTION_RULES = (
         "Ask the collector in writing to identify the original creditor, the amount, the account, and why they say you owe it.",
         "Compare the notice with your payment, settlement, insurance, or provider records before you pay or share more information.",
     )),
+    (_MORTGAGE_INTENT_TERMS, _MORTGAGE_ACTION_STEPS),
     (("export", "report", "dashboard", "attribution"), (
         "Open the reporting or analytics area and choose the date range you need.",
         "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
@@ -403,6 +430,7 @@ def _intent_topic(
     intent_rules: Sequence[tuple[str, Sequence[str]]],
 ) -> str:
     text = " ".join((
+        _source_context_text(opportunity, evidence),
         _compact(evidence.get("source_title") or opportunity.get("source_title")),
         _compact(evidence.get("text")),
         _compact(opportunity.get("text") or opportunity.get("description")),
@@ -414,6 +442,16 @@ def _intent_topic(
         if any(_keyword_matches(text, keyword) for keyword in keywords):
             return _clean(topic).lower()
     return ""
+
+
+def _source_context_text(*rows: Mapping[str, Any]) -> str:
+    values: list[str] = []
+    for row in rows:
+        for key in _SOURCE_CONTEXT_KEYS:
+            text = _compact(_field_value(row, key))
+            if text:
+                values.append(text)
+    return " ".join(values)
 
 
 def _keyword_matches(text: str, keyword: Any) -> bool:
@@ -596,7 +634,12 @@ def _first_sentence(text: str) -> str:
 
 def _usable_question(value: str) -> bool:
     lowered = _compact(value).lower()
-    return bool(value) and len(value) <= MAX_EXTRACTED_QUESTION_CHARS and lowered not in _GENERIC_QUESTION_TEXTS
+    return (
+        bool(value)
+        and len(value) <= MAX_EXTRACTED_QUESTION_CHARS
+        and lowered not in _GENERIC_QUESTION_TEXTS
+        and not any(phrase in lowered for phrase in _GENERIC_QUESTION_PHRASES)
+    )
 
 
 def _normalize_question_text(value: str) -> str:
@@ -612,6 +655,8 @@ def _policy_question(topic: str) -> str:
         return "What should I do if information on my credit report is wrong?"
     if normalized == "debt collection disputes":
         return "What should I do if a collector says I owe a debt I do not recognize?"
+    if normalized == "mortgage servicing issues":
+        return "What should I do if my mortgage servicer will not fix a payment, payoff, foreclosure, or modification issue?"
     return ""
 
 
@@ -701,6 +746,11 @@ def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str
         return (
             f"{_support_sentence(support_contact)} if the collector will not validate "
             "the debt, keeps contacting you about a debt you do not recognize, or reports it again."
+        )
+    if topic == "mortgage servicing issues" or any(term in text for term in _MORTGAGE_INTENT_TERMS):
+        return (
+            f"{_support_sentence(support_contact)} if the servicer will not explain "
+            "the payment, payoff, foreclosure, modification, escrow, or insurance issue in writing."
         )
     if any(term in text for term in ("export", "report", "dashboard", "attribution")):
         return (
@@ -863,6 +913,8 @@ def _support_contact_metadata(support_contact: str | None) -> dict[str, str]:
 
 
 def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:
+    if topic == "mortgage servicing issues":
+        return _MORTGAGE_ACTION_STEPS
     text = f"{topic} {evidence_text}".lower()
     for terms, steps in _ACTION_RULES:
         if any(term in text for term in terms):
