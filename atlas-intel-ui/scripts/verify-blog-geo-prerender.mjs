@@ -33,6 +33,70 @@ function parseTemplateField(content, field) {
   return match ? match[1] : ''
 }
 
+function parseArrayField(content, field) {
+  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
+  if (!fieldMatch) return ''
+
+  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
+  let depth = 0
+  let quote = ''
+  let escaped = false
+
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = ''
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+
+    if (char === '[') depth += 1
+    if (char === ']') depth -= 1
+
+    if (depth === 0) {
+      return content.slice(start, index + 1)
+    }
+  }
+
+  fail(`Unclosed array field in blog source: ${field}`)
+}
+
+function parseChartsField(content, file) {
+  const chartsLiteral = parseArrayField(content, 'charts')
+  if (!chartsLiteral) return []
+
+  try {
+    return JSON.parse(chartsLiteral)
+  } catch (error) {
+    fail(`Invalid charts JSON in ${file}: ${error.message}`)
+  }
+}
+
+function chartPlaceholderIds(content) {
+  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
+    .map(match => (match[1] || match[2] || '').trim())
+    .filter(Boolean)
+}
+
+function assertKnownChartPlaceholders(body, charts, slug) {
+  const chartIds = new Set(charts.map(chart => chart.chart_id))
+  const unknownChartIds = [...new Set(chartPlaceholderIds(body).filter(chartId => !chartIds.has(chartId)))]
+  if (unknownChartIds.length) {
+    fail(`/blog/${slug} source references missing chart fallback data: ${unknownChartIds.join(', ')}`)
+  }
+}
+
 function collectBlogPosts() {
   const posts = []
   for (const file of readdirSync(blogDir)) {
@@ -46,12 +110,14 @@ function collectBlogPosts() {
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
     const body = parseTemplateField(content, 'content')
+    const charts = parseChartsField(content, file)
     if (!slug) fail(`Missing slug in ${file}`)
     if (!title) fail(`Missing title in ${file}`)
     if (!description) fail(`Missing description in ${file}`)
     if (!date) fail(`Missing date in ${file}`)
     if (!author) fail(`Missing author in ${file}`)
     if (!body.trim()) fail(`Missing content in ${file}`)
+    assertKnownChartPlaceholders(body, charts, slug)
     posts.push({
       slug,
       title,
@@ -61,6 +127,7 @@ function collectBlogPosts() {
       seoTitle,
       seoDescription,
       body,
+      charts,
     })
   }
   if (!posts.length) fail('No blog posts found')
@@ -271,6 +338,18 @@ function assertCrawlerVisibleArticle(html, post) {
   }
   if (!visibleText.includes(post.author)) {
     fail(`/blog/${post.slug} prerendered body missing source author`)
+  }
+  if (html.includes('{{chart:')) {
+    fail(`/blog/${post.slug} prerendered body still contains chart placeholders`)
+  }
+
+  for (const chart of post.charts) {
+    if (!html.includes(`data-prerendered-chart="${chart.chart_id}"`)) {
+      fail(`/blog/${post.slug} missing prerendered chart fallback for ${chart.chart_id}`)
+    }
+    if (!visibleText.includes(chart.title)) {
+      fail(`/blog/${post.slug} prerendered chart fallback missing title ${chart.title}`)
+    }
   }
 
   const phrase = expectedBodyPhrase(post)

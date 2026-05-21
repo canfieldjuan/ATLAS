@@ -34,6 +34,24 @@ interface BlogSourceMetadata {
   seoTitle: string
   seoDescription: string
   content: string
+  charts: ChartSpec[]
+}
+
+type ChartValue = string | number | null | undefined
+type ChartDatum = Record<string, ChartValue>
+
+interface ChartSeries {
+  dataKey: string
+}
+
+interface ChartSpec {
+  chart_id: string
+  title: string
+  data: ChartDatum[]
+  config: {
+    bars?: ChartSeries[]
+    x_key?: string
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -52,6 +70,57 @@ function parseTemplateField(content: string, field: string): string {
   return match ? match[1] : ''
 }
 
+function parseArrayField(content: string, field: string): string {
+  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
+  if (!fieldMatch) return ''
+
+  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
+  let depth = 0
+  let quote = ''
+  let escaped = false
+
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = ''
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+
+    if (char === '[') depth += 1
+    if (char === ']') depth -= 1
+
+    if (depth === 0) {
+      return content.slice(start, index + 1)
+    }
+  }
+
+  throw new Error(`Unclosed array field in blog source: ${field}`)
+}
+
+function parseChartsField(content: string, file: string): ChartSpec[] {
+  const chartsLiteral = parseArrayField(content, 'charts')
+  if (!chartsLiteral) return []
+
+  try {
+    return JSON.parse(chartsLiteral) as ChartSpec[]
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Invalid charts JSON in blog source ${file}: ${message}`)
+  }
+}
+
 function collectBlogSourceMetadata(): BlogSourceMetadata[] {
   const blogDir = resolve(import.meta.dirname, 'src/content/blog')
   if (!existsSync(blogDir)) return []
@@ -68,6 +137,7 @@ function collectBlogSourceMetadata(): BlogSourceMetadata[] {
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
     const postContent = parseTemplateField(content, 'content')
+    const charts = parseChartsField(content, file)
 
     if (!slug) throw new Error(`Missing slug in blog source: ${file}`)
     if (!title) throw new Error(`Missing title in blog source: ${file}`)
@@ -86,6 +156,7 @@ function collectBlogSourceMetadata(): BlogSourceMetadata[] {
       seoTitle,
       seoDescription,
       content: postContent,
+      charts,
     })
   }
 
@@ -164,12 +235,60 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function stripChartPlaceholders(content: string): string {
-  return content.replace(/<p>\s*\{\{chart:[^}]+\}\}\s*<\/p>|\{\{chart:[^}]+\}\}/g, '')
+function chartValue(value: ChartValue): string {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function buildChartFallbackHtml(chart: ChartSpec): string {
+  const xKey = chart.config.x_key || 'name'
+  const series = chart.config.bars?.map(item => item.dataKey) || []
+  const headers = [xKey, ...series]
+  const rows = chart.data
+    .map(row => `          <tr>${headers
+      .map(header => `<td>${escapeHtml(chartValue(row[header]))}</td>`)
+      .join('')}</tr>`)
+    .join('\n')
+
+  return `<figure data-prerendered-chart="${escapeHtml(chart.chart_id)}">
+        <figcaption>${escapeHtml(chart.title)}</figcaption>
+        <table>
+          <thead><tr>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead>
+          <tbody>
+${rows}
+          </tbody>
+        </table>
+      </figure>`
+}
+
+function chartPlaceholderIds(content: string): string[] {
+  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
+    .map(match => (match[1] || match[2] || '').trim())
+    .filter(Boolean)
+}
+
+function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
+  const chartMap = new Map(charts.map(chart => [chart.chart_id, chart]))
+  const unknownChartIds = [...new Set(chartPlaceholderIds(content).filter(chartId => !chartMap.has(chartId)))]
+  if (unknownChartIds.length) {
+    throw new Error(`Missing chart fallback data for: ${unknownChartIds.join(', ')}`)
+  }
+
+  return content.replace(
+    /<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g,
+    (_match, htmlId: string | undefined, markdownId: string | undefined) => {
+      const chartId = (htmlId || markdownId || '').trim()
+      const chart = chartMap.get(chartId)
+      if (!chart) {
+        throw new Error(`Missing chart fallback data for: ${chartId}`)
+      }
+      return buildChartFallbackHtml(chart)
+    },
+  )
 }
 
 function buildBlogBodyHtml(post: BlogSourceMetadata): string {
-  const articleHtml = marked.parse(stripChartPlaceholders(post.content), { async: false }) as string
+  const articleHtml = marked.parse(renderChartFallbacks(post.content, post.charts), { async: false }) as string
   return `
     <article data-prerendered-blog-article="true">
       <header>
