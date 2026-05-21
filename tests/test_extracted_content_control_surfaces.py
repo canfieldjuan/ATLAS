@@ -259,6 +259,56 @@ def test_landing_page_repair_attempt_contract_matches_generation_and_ui():
     )
 
 
+# The cross-language scrape above pins the MAX/key/default constants. These pin
+# the shared backend validator's accept/reject LOGIC, so a regression that drops
+# the cap, the negative check, or the bool/float guards is also caught -- not
+# just a changed constant. The UI normalizer is expected to mirror this; that
+# mirror is asserted at the constant level (scrape) until a JS test runner exists.
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (0, 0),
+        (5, 5),
+        (MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS, MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS),
+        ("0", 0),
+        ("7", 7),
+        (str(MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS), MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS),
+    ],
+)
+def test_landing_page_repair_attempt_input_accepts_in_range(raw, expected):
+    assert (
+        landing_page_quality_repair_attempt_input({LANDING_PAGE_QUALITY_REPAIR_INPUT: raw})
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        -1,
+        MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS + 1,
+        100,
+        True,
+        1.5,
+        "many",
+        "-1",
+        "1.5",
+        "",
+    ],
+)
+def test_landing_page_repair_attempt_input_rejects_out_of_contract(raw):
+    with pytest.raises(ValueError):
+        landing_page_quality_repair_attempt_input({LANDING_PAGE_QUALITY_REPAIR_INPUT: raw})
+
+
+def test_landing_page_repair_attempt_input_treats_missing_as_none():
+    assert landing_page_quality_repair_attempt_input({}) is None
+    assert (
+        landing_page_quality_repair_attempt_input({LANDING_PAGE_QUALITY_REPAIR_INPUT: None})
+        is None
+    )
+
+
 def test_preview_landing_page_repair_cost_can_block_budget():
     preview = preview_from_mapping(
         {
