@@ -81,6 +81,14 @@ git diff --name-status "$base"...HEAD || true
 
 run_check "Pre-push audit wrapper" bash scripts/pre_push_audit.sh
 
+if [ -f scripts/audit_pr_session_drift.py ]; then
+    run_check "Cross-session PR drift" python scripts/audit_pr_session_drift.py "$base_ref"
+else
+    echo
+    echo "==> Cross-session PR drift"
+    echo "    SKIP (scripts/audit_pr_session_drift.py not found)"
+fi
+
 committed_plan_docs=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null |
         sort -u |
