@@ -191,80 +191,110 @@ const post: BlogPost = {
 <p>These patterns suggest that CRM buyers are actively evaluating multiple options and that no single vendor fully resolves the category's recurring pain points.</p>
 <h2 id="close-strengths-weaknesses">Close: Strengths &amp; Weaknesses</h2>
 <p>Close has 12 reviews in scope with an average rating of 4.5 stars. The sample is small, so treat these findings as preliminary sentiment evidence.</p>
-<p><strong>Top pain points:</strong>
-- Overall dissatisfaction
-- Pricing
-- User experience</p>
-<p><strong>Strengths:</strong>
-- Pricing (despite also appearing as a weakness, some reviewers find the pricing model acceptable)
-- User experience (reviewers who praise Close often highlight its clean interface)
-- Reliability</p>
-<p><strong>Weaknesses:</strong>
-- Contract lock-in
-- Technical debt
-- Support</p>
+<p><strong>Top pain points:</strong></p>
+<ul>
+<li>Overall dissatisfaction</li>
+<li>Pricing</li>
+<li>User experience</li>
+</ul>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Pricing (despite also appearing as a weakness, some reviewers find the pricing model acceptable)</li>
+<li>User experience (reviewers who praise Close often highlight its clean interface)</li>
+<li>Reliability</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Contract lock-in</li>
+<li>Technical debt</li>
+<li>Support</li>
+</ul>
 <p>Close's positioning is interesting. Pricing appears in both the strength and weakness lists, suggesting segmentation. Some reviewers find the pricing fair, while others report frustration with cost increases or seat-based models.</p>
 <p>The small sample size limits confidence. If you are evaluating Close, supplement this analysis with direct vendor conversations and trial usage.</p>
 <h2 id="copper-strengths-weaknesses">Copper: Strengths &amp; Weaknesses</h2>
 <p>Copper has 24 reviews in scope with an average rating of 4.7 stars. Despite the high rating, Copper shows elevated churn urgency.</p>
-<p><strong>Top pain points:</strong>
-- Overall dissatisfaction (appears twice in the top three, indicating concentrated frustration)
-- Pricing</p>
-<p><strong>Strengths:</strong>
-- Security
-- Overall dissatisfaction (counterintuitively, some reviewers report satisfaction despite the category's high pain frequency)
-- Onboarding</p>
-<p><strong>Weaknesses:</strong>
-- Data migration
-- Technical debt
-- Contract lock-in</p>
+<p><strong>Top pain points:</strong></p>
+<ul>
+<li>Overall dissatisfaction (appears twice in the top three, indicating concentrated frustration)</li>
+<li>Pricing</li>
+</ul>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Security</li>
+<li>Overall dissatisfaction (counterintuitively, some reviewers report satisfaction despite the category's high pain frequency)</li>
+<li>Onboarding</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Data migration</li>
+<li>Technical debt</li>
+<li>Contract lock-in</li>
+</ul>
 <p>Copper's high rating combined with elevated churn urgency suggests a polarized user base. Satisfied users rate it highly, but frustrated users express strong switching intent.</p>
 <p>Data migration appears as a weakness. Reviewers report friction moving data into or out of Copper, which can create lock-in effects even when satisfaction declines.</p>
 <h2 id="freshsales-strengths-weaknesses">Freshsales: Strengths &amp; Weaknesses</h2>
 <p>Freshsales has 31 reviews in scope with an average rating of 4.2 stars. It shows elevated churn urgency alongside Copper.</p>
-<p><strong>Top pain points:</strong>
-- Features
-- Overall dissatisfaction
-- User experience</p>
-<p><strong>Strengths:</strong>
-- Performance
-- User experience (again, appears in both lists)
-- Features (also appears in both lists)</p>
-<p><strong>Weaknesses:</strong>
-- Contract lock-in
-- Reliability
-- Pricing</p>
+<p><strong>Top pain points:</strong></p>
+<ul>
+<li>Features</li>
+<li>Overall dissatisfaction</li>
+<li>User experience</li>
+</ul>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Performance</li>
+<li>User experience (again, appears in both lists)</li>
+<li>Features (also appears in both lists)</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Contract lock-in</li>
+<li>Reliability</li>
+<li>Pricing</li>
+</ul>
 <p>Freshsales' pain profile is broad. Features, UX, and overall dissatisfaction all appear in the top three, suggesting that frustration is not concentrated in one area.</p>
 <p>The dual appearance of features and UX in both strength and weakness lists indicates segmentation. Some users find the feature set and interface strong, while others report gaps and friction.</p>
 <p>Reliability appears as a weakness. Reviewers mention bugs, downtime, and performance issues that undermine trust.</p>
 <h2 id="insightly-strengths-weaknesses">Insightly: Strengths &amp; Weaknesses</h2>
 <p>Insightly has 26 reviews in scope with an average rating of 4.1 stars.</p>
-<p><strong>Top pain points:</strong>
-- Features
-- Support
-- Pricing</p>
-<p><strong>Strengths:</strong>
-- Data migration
-- Onboarding
-- User experience</p>
-<p><strong>Weaknesses:</strong>
-- Support (appears in both lists)
-- Features (appears in both lists)</p>
+<p><strong>Top pain points:</strong></p>
+<ul>
+<li>Features</li>
+<li>Support</li>
+<li>Pricing</li>
+</ul>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Data migration</li>
+<li>Onboarding</li>
+<li>User experience</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Support (appears in both lists)</li>
+<li>Features (appears in both lists)</li>
+</ul>
 <p>Insightly's pain profile is notable for the prominence of support. Reviewers report frustration with response time, resolution quality, and the support team's ability to address complex issues.</p>
 <p>Features also appear in both lists. Some reviewers praise Insightly's project management and pipeline features, while others report gaps in reporting, automation, and customization.</p>
 <p>Data migration appears as a strength. Reviewers who switched to Insightly report relatively smooth onboarding and data import processes.</p>
 <h2 id="nutshell-strengths-weaknesses">Nutshell: Strengths &amp; Weaknesses</h2>
 <p>Nutshell has 26 reviews in scope with an average rating of 4.4 stars. It shows the lowest churn urgency among the vendors profiled.</p>
-<p><strong>Top pain points:</strong>
-- Data migration
-- Integration
-- Pricing</p>
-<p><strong>Strengths:</strong>
-- Integration (appears in both lists)
-- Data migration (appears in both lists)
-- Onboarding</p>
-<p><strong>Weaknesses:</strong>
-- None listed in the supplied data</p>
+<p><strong>Top pain points:</strong></p>
+<ul>
+<li>Data migration</li>
+<li>Integration</li>
+<li>Pricing</li>
+</ul>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Integration (appears in both lists)</li>
+<li>Data migration (appears in both lists)</li>
+<li>Onboarding</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>None listed in the supplied data</li>
+</ul>
 <p>Nutshell's profile is the most balanced. Data migration and integration appear in both the pain and strength lists, suggesting that experiences vary by use case or implementation quality.</p>
 <p>The absence of weaknesses in the supplied data does not mean Nutshell is flawless. It may indicate that the sample size is too small to surface a clear weakness pattern, or that Nutshell's pain points are more evenly distributed across categories.</p>
 <p>Nutshell's low churn urgency and high rating suggest relatively stable satisfaction, but the pricing pain point indicates that cost pressure is still a factor.</p>

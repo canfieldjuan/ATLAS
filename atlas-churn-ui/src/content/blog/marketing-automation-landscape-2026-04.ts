@@ -144,12 +144,14 @@ const post: BlogPost = {
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
 <p>The marketing automation category has become a crowded, price-sensitive market where feature parity is high and cost differentiation drives switching behavior. This analysis examines 1,568 enriched reviews of five major vendors—ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp—collected between February 28 and April 6, 2026.</p>
 <p>Our data comes from verified review platforms (G2, Gartner Peer Insights, PeerSpot) and community platforms (Reddit, Software Advice, TrustPilot), giving us both structured ratings and unfiltered switching intent signals. The goal is not to declare a winner, but to show you where the churn pressure lies, which vendors face the highest replacement risk, and what patterns repeat across the category.</p>
-<p><strong>Key facts:</strong>
-- 5 vendors analyzed
-- 57 total churn signals identified
-- Average urgency score: 4.1 (on a 10-point scale)
-- Market regime: fragmented
-- Confidence level: high (based on 1,568 enriched reviews)</p>
+<p><strong>Key facts:</strong></p>
+<ul>
+<li>5 vendors analyzed</li>
+<li>57 total churn signals identified</li>
+<li>Average urgency score: 4.1 (on a 10-point scale)</li>
+<li>Market regime: fragmented</li>
+<li>Confidence level: high (based on 1,568 enriched reviews)</li>
+</ul>
 <h2 id="what-market-regime-are-we-in">What Market Regime Are We In?</h2>
 <p>The marketing automation market is fragmented. No single vendor dominates; instead, we see clear displacement flows where teams switch based on cost and perceived feature gaps. This fragmentation creates opportunity for specialists (Klaviyo for e-commerce, GetResponse for small business) and pressure on generalists (ActiveCampaign, Mailchimp) to justify premium pricing.</p>
 <p>In a fragmented regime, switching costs are moderate, contract lock-in is real but not absolute, and pricing becomes the tiebreaker. When two platforms offer similar features, the cheaper one wins—especially at renewal time when frustration peaks.</p>
@@ -165,76 +167,96 @@ const post: BlogPost = {
 <h2 id="activecampaign-strengths-weaknesses">ActiveCampaign: Strengths &amp; Weaknesses</h2>
 <p><strong>Rating:</strong> 4.3 | <strong>Reviews analyzed:</strong> 28 | <strong>Churn urgency:</strong> High</p>
 <p>ActiveC ampaign is a full-featured CRM and marketing automation platform that excels at workflow automation and integration breadth. Reviewers consistently praise its feature depth and customization options.</p>
-<p><strong>Strengths:</strong>
-- Feature richness and automation depth
-- Strong UX for power users
-- Extensive integration ecosystem</p>
-<p><strong>Weaknesses:</strong>
-- Pricing pressure: Premium plans run $500–$800 more per month than Mailchimp equivalents
-- Overall dissatisfaction: Reviewers report frustration with pricing-to-value ratio
-- Competitive inferiority: Losing ground to HubSpot on all-in-one appeal and to Klaviyo on e-commerce focus
-- Technical debt and performance issues cited by some users
-- Contract lock-in concerns, especially at higher tiers</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Feature richness and automation depth</li>
+<li>Strong UX for power users</li>
+<li>Extensive integration ecosystem</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing pressure: Premium plans run $500–$800 more per month than Mailchimp equivalents</li>
+<li>Overall dissatisfaction: Reviewers report frustration with pricing-to-value ratio</li>
+<li>Competitive inferiority: Losing ground to HubSpot on all-in-one appeal and to Klaviyo on e-commerce focus</li>
+<li>Technical debt and performance issues cited by some users</li>
+<li>Contract lock-in concerns, especially at higher tiers</li>
+</ul>
 <p><strong>Churn signal:</strong> Reviewers report evaluating Mailchimp, HubSpot, and Klaviyo as cost-conscious alternatives. Pricing renewal conversations often trigger evaluations.</p>
 <h2 id="brevo-strengths-weaknesses">Brevo: Strengths &amp; Weaknesses</h2>
 <p><strong>Rating:</strong> 4.4 | <strong>Reviews analyzed:</strong> 20 | <strong>Churn urgency:</strong> Moderate</p>
 <p>Brevo (formerly Sendinblue) positions itself as a budget-friendly alternative with strong email and SMS capabilities. It appeals to cost-conscious SMBs and mid-market teams.</p>
-<p><strong>Strengths:</strong>
-- Competitive pricing, especially for email-first workflows
-- Smooth data migration from legacy platforms
-- Strong onboarding experience
-- Reasonable feature set for the price</p>
-<p><strong>Weaknesses:</strong>
-- Pricing still a friction point for some; UX complexity for advanced automation
-- Competitive inferiority: Losing to Klaviyo on e-commerce and HubSpot on all-in-one appeal
-- Performance and reliability concerns cited by some reviewers
-- Contract lock-in on longer commitments</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Competitive pricing, especially for email-first workflows</li>
+<li>Smooth data migration from legacy platforms</li>
+<li>Strong onboarding experience</li>
+<li>Reasonable feature set for the price</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing still a friction point for some; UX complexity for advanced automation</li>
+<li>Competitive inferiority: Losing to Klaviyo on e-commerce and HubSpot on all-in-one appeal</li>
+<li>Performance and reliability concerns cited by some reviewers</li>
+<li>Contract lock-in on longer commitments</li>
+</ul>
 <p><strong>Churn signal:</strong> Reviewers often evaluate Brevo as a cost-down move, then reconsider when they need deeper automation or e-commerce features. Retention is strongest among email-first teams.</p>
 <h2 id="getresponse-strengths-weaknesses">GetResponse: Strengths &amp; Weaknesses</h2>
 <p><strong>Rating:</strong> 4.6 | <strong>Reviews analyzed:</strong> 12 | <strong>Churn urgency:</strong> Low-Moderate</p>
 <p>GetResponse targets small business and solopreneur segments with an affordable, integrated platform. It combines email, landing pages, and webinars in one toolset.</p>
-<p><strong>Strengths:</strong>
-- Strong integration ecosystem
-- Clean, intuitive UX
-- Smooth onboarding for non-technical users
-- Good value for small teams</p>
-<p><strong>Weaknesses:</strong>
-- Pricing complaints despite affordability—reviewers want lower entry points
-- Support responsiveness cited as a gap
-- Competitive inferiority: Losing to HubSpot and Klaviyo on feature depth
-- Contract lock-in for annual commitments</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Strong integration ecosystem</li>
+<li>Clean, intuitive UX</li>
+<li>Smooth onboarding for non-technical users</li>
+<li>Good value for small teams</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing complaints despite affordability—reviewers want lower entry points</li>
+<li>Support responsiveness cited as a gap</li>
+<li>Competitive inferiority: Losing to HubSpot and Klaviyo on feature depth</li>
+<li>Contract lock-in for annual commitments</li>
+</ul>
 <p><strong>Churn signal:</strong> GetResponse loses teams when they outgrow the platform's feature set or when they consolidate around HubSpot for all-in-one CRM + marketing. Churn is less price-driven than feature-driven.</p>
 <h2 id="klaviyo-strengths-weaknesses">Klaviyo: Strengths &amp; Weaknesses</h2>
 <p><strong>Rating:</strong> 4.6 | <strong>Reviews analyzed:</strong> 45 | <strong>Churn urgency:</strong> Low</p>
 <p>Klaviyo has become the dominant e-commerce marketing automation platform, with deep Shopify, WooCommerce, and BigCommerce integration. It attracts high-growth online retailers and DTC brands.</p>
-<p><strong>Strengths:</strong>
-- Industry-leading e-commerce integrations
-- Powerful segmentation and personalization
-- Strong feature depth and onboarding
-- High satisfaction among target segment</p>
-<p><strong>Weaknesses:</strong>
-- Pricing: Premium plans are expensive; reviewers cite $500+ monthly costs for mid-scale campaigns
-- UX complexity: Advanced features have a learning curve
-- Overall dissatisfaction: Some reviewers feel price does not justify feature gaps vs. competitors
-- Data migration challenges from legacy platforms
-- Performance issues at scale reported by some users
-- Security concerns cited in a small number of reviews</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Industry-leading e-commerce integrations</li>
+<li>Powerful segmentation and personalization</li>
+<li>Strong feature depth and onboarding</li>
+<li>High satisfaction among target segment</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing: Premium plans are expensive; reviewers cite $500+ monthly costs for mid-scale campaigns</li>
+<li>UX complexity: Advanced features have a learning curve</li>
+<li>Overall dissatisfaction: Some reviewers feel price does not justify feature gaps vs. competitors</li>
+<li>Data migration challenges from legacy platforms</li>
+<li>Performance issues at scale reported by some users</li>
+<li>Security concerns cited in a small number of reviews</li>
+</ul>
 <p><strong>Churn signal:</strong> Klaviyo loses cost-conscious teams to Omnisend and Brevo, but retention is strong among high-growth e-commerce teams that see clear ROI. Pricing renewal is the key churn moment.</p>
 <h2 id="mailchimp-strengths-weaknesses">Mailchimp: Strengths &amp; Weaknesses</h2>
 <p><strong>Rating:</strong> 4.3 | <strong>Reviews analyzed:</strong> 45 | <strong>Churn urgency:</strong> High</p>
 <p>Mailchimp is the incumbent email marketing platform, known for ease of use and free tier accessibility. It remains the entry point for many small businesses, but faces intense competition at scale.</p>
-<p><strong>Strengths:</strong>
-- Intuitive UX, especially for email-first workflows
-- Robust feature set for the price
-- Strong overall satisfaction among small business users
-- Free tier enables low-friction adoption</p>
-<p><strong>Weaknesses:</strong>
-- Pricing: Teams report significant cost jumps at higher tiers and list sizes
-- UX: Advanced automation and segmentation feel clunky compared to Klaviyo or ActiveCampaign
-- Feature gaps: Missing advanced CRM, e-commerce, and workflow capabilities
-- Technical debt: Platform feels dated in places
-- Contract lock-in: Annual commitments with limited flexibility
-- Reliability: Some users report deliverability and API stability issues</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Intuitive UX, especially for email-first workflows</li>
+<li>Robust feature set for the price</li>
+<li>Strong overall satisfaction among small business users</li>
+<li>Free tier enables low-friction adoption</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing: Teams report significant cost jumps at higher tiers and list sizes</li>
+<li>UX: Advanced automation and segmentation feel clunky compared to Klaviyo or ActiveCampaign</li>
+<li>Feature gaps: Missing advanced CRM, e-commerce, and workflow capabilities</li>
+<li>Technical debt: Platform feels dated in places</li>
+<li>Contract lock-in: Annual commitments with limited flexibility</li>
+<li>Reliability: Some users report deliverability and API stability issues</li>
+</ul>
 <p><strong>Churn signal:</strong> Mailchimp loses teams to Klaviyo (e-commerce focus), HubSpot (all-in-one CRM), and Brevo (cost). The churn moment typically arrives at renewal when teams realize they have outgrown email-only capabilities.</p>
 <h2 id="choosing-the-right-marketing-automation-platform">Choosing the Right Marketing Automation Platform</h2>
 <p>The marketing automation landscape offers no universal winner. Instead, the right choice depends on your use case, budget, and growth stage.</p>

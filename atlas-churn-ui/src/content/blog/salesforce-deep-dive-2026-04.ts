@@ -239,27 +239,33 @@ const post: BlogPost = {
 <p>Timing matters here. The analysis identifies May 1 as a timing anchor, corresponding to the Agentforce launch window. Reviewers are actively calculating ROI in the context of new product announcements and pricing changes. Setup cost transparency creates immediate evaluation pressure before teams commit to deeper organizational integration. This isn't a long-simmering issue -- it's fresh, and buyers are responding now.</p>
 <p>Two active evaluation signals are visible in the current dataset, indicating teams actively weighing alternatives. That's a small number in absolute terms, but meaningful given the dataset's 73 total churn intent signals. When 2.7% of switching-intent reviewers are in active evaluation (versus considering a future switch), it suggests urgency.</p>
 <p><strong>Economic buyers show zero public churn rate.</strong> This is a critical data point: once economic decision-makers commit to Salesforce, they don't publicly reverse that decision. The 0.0% churn rate among economic buyers suggests either strong satisfaction post-purchase, or that switching costs (data migration complexity, organizational dependencies) create effective lock-in. The data can't distinguish between these explanations, but the pattern is clear.</p>
-<p><strong>The platform works best for well-resourced organizations.</strong> Reviewer sentiment consistently shows that Salesforce delivers value when teams have:
-- Dedicated Salesforce administrators to manage the platform
-- Budget for proper implementation (not just licensing)
-- Complex business processes that justify customization investment
-- Enterprise-scale user bases where per-seat costs distribute across larger teams</p>
+<p><strong>The platform works best for well-resourced organizations.</strong> Reviewer sentiment consistently shows that Salesforce delivers value when teams have:</p>
+<ul>
+<li>Dedicated Salesforce administrators to manage the platform</li>
+<li>Budget for proper implementation (not just licensing)</li>
+<li>Complex business processes that justify customization investment</li>
+<li>Enterprise-scale user bases where per-seat costs distribute across larger teams</li>
+</ul>
 <p>Teams without these resources report frustration with complexity, implementation timelines, and cost-benefit ratios that don't justify the investment.</p>
 <p><strong>Support quality remains a persistent weakness.</strong> Despite Salesforce's market dominance and enterprise focus, reviewers consistently cite support issues. Response times, knowledge gaps, and the need for premium support tiers to access competent help create friction. This pattern appears across company sizes, though enterprise reviewers report better experiences with dedicated account teams.</p>
 <p><strong>The ecosystem is both strength and liability.</strong> Reviewers value Salesforce's integration breadth and AppExchange marketplace while simultaneously reporting that making integrations work reliably requires ongoing effort. Pre-built connectors don't always deliver seamless data flow. Custom development or middleware becomes necessary for integrations that should theoretically work out-of-box. The maintenance burden of keeping integrations functional through platform updates creates ongoing operational cost.</p>
 <p><strong>Market regime remains stable.</strong> Despite pricing pressure and active evaluation signals, Salesforce operates in a "stable" market regime according to category assessment. This suggests the current churn patterns are elevated but not catastrophic. Competitors are applying pressure, but no single alternative is displacing Salesforce at scale. The platform's market position remains defensible, even as specific buyer segments (particularly smaller teams) increasingly question the value proposition.</p>
-<p><strong>Who should consider Salesforce in 2026:</strong>
-- Mid-market to enterprise B2B companies with complex sales processes
-- Organizations with existing Salesforce investments seeking to expand usage
-- Teams with dedicated resources for implementation and ongoing administration
-- Companies requiring deep customization and extensive third-party integrations
-- Buyers prioritizing ecosystem breadth over setup simplicity</p>
-<p><strong>Who should evaluate alternatives:</strong>
-- Small teams (sub-50 employees) without dedicated admin resources
-- Organizations with straightforward CRM requirements that don't justify customization investment
-- Budget-constrained buyers where total cost of ownership is a primary concern
-- Teams prioritizing quick setup and intuitive UX over customization depth
-- Companies seeking modern interface design and user experience</p>
+<p><strong>Who should consider Salesforce in 2026:</strong></p>
+<ul>
+<li>Mid-market to enterprise B2B companies with complex sales processes</li>
+<li>Organizations with existing Salesforce investments seeking to expand usage</li>
+<li>Teams with dedicated resources for implementation and ongoing administration</li>
+<li>Companies requiring deep customization and extensive third-party integrations</li>
+<li>Buyers prioritizing ecosystem breadth over setup simplicity</li>
+</ul>
+<p><strong>Who should evaluate alternatives:</strong></p>
+<ul>
+<li>Small teams (sub-50 employees) without dedicated admin resources</li>
+<li>Organizations with straightforward CRM requirements that don't justify customization investment</li>
+<li>Budget-constrained buyers where total cost of ownership is a primary concern</li>
+<li>Teams prioritizing quick setup and intuitive UX over customization depth</li>
+<li>Companies seeking modern interface design and user experience</li>
+</ul>
 <p>The data suggests Salesforce isn't failing -- it's succeeding at what it was designed to do while struggling to justify its complexity and cost for buyers outside its core market. The platform's challenges are primarily economic (pricing pressure) and operational (implementation complexity) rather than technical capability gaps.</p>
 <p>For decision-makers evaluating Salesforce in 2026, the key question isn't "Is Salesforce good?" but rather "Do we have the resources and requirements that make Salesforce the right fit?" The reviewer data provides clear signals on both sides of that question.</p>`,
 }

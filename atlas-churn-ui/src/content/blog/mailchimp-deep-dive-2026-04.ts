@@ -216,18 +216,22 @@ const post: BlogPost = {
 <hr />
 <h2 id="who-reviews-mailchimp-buyer-personas">Who Reviews Mailchimp: Buyer Personas</h2>
 <p>Mailchimp reviewers span multiple roles and purchase stages:</p>
-<p><strong>Top reviewer roles:</strong>
-- Unknown/unspecified (13 reviews in post-purchase stage)
-- End users / individual contributors (5 reviews in post-purchase)
-- Evaluators / decision-makers in active assessment (4 reviews)
-- Economic buyers / budget holders (2 reviews)</p>
+<p><strong>Top reviewer roles:</strong></p>
+<ul>
+<li>Unknown/unspecified (13 reviews in post-purchase stage)</li>
+<li>End users / individual contributors (5 reviews in post-purchase)</li>
+<li>Evaluators / decision-makers in active assessment (4 reviews)</li>
+<li>Economic buyers / budget holders (2 reviews)</li>
+</ul>
 <p><strong>Purchase stage distribution:</strong>
 - <strong>Post-purchase.</strong> The vast majority of reviews come from existing customers reflecting on their experience. This skews sentiment toward frustration with price increases and feature gaps.
 - <strong>Evaluation stage.</strong> A smaller but vocal segment of reviewers are actively comparing Mailchimp to competitors (Brevo, Klaviyo, ActiveCampaign) and documenting switching intent.</p>
-<p><strong>Company size and use case:</strong>
-- Small businesses (1–50 employees) dominate the review base, particularly solopreneurs and small marketing teams.
-- Mid-market companies (51–1,000 employees) also appear, often frustrated by feature limitations.
-- Enterprise adoption is minimal; Mailchimp lacks the depth and compliance features needed at scale.</p>
+<p><strong>Company size and use case:</strong></p>
+<ul>
+<li>Small businesses (1–50 employees) dominate the review base, particularly solopreneurs and small marketing teams.</li>
+<li>Mid-market companies (51–1,000 employees) also appear, often frustrated by feature limitations.</li>
+<li>Enterprise adoption is minimal; Mailchimp lacks the depth and compliance features needed at scale.</li>
+</ul>
 <p><strong>Decision timeline:</strong> Reviewers explicitly reference "few weeks" evaluation windows, often triggered by price increase notices or contract renewal cycles.</p>
 <hr />
 <h2 id="how-mailchimp-stacks-up-against-competitors">How Mailchimp Stacks Up Against Competitors</h2>
@@ -254,10 +258,12 @@ const post: BlogPost = {
 <p><strong>Specific price points cited:</strong>
 - $126/month for 1,000 contacts
 - $308/month for 7,000 contacts</p>
-<p><strong>Triggering events:</strong>
-- Free plan cuts in early 2026
-- Retroactive price increases on existing plans
-- Contact-based pricing model that penalizes growth</p>
+<p><strong>Triggering events:</strong></p>
+<ul>
+<li>Free plan cuts in early 2026</li>
+<li>Retroactive price increases on existing plans</li>
+<li>Contact-based pricing model that penalizes growth</li>
+</ul>
 <p><strong>Reviewer sentiment on pricing:</strong></p>
 <blockquote>
 <p>"I stopped paying hundreds per month for Mailchimp &amp; Instantly and built a self-hosted cold email system in n8n." -- reviewer on Reddit</p>
@@ -267,19 +273,23 @@ const post: BlogPost = {
 <p><strong>The counterevidence:</strong> Despite pricing frustration, reviewers acknowledge that the basic platform works well. One reviewer noted: "Despite the many price increases, we do like the basic platform. This may be our goodbye to Mailchimp." This suggests that if Mailchimp were to address pricing or introduce tiered feature improvements, some churn could be arrested. However, the "few weeks" evaluation timeline indicates that the window to act is narrow.</p>
 <hr />
 <h2 id="key-takeaways-for-potential-buyers">Key Takeaways for Potential Buyers</h2>
-<p><strong>Choose Mailchimp if:</strong>
-- You need a simple, intuitive email marketing platform with minimal learning curve.
-- You operate an e-commerce store and want seamless Shopify or WooCommerce integration.
-- You have fewer than 5,000 contacts and plan to stay small.
-- You value template quality and drag-and-drop simplicity over advanced automation.
-- You are willing to accept limited support on lower-tier plans.</p>
-<p><strong>Evaluate alternatives if:</strong>
-- You have more than 5,000 contacts or expect rapid growth. Cost per contact will become prohibitive.
-- You need advanced automation, conditional logic, or multi-channel orchestration.
-- You require tight CRM integration or API depth for custom workflows.
-- You want unlimited contacts at a fixed price (Brevo is a strong alternative).
-- You prioritize responsive support and transparent pricing without recent increases.
-- You are evaluating Mailchimp during a contract renewal or price increase notice.</p>
+<p><strong>Choose Mailchimp if:</strong></p>
+<ul>
+<li>You need a simple, intuitive email marketing platform with minimal learning curve.</li>
+<li>You operate an e-commerce store and want seamless Shopify or WooCommerce integration.</li>
+<li>You have fewer than 5,000 contacts and plan to stay small.</li>
+<li>You value template quality and drag-and-drop simplicity over advanced automation.</li>
+<li>You are willing to accept limited support on lower-tier plans.</li>
+</ul>
+<p><strong>Evaluate alternatives if:</strong></p>
+<ul>
+<li>You have more than 5,000 contacts or expect rapid growth. Cost per contact will become prohibitive.</li>
+<li>You need advanced automation, conditional logic, or multi-channel orchestration.</li>
+<li>You require tight CRM integration or API depth for custom workflows.</li>
+<li>You want unlimited contacts at a fixed price (Brevo is a strong alternative).</li>
+<li>You prioritize responsive support and transparent pricing without recent increases.</li>
+<li>You are evaluating Mailchimp during a contract renewal or price increase notice.</li>
+</ul>
 <p><strong>Market context:</strong> Mailchimp operates in an entrenchment regime where the incumbent has raised prices on the existing base while feature development has slowed relative to competitors. This creates a window for challengers (Brevo, Klaviyo, ActiveCampaign) to capture switchers. The timing is immediate: free plan cuts and price increases in early 2026 are actively triggering evaluation cycles with few-week decision windows.</p>
 <hr />
 <h2 id="the-bottom-line">The Bottom Line</h2>

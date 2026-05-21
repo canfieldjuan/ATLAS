@@ -200,16 +200,20 @@ const post: BlogPost = {
 <p><strong>Technical debt signals are newly emerging</strong>, with all 4 mentions appearing in the recent review period (prior count was zero). Support complaints are accelerating. These are early-stage compounding signals that typically precede broader churn acceleration. The data suggests that engaging accounts before these issues become entrenched increases displacement probability, particularly given the 61 active evaluation signals visible in the current dataset.</p>
 <p>Economic buyer churn rate is 0.0%, meaning none of the decision-makers in this dataset show switching intent. This is a strong retention signal at the budget-holder level. However, the declining sentiment trajectory (0.0% declining vs. 0.0% improving) suggests stability rather than momentum. The platform is not losing ground, but it is not gaining either.</p>
 <p>The strongest current pressure surfaces with <strong>economic buyers and evaluators, especially in SMB accounts</strong>. This segment is actively comparing Copper to alternatives and weighing the Google integration benefit against feature and UX trade-offs. For teams where Google Workspace is central to operations, Copper's integration advantage is defensible. For teams with lighter Google usage or stronger automation needs, the feature gaps become harder to justify.</p>
-<p><strong>Who should buy Copper:</strong>
-- Small to mid-market sales teams (under 50 users) embedded in Google Workspace
-- Teams prioritizing seamless Gmail and Calendar integration over advanced automation
-- Organizations with straightforward sales processes that do not require complex workflow customization
-- Buyers who value simplicity and are willing to trade feature depth for ease of deployment</p>
-<p><strong>Who should evaluate alternatives:</strong>
-- Teams using Microsoft 365 or other non-Google productivity suites
-- Organizations needing enterprise-grade reporting, automation, or AI-powered insights
-- Sales teams with complex, multi-stage pipelines requiring advanced customization
-- Buyers who have outgrown Copper's feature set and are experiencing UX friction at scale</p>
+<p><strong>Who should buy Copper:</strong></p>
+<ul>
+<li>Small to mid-market sales teams (under 50 users) embedded in Google Workspace</li>
+<li>Teams prioritizing seamless Gmail and Calendar integration over advanced automation</li>
+<li>Organizations with straightforward sales processes that do not require complex workflow customization</li>
+<li>Buyers who value simplicity and are willing to trade feature depth for ease of deployment</li>
+</ul>
+<p><strong>Who should evaluate alternatives:</strong></p>
+<ul>
+<li>Teams using Microsoft 365 or other non-Google productivity suites</li>
+<li>Organizations needing enterprise-grade reporting, automation, or AI-powered insights</li>
+<li>Sales teams with complex, multi-stage pipelines requiring advanced customization</li>
+<li>Buyers who have outgrown Copper's feature set and are experiencing UX friction at scale</li>
+</ul>
 <p>The market regime is <strong>stable</strong>, indicating no category-wide disruption or churn acceleration. Copper operates in a mature CRM market where buyer expectations are high and feature parity with leaders like Salesforce and HubSpot is an ongoing challenge.</p>
 <p>The data suggests Copper is a defensible choice for its target segment (Google-native SMB teams) but faces pressure as customers scale and demand more sophisticated capabilities. The platform's future competitiveness depends on closing feature gaps without sacrificing the simplicity that defines its positioning.</p>
 <p>For teams evaluating Copper today, the decision hinges on one question: Is seamless Google integration worth the trade-offs in automation, reporting, and UX polish? If yes, Copper delivers on its core promise. If no, Salesforce and HubSpot offer richer feature sets at the cost of complexity.</p>`,

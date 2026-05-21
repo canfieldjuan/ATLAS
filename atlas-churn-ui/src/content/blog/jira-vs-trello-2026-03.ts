@@ -128,18 +128,22 @@ const post: BlogPost = {
 <h2 id="jira-vs-trello-by-the-numbers">Jira vs Trello: By the Numbers</h2>
 <p>The core metrics reveal divergent reviewer experiences. Jira's 886 reviews show elevated urgency across multiple pain categories, while Trello's 1016 reviews cluster around a narrower set of scaling-related complaints.</p>
 <p>{{chart:head2head-bar}}</p>
-<p><strong>Jira's profile:</strong>
-- 886 reviews analyzed, 2.3/10 average urgency
-- Decision-maker churn rate: 10%
-- Top complaint category: UX complexity and forced cloud migrations
-- 58 evaluator-role reviews, 30 economic buyer reviews
-- 7 displacement signals (reviewers describing switches to Trello)</p>
-<p><strong>Trello's profile:</strong>
-- 1016 reviews analyzed, 1.7/10 average urgency
-- Decision-maker churn rate: 0%
-- Top complaint category: Scaling limitations beyond 50 cards
-- 48 evaluator-role reviews, 24 economic buyer reviews
-- 6 displacement signals (reviewers describing switches to Jira)</p>
+<p><strong>Jira's profile:</strong></p>
+<ul>
+<li>886 reviews analyzed, 2.3/10 average urgency</li>
+<li>Decision-maker churn rate: 10%</li>
+<li>Top complaint category: UX complexity and forced cloud migrations</li>
+<li>58 evaluator-role reviews, 30 economic buyer reviews</li>
+<li>7 displacement signals (reviewers describing switches to Trello)</li>
+</ul>
+<p><strong>Trello's profile:</strong></p>
+<ul>
+<li>1016 reviews analyzed, 1.7/10 average urgency</li>
+<li>Decision-maker churn rate: 0%</li>
+<li>Top complaint category: Scaling limitations beyond 50 cards</li>
+<li>48 evaluator-role reviews, 24 economic buyer reviews</li>
+<li>6 displacement signals (reviewers describing switches to Jira)</li>
+</ul>
 <p>The 0.6-point urgency gap is meaningful but not extreme. For context, urgency scores above 5.0 indicate acute pain requiring immediate intervention. Both vendors sit well below that threshold, suggesting most reviewers experience manageable friction rather than crisis-level problems.</p>
 <p>Source distribution matters for interpretation. Reddit accounts for 708 reviews (37% of total), skewing toward technical users and teams with strong opinions. Verified review platforms (G2, Capterra, Gartner, TrustRadius) contribute 294 reviews, representing a more balanced mix of buyer roles. Trustpilot adds 173 reviews, often from smaller teams and individual users.</p>
 <h2 id="where-each-vendor-falls-short">Where Each Vendor Falls Short</h2>
@@ -165,18 +169,22 @@ const post: BlogPost = {
 <h2 id="who-is-actually-switching">Who Is Actually Switching?</h2>
 <p>Displacement patterns reveal bidirectional movement between the two vendors, with moderate signal strength and distinct switching triggers.</p>
 <p>Among 1002 enriched reviews, <strong>7 describe switching from Jira to Trello</strong> and <strong>6 describe switching from Trello to Jira</strong>. This near-parity suggests the vendors serve different segments rather than competing head-to-head for the same buyers. The displacement flows are driven by different pain points:</p>
-<p><strong>Jira → Trello switches:</strong>
-- Primary driver: <strong>Integration challenges and UX complexity</strong>
-- Signal strength: Moderate (based on 7 mentions)
-- Active evaluations: 5 reviewers actively comparing alternatives
-- Explicit switches: 0 reviewers report completed migrations in this sample</p>
+<p><strong>Jira → Trello switches:</strong></p>
+<ul>
+<li>Primary driver: <strong>Integration challenges and UX complexity</strong></li>
+<li>Signal strength: Moderate (based on 7 mentions)</li>
+<li>Active evaluations: 5 reviewers actively comparing alternatives</li>
+<li>Explicit switches: 0 reviewers report completed migrations in this sample</li>
+</ul>
 <p>Reviewers considering moves from Jira to Trello cite the desire for simpler workflows and easier onboarding. These are typically smaller teams (under 20 people) or teams using Jira for use cases simpler than software development. They describe Jira as "overkill" for their needs.</p>
 <p>The integration complaint appears counterintuitive—Jira has a larger ecosystem than Trello. But reviewers describe friction connecting Jira to non-Atlassian tools, particularly in marketing, design, and operations workflows where Atlassian's ecosystem has less coverage.</p>
-<p><strong>Trello → Jira switches:</strong>
-- Primary driver: <strong>Scaling limitations and feature gaps</strong>
-- Signal strength: Moderate (based on 6 mentions)
-- Active evaluations: Included in the 5 total active evaluations
-- Explicit switches: 0 reviewers report completed migrations in this sample</p>
+<p><strong>Trello → Jira switches:</strong></p>
+<ul>
+<li>Primary driver: <strong>Scaling limitations and feature gaps</strong></li>
+<li>Signal strength: Moderate (based on 6 mentions)</li>
+<li>Active evaluations: Included in the 5 total active evaluations</li>
+<li>Explicit switches: 0 reviewers report completed migrations in this sample</li>
+</ul>
 <p>Reviewers considering moves from Trello to Jira describe hitting the 50-card wall or needing capabilities Trello lacks (time tracking, advanced reporting, dependency management). These are typically growing teams (20-50 people) or teams with increasingly complex workflows.</p>
 <p>One reviewer cites <strong>support issues</strong> as a switching trigger, though this appears only once and may reflect an isolated incident rather than a systemic pattern.</p>
 <p><strong>Displacement velocity:</strong></p>
@@ -324,11 +332,13 @@ const post: BlogPost = {
 <p>The pricing pain patterns reinforce the positioning difference. Jira reviewers complain about forced increases from a higher baseline. Trello reviewers complain about add-on costs from a lower baseline. Neither pattern suggests the vendor is overpriced for its target segment—they suggest friction at the boundaries of those segments.</p>
 <h2 id="the-verdict">The Verdict</h2>
 <p>Based on 1902 reviews analyzed between March 4 and March 29, 2026, the data leans toward Trello showing stronger reviewer sentiment, but with critical caveats.</p>
-<p><strong>By the numbers:</strong>
-- Trello shows 26% lower complaint urgency (1.7 vs 2.3)
-- Trello shows 0% decision-maker churn vs 10% for Jira
-- Displacement flows are bidirectional and moderate (7 Jira → Trello, 6 Trello → Jira)
-- Both vendors show 0% churn among evaluators, champions, and end-users</p>
+<p><strong>By the numbers:</strong></p>
+<ul>
+<li>Trello shows 26% lower complaint urgency (1.7 vs 2.3)</li>
+<li>Trello shows 0% decision-maker churn vs 10% for Jira</li>
+<li>Displacement flows are bidirectional and moderate (7 Jira → Trello, 6 Trello → Jira)</li>
+<li>Both vendors show 0% churn among evaluators, champions, and end-users</li>
+</ul>
 <p><strong>The decisive factor:</strong></p>
 <p>Jira's elevated urgency and decision-maker churn stem from a specific catalyst: <strong>forced Server edition sunset compounding existing UX and pricing frustrations</strong>. This is a temporal trigger, not a permanent product weakness. The data shows UX complaints accelerated 36% and pricing complaints surged 86% in the recent window, creating simultaneous friction on usability and cost.</p>
 <p>Reviewers caught in this migration mandate face acute pressure. Teams in regulated industries (financial services, healthcare, government) describe being trapped between compliance requirements and discontinued products. This cohort drives Jira's elevated urgency.</p>
@@ -341,23 +351,29 @@ const post: BlogPost = {
 <p>In this stable context, Jira's UX regression and Server sunset represent a localized disruption, not a category-wide shift. Trello's scaling limitations represent a persistent constraint, not an emerging crisis.</p>
 <p><strong>Buyer guidance:</strong></p>
 <p>The data suggests which vendor fits which buyer profile:</p>
-<p><strong>Consider Trello if:</strong>
-- Your team is under 20 people
-- Your workflows are simple and visual
-- You need fast onboarding and minimal training
-- You won't exceed 50 cards per board
-- You don't need advanced reporting or time tracking</p>
-<p><strong>Consider Jira if:</strong>
-- Your team is over 50 people
-- Your workflows are complex with dependencies
-- You need advanced reporting and sprint planning
-- You can invest in training and configuration
-- You don't have regulatory barriers to cloud deployment</p>
-<p><strong>Reconsider both if:</strong>
-- You're in a regulated industry requiring on-premise deployment (Jira Server sunset affects you)
-- You're a small team that might scale quickly (Trello's limits will constrain you)
-- You need deep integration with non-Atlassian tools (Jira's ecosystem has gaps)
-- You want database-backed flexibility (both are workflow-centric, not data-centric)</p>
+<p><strong>Consider Trello if:</strong></p>
+<ul>
+<li>Your team is under 20 people</li>
+<li>Your workflows are simple and visual</li>
+<li>You need fast onboarding and minimal training</li>
+<li>You won't exceed 50 cards per board</li>
+<li>You don't need advanced reporting or time tracking</li>
+</ul>
+<p><strong>Consider Jira if:</strong></p>
+<ul>
+<li>Your team is over 50 people</li>
+<li>Your workflows are complex with dependencies</li>
+<li>You need advanced reporting and sprint planning</li>
+<li>You can invest in training and configuration</li>
+<li>You don't have regulatory barriers to cloud deployment</li>
+</ul>
+<p><strong>Reconsider both if:</strong></p>
+<ul>
+<li>You're in a regulated industry requiring on-premise deployment (Jira Server sunset affects you)</li>
+<li>You're a small team that might scale quickly (Trello's limits will constrain you)</li>
+<li>You need deep integration with non-Atlassian tools (Jira's ecosystem has gaps)</li>
+<li>You want database-backed flexibility (both are workflow-centric, not data-centric)</li>
+</ul>
 <p>The "winner" depends entirely on where you sit on the complexity-simplicity spectrum and whether you're affected by Jira's migration mandates. Neither vendor dominates across all buyer segments.</p>
 <p><strong>Looking forward:</strong></p>
 <p>The causal trigger (Server sunset) is a one-time event. As affected teams complete migrations or switch to alternatives, Jira's elevated urgency should normalize. The UX complexity complaints will persist—they predate the Server sunset and reflect fundamental design choices—but without the migration catalyst, they're less likely to drive active churn.</p>

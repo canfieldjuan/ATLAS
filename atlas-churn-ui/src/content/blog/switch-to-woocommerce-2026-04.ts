@@ -192,16 +192,20 @@ const post: BlogPost = {
 <p><strong>Integration priorities</strong>: Payment processing (PayPal), shipping logistics (FedEx), dropshipping (Printful), WordPress ecosystem dependencies, and social commerce (Facebook) define the plugin landscape. Reviewers report that integration quality varies and requires active management.</p>
 <p><strong>Migration trade-offs</strong>: Cost control and customization flexibility versus operational simplicity and vendor-managed infrastructure. Reviewers who successfully migrate describe 1-2 weeks of intensive setup and ongoing responsibility for hosting, security, and updates. Those who prioritize simplicity report switching <em>away from</em> WooCommerce to SaaS alternatives.</p>
 <p><strong>Market context</strong>: The category regime is <strong>fragmented comparison</strong> — buyers are actively weighing trade-offs across multiple platforms rather than defaulting to a single dominant solution. This creates opportunity for WooCommerce's cost-control positioning but also means buyers must evaluate performance, ecosystem maturity, and operational complexity alongside price.</p>
-<p><strong>Who this migration pattern fits</strong>:
-- Teams with technical competence or developer support
-- Businesses prioritizing cost control over operational simplicity
-- Stores requiring deep customization beyond SaaS platform constraints
-- Buyers willing to manage hosting, security, and plugin ecosystem</p>
-<p><strong>Who should reconsider</strong>:
-- Teams without technical resources or budget for developer support
-- Businesses prioritizing operational simplicity and vendor-managed infrastructure
-- Stores needing out-of-the-box performance comparable to hosted SaaS platforms
-- Buyers seeking bundled features without plugin dependency management</p>
+<p><strong>Who this migration pattern fits</strong>:</p>
+<ul>
+<li>Teams with technical competence or developer support</li>
+<li>Businesses prioritizing cost control over operational simplicity</li>
+<li>Stores requiring deep customization beyond SaaS platform constraints</li>
+<li>Buyers willing to manage hosting, security, and plugin ecosystem</li>
+</ul>
+<p><strong>Who should reconsider</strong>:</p>
+<ul>
+<li>Teams without technical resources or budget for developer support</li>
+<li>Businesses prioritizing operational simplicity and vendor-managed infrastructure</li>
+<li>Stores needing out-of-the-box performance comparable to hosted SaaS platforms</li>
+<li>Buyers seeking bundled features without plugin dependency management</li>
+</ul>
 <p>The data suggests WooCommerce migration is a strategic choice, not a universal solution. The right decision depends on whether cost control and customization flexibility justify the operational complexity reviewers describe.</p>
 <p>For additional context on CRM migration patterns, see the <a href="/blog/copper-deep-dive-2026-04">Copper deep dive</a>, which shows reviewer sentiment across a different category with distinct switching triggers.</p>`,
 }

@@ -185,10 +185,12 @@ const post: BlogPost = {
 <p>Organizations should supplement this review analysis with direct account intelligence—contract end dates, renewal discussions, competitive RFP activity, and feature request patterns—to identify which customers are at elevated risk of switching.</p>
 <h2 id="how-microsoft-defender-for-endpoint-stacks-up-against-competitors">How Microsoft Defender for Endpoint Stacks Up Against Competitors</h2>
 <p>Reviewers frequently compare Microsoft Defender for Endpoint to CrowdStrike, Cisco Secure Endpoint, Microsoft Defender (the consumer product), Rapid7, and Tenable. The competitive landscape reveals clear differentiation points:</p>
-<p><strong>Microsoft Defender for Endpoint strengths in comparison:</strong>
-- Native Windows and Microsoft 365 integration
-- Lower cost of ownership for organizations already on Microsoft licensing
-- Unified security posture across endpoints and cloud workloads</p>
+<p><strong>Microsoft Defender for Endpoint strengths in comparison:</strong></p>
+<ul>
+<li>Native Windows and Microsoft 365 integration</li>
+<li>Lower cost of ownership for organizations already on Microsoft licensing</li>
+<li>Unified security posture across endpoints and cloud workloads</li>
+</ul>
 <p><strong>Competitor advantages cited by reviewers:</strong>
 - <strong>CrowdStrike</strong>: Superior visibility into non-Windows and cloud-native environments; better integration with modern development tooling
 - <strong>Cisco Secure Endpoint</strong>: Stronger support for heterogeneous infrastructure; better multi-cloud visibility
