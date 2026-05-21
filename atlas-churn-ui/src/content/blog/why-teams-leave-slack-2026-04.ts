@@ -57,7 +57,7 @@ const post: BlogPost = {
 <p>Real-time synchronous chat creates constant context switching. Reviewers report this as the primary driver behind workflow migration.</p>
 <p>These are not isolated complaints. They represent a common pattern: teams migrate specific workflows to asynchronous tools while keeping Slack for other use cases.</p>
 <p>Pricing pressure appears in switching stories.</p>
-<p>The excerpt cuts off, but the signal is clear: teams are comparing per-seat costs and finding alternatives that cost less.</p>
+<p>The signal is clear: teams are comparing per-seat costs and finding alternatives that cost less.</p>
 <p>UX frustrations cluster around FOMO and constant interruptions. Reviewers describe real-time chat culture as creating pressure to stay constantly available. This is not a feature complaint. It is a workflow culture complaint.</p>
 <p>One reviewer described their organization's switch:</p>
 <blockquote>
@@ -95,7 +95,7 @@ const post: BlogPost = {
 <p>Discord appears as a destination, though witness evidence does not include specific Discord switching stories in the quotable phrases.</p>
 <p>Mattermost and Rocket.Chat appear in switching stories from free-tier users and teams prioritizing infrastructure ownership. These are open-source alternatives, not SaaS competitors.</p>
 <p>The displacement pattern is not Slack-to-Teams. It is Slack-for-everything to Slack-plus-async-tools or Slack-to-owned-infrastructure.</p>
-<p>This excerpt shows an active evaluation in progress. The reviewer is comparing tools for specific use cases, not looking for a single Slack replacement.</p>
+<p>An active evaluation is in progress: the reviewer is comparing tools for specific use cases, not looking for a single Slack replacement.</p>
 <p>The switching pattern suggests category shift, not vendor displacement. Teams are not replacing Slack with a better Slack. They are replacing Slack-first workflows with async-first workflows using different tool categories.</p>
 <h2 id="what-youll-miss-slacks-genuine-strengths">What You'll Miss: Slack's Genuine Strengths</h2>
 <p>Despite switching signals, 293 mentions of positive overall satisfaction signals appear in the data. This is not a universally hated product.</p>
