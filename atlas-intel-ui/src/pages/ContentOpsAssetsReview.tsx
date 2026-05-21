@@ -552,7 +552,7 @@ function AssetDetailDrawer({
   const sections = sectionList(row.sections)
   const references = valueList(row.reference_ids)
   const faqItems = asset === 'faq_markdown' ? faqItemList(row.items) : []
-  const readinessPanels = asset === 'blog_post' ? blogReadinessPanels(row) : []
+  const readinessPanels = assetReadinessPanels(row, asset)
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -673,7 +673,7 @@ function AssetDetailDrawer({
         )}
 
         {readinessPanels.length > 0 && (
-          <BlogReadinessBreakdown panels={readinessPanels} />
+          <ReadinessBreakdown panels={readinessPanels} />
         )}
 
         {sections.length > 0 && (
@@ -781,7 +781,7 @@ function AssetDetailDrawer({
   )
 }
 
-function BlogReadinessBreakdown({ panels }: { panels: ReadinessPanel[] }) {
+function ReadinessBreakdown({ panels }: { panels: ReadinessPanel[] }) {
   return (
     <section className="mt-6">
       <h3 className="text-sm font-semibold text-slate-200">Readiness</h3>
@@ -936,6 +936,8 @@ function addAssetSpecificFacts(
   if (asset === 'landing_page') {
     addFact(facts, 'campaign', row.campaign_name)
     addFact(facts, 'persona', row.persona)
+    addFact(facts, 'SEO/AEO', readinessLabel(row.seo_aeo_readiness))
+    addFact(facts, 'GEO', readinessLabel(row.geo_readiness))
     return
   }
   if (asset === 'faq_markdown') {
@@ -1148,7 +1150,11 @@ function readinessSummary(value: unknown): ReadinessSummary | null {
   }
 }
 
-function blogReadinessPanels(row: GeneratedAssetDraft): ReadinessPanel[] {
+function assetReadinessPanels(
+  row: GeneratedAssetDraft,
+  asset: GeneratedAssetType,
+): ReadinessPanel[] {
+  if (asset !== 'blog_post' && asset !== 'landing_page') return []
   return [
     readinessPanel('SEO/AEO', row.seo_aeo_readiness),
     readinessPanel('GEO', row.geo_readiness),
