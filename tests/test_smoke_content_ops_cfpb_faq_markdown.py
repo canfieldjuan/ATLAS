@@ -29,6 +29,25 @@ def _row(row_id: str, text: str) -> dict[str, str]:
     }
 
 
+def _profile(*, source_count: int, scanned_count: int | None = None) -> dict[str, object]:
+    scanned = scanned_count if scanned_count is not None else source_count
+    return {
+        "status": "ok",
+        "raw_row_count": scanned,
+        "raw_row_count_source": "cfpb_csv_rows_scanned",
+        "usable_source_count": source_count,
+        "skipped_row_count": scanned - source_count,
+        "missing_complaint_id_count": 0,
+        "missing_narrative_count": scanned - source_count,
+        "skipped_other_count": 0,
+        "usable_source_ratio": round(source_count / scanned, 6) if scanned else None,
+        "requested_source_count": 2,
+        "max_rows_scanned": 5,
+        "stop_reason": "limit" if source_count >= 2 else "exhausted",
+        "require_narrative": True,
+    }
+
+
 def _args(**overrides):
     values = {
         "company": "Example Bank",
@@ -60,11 +79,15 @@ def test_cfpb_faq_smoke_builds_grounded_markdown(monkeypatch, tmp_path: Path) ->
     calls = []
     monkeypatch.setattr(
         smoke,
-        "fetch_cfpb_source_rows",
-        lambda **kwargs: calls.append(kwargs) or [
-            _row("1", "I was charged overdraft fees after I closed the account."),
-            _row("2", "My payment was applied to the wrong loan balance."),
-        ],
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **kwargs: calls.append(kwargs)
+        or (
+            [
+                _row("1", "I was charged overdraft fees after I closed the account."),
+                _row("2", "My payment was applied to the wrong loan balance."),
+            ],
+            _profile(source_count=2, scanned_count=4),
+        ),
     )
 
     code, payload = smoke.run_cfpb_faq_markdown_smoke(
@@ -79,28 +102,52 @@ def test_cfpb_faq_smoke_builds_grounded_markdown(monkeypatch, tmp_path: Path) ->
         "has_action_items": True,
     }
     assert calls[0]["require_narrative"] is True
+    assert payload["source_profile"]["raw_row_count"] == 4
+    assert payload["source_profile"]["usable_source_count"] == 2
+    assert payload["source_profile"]["missing_narrative_count"] == 2
     markdown = (tmp_path / "cfpb_faq.md").read_text(encoding="utf-8")
     assert "What should I do if I was charged overdraft fees" in markdown
     assert "Open the bill, statement, payment history, or dispute record" in markdown
 
 
 def test_cfpb_faq_smoke_fails_when_fetch_returns_too_few_rows(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(smoke, "fetch_cfpb_source_rows", lambda **_kwargs: [_row("1", "I was charged a fee.")])
+    monkeypatch.setattr(
+        smoke,
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **_kwargs: (
+            [_row("1", "I was charged a fee.")],
+            _profile(source_count=1, scanned_count=3),
+        ),
+    )
 
-    code, payload = smoke.run_cfpb_faq_markdown_smoke(_args(limit=2), source_rows_path=tmp_path / "rows.jsonl")
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(limit=2),
+        source_rows_path=tmp_path / "rows.jsonl",
+    )
 
     assert code == 1
     assert payload["errors"] == ["expected 2 CFPB source row(s), got 1"]
+    assert payload["source_profile"]["raw_row_count"] == 3
+    assert payload["source_profile"]["usable_source_count"] == 1
 
 
-def test_cfpb_faq_smoke_accepts_source_policy_questions_for_weak_rows(monkeypatch, tmp_path: Path) -> None:
+def test_cfpb_faq_smoke_accepts_source_policy_questions_for_weak_rows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr(
         smoke,
-        "fetch_cfpb_source_rows",
-        lambda **_kwargs: [_row("1", "Fee appeared after closure."), _row("2", "Fees changed.")],
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **_kwargs: (
+            [_row("1", "Fee appeared after closure."), _row("2", "Fees changed.")],
+            _profile(source_count=2),
+        ),
     )
 
-    code, payload = smoke.run_cfpb_faq_markdown_smoke(_args(), source_rows_path=tmp_path / "rows.jsonl")
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(),
+        source_rows_path=tmp_path / "rows.jsonl",
+    )
 
     assert code == 0
     assert payload["faq"]["output_checks"] == {
