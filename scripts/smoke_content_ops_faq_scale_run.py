@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import time
 from typing import Any
 
 
@@ -63,16 +64,26 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     stderr_path = artifact_dir / "stderr.txt"
     summary_path = artifact_dir / "run_summary.json"
     command = _build_command(args, markdown_path=markdown_path, result_path=result_path)
+    started = time.monotonic()
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    elapsed_seconds = time.monotonic() - started
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
     result_payload = _read_json(result_path)
+    artifact_paths = {
+        "markdown": markdown_path,
+        "result": result_path,
+        "stdout": stdout_path,
+        "stderr": stderr_path,
+        "summary": summary_path,
+    }
     summary = {
         "ok": completed.returncode == 0,
         "exit_code": completed.returncode,
         "source": str(args.path),
         "source_format": args.source_format,
         "command": command,
+        "timing": {"elapsed_seconds": round(elapsed_seconds, 6)},
         "artifacts": {
             "markdown": _artifact_path(markdown_path),
             "result": _artifact_path(result_path),
@@ -80,9 +91,15 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "stderr": str(stderr_path),
             "summary": str(summary_path),
         },
+        "artifact_details": _artifact_details(artifact_paths),
+        "failure": _failure_summary(
+            returncode=completed.returncode,
+            result_payload=result_payload,
+            stderr=completed.stderr,
+        ),
         "result": result_payload,
     }
-    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_summary(summary_path, summary, artifact_paths)
     if (
         completed.returncode != 0
         and bool(args.allow_output_check_failures)
@@ -141,6 +158,77 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _artifact_path(path: Path) -> str | None:
     return str(path) if path.exists() else None
+
+
+def _artifact_details(paths: dict[str, Path]) -> dict[str, dict[str, Any]]:
+    details = {}
+    for name, path in paths.items():
+        exists = path.exists()
+        details[name] = {
+            "path": str(path),
+            "exists": exists,
+            "bytes": path.stat().st_size if exists else None,
+        }
+    return details
+
+
+def _write_summary(
+    summary_path: Path,
+    summary: dict[str, Any],
+    artifact_paths: dict[str, Path],
+) -> None:
+    details = _artifact_details(artifact_paths)
+    if "summary" in details:
+        details["summary"]["exists"] = True
+        details["summary"]["bytes"] = None
+    summary["artifact_details"] = details
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _failure_summary(
+    *,
+    returncode: int,
+    result_payload: dict[str, Any] | None,
+    stderr: str,
+) -> dict[str, Any] | None:
+    if returncode == 0:
+        return None
+    failed_checks: list[str] = []
+    result_status = None
+    output_check_details: list[dict[str, Any]] = []
+    if isinstance(result_payload, dict):
+        result_status = result_payload.get("status")
+        failed_checks = [
+            str(check)
+            for check in result_payload.get("failed_output_checks") or []
+        ]
+        diagnostics = result_payload.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            details = diagnostics.get("output_check_details")
+            if isinstance(details, list):
+                output_check_details = [
+                    dict(detail)
+                    for detail in details
+                    if isinstance(detail, dict) and detail.get("passed") is not True
+                ]
+    return {
+        "type": "output_checks" if failed_checks else "cli_error",
+        "exit_code": returncode,
+        "result_status": result_status,
+        "failed_output_checks": failed_checks,
+        "output_check_details": output_check_details,
+        "stderr_tail": _text_tail(stderr),
+    }
+
+
+def _text_tail(text: str, *, max_lines: int = 20, max_chars: int = 4000) -> str:
+    tail = "\n".join(text.splitlines()[-max_lines:])
+    if len(tail) > max_chars:
+        return tail[-max_chars:]
+    return tail
 
 
 def _is_output_check_failure(result_payload: dict[str, Any] | None) -> bool:

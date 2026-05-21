@@ -94,6 +94,12 @@ def test_faq_scale_smoke_writes_standard_artifacts(tmp_path: Path, fmt: str) -> 
     assert saved_summary["exit_code"] == 0
     assert saved_summary["result"]["generated"] == result["generated"]
     assert saved_summary["source_format"] == fmt
+    assert saved_summary["timing"]["elapsed_seconds"] >= 0
+    assert saved_summary["failure"] is None
+    assert saved_summary["artifact_details"]["markdown"]["exists"] is True
+    assert saved_summary["artifact_details"]["markdown"]["bytes"] > 0
+    assert saved_summary["artifact_details"]["summary"]["exists"] is True
+    assert saved_summary["artifact_details"]["summary"]["bytes"] is None
     assert (artifact_dir / "faq.md").read_text(encoding="utf-8").startswith(
         "# Customer Ticket FAQ Scale Smoke"
     )
@@ -118,6 +124,11 @@ def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path
     assert "FAQ output checks failed: condensed" in stderr
     assert not (artifact_dir / "faq.md").exists()
     assert summary["artifacts"]["markdown"] is None
+    assert summary["artifact_details"]["markdown"]["exists"] is False
+    assert summary["artifact_details"]["result"]["bytes"] > 0
+    assert summary["failure"]["type"] == "output_checks"
+    assert summary["failure"]["failed_output_checks"] == ["condensed"]
+    assert "FAQ output checks failed: condensed" in summary["failure"]["stderr_tail"]
     assert summary["result"]["diagnostics"]["rendered_ticket_source_count"] == 2
 
 
@@ -145,6 +156,10 @@ def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> Non
     assert code != 0
     assert summary["ok"] is False
     assert summary["result"] is None
+    assert summary["failure"]["type"] == "cli_error"
+    assert summary["failure"]["result_status"] is None
+    assert summary["artifact_details"]["result"]["exists"] is False
+    assert "No such file or directory" in summary["failure"]["stderr_tail"]
     assert "No such file or directory" in (
         tmp_path / "artifacts" / "stderr.txt"
     ).read_text(encoding="utf-8")
@@ -157,6 +172,13 @@ def test_faq_scale_smoke_main_uses_cli_defaults(tmp_path: Path) -> None:
     assert code == 0
     assert result["input"]["source_format"] == "auto"
     assert result["config"]["max_items"] == 12
+
+
+def test_text_tail_bounds_long_stderr() -> None:
+    assert smoke._text_tail("\n".join(f"line{i}" for i in range(50))).splitlines() == [
+        f"line{i}" for i in range(30, 50)
+    ]
+    assert len(smoke._text_tail("x" * 5000)) == 4000
 
 
 @pytest.mark.parametrize("overrides,message", [
