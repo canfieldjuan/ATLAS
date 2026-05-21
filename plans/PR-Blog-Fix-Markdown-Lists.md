@@ -94,6 +94,6 @@ The analyzer-side detector change (extended `markdown_in_html`, plus a new
 
 | Area | Estimated LOC |
 |---|---:|
-| 10 blog `.ts` posts (61 markdown blocks -> `<ul><li>`) | ~245 |
-| Plan doc | ~90 |
-| **Total** | **~335** |
+| 10 blog `.ts` posts (61 markdown blocks -> `<ul><li>`, line-expanding) | ~705 |
+| Plan doc | ~92 |
+| **Total** | **~797** |
