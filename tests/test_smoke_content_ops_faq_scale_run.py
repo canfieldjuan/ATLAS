@@ -188,13 +188,39 @@ def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> Non
     ).read_text(encoding="utf-8")
 
 
-def test_faq_scale_smoke_main_uses_cli_defaults(tmp_path: Path) -> None:
+def test_faq_scale_smoke_main_uses_cli_defaults(tmp_path: Path, capsys) -> None:
     code = smoke.main([str(SUPPORT_TICKET_CSV), "--artifact-dir", str(tmp_path / "artifacts")])
 
     result = json.loads((tmp_path / "artifacts" / "faq_result.json").read_text(encoding="utf-8"))
+    captured = capsys.readouterr()
     assert code == 0
+    assert "Content Ops FAQ scale smoke passed:" in captured.out
+    assert "source_rows=4/4" in captured.out
+    assert "summary=" in captured.out
+    assert captured.err == ""
     assert result["input"]["source_format"] == "auto"
     assert result["config"]["max_items"] == 12
+
+
+def test_faq_scale_smoke_main_prints_profile_on_failure(tmp_path: Path, capsys) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Unique one,The export button moved.,exports",
+        "ticket-2,2026-05-01,Unique two,Billing receipt is missing.,billing",
+        "ticket-3,2026-05-01,Empty text,,billing",
+    )
+
+    code = smoke.main([str(source), "--artifact-dir", str(tmp_path / "artifacts")])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "Content Ops FAQ scale smoke failed:" in captured.err
+    assert "source_rows=2/3" in captured.err
+    assert "skipped_rows=1" in captured.err
+    assert "missing_source_text=1" in captured.err
+    assert "failure=output_checks" in captured.err
+    assert "summary=" in captured.err
 
 
 def test_text_tail_bounds_long_stderr() -> None:

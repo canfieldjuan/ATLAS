@@ -63,7 +63,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _validate_args(args)
-    code, _summary = run_scale_smoke(args)
+    code, summary = run_scale_smoke(args)
+    _print_scale_summary(summary)
     return code
 
 
@@ -303,6 +304,48 @@ def _write_summary(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _print_scale_summary(summary: Mapping[str, Any]) -> None:
+    artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), Mapping) else {}
+    summary_path = artifacts.get("summary") if isinstance(artifacts, Mapping) else None
+    profile = _console_input_profile(summary.get("input_profile"))
+    if summary.get("ok") is True:
+        print(
+            "Content Ops FAQ scale smoke passed: "
+            f"{profile} summary={summary_path}"
+        )
+        return
+    failure = summary.get("failure") if isinstance(summary.get("failure"), Mapping) else {}
+    failure_type = failure.get("type") if isinstance(failure, Mapping) else None
+    print(
+        "Content Ops FAQ scale smoke failed: "
+        f"{profile} failure={failure_type or 'unknown'} summary={summary_path}",
+        file=sys.stderr,
+    )
+
+
+def _console_input_profile(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "source_rows=unknown"
+    parts = [f"input_status={value.get('status') or 'unknown'}"]
+    usable = value.get("usable_source_count")
+    raw = value.get("raw_row_count")
+    if usable is not None or raw is not None:
+        parts.append(f"source_rows={_console_value(usable)}/{_console_value(raw)}")
+    for key, label in (
+        ("skipped_row_count", "skipped_rows"),
+        ("missing_source_text_count", "missing_source_text"),
+        ("warning_count", "warnings"),
+    ):
+        item = value.get(key)
+        if item not in (None, 0):
+            parts.append(f"{label}={item}")
+    return " ".join(parts)
+
+
+def _console_value(value: Any) -> str:
+    return str(value) if value is not None else "unknown"
 
 
 def _failure_summary(
