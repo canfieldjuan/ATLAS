@@ -17,7 +17,7 @@ plan + claims that the LLM consumes when structuring the page.
 
 Quality gating runs through ``extracted_quality_gate.landing_page_pack``
 -- pure deterministic, no LLM. Failures skip persistence and surface
-in the result's ``errors`` payload.
+in the result's ``errors`` payload after one targeted repair attempt.
 """
 
 from __future__ import annotations
@@ -69,6 +69,7 @@ class LandingPageGenerationConfig:
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
     quality_gates_enabled: bool = True
+    quality_repair_attempts: int = 1
     parse_retry_attempts: int = 1
     parse_retry_response_excerpt_chars: int = 800
 
@@ -166,8 +167,21 @@ def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
     return isinstance(payload.get("campaign_reasoning_context"), Mapping)
 
 
-def _landing_page_user_prompt(prior_invalid_response: str = "") -> str:
+def _landing_page_user_prompt(
+    prior_invalid_response: str = "",
+    *,
+    quality_blockers: Sequence[str] = (),
+) -> str:
     prompt = "Generate one landing page from the marketing campaign above."
+    if quality_blockers:
+        blockers = "\n".join(f"- {str(item)}" for item in quality_blockers)
+        prompt = (
+            f"{prompt}\n\n"
+            "The previous landing-page JSON parsed, but it failed the "
+            "deterministic quality gate. Fix these issues and return one "
+            "corrected JSON object only:\n"
+            f"{blockers}"
+        )
     return retry_prompt_with_invalid_response(
         prompt,
         prior_invalid_response=prior_invalid_response,
@@ -219,6 +233,7 @@ class LandingPageGenerationService:
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        quality_repair_attempts: int | None = None,
     ) -> LandingPageGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -250,6 +265,11 @@ class LandingPageGenerationService:
             if quality_gates_enabled is None
             else bool(quality_gates_enabled)
         )
+        resolved_quality_repair_attempts = (
+            self._config.quality_repair_attempts
+            if quality_repair_attempts is None
+            else int(quality_repair_attempts)
+        )
 
         if not str(campaign.name or "").strip():
             return LandingPageGenerationResult(
@@ -272,36 +292,67 @@ class LandingPageGenerationService:
                 errors=({"campaign_name": campaign.name, "reason": str(exc)},),
             )
 
-        try:
-            parsed = await self._generate_one(
-                prompt_template,
-                campaign_payload=campaign_payload,
-                temperature=resolved_temperature,
-                max_tokens=resolved_max_tokens,
-                parse_retry_attempts=resolved_parse_retry_attempts,
-                parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
-            )
-        except Exception as exc:
-            return LandingPageGenerationResult(
-                requested=1,
-                generated=0,
-                skipped=1,
-                errors=({"campaign_name": campaign.name, "reason": str(exc)},),
-            )
-
-        if not parsed:
-            return LandingPageGenerationResult(
-                requested=1,
-                generated=0,
-                skipped=1,
-                errors=({"campaign_name": campaign.name, "reason": "unparseable_response"},),
-            )
-
-        quality = self._quality_check(
-            parsed,
-            quality_gates_enabled=resolved_quality_gates_enabled,
+        parsed: dict[str, Any] | None = None
+        quality: dict[str, Any] = {"passed": False, "blockers": (), "repair_issues": ()}
+        quality_blockers: tuple[str, ...] = ()
+        total_usage: dict[str, Any] = {}
+        total_parse_attempts = 0
+        repair_limit = (
+            max(0, int(resolved_quality_repair_attempts or 0))
+            if resolved_quality_gates_enabled
+            else 0
         )
-        if not quality["passed"]:
+        for repair_attempt_no in range(0, repair_limit + 1):
+            try:
+                parsed = await self._generate_one(
+                    prompt_template,
+                    campaign_payload=campaign_payload,
+                    temperature=resolved_temperature,
+                    max_tokens=resolved_max_tokens,
+                    parse_retry_attempts=resolved_parse_retry_attempts,
+                    parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                    quality_blockers=quality_blockers,
+                    quality_repair_attempt_no=repair_attempt_no,
+                )
+            except Exception as exc:
+                return LandingPageGenerationResult(
+                    requested=1,
+                    generated=0,
+                    skipped=1,
+                    errors=({"campaign_name": campaign.name, "reason": str(exc)},),
+                )
+
+            if not parsed:
+                error: dict[str, Any] = {
+                    "campaign_name": campaign.name,
+                    "reason": "unparseable_response",
+                }
+                if quality_blockers:
+                    error["quality_blockers"] = quality_blockers
+                return LandingPageGenerationResult(
+                    requested=1,
+                    generated=0,
+                    skipped=1,
+                    errors=(error,),
+                )
+
+            total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
+            total_parse_attempts += int(parsed.get("_parse_attempts") or 0)
+            parsed = {
+                **parsed,
+                "_usage": total_usage,
+                "_parse_attempts": total_parse_attempts,
+                "_quality_repair_attempts": repair_attempt_no,
+            }
+            quality = self._quality_check(
+                parsed,
+                quality_gates_enabled=resolved_quality_gates_enabled,
+            )
+            if quality["passed"]:
+                break
+            quality_blockers = tuple(str(item) for item in quality["repair_issues"])
+
+        if not quality["passed"] or parsed is None:
             return LandingPageGenerationResult(
                 requested=1,
                 generated=0,
@@ -309,7 +360,8 @@ class LandingPageGenerationService:
                 errors=({
                     "campaign_name": campaign.name,
                     "reason": "quality_blocked",
-                    "blockers": quality["blockers"],
+                    "blockers": tuple(str(item) for item in quality["blockers"]),
+                    "quality_repair_attempts": repair_limit,
                 },),
             )
 
@@ -376,6 +428,8 @@ class LandingPageGenerationService:
         max_tokens: int,
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
+        quality_blockers: Sequence[str] = (),
+        quality_repair_attempt_no: int = 0,
     ) -> dict[str, Any] | None:
         campaign_json = json.dumps(dict(campaign_payload), separators=(",", ":"), default=str)
         # Single source for the campaign payload: in the system prompt
@@ -391,7 +445,10 @@ class LandingPageGenerationService:
                     LLMMessage(role="system", content=system_prompt),
                     LLMMessage(
                         role="user",
-                        content=_landing_page_user_prompt(last_response),
+                        content=_landing_page_user_prompt(
+                            last_response,
+                            quality_blockers=quality_blockers,
+                        ),
                     ),
                 ],
                 max_tokens=max_tokens,
@@ -402,6 +459,7 @@ class LandingPageGenerationService:
                     "asset_type": "landing_page",
                     "target_mode": _TARGET_MODE,
                     "attempt_no": attempt_no,
+                    "quality_repair_attempt_no": quality_repair_attempt_no,
                 },
             )
             total_usage = accumulate_usage(total_usage, response.usage)
@@ -430,7 +488,7 @@ class LandingPageGenerationService:
         # can route the operator's choice to the service. False short-
         # circuits the gate; True (the default) preserves prior behavior.
         if not quality_gates_enabled:
-            return {"passed": True, "blockers": ()}
+            return {"passed": True, "blockers": (), "repair_issues": ()}
         report_input = QualityInput(
             artifact_type="landing_page",
             context={
@@ -443,9 +501,12 @@ class LandingPageGenerationService:
             },
         )
         report = evaluate_landing_page(report_input, policy=self._config.quality_policy)
+        blockers = tuple(f.message for f in report.blockers)
+        warnings = tuple(f.message for f in report.warnings)
         return {
             "passed": report.passed,
-            "blockers": tuple(f.message for f in report.blockers),
+            "blockers": blockers,
+            "repair_issues": blockers or warnings,
         }
 
     def _build_draft(
@@ -484,6 +545,7 @@ class LandingPageGenerationService:
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
+            "generation_quality_repair_attempts": parsed.get("_quality_repair_attempts"),
         }
         if campaign_payload is not None:
             context = normalize_campaign_reasoning_context(campaign_payload)

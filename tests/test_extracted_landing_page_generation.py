@@ -230,7 +230,10 @@ async def test_generate_blocks_with_no_hero_headline_when_response_omits_hero() 
         "cta": {"label": "L", "url": "/u"},
         "meta": {},
     })
-    service, landing_pages, _llm, _skills, _rp = _service(responses=[response])
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
 
     result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
 
@@ -373,7 +376,10 @@ async def test_generate_skips_when_quality_pack_blocks() -> None:
         "meta": {},
         "reference_ids": [],
     })
-    service, landing_pages, _llm, _skills, _rp = _service(responses=[bad_response])
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[bad_response],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
 
     result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
 
@@ -383,6 +389,101 @@ async def test_generate_skips_when_quality_pack_blocks() -> None:
     assert any(err.get("reason") == "quality_blocked" for err in result.errors)
     blockers = result.errors[0]["blockers"]
     assert any("no_cta" in b for b in blockers)
+
+
+@pytest.mark.asyncio
+async def test_generate_repairs_quality_blocked_response_once_and_persists() -> None:
+    """Parsed JSON that fails the quality gate gets one targeted repair pass."""
+    bad_response = json.dumps({
+        "title": "ok",
+        "slug": "ok",
+        "hero": {"headline": "h", "subheadline": "s", "cta_label": "L", "cta_url": "/u"},
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {},  # missing CTA -> no_cta blocker
+        "meta": {},
+        "reference_ids": [],
+    })
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[
+            {
+                "content": bad_response,
+                "model": "first-model",
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+            {
+                "content": _valid_response(),
+                "model": "final-model",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            },
+        ],
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 1
+    assert result.saved_ids == ("lp-1",)
+    assert len(llm.calls) == 2
+    assert llm.calls[0]["metadata"]["quality_repair_attempt_no"] == 0
+    assert llm.calls[1]["metadata"]["quality_repair_attempt_no"] == 1
+    repair_prompt = llm.calls[1]["messages"][1].content
+    assert "failed the deterministic quality gate" in repair_prompt
+    assert "no_cta" in repair_prompt
+    draft = landing_pages.saved[0]["drafts"][0]
+    assert draft.metadata["generation_model"] == "final-model"
+    assert draft.metadata["generation_usage"] == {"input_tokens": 12, "output_tokens": 5}
+    assert draft.metadata["generation_parse_attempts"] == 2
+    assert draft.metadata["generation_quality_repair_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_reports_quality_blockers_after_repair_attempt_fails() -> None:
+    bad_response = json.dumps({
+        "title": "ok",
+        "slug": "ok",
+        "hero": {"headline": "h", "subheadline": "s", "cta_label": "L", "cta_url": "/u"},
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {},
+        "meta": {},
+        "reference_ids": [],
+    })
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[bad_response, bad_response],
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 0
+    assert landing_pages.saved == []
+    assert len(llm.calls) == 2
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert result.errors[0]["quality_repair_attempts"] == 1
+    assert any("no_cta" in blocker for blocker in result.errors[0]["blockers"])
+
+
+@pytest.mark.asyncio
+async def test_generate_reports_quality_blockers_when_repair_response_will_not_parse() -> None:
+    bad_response = json.dumps({
+        "title": "ok",
+        "slug": "ok",
+        "hero": {"headline": "h", "subheadline": "s", "cta_label": "L", "cta_url": "/u"},
+        "sections": [{"id": "s1", "title": "T", "body_markdown": "b"}],
+        "cta": {},
+        "meta": {},
+        "reference_ids": [],
+    })
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[bad_response, "not valid json"],
+        config=LandingPageGenerationConfig(parse_retry_attempts=0),
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert landing_pages.saved == []
+    assert len(llm.calls) == 2
+    assert result.errors[0]["reason"] == "unparseable_response"
+    assert any("no_cta" in blocker for blocker in result.errors[0]["quality_blockers"])
 
 
 @pytest.mark.asyncio
@@ -439,7 +540,10 @@ async def test_generate_raises_value_error_when_skill_prompt_missing() -> None:
 async def test_generate_blocks_when_llm_omits_slug() -> None:
     """Empty slug from the LLM hits the quality pack's no_slug blocker."""
     response = _valid_response(slug="")
-    service, landing_pages, _llm, _skills, _rp = _service(responses=[response])
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[response],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
 
     result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
 
@@ -551,7 +655,10 @@ async def test_generate_per_call_quality_gates_enabled_false_skips_quality_gate(
         "meta": {},
         "reference_ids": [],
     })
-    service, landing_pages, _llm, _skills, _rp = _service(responses=[bad_response])
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[bad_response],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
 
     result = await service.generate(
         scope=TenantScope(account_id="acct-1"),
@@ -578,7 +685,10 @@ async def test_generate_per_call_quality_gates_enabled_true_still_blocks() -> No
         "meta": {},
         "reference_ids": [],
     })
-    service, landing_pages, _llm, _skills, _rp = _service(responses=[bad_response])
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[bad_response],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
 
     result = await service.generate(
         scope=TenantScope(account_id="acct-1"),
