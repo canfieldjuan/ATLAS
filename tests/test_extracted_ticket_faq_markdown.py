@@ -246,7 +246,7 @@ def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -
     assert "contact support at https://example.com/support" in result.markdown
 
 
-def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
+def test_build_ticket_faq_markdown_uses_source_policy_question_when_customer_wording_is_missing() -> None:
     result = build_ticket_faq_markdown(
         [
             {
@@ -262,12 +262,12 @@ def test_build_ticket_faq_markdown_falls_back_to_topic_question() -> None:
     )
 
     assert result.items[0]["topic"] == "reporting friction"
-    assert result.items[0]["question"] == "What are customers asking about reporting friction?"
-    assert result.items[0]["question_source"] == "topic_fallback"
-    assert result.output_checks["uses_user_vocabulary"] is False
+    assert result.items[0]["question"] == "What should I do about reporting friction?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.output_checks["uses_user_vocabulary"] is True
 
 
-def test_build_ticket_faq_markdown_falls_back_from_long_customer_question() -> None:
+def test_build_ticket_faq_markdown_uses_source_policy_when_customer_question_is_too_long() -> None:
     long_question = "How do I " + ("change every nested account setting " * 8).strip() + "?"
     result = build_ticket_faq_markdown(
         [
@@ -285,8 +285,8 @@ def test_build_ticket_faq_markdown_falls_back_from_long_customer_question() -> N
 
     assert len(long_question) > 140
     assert result.items[0]["topic"] == "email and profile updates"
-    assert result.items[0]["question"] == "What are customers asking about email and profile updates?"
-    assert result.items[0]["question_source"] == "topic_fallback"
+    assert result.items[0]["question"] == "What should I do about email and profile updates?"
+    assert result.items[0]["question_source"] == "source_policy"
 
 
 def test_build_ticket_faq_markdown_extracts_question_sentence_from_ticket_text() -> None:
@@ -381,8 +381,8 @@ def test_build_ticket_faq_markdown_ignores_agent_questions() -> None:
         ]
     )
 
-    assert result.items[0]["question"] == "What are customers asking about login reset?"
-    assert result.items[0]["question_source"] == "topic_fallback"
+    assert result.items[0]["question"] == "What should I do about login reset?"
+    assert result.items[0]["question_source"] == "source_policy"
 
 
 def test_build_ticket_faq_markdown_uses_unlabeled_customer_text_before_agent_label() -> None:
@@ -438,8 +438,53 @@ def test_build_ticket_faq_markdown_ignores_url_query_markers() -> None:
         ]
     )
 
-    assert result.items[0]["question"] == "What are customers asking about help article?"
-    assert result.items[0]["question_source"] == "topic_fallback"
+    assert result.items[0]["question"] == "What should I do about help article?"
+    assert result.items[0]["question_source"] == "source_policy"
+
+
+@pytest.mark.parametrize(
+    "text,source_title,expected_question",
+    [
+        (
+            "I paid the XX/XX/2019 credit card installment of {$100 and the balance is still wrong.",
+            "Credit card or prepaid card - Getting a credit card",
+            "What should I do if my card application, offer, or activation does not look right?",
+        ),
+        (
+            "I am not \" allowed '' to speak to a human.",
+            "Customer support issues",
+            "What should I do about customer support issues?",
+        ),
+        (
+            "I received a letter dated XX/XX/XXXX, signed by Mr.",
+            "Customer support issues",
+            "What should I do about customer support issues?",
+        ),
+    ],
+)
+def test_build_ticket_faq_markdown_rejects_malformed_redacted_customer_questions(
+    text: str,
+    source_title: str,
+    expected_question: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Credit card complaint",
+                "evidence": [{
+                    "text": text,
+                    "source_id": "cfpb:1",
+                    "source_type": "support_ticket",
+                    "source_title": source_title,
+                }],
+            }
+        ]
+    )
+
+    assert result.items[0]["question"] == expected_question
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.output_checks["uses_user_vocabulary"] is True
 
 
 def test_build_ticket_faq_markdown_accepts_host_intent_rules() -> None:
@@ -498,6 +543,123 @@ def test_build_ticket_faq_markdown_keeps_total_volume_when_display_is_capped() -
     assert len(item["source_labels"]) == 2
     assert "Evidence comes from 4 ticket source(s)." in item["answer"]
     assert "ticket-3" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_condenses_tail_groups_when_item_cap_is_lower_than_topics() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "source_title": "Credit report dispute",
+            "evidence": [{
+                "text": f"My credit report has the wrong balance on account {index}.",
+                "source_id": f"credit-{index}",
+                "source_type": "support_ticket",
+            }],
+        }
+        for index in range(1, 4)
+    ]
+    rows.extend([
+        {
+            "source_type": "support_ticket",
+            "source_title": "Mortgage issue",
+            "evidence": [{
+                "text": "My mortgage servicer will not explain the payoff quote.",
+                "source_id": "mortgage-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Debt collection issue",
+            "evidence": [{
+                "text": "A debt collector is asking me to pay a debt I do not recognize.",
+                "source_id": "debt-1",
+                "source_type": "support_ticket",
+            }],
+        },
+    ])
+
+    result = build_ticket_faq_markdown(rows, max_items=2)
+
+    assert [item["topic"] for item in result.items] == [
+        "credit report disputes",
+        "other support issues",
+    ]
+    assert result.items[1]["source_ids"] == ("debt-1", "mortgage-1")
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+
+
+def test_build_ticket_faq_markdown_preserves_top_group_when_single_item_cap_overflows() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": f"Credit report dispute {index}",
+                "evidence": [{
+                    "text": f"My credit report has the wrong balance on account {index}.",
+                    "source_id": f"credit-{index}",
+                    "source_type": "support_ticket",
+                }],
+            }
+            for index in range(1, 4)
+        ] + [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Debt collection issue",
+                "evidence": [{
+                    "text": "A collector is asking me to pay a debt I do not recognize.",
+                    "source_id": "debt-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ],
+        max_items=1,
+    )
+
+    assert len(result.items) == 1
+    assert result.items[0]["topic"] == "credit report disputes"
+    assert result.items[0]["source_ids"] == ("credit-1", "credit-2", "credit-3", "debt-1")
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+
+
+def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_account_topics() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Checking or savings account - Opening an account",
+                "evidence": [{
+                    "text": "I was trying to open an account and the bank declined me because of early warning services.",
+                    "source_id": "cfpb:1",
+                    "source_type": "support_ticket",
+                    "source_title": "Checking or savings account - Opening an account",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Checking or savings account - Opening an account",
+                "evidence": [{
+                    "text": "The bonus for opening my money market account was never paid.",
+                    "source_id": "cfpb:2",
+                    "source_type": "support_ticket",
+                    "source_title": "Checking or savings account - Opening an account",
+                }],
+            },
+        ]
+    )
+
+    assert result.items[0]["topic"] == "opening an account"
+    assert result.items[0]["steps"][0].startswith("Gather the application")
+    assert "Export or Download" not in result.markdown
+    assert "export is missing" not in result.markdown
 
 
 def test_build_ticket_faq_markdown_normalizes_intent_whitespace() -> None:
@@ -1202,7 +1364,7 @@ def test_build_ticket_faq_markdown_counts_unidentified_source_rows_once() -> Non
     assert result.output_checks["condensed"] is True
 
 
-def test_build_ticket_faq_markdown_does_not_treat_max_items_truncation_as_condensed() -> None:
+def test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating() -> None:
     opportunities = [
         {
             "source_type": "support_ticket",
@@ -1221,7 +1383,9 @@ def test_build_ticket_faq_markdown_does_not_treat_max_items_truncation_as_conden
     assert len(result.items) == 8
     assert result.ticket_source_count == 9
     assert result.output_checks["uses_user_vocabulary"] is True
-    assert result.output_checks["condensed"] is False
+    assert result.output_checks["condensed"] is True
+    assert result.items[-1]["topic"] == "other support issues"
+    assert result.items[-1]["source_ids"] == ("ticket-8", "ticket-9")
 
 
 def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
@@ -1349,7 +1513,7 @@ def test_ticket_faq_cli_fails_required_output_checks_for_weak_rows(tmp_path: Pat
     assert completed.returncode == 1
     assert "FAQ output checks failed" in completed.stderr
     assert "condensed" in completed.stderr
-    assert "uses_user_vocabulary" in completed.stderr
+    assert "uses_user_vocabulary" not in completed.stderr
 
 
 def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> None:

@@ -93,7 +93,7 @@ def test_cfpb_faq_smoke_fails_when_fetch_returns_too_few_rows(monkeypatch, tmp_p
     assert payload["errors"] == ["expected 2 CFPB source row(s), got 1"]
 
 
-def test_cfpb_faq_smoke_fails_when_output_checks_fail(monkeypatch, tmp_path: Path) -> None:
+def test_cfpb_faq_smoke_accepts_source_policy_questions_for_weak_rows(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         smoke,
         "fetch_cfpb_source_rows",
@@ -102,9 +102,14 @@ def test_cfpb_faq_smoke_fails_when_output_checks_fail(monkeypatch, tmp_path: Pat
 
     code, payload = smoke.run_cfpb_faq_markdown_smoke(_args(), source_rows_path=tmp_path / "rows.jsonl")
 
-    assert code == 1
-    assert payload["faq"]["output_checks"]["uses_user_vocabulary"] is False
-    assert payload["errors"] == ["FAQ output checks failed: uses_user_vocabulary"]
+    assert code == 0
+    assert payload["faq"]["output_checks"] == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert payload["faq"]["items"][0]["question_source"] == "source_policy"
+    assert payload["errors"] == []
 
 
 def test_json_output_and_invalid_args(capsys) -> None:
