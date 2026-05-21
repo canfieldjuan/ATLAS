@@ -190,6 +190,21 @@ show a support phone number, email, or help URL; the builder never invents one.
 Pass `--require-output-checks` in host smoke runs when weak FAQ output should
 fail the command instead of producing a reviewable draft.
 
+For large-upload validation, compare the scale smoke `run_summary.json` against
+the checked-in failure profiles:
+
+- `examples/faq_scale_density_limited_summary.json` shows a 1,000-row upload
+  where most rows were skipped before FAQ generation. Fix source export fields,
+  text columns, or filters before tuning the FAQ generator.
+- `examples/faq_scale_output_check_failure_summary.json` shows healthy input
+  density with failed FAQ output checks. In that case, investigate grouping,
+  question wording, or action-step generation.
+
+The first pass is `input_profile.usable_source_count` divided by
+`input_profile.raw_row_count`. If that ratio is poor, treat the run as a source
+prep problem. If the ratio is healthy and `failure.type` is `output_checks`,
+debug the FAQ generator path.
+
 The same artifact can run through the Content Ops execution seam by selecting
 `faq_markdown` and passing inline `source_material`. It remains zero-provider.
 When the host wires `PostgresTicketFAQRepository`, execution also persists the

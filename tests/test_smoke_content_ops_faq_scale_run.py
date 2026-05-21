@@ -15,6 +15,10 @@ assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
 SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
+FAILURE_EXAMPLES = {
+    "density": ROOT / "extracted_content_pipeline/examples/faq_scale_density_limited_summary.json",
+    "output_checks": ROOT / "extracted_content_pipeline/examples/faq_scale_output_check_failure_summary.json",
+}
 TICKET_ROWS = (
     ("ticket-acme-1", "Change login email", "How do I change my login email?", "email and profile updates"),
     ("ticket-acme-2", "Update account email", "I need to update the email on my account.", "email and profile updates"),
@@ -251,6 +255,26 @@ def test_raw_row_profile_returns_none_for_unrecognized_shape(tmp_path: Path) -> 
         "raw_row_count": None,
         "raw_row_count_source": None,
     }
+
+
+def test_faq_scale_failure_examples_separate_density_from_output_checks() -> None:
+    density = json.loads(FAILURE_EXAMPLES["density"].read_text(encoding="utf-8"))
+    output_checks = json.loads(FAILURE_EXAMPLES["output_checks"].read_text(encoding="utf-8"))
+
+    assert density["ok"] is False
+    assert density["input_profile"]["raw_row_count"] == 1000
+    assert density["input_profile"]["usable_source_count"] == 46
+    assert density["input_profile"]["usable_source_ratio"] < 0.1
+    assert density["input_profile"]["skipped_row_count"] == 954
+    assert density["input_profile"]["warnings_by_code"]["missing_source_text"] == 954
+
+    assert output_checks["ok"] is False
+    assert output_checks["input_profile"]["raw_row_count"] == 1000
+    assert output_checks["input_profile"]["usable_source_count"] == 1000
+    assert output_checks["input_profile"]["usable_source_ratio"] == 1.0
+    assert output_checks["input_profile"]["skipped_row_count"] == 0
+    assert output_checks["failure"]["type"] == "output_checks"
+    assert output_checks["failure"]["failed_output_checks"]
 
 
 @pytest.mark.parametrize("overrides,message", [
