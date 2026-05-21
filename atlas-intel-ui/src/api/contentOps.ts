@@ -282,6 +282,14 @@ export type GeneratedAssetType =
   | 'sales_brief'
   | 'faq_markdown'
 
+export interface GeneratedAssetRepairHistoryEntry {
+  attempt?: number
+  passed?: boolean
+  blockers?: string[] | string
+  repair_issues?: string[] | string
+  [key: string]: unknown
+}
+
 export interface GeneratedAssetDraft {
   id?: string
   title?: string
@@ -303,11 +311,15 @@ export interface GeneratedAssetDraft {
   hero?: Record<string, unknown>
   sections?: Array<Record<string, unknown>> | string
   cta?: Record<string, unknown>
+  metadata?: Record<string, unknown> | string
   reference_ids?: string[] | string
   generation_total_tokens?: number
   generation_input_tokens?: number
   generation_output_tokens?: number
   generation_parse_attempts?: number
+  generation_quality_repair_attempts?: number
+  generation_quality_repair_history?: GeneratedAssetRepairHistoryEntry[] | string
+  quality_repair_history?: GeneratedAssetRepairHistoryEntry[] | string
   reasoning_context_used?: boolean
   reasoning_wedge?: string
   reasoning_confidence?: number | string

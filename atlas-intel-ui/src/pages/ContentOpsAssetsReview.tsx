@@ -426,6 +426,8 @@ function AssetRow({
   const canReview = Boolean(id)
   const preview = assetPreview(row, asset)
   const facts = assetFacts(row, asset)
+  const repairHistory = assetRepairHistory(row)
+  const repairSummary = repairHistorySummary(repairHistory)
 
   return (
     <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
@@ -448,6 +450,16 @@ function AssetRow({
               {row.reasoning_context_used && (
                 <span className="rounded bg-violet-500/10 px-2 py-0.5 text-xs text-violet-200">
                   reasoning
+                </span>
+              )}
+              {repairSummary && (
+                <span className={clsx(
+                  'rounded px-2 py-0.5 text-xs',
+                  repairSummary.passed
+                    ? 'bg-emerald-500/10 text-emerald-200'
+                    : 'bg-amber-500/10 text-amber-200',
+                )}>
+                  {repairSummary.label}
                 </span>
               )}
             </div>
@@ -882,6 +894,24 @@ function RepairHistoryList({
       </ul>
     </div>
   )
+}
+
+function repairHistorySummary(
+  history: RepairHistoryEntry[],
+): { label: string; passed: boolean } | null {
+  if (history.length === 0) return null
+  const latest = history[history.length - 1]
+  const repairCount = Math.max(0, history.length - 1)
+  const repairLabel =
+    repairCount === 0
+      ? 'without repair'
+      : `after ${repairCount} repair${repairCount === 1 ? '' : 's'}`
+  return {
+    label: latest.passed
+      ? `quality passed ${repairLabel}`
+      : `quality blocked ${repairLabel}`,
+    passed: latest.passed,
+  }
 }
 
 function ReadinessBreakdown({ panels }: { panels: ReadinessPanel[] }) {
