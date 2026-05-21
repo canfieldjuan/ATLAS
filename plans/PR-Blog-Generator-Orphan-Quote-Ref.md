@@ -84,8 +84,8 @@ configurable values. `_remove_unmatched_quote_lines`'s signature is unchanged.
 
 | Area | Estimated LOC |
 |---|---:|
-| `b2b_blog_post_generation.py` (matcher + sweep) | ~45 |
-| `extracted_content_pipeline` mirror | ~45 |
-| `test_b2b_blog_post_generation_quote_gate.py` (2 tests) | ~40 |
-| Plan doc | ~95 |
-| **Total** | **~225** |
+| `b2b_blog_post_generation.py` (matcher + sweep) | ~55 |
+| `extracted_content_pipeline` mirror | ~55 |
+| `test_b2b_blog_post_generation_quote_gate.py` (tests) | ~55 |
+| Plan doc | ~90 |
+| **Total** | **~255** |
