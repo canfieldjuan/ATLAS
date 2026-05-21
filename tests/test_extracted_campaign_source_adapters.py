@@ -39,6 +39,20 @@ def test_source_type_precedence_table_matches_current_contract() -> None:
     assert adapters._SOURCE_TYPE_PRECEDENCE == (
         (("review_text",), "review"),
         (("transcript",), "transcript"),
+        ((
+            "search_query",
+            "query",
+            "query_text",
+            "search_term",
+            "search_terms",
+            "search_phrase",
+            "zero_result_query",
+            "search_id",
+            "search_log_id",
+            "search_query_id",
+            "query_id",
+            "zero_result_query_id",
+        ), "search_log"),
         (("call_id", "recording_id"), "sales_call"),
         (("meeting_id",), "meeting"),
         (("deal_id", "opportunity_id"), "crm_deal"),
@@ -184,6 +198,66 @@ def test_source_row_maps_provider_complaint_narrative_aliases() -> None:
         "source_id": "3182593",
         "source_type": "complaint",
     }]
+
+
+def test_source_row_maps_search_query_to_campaign_opportunity() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "Query ID": "query-1",
+        "Search Query": "export attribution report",
+        "Results Count": "0",
+        "Zero Results": "true",
+        "Page URL": "https://example.com/help",
+        "Topic": "Analytics",
+    })
+
+    assert warnings == ()
+    assert opportunity["id"] == "query-1"
+    assert opportunity["target_id"] == "query-1"
+    assert opportunity["source_id"] == "query-1"
+    assert opportunity["source_type"] == "search_log"
+    assert opportunity["Results Count"] == "0"
+    assert opportunity["Zero Results"] == "true"
+    assert opportunity["Page URL"] == "https://example.com/help"
+    assert opportunity["pain_points"] == ["Analytics"]
+    assert opportunity["evidence"] == [{
+        "text": "export attribution report",
+        "source_id": "query-1",
+        "source_type": "search_log",
+    }]
+
+
+def test_source_bundle_extracts_zero_result_search_logs(tmp_path: Path) -> None:
+    source = tmp_path / "search_bundle.json"
+    source.write_text(
+        json.dumps({
+            "account_name": "Acme Logistics",
+            "search_logs": [
+                {
+                    "zero_result_query_id": "zero-1",
+                    "zero_result_query": "change billing email",
+                    "results_count": 0,
+                    "zero_results": True,
+                },
+                {
+                    "query_id": "search-2",
+                    "query": "download invoice",
+                    "results_count": 4,
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(source, file_format="json")
+
+    assert [item["source_id"] for item in loaded.opportunities] == ["zero-1", "search-2"]
+    assert [item["source_type"] for item in loaded.opportunities] == ["search_log", "search_log"]
+    assert [item["company_name"] for item in loaded.opportunities] == [
+        "Acme Logistics",
+        "Acme Logistics",
+    ]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == "change billing email"
+    assert loaded.opportunities[0]["zero_results"] is True
 
 
 def test_source_rows_apply_default_fields_without_overriding_row_values() -> None:

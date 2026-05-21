@@ -1162,6 +1162,39 @@ async def test_ticket_faq_service_skips_empty_source_material_containers() -> No
 
 
 @pytest.mark.asyncio
+async def test_ticket_faq_service_accepts_search_log_source_material() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "search_logs": [
+                {
+                    "query_id": "search-1",
+                    "search_query": "How do I export attribution report?",
+                    "results_count": 0,
+                    "zero_results": True,
+                },
+                {
+                    "query_id": "search-2",
+                    "search_query": "export dashboard attribution",
+                    "results_count": 2,
+                },
+            ]
+        },
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert result.ticket_source_count == 2
+    assert result.items[0]["topic"] == "reporting friction"
+    assert result.items[0]["source_ids"] == ("search-1", "search-2")
+    assert result.items[0]["frequency"] == 2
+    assert "`search-1`" in result.markdown
+    assert "How do I export attribution report?" in result.markdown
+
+
+@pytest.mark.asyncio
 async def test_ticket_faq_service_saves_generated_markdown_when_repository_configured() -> None:
     repository = _FAQRepository()
     service = TicketFAQMarkdownService(ticket_faqs=repository)
@@ -1194,6 +1227,8 @@ async def test_ticket_faq_service_saves_generated_markdown_when_repository_confi
         "case",
         "conversation",
         "complaint",
+        "search_log",
+        "search_query",
     ]
     assert draft.metadata["window_days"] == 90
     assert draft.metadata["as_of_date"] == "2026-05-20"
