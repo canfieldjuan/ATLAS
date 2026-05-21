@@ -236,6 +236,30 @@ def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     assert args == ("acct_1", "draft", "vendor_alternative", 5)
 
 
+def test_generated_asset_router_lists_landing_page_drafts_with_readiness() -> None:
+    pool = _Pool(rows=[_landing_page_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get(
+        "/content-assets/landing_page/drafts"
+        "?campaign_name=acme-launch&slug=acme-launch&limit=5"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    row = body["rows"][0]
+    assert row["id"] == "landing-page-uuid-1"
+    assert row["passed_output_checks"] == 3
+    assert row["seo_aeo_readiness"]["status"] == "needs_review"
+    assert row["geo_readiness"]["status"] == "needs_review"
+    assert row["geo_readiness"]["checks"]["trust_signal_visibility"] is True
+    query, args = pool.fetch_calls[0]
+    assert "FROM landing_pages" in query
+    assert args == ("acct_1", "draft", "acme-launch", "acme-launch", 5)
+
+
 def test_generated_asset_router_exports_landing_page_csv() -> None:
     pool = _Pool(rows=[_landing_page_row()])
 

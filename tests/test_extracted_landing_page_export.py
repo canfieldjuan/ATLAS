@@ -145,6 +145,84 @@ def _draft(**overrides) -> LandingPageDraft:
     )
 
 
+def _ready_draft(**overrides) -> LandingPageDraft:
+    sections = (
+        LandingPageSection(
+            id="problem",
+            title="Support problems that keep coming back",
+            body_markdown=(
+                "Support problems keep coming back when VP Engineering teams "
+                "cannot see where customers get stuck before renewal pressure "
+                "builds."
+            ),
+        ),
+        LandingPageSection(
+            id="solution",
+            title="A workflow for catching pressure early",
+            body_markdown=(
+                "The solution helps teams catch pressure early by turning the "
+                "same repeated support signals into a clear page and follow-up "
+                "workflow."
+            ),
+        ),
+        LandingPageSection(
+            id="faq",
+            title="Questions buyers ask before rollout",
+            body_markdown=(
+                "This section answers implementation, pricing, and security "
+                "questions before the buyer has to email the team."
+            ),
+        ),
+    )
+    draft = LandingPageDraft(
+        campaign_name="acme-support-retention",
+        persona="VP Engineering",
+        value_prop="Catch pressure early",
+        title="Acme support retention page",
+        slug="acme-support-retention",
+        hero={
+            "headline": "Catch support pressure before renewal risk builds",
+            "subheadline": (
+                "A landing page for VP Engineering teams that turns repeat "
+                "support signals into clearer answers before customers drift."
+            ),
+            "cta_label": "Book a demo",
+            "cta_url": "/demo",
+        },
+        sections=sections,
+        cta={"label": "Book a demo", "url": "/demo"},
+        meta={
+            "title_tag": "Acme Support Retention for VP Engineering",
+            "description": (
+                "See how VP Engineering teams catch support pressure early and "
+                "turn repeated customer questions into clearer retention pages."
+            ),
+            "og_title": "Acme Support Retention",
+        },
+        reference_ids=("r1",),
+        metadata={
+            "generation_usage": {
+                "input_tokens": 12,
+                "output_tokens": 6,
+                "total_tokens": 18,
+            },
+        },
+    )
+    return LandingPageDraft(
+        campaign_name=overrides.get("campaign_name", draft.campaign_name),
+        persona=overrides.get("persona", draft.persona),
+        value_prop=overrides.get("value_prop", draft.value_prop),
+        title=overrides.get("title", draft.title),
+        slug=overrides.get("slug", draft.slug),
+        hero=overrides.get("hero", draft.hero),
+        sections=overrides.get("sections", draft.sections),
+        cta=overrides.get("cta", draft.cta),
+        meta=overrides.get("meta", draft.meta),
+        reference_ids=overrides.get("reference_ids", draft.reference_ids),
+        metadata=overrides.get("metadata", draft.metadata),
+    )
+
+
 @pytest.mark.asyncio
 async def test_export_landing_page_drafts_passes_filters_to_repository() -> None:
     repo = _Repository(drafts=[_draft()])
@@ -193,6 +271,98 @@ async def test_export_landing_page_drafts_derives_review_summary_fields() -> Non
     assert row["reasoning_context_used"] is True
     assert row["reasoning_wedge"] == "price_squeeze"
     assert row["reasoning_confidence"] == "high"
+    assert row["passed_output_checks"] == 3
+    assert row["seo_aeo_readiness"]["status"] == "needs_review"
+    assert row["geo_readiness"]["status"] == "needs_review"
+
+
+@pytest.mark.asyncio
+async def test_export_landing_page_drafts_surfaces_ready_readiness() -> None:
+    result = await export_landing_page_drafts(
+        _Repository(drafts=[_ready_draft()]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    row = result.rows[0]
+    assert row["passed_output_checks"] == 8
+    assert row["output_checks"] == {
+        "title_tag": True,
+        "meta_description": True,
+        "slug_quality": True,
+        "metadata_consistency": True,
+        "answer_first_hero": True,
+        "problem_solution_clarity": True,
+        "audience_specificity": True,
+        "objection_coverage": True,
+    }
+    assert row["seo_aeo_readiness"] == {
+        "status": "ready",
+        "passed": 8,
+        "total": 8,
+        "missing": [],
+        "checks": row["output_checks"],
+    }
+    assert row["geo_readiness"] == {
+        "status": "ready",
+        "passed": 7,
+        "total": 7,
+        "missing": [],
+        "checks": {
+            "offer_entity_clarity": True,
+            "audience_entity_clarity": True,
+            "answer_extractability": True,
+            "section_semantics": True,
+            "trust_signal_visibility": True,
+            "conversion_path_clarity": True,
+            "claim_safety": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_export_landing_page_drafts_surfaces_incomplete_readiness() -> None:
+    result = await export_landing_page_drafts(
+        _Repository(drafts=[
+            _ready_draft(
+                persona="teams",
+                slug="landing-page",
+                hero={"headline": "Launch faster"},
+                sections=(
+                    LandingPageSection(
+                        id="overview",
+                        title="Overview",
+                        body_markdown="TODO {{claim}} 42% faster",
+                    ),
+                ),
+                cta={"label": "Book a demo", "url": "#"},
+                meta={"title_tag": "Launch"},
+                reference_ids=(),
+            )
+        ]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    row = result.rows[0]
+    assert row["passed_output_checks"] == 1
+    assert row["seo_aeo_readiness"]["status"] == "needs_review"
+    assert row["seo_aeo_readiness"]["missing"] == [
+        "title_tag",
+        "meta_description",
+        "slug_quality",
+        "answer_first_hero",
+        "problem_solution_clarity",
+        "audience_specificity",
+        "objection_coverage",
+    ]
+    assert row["geo_readiness"]["status"] == "needs_review"
+    assert row["geo_readiness"]["missing"] == [
+        "audience_entity_clarity",
+        "answer_extractability",
+        "section_semantics",
+        "trust_signal_visibility",
+        "conversion_path_clarity",
+        "claim_safety",
+    ]
 
 
 @pytest.mark.asyncio
@@ -267,6 +437,10 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
                 "reasoning_context_used": True,
                 "reasoning_wedge": "price_squeeze",
                 "reasoning_confidence": "high",
+                "passed_output_checks": 8,
+                "output_checks": {"title_tag": True},
+                "seo_aeo_readiness": {"status": "ready"},
+                "geo_readiness": {"status": "ready"},
                 "hero": {"headline": "Stop surprises"},
                 "sections": [{"id": "problem"}],
                 "cta": {"label": "Book a demo"},
@@ -287,4 +461,5 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
     assert "campaign_name,persona,value_prop" in csv_text
     assert "generation_input_tokens,generation_output_tokens" in csv_text
     assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in csv_text
+    assert "passed_output_checks,output_checks,seo_aeo_readiness,geo_readiness" in csv_text
     assert "price_squeeze" in csv_text
