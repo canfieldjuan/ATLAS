@@ -52,6 +52,13 @@ type ReadinessPanel = ReadinessSummary & {
   label: string
 }
 
+type RepairHistoryEntry = {
+  attempt: number
+  passed: boolean
+  blockers: string[]
+  repairIssues: string[]
+}
+
 type FAQItemPreview = {
   question: string
   answer: string
@@ -553,6 +560,7 @@ function AssetDetailDrawer({
   const references = valueList(row.reference_ids)
   const faqItems = asset === 'faq_markdown' ? faqItemList(row.items) : []
   const readinessPanels = assetReadinessPanels(row, asset)
+  const repairHistory = assetRepairHistory(row)
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -676,6 +684,10 @@ function AssetDetailDrawer({
           <ReadinessBreakdown panels={readinessPanels} />
         )}
 
+        {repairHistory.length > 0 && (
+          <RepairHistory history={repairHistory} />
+        )}
+
         {sections.length > 0 && (
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-200">Sections</h3>
@@ -777,6 +789,97 @@ function AssetDetailDrawer({
           </pre>
         </section>
       </aside>
+    </div>
+  )
+}
+
+function RepairHistory({ history }: { history: RepairHistoryEntry[] }) {
+  return (
+    <section className="mt-6">
+      <h3 className="text-sm font-semibold text-slate-200">Repair History</h3>
+      <div className="mt-3 space-y-3">
+        {history.map((entry) => (
+          <div
+            key={`${entry.attempt}-${entry.passed ? 'passed' : 'blocked'}`}
+            className="rounded-md border border-slate-800 bg-slate-900/60 p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-medium text-white">
+                Attempt {entry.attempt}
+              </div>
+              <span
+                className={clsx(
+                  'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs',
+                  entry.passed
+                    ? 'bg-emerald-500/10 text-emerald-200'
+                    : 'bg-amber-500/10 text-amber-200',
+                )}
+              >
+                {entry.passed ? (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                ) : (
+                  <XCircle className="h-3.5 w-3.5" />
+                )}
+                {entry.passed ? 'Passed' : 'Blocked'}
+              </span>
+            </div>
+
+            {entry.blockers.length > 0 && (
+              <RepairHistoryList title="Blockers" items={entry.blockers} tone="amber" />
+            )}
+
+            {entry.repairIssues.length > 0 && (
+              <RepairHistoryList title="Repair issues" items={entry.repairIssues} tone="slate" />
+            )}
+
+            {entry.blockers.length === 0 && entry.repairIssues.length === 0 && (
+              <p className="mt-3 text-xs text-slate-500">
+                No blockers or repair issues reported for this attempt.
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function RepairHistoryList({
+  title,
+  items,
+  tone,
+}: {
+  title: string
+  items: string[]
+  tone: 'amber' | 'slate'
+}) {
+  return (
+    <div
+      className={clsx(
+        'mt-3 rounded border p-2',
+        tone === 'amber'
+          ? 'border-amber-500/20 bg-amber-500/10'
+          : 'border-slate-800 bg-slate-950/40',
+      )}
+    >
+      <div
+        className={clsx(
+          'text-xs font-semibold uppercase tracking-wide',
+          tone === 'amber' ? 'text-amber-200' : 'text-slate-500',
+        )}
+      >
+        {title}
+      </div>
+      <ul
+        className={clsx(
+          'mt-1 list-disc space-y-1 pl-4 text-xs',
+          tone === 'amber' ? 'text-amber-100/90' : 'text-slate-300',
+        )}
+      >
+        {items.map((item, index) => (
+          <li key={`${item}-${index}`}>{fmtLabel(item)}</li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -1098,6 +1201,39 @@ function valueList(value: unknown): string[] {
   const text = textValue(value)
   if (!text) return []
   return text.split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function assetRepairHistory(row: GeneratedAssetDraft): RepairHistoryEntry[] {
+  return [
+    row.generation_quality_repair_history,
+    row.quality_repair_history,
+    metadataValue(row, 'generation_quality_repair_history'),
+    metadataValue(row, 'quality_repair_history'),
+  ]
+    .map(repairHistoryList)
+    .find((history) => history.length > 0) ?? []
+}
+
+function metadataValue(row: GeneratedAssetDraft, key: string): unknown {
+  const metadata = recordValue(row.metadata)
+  return metadata ? metadata[key] : undefined
+}
+
+function repairHistoryList(value: unknown): RepairHistoryEntry[] {
+  return recordList(value)
+    .map(repairHistoryEntry)
+    .filter((entry): entry is RepairHistoryEntry => Boolean(entry))
+}
+
+function repairHistoryEntry(item: Record<string, unknown>): RepairHistoryEntry | null {
+  const attempt = finiteNumber(item.attempt)
+  if (attempt == null) return null
+  return {
+    attempt,
+    passed: item.passed === true,
+    blockers: valueList(item.blockers),
+    repairIssues: valueList(item.repair_issues),
+  }
 }
 
 function outputCheckLabels(value: unknown): string[] {
