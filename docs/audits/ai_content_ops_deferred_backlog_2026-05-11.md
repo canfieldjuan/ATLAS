@@ -58,6 +58,12 @@ The following items appear in older plan docs but are no longer active backlog:
 - Operator-facing strict validation telemetry in Content Ops execution results.
 - Strict validation blocked-event logging in Content Ops execution.
 - Blog-specific packaged narrative pack for structured reasoning.
+- Extracted blog SEO field persistence into first-class `blog_posts` columns.
+- Blog SEO/AEO and GEO readiness summaries in generated-asset export/review
+  output.
+- Blog SEO/AEO and GEO save-time quality gates plus GEO repair loop.
+- Blog publish-level SEO/GEO/JSON-LD/crawler-visible article verification.
+- Atlas Intel blog readiness review and breakdown UI.
 
 ## Active Backlog
 
@@ -168,6 +174,14 @@ highest-leverage code should come from either a real source export fixture
 future slice touches reasoning policy, it should name the concrete trigger from
 the list above in its plan doc.
 
+The blog SEO/AEO/GEO arc is also closed for the current product contract.
+The original discovery audit now records the merged closeout chain:
+
+- `docs/audits/ai_content_ops_blog_seo_aeo_geo_discovery_2026-05-20.md`
+
+Do not take another Content Ops blog SEO/GEO slice unless it is driven by a
+new live-output failure, a UI/operator need, or a publish verifier regression.
+
 The review-source readiness and Postgres smoke closeouts do not create a new
 active Content Ops implementation backlog. G2 can use the existing exporter,
 source-row import, DB-backed draft persistence, optional live-provider
@@ -210,9 +224,9 @@ has 1,282,355 rows, 383,564 with usable complaint narratives. A 50-row debt
 collection sample exposed generic gaps: provider-style complaint narrative
 fields needed direct source-row aliases, and debt/credit-report complaints
 needed financial complaint action policy before SaaS-style reporting/account
-rules. PR-Content-Ops-FAQ-Complaint-Source-Policy owns that source-level fix.
-Future FAQ/source work should be driven by a real customer help desk export,
-hosted UI need, or another real dataset exposing a generic policy gap.
+rules. Those source-level fixes landed in the FAQ complaint/source-policy
+chain. Future FAQ/source work should be driven by a real customer help desk
+export, hosted UI need, or another real dataset exposing a generic policy gap.
 
 **Real CFPB output-quality update:** A follow-up run against three 150-row
 samples from the same local CFPB export (`Debt collection`, `Credit reporting,
@@ -221,7 +235,8 @@ showed that the source adapter preserved provider context such as `Product`,
 `Issue`, and `Sub-issue`, but the FAQ classifier did not read that context
 when choosing intent/action policy. That caused financial complaint rows to
 fall into generic SaaS reporting/account workflows.
-PR-Content-Ops-FAQ-Source-Context-Policy owns the generic fix: include
-normalized source-context fields in FAQ intent classification and add
-mortgage-servicing policy. This is still not a CFPB-specific branch; CFPB is
-the real public fixture that exposed the generic source-context gap.
+PR #699 landed the generic fix: include normalized source-context fields in FAQ
+intent classification, add mortgage-servicing policy, and keep mortgage
+classification anchored to mortgage-specific source language. This is still
+not a CFPB-specific branch; CFPB is the real public fixture that exposed the
+generic source-context gap.
