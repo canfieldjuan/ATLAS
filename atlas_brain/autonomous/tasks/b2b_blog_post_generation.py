@@ -1695,7 +1695,16 @@ def _looks_like_orphan_quote_reference(line: str) -> bool:
         return False
     if re.match(r"^\d+\.\s", stripped):  # ordered list item
         return False
-    if re.match(r"^the witness\b", stripped, re.IGNORECASE):
+    # Exclude only AGGREGATE witness references ("the witness evidence/data/
+    # highlights ..."), which cite aggregate data, not a quote. A genuine
+    # orphan ref like "The witness quoted earlier ..." must still be caught
+    # (Codex review on #728), so the guard is the aggregate-noun form rather
+    # than a bare "the witness" prefix.
+    if re.match(
+        r"^the witness\s+(?:evidence|data|highlights?|packet|signals?)\b",
+        stripped,
+        re.IGNORECASE,
+    ):
         return False
     return bool(_ORPHAN_QUOTE_REF_RE.match(stripped) or _QUOTED_EARLIER_RE.search(line))
 

@@ -19,15 +19,19 @@ in sync.
 
 1. Add `_looks_like_orphan_quote_reference(line)` -- mirrors the skill
    detector: matches a line starting with "That/This quote", "This/The
-   excerpt", or containing "quoted earlier"; excludes aggregate "the witness
-   ..." references, generic follow-ons, and markdown structural lines (`>`,
-   `#`, `-`, `*`, `+`, ordered list), same guards as
-   `_looks_like_orphan_disclaimer`.
+   excerpt", or containing "quoted earlier"; same structural guards as
+   `_looks_like_orphan_disclaimer`. The witness guard excludes only the
+   AGGREGATE-noun forms ("the witness evidence/data/highlights/..."), so a
+   genuine orphan ref like "The witness quoted earlier ..." is still caught
+   (per Codex review on #728).
 2. Extend the forward-sweep in `_remove_unmatched_quote_lines` to widen across
    an orphan quote-reference paragraph as well as a disclaimer.
-3. Add two tests: the sweep fires on the back-reference shapes; a
-   false-positive guard that a generic follow-on ("This pattern recurs ...")
-   and an aggregate "The witness evidence ..." reference are preserved.
+3. Tests: the sweep fires on the back-reference shapes (incl. "The witness
+   quoted earlier ..."); a false-positive guard that a generic follow-on and
+   an aggregate "The witness evidence ..." reference are preserved; and a
+   quote-reference-shaped follow-on after a KEPT (grounded) block survives
+   (the legitimate #723 case -- the line matches the matcher, so the
+   stripped-block gate is the only protection, and this pins it).
 4. Sync the change into the `extracted_content_pipeline` mirror.
 
 ### Files touched
@@ -66,8 +70,9 @@ configurable values. `_remove_unmatched_quote_lines`'s signature is unchanged.
 ## Verification
 
 - `tests/test_b2b_blog_post_generation_quote_gate.py` run via pytest ->
-  `85 passed` (was 83; +2: orphan-quote-reference swept, and the
-  generic/witness false-positive guard).
+  `86 passed` (orphan-quote-reference swept incl. "The witness quoted
+  earlier ..."; generic/aggregate-witness false-positive guard; and the
+  kept-block-survives case from the #728 review).
 - `extracted_content_pipeline` re-synced via
   `extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline`
   (`refreshed from atlas_brain sources (43 files)`); mirror carries the new
