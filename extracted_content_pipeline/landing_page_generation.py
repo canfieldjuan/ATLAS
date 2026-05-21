@@ -83,6 +83,7 @@ class LandingPageGenerationResult:
     consumed_reasoning_contexts: tuple[Mapping[str, Any], ...] = ()
     saved_ids: tuple[str, ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
+    quality_repair_history: tuple[Mapping[str, Any], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         data = {
@@ -93,6 +94,10 @@ class LandingPageGenerationResult:
             "saved_ids": list(self.saved_ids),
             "errors": list(self.errors),
         }
+        if self.quality_repair_history:
+            data["quality_repair_history"] = [
+                dict(item) for item in self.quality_repair_history
+            ]
         if self.consumed_reasoning_contexts:
             data["consumed_reasoning_contexts"] = [
                 dict(item) for item in self.consumed_reasoning_contexts
@@ -295,6 +300,7 @@ class LandingPageGenerationService:
         parsed: dict[str, Any] | None = None
         quality: dict[str, Any] = {"passed": False, "blockers": (), "repair_issues": ()}
         quality_blockers: tuple[str, ...] = ()
+        quality_repair_history: list[dict[str, Any]] = []
         total_usage: dict[str, Any] = {}
         total_parse_attempts = 0
         repair_limit = (
@@ -329,11 +335,14 @@ class LandingPageGenerationService:
                 }
                 if quality_blockers:
                     error["quality_blockers"] = quality_blockers
+                if quality_repair_history:
+                    error["quality_repair_history"] = tuple(quality_repair_history)
                 return LandingPageGenerationResult(
                     requested=1,
                     generated=0,
                     skipped=1,
                     errors=(error,),
+                    quality_repair_history=tuple(quality_repair_history),
                 )
 
             total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
@@ -348,6 +357,13 @@ class LandingPageGenerationService:
                 parsed,
                 quality_gates_enabled=resolved_quality_gates_enabled,
             )
+            quality_repair_history.append(
+                _quality_repair_history_row(repair_attempt_no, quality)
+            )
+            parsed = {
+                **parsed,
+                "_quality_repair_history": tuple(quality_repair_history),
+            }
             if quality["passed"]:
                 break
             quality_blockers = tuple(str(item) for item in quality["repair_issues"])
@@ -362,7 +378,9 @@ class LandingPageGenerationService:
                     "reason": "quality_blocked",
                     "blockers": tuple(str(item) for item in quality["blockers"]),
                     "quality_repair_attempts": repair_limit,
+                    "quality_repair_history": tuple(quality_repair_history),
                 },),
+                quality_repair_history=tuple(quality_repair_history),
             )
 
         draft = self._build_draft(
@@ -384,6 +402,7 @@ class LandingPageGenerationService:
                 campaign_payload
             ),
             saved_ids=saved_ids,
+            quality_repair_history=tuple(quality_repair_history),
         )
 
     async def _campaign_with_reasoning_context(
@@ -546,6 +565,8 @@ class LandingPageGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
             "generation_quality_repair_attempts": parsed.get("_quality_repair_attempts"),
+            "generation_quality_repair_history": parsed.get("_quality_repair_history")
+            or (),
         }
         if campaign_payload is not None:
             context = normalize_campaign_reasoning_context(campaign_payload)
@@ -563,6 +584,20 @@ class LandingPageGenerationService:
             reference_ids=reference_ids,
             metadata=metadata,
         )
+
+
+def _quality_repair_history_row(
+    attempt_no: int,
+    quality: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "attempt": int(attempt_no),
+        "passed": bool(quality.get("passed")),
+        "blockers": tuple(str(item) for item in quality.get("blockers") or ()),
+        "repair_issues": tuple(
+            str(item) for item in quality.get("repair_issues") or ()
+        ),
+    }
 
 
 __all__ = [

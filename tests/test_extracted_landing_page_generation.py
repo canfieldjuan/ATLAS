@@ -433,6 +433,25 @@ async def test_generate_repairs_quality_blocked_response_once_and_persists() -> 
     assert draft.metadata["generation_usage"] == {"input_tokens": 12, "output_tokens": 5}
     assert draft.metadata["generation_parse_attempts"] == 2
     assert draft.metadata["generation_quality_repair_attempts"] == 1
+    assert result.quality_repair_history[0]["attempt"] == 0
+    assert result.quality_repair_history[0]["passed"] is False
+    assert any(
+        "no_cta" in blocker
+        for blocker in result.quality_repair_history[0]["blockers"]
+    )
+    assert result.quality_repair_history[1] == {
+        "attempt": 1,
+        "passed": True,
+        "blockers": (),
+        "repair_issues": (),
+    }
+    assert result.as_dict()["quality_repair_history"] == [
+        dict(item) for item in result.quality_repair_history
+    ]
+    assert (
+        draft.metadata["generation_quality_repair_history"]
+        == result.quality_repair_history
+    )
 
 
 @pytest.mark.asyncio
@@ -458,6 +477,9 @@ async def test_generate_reports_quality_blockers_after_repair_attempt_fails() ->
     assert result.errors[0]["reason"] == "quality_blocked"
     assert result.errors[0]["quality_repair_attempts"] == 1
     assert any("no_cta" in blocker for blocker in result.errors[0]["blockers"])
+    assert result.errors[0]["quality_repair_history"] == result.quality_repair_history
+    assert [row["attempt"] for row in result.quality_repair_history] == [0, 1]
+    assert all(row["passed"] is False for row in result.quality_repair_history)
 
 
 @pytest.mark.asyncio
@@ -484,6 +506,10 @@ async def test_generate_reports_quality_blockers_when_repair_response_will_not_p
     assert len(llm.calls) == 2
     assert result.errors[0]["reason"] == "unparseable_response"
     assert any("no_cta" in blocker for blocker in result.errors[0]["quality_blockers"])
+    assert result.errors[0]["quality_repair_history"] == result.quality_repair_history
+    assert len(result.quality_repair_history) == 1
+    assert result.quality_repair_history[0]["attempt"] == 0
+    assert result.quality_repair_history[0]["passed"] is False
 
 
 @pytest.mark.asyncio
