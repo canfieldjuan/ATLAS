@@ -1,0 +1,43 @@
+{
+  "ok": false,
+  "exit_code": 1,
+  "source": "customer_tickets_1000.csv",
+  "source_format": "csv",
+  "input_profile": {
+    "status": "ok",
+    "raw_row_count": 1000,
+    "raw_row_count_source": "csv_rows",
+    "usable_source_count": 1000,
+    "warning_count": 0,
+    "warnings_by_code": {},
+    "skipped_row_count": 0,
+    "missing_source_text_count": 0,
+    "warning_sample": [],
+    "usable_source_ratio": 1.0
+  },
+  "failure": {
+    "type": "output_checks",
+    "exit_code": 1,
+    "result_status": "failed_output_checks",
+    "failed_output_checks": [
+      "uses_user_vocabulary",
+      "has_action_items"
+    ],
+    "output_check_details": [
+      {
+        "name": "uses_user_vocabulary",
+        "passed": false,
+        "hint": "Generated FAQ questions did not preserve customer wording or source-policy question wording."
+      },
+      {
+        "name": "has_action_items",
+        "passed": false,
+        "hint": "Generated FAQ items did not include actionable next steps."
+      }
+    ],
+    "stderr_tail": "FAQ output checks failed: has_action_items, uses_user_vocabulary"
+  },
+  "artifacts": {
+    "summary": "artifacts/run_summary.json"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "ok": false,
+  "exit_code": 1,
+  "source": "customer_tickets_1000.csv",
+  "source_format": "csv",
+  "input_profile": {
+    "status": "ok",
+    "raw_row_count": 1000,
+    "raw_row_count_source": "csv_rows",
+    "usable_source_count": 46,
+    "warning_count": 954,
+    "warnings_by_code": {
+      "missing_source_text": 954
+    },
+    "skipped_row_count": 954,
+    "missing_source_text_count": 954,
+    "warning_sample": [],
+    "usable_source_ratio": 0.046
+  },
+  "failure": {
+    "type": "output_checks",
+    "exit_code": 1,
+    "result_status": "failed_output_checks",
+    "failed_output_checks": [
+      "condensed"
+    ],
+    "output_check_details": [
+      {
+        "name": "condensed",
+        "passed": false,
+        "hint": "Most raw rows were skipped before FAQ generation; inspect source text columns or export filters first."
+      }
+    ],
+    "stderr_tail": "FAQ output checks failed: condensed"
+  },
+  "artifacts": {
+    "summary": "artifacts/run_summary.json"
+  }
+}
