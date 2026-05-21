@@ -70,12 +70,51 @@ function parseTemplateField(content: string, field: string): string {
   return match ? match[1] : ''
 }
 
+function parseArrayField(content: string, field: string): string {
+  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
+  if (!fieldMatch) return ''
+
+  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
+  let depth = 0
+  let quote = ''
+  let escaped = false
+
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index]
+
+    if (quote) {
+      if (escaped) {
+        escaped = false
+      } else if (char === '\\') {
+        escaped = true
+      } else if (char === quote) {
+        quote = ''
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+
+    if (char === '[') depth += 1
+    if (char === ']') depth -= 1
+
+    if (depth === 0) {
+      return content.slice(start, index + 1)
+    }
+  }
+
+  throw new Error(`Unclosed array field in blog source: ${field}`)
+}
+
 function parseChartsField(content: string, file: string): ChartSpec[] {
-  const match = content.match(/^\s*charts:\s*(\[[\s\S]*?\])\s*,\s*content:/m)
-  if (!match) return []
+  const chartsLiteral = parseArrayField(content, 'charts')
+  if (!chartsLiteral) return []
 
   try {
-    return JSON.parse(match[1]) as ChartSpec[]
+    return JSON.parse(chartsLiteral) as ChartSpec[]
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(`Invalid charts JSON in blog source ${file}: ${message}`)
@@ -222,14 +261,28 @@ ${rows}
       </figure>`
 }
 
+function chartPlaceholderIds(content: string): string[] {
+  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
+    .map(match => (match[1] || match[2] || '').trim())
+    .filter(Boolean)
+}
+
 function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
   const chartMap = new Map(charts.map(chart => [chart.chart_id, chart]))
+  const unknownChartIds = [...new Set(chartPlaceholderIds(content).filter(chartId => !chartMap.has(chartId)))]
+  if (unknownChartIds.length) {
+    throw new Error(`Missing chart fallback data for: ${unknownChartIds.join(', ')}`)
+  }
+
   return content.replace(
     /<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g,
     (_match, htmlId: string | undefined, markdownId: string | undefined) => {
-      const chartId = htmlId || markdownId || ''
+      const chartId = (htmlId || markdownId || '').trim()
       const chart = chartMap.get(chartId)
-      return chart ? buildChartFallbackHtml(chart) : ''
+      if (!chart) {
+        throw new Error(`Missing chart fallback data for: ${chartId}`)
+      }
+      return buildChartFallbackHtml(chart)
     },
   )
 }
