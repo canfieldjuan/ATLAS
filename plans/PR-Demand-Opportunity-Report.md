@@ -149,7 +149,7 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
 
 | Area | Estimated LOC |
 |---|---:|
-| `scripts/demand_opportunity_report.py` | ~290 |
+| `scripts/demand_opportunity_report.py` | ~330 |
 | `tests/test_demand_opportunity_report.py` | ~110 |
-| Plan doc (this update) | ~30 |
-| **Total** | **~430** |
+| Plan doc (this update) | ~75 |
+| **Total** | **~515** |
