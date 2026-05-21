@@ -398,7 +398,12 @@ def build_ticket_faq_markdown(
                 "text": text,
                 "source_id": source_id or "unknown",
                 "source_key": source_key,
+                "source_type": source_type,
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                "results_count": _first_present(evidence, opportunity, key="results_count"),
+                "result_count": _first_present(evidence, opportunity, key="result_count"),
+                "zero_results": _first_present(evidence, opportunity, key="zero_results"),
+                "zero_result": _first_present(evidence, opportunity, key="zero_result"),
             })
 
     sorted_groups = sorted(groups.items(), key=_group_sort_key)
@@ -599,7 +604,48 @@ def _failure_risk_signals(topic: str, rows: Sequence[Mapping[str, str]]) -> tupl
     for signal, terms in _FAILURE_RISK_RULES:
         if any(_keyword_matches(text, term) for term in terms):
             signals.append(signal)
+    if any(_is_zero_result_search_row(row) for row in rows):
+        signals.append("zero_result_search")
     return tuple(signals)
+
+
+def _is_zero_result_search_row(row: Mapping[str, Any]) -> bool:
+    source_type = _source_type_key(row.get("source_type"))
+    if source_type not in {"search_log", "search_query"}:
+        return False
+    for key in ("zero_results", "zero_result"):
+        value = row.get(key)
+        if _truthy(value):
+            return True
+    for key in ("results_count", "result_count"):
+        count = _integer_or_none(row.get(key))
+        if count == 0:
+            return True
+    return False
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = _clean(value).lower()
+    return text in {"1", "true", "yes", "y"}
+
+
+def _integer_or_none(value: Any) -> int | None:
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_present(*rows: Mapping[str, Any], key: str) -> Any:
+    for row in rows:
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return ""
 
 
 def _question(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, str]:

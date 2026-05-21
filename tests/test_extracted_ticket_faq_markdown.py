@@ -329,6 +329,73 @@ def test_build_ticket_faq_markdown_uses_frequency_tiebreak_after_opportunity_sco
     ]
 
 
+def test_build_ticket_faq_markdown_ranks_zero_result_searches_as_failure_risk() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-1",
+            "search_query": "How do I export attribution report?",
+            "results_count": 0,
+            "zero_results": True,
+            "evidence": [{
+                "text": "How do I export attribution report?",
+                "source_id": "search-export-1",
+                "source_type": "search_log",
+            }],
+        },
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-2",
+            "search_query": "export dashboard attribution",
+            "result_count": "0",
+            "evidence": [{
+                "text": "export dashboard attribution",
+                "source_id": "search-export-2",
+                "source_type": "search_log",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email update",
+            "evidence": [{
+                "text": "How do I change my email?",
+                "source_id": "ticket-email-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email settings",
+            "evidence": [{
+                "text": "I need to update the email on my account.",
+                "source_id": "ticket-email-2",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email profile",
+            "evidence": [{
+                "text": "Where can I edit the email address?",
+                "source_id": "ticket-email-3",
+                "source_type": "support_ticket",
+            }],
+        },
+    ])
+
+    assert [item["topic"] for item in result.items] == [
+        "reporting friction",
+        "email and profile updates",
+    ]
+    assert result.items[0]["frequency"] == 2
+    assert result.items[0]["failure_risk_signals"] == ("zero_result_search",)
+    assert result.items[0]["failure_risk_score"] == 1
+    assert result.items[0]["opportunity_score"] == 4
+    assert result.items[1]["frequency"] == 3
+    assert result.items[1]["failure_risk_score"] == 0
+    assert result.items[1]["opportunity_score"] == 3
+
+
 def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -> None:
     result = build_ticket_faq_markdown(
         [
