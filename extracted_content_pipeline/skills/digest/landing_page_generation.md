@@ -38,13 +38,22 @@ Output ONLY a single JSON object with this exact shape. No prose outside the JSO
 
 Field rules:
 - `title`: descriptive H1; reflects the campaign's value_prop; do NOT include date stamps.
-- `slug`: lowercase, hyphenated, derived from `campaign.name`. URL-safe ASCII only.
-- `hero.headline`: punchy, persona-aware. Subheadline reinforces the value prop in one sentence.
+- `slug`: lowercase, hyphenated, derived from `campaign.name`. URL-safe ASCII only. Do not use generic slugs such as `landing-page`, `campaign`, `demo`, `offer`, or `page`.
+- `hero.headline`: punchy, persona-aware. Subheadline reinforces the value prop in one sentence and makes the offer clear without hidden context.
 - `hero.cta_label` / `hero.cta_url`: the hero's primary CTA. Reuse for the page-level `cta` block unless the page uses a hero-CTA + sticky-footer-CTA pattern.
-- `sections`: 3-6 ordered sections. Common shapes: problem / solution / social-proof / how-it-works / pricing / FAQ. Each section needs a non-empty `title` and `body_markdown`.
-- `cta`: page-level primary CTA (label + url required). Optional `secondary_label` / `secondary_url`.
-- `meta.description`: SEO meta description, 120-160 characters. Skip the title tag if it's identical to `title`.
-- `reference_ids`: customer logos, case studies, testimonials, or other social-proof source ids the page cites. Empty when none.
+- `sections`: 3-6 ordered sections. Common shapes: problem / solution / how-it-works / proof / pricing / FAQ. Each section needs a non-empty `title` and `body_markdown`.
+- `sections.title`: use specific headings that describe the offer, audience, problem, or buyer question. Do not use generic headings such as "Overview", "Features", "Benefits", "Summary", "Introduction", or "Conclusion".
+- `cta`: page-level primary CTA (label + url required). Optional `secondary_label` / `secondary_url`. Do not output placeholder URLs such as `#`, `/#`, `javascript:void(0)`, or `javascript:;`.
+- `meta.title_tag`: always include a concrete SEO title tag, ideally 50-60 characters and no more than 70 characters.
+- `meta.description`: SEO meta description, 120-160 characters. Keep the title tag and description aligned with visible page copy.
+- `reference_ids`: customer logos, case studies, testimonials, or other social-proof source ids the page cites. Empty when none. Do not invent reference ids.
+
+Readiness rules:
+- The first viewport must make it clear what the offer is, who it is for, and why that reader should care.
+- Include a clear problem section and a clear solution or how-it-works section tied to `campaign.value_prop`.
+- Include objection coverage when the campaign gives enough context. This can be a FAQ, pricing, implementation, risk-reversal, comparison, security, or proof section.
+- If the campaign does not provide proof, testimonials, case studies, customer names, customer logos, or source ids, do not invent them. Use honest copy without fake social proof.
+- Do not leave unresolved placeholders or draft notes such as `{{claim}}`, `TODO`, `TBD`, or `lorem ipsum`.
 
 When the reasoning context provides a `narrative_plan`, copy each plan section's `id`/`title` verbatim and write prose grounded in the plan's `claim_ids`. Persona-tailor the headline + subheadline for `campaign.persona`.
 
