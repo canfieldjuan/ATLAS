@@ -76,8 +76,17 @@ def _write_source(tmp_path: Path, fmt: str) -> Path:
     )
 
 
-@pytest.mark.parametrize("fmt", ["auto", "csv", "json", "jsonl"])
-def test_faq_scale_smoke_writes_standard_artifacts(tmp_path: Path, fmt: str) -> None:
+@pytest.mark.parametrize(("fmt", "raw_row_count_source"), [
+    ("auto", "json_array"),
+    ("csv", "csv_rows"),
+    ("json", "json_array"),
+    ("jsonl", "jsonl_lines"),
+])
+def test_faq_scale_smoke_writes_standard_artifacts(
+    tmp_path: Path,
+    fmt: str,
+    raw_row_count_source: str,
+) -> None:
     source = _write_source(tmp_path, fmt)
     code, summary = smoke.run_scale_smoke(_args(tmp_path, path=source, source_format=fmt))
 
@@ -94,6 +103,12 @@ def test_faq_scale_smoke_writes_standard_artifacts(tmp_path: Path, fmt: str) -> 
     assert saved_summary["exit_code"] == 0
     assert saved_summary["result"]["generated"] == result["generated"]
     assert saved_summary["source_format"] == fmt
+    assert saved_summary["input_profile"]["status"] == "ok"
+    assert saved_summary["input_profile"]["raw_row_count"] == 4
+    assert saved_summary["input_profile"]["raw_row_count_source"] == raw_row_count_source
+    assert saved_summary["input_profile"]["usable_source_count"] == 4
+    assert saved_summary["input_profile"]["missing_source_text_count"] == 0
+    assert saved_summary["input_profile"]["usable_source_ratio"] == 1.0
     assert saved_summary["timing"]["elapsed_seconds"] >= 0
     assert saved_summary["failure"] is None
     assert saved_summary["artifact_details"]["markdown"]["exists"] is True
@@ -110,6 +125,7 @@ def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path
         tmp_path,
         "ticket-1,2026-05-01,Unique one,The export button moved.,exports",
         "ticket-2,2026-05-01,Unique two,Billing receipt is missing.,billing",
+        "ticket-3,2026-05-01,Empty text,,billing",
     )
 
     code, summary = smoke.run_scale_smoke(_args(tmp_path, path=source))
@@ -129,6 +145,11 @@ def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path
     assert summary["failure"]["type"] == "output_checks"
     assert summary["failure"]["failed_output_checks"] == ["condensed"]
     assert "FAQ output checks failed: condensed" in summary["failure"]["stderr_tail"]
+    assert summary["input_profile"]["raw_row_count"] == 3
+    assert summary["input_profile"]["usable_source_count"] == 2
+    assert summary["input_profile"]["warnings_by_code"]["missing_source_text"] == 1
+    assert summary["input_profile"]["missing_source_text_count"] == 1
+    assert summary["input_profile"]["skipped_row_count"] == 1
     assert summary["result"]["diagnostics"]["rendered_ticket_source_count"] == 2
 
 
@@ -156,6 +177,8 @@ def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> Non
     assert code != 0
     assert summary["ok"] is False
     assert summary["result"] is None
+    assert summary["input_profile"]["status"] == "error"
+    assert "No such file or directory" in summary["input_profile"]["error"]
     assert summary["failure"]["type"] == "cli_error"
     assert summary["failure"]["result_status"] is None
     assert summary["artifact_details"]["result"]["exists"] is False
@@ -179,6 +202,29 @@ def test_text_tail_bounds_long_stderr() -> None:
         f"line{i}" for i in range(30, 50)
     ]
     assert len(smoke._text_tail("x" * 5000)) == 4000
+
+
+def test_raw_row_profile_counts_json_bundle_rows(tmp_path: Path) -> None:
+    source = tmp_path / "bundle.json"
+    source.write_text(
+        json.dumps({"support_tickets": [{}, {}, {}], "reviews": [{}, {}]}) + "\n",
+        encoding="utf-8",
+    )
+
+    assert smoke._raw_row_profile(source, "auto") == {
+        "raw_row_count": 5,
+        "raw_row_count_source": "json_bundle.support_tickets,reviews",
+    }
+
+
+def test_raw_row_profile_returns_none_for_unrecognized_shape(tmp_path: Path) -> None:
+    source = tmp_path / "odd.json"
+    source.write_text(json.dumps({"items": [{}, {}]}) + "\n", encoding="utf-8")
+
+    assert smoke._raw_row_profile(source, "auto") == {
+        "raw_row_count": None,
+        "raw_row_count_source": None,
+    }
 
 
 @pytest.mark.parametrize("overrides,message", [
