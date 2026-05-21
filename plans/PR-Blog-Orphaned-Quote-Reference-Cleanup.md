@@ -112,12 +112,13 @@ the disclaimer hardening (#703).
 - Phase 1/2 PR: detector run over the corpus produces the authoritative
   orphan list, then `0` after the data fix; `npm run build` clean; HTML
   well-formedness validator -> 0 issues.
-- Phase 3 PR: `python -m pytest tests/test_b2b_blog_post_generation_quote_gate.py`
-  with the new sweep + false-positive-guard tests; extracted mirror re-synced.
+- Phase 3 PR: `tests/test_b2b_blog_post_generation_quote_gate.py` run via
+  pytest with the new sweep + false-positive-guard tests; extracted mirror
+  re-synced.
 
 ## Estimated diff size
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~135 |
-| **Total (this PR)** | **~135** |
+| Plan doc | ~125 |
+| **Total** | **~125** |
