@@ -596,6 +596,44 @@ def test_offtopic_pattern_does_not_sweep_nondisclaimer_following_prose():
     assert "Buyers value simplicity rather than feature depth" in out
 
 
+def test_orphan_quote_reference_swept_with_block():
+    """A stripped blockquote followed by a paragraph that back-references the
+    quote ("This quote ...", "The excerpt ...", "quoted earlier") is swept
+    with the block -- the reference dangles once the quote is gone."""
+    for follow in (
+        "This quote shows an active evaluation in progress.",
+        "The excerpt cuts off, but the signal is clear: teams compare costs.",
+        "The Reddit reviewer quoted earlier described it as the worst so far.",
+    ):
+        markdown = (
+            "## Section\n\n"
+            "> a quote that gets stripped (empty source pool)\n\n"
+            f"{follow}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "gets stripped" not in out
+        assert follow not in out, follow
+        assert "## Section" in out
+
+
+def test_quote_reference_does_not_sweep_generic_or_witness_followon():
+    """False-positive guard: a generic follow-on or an aggregate
+    "The witness evidence ..." reference after a stripped block is preserved
+    -- neither is an orphaned quote back-reference."""
+    for follow in (
+        "This pattern recurs across the dataset.",
+        "The witness evidence shows workflow migration at the team level.",
+    ):
+        markdown = (
+            "## Section\n\n"
+            "> an ungrounded quote\n\n"
+            f"{follow}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "ungrounded quote" not in out  # block still stripped
+        assert follow in out, follow          # follow-on preserved
+
+
 def test_orphan_prose_preserved_for_kept_blocks():
     """When a block is KEPT (its quotes ground), the surrounding intro
     and prose are also preserved. The orphan-prose cleanup only fires

@@ -1668,6 +1668,38 @@ def _looks_like_orphan_disclaimer(line: str) -> bool:
     return any(p.search(line) for p in _ORPHAN_DISCLAIMER_RES)
 
 
+# Quote back-reference patterns. A paragraph that points at a specific quote
+# ("That/This quote", "This/The excerpt", or "quoted earlier") is orphaned when
+# the quote it references was stripped, leaving a dangling non-sequitur. Kept
+# in sync with the seo-geo-aeo-blog-post skill's orphaned_quote_reference
+# detector. Aggregate "the witness ..." references and generic follow-ons
+# ("This pattern recurs ...") are deliberately NOT matched.
+_ORPHAN_QUOTE_REF_RE = re.compile(
+    r"^(?:that quote|this quote|the quote\b|this excerpt|the excerpt)\b",
+    re.IGNORECASE,
+)
+_QUOTED_EARLIER_RE = re.compile(r"\bquoted earlier\b", re.IGNORECASE)
+
+
+def _looks_like_orphan_quote_reference(line: str) -> bool:
+    """True if ``line`` explicitly back-references a quote that no longer
+    exists (its block was stripped), leaving a dangling reference. When a
+    stripped blockquote is followed by such a paragraph, the paragraph is
+    orphaned and should be swept with the block. Same structural guards as
+    ``_looks_like_orphan_disclaimer``; aggregate "the witness ..." references
+    and generic follow-ons are not matched."""
+    if not line or not line.strip():
+        return False
+    stripped = line.lstrip()
+    if stripped.startswith((">", "#", "-", "*", "+")):
+        return False
+    if re.match(r"^\d+\.\s", stripped):  # ordered list item
+        return False
+    if re.match(r"^the witness\b", stripped, re.IGNORECASE):
+        return False
+    return bool(_ORPHAN_QUOTE_REF_RE.match(stripped) or _QUOTED_EARLIER_RE.search(line))
+
+
 def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tuple[str, int]:
     """Strip LLM-generated blockquote BLOCKS that do not ground in a
     quote-grade source pool, AND the orphan prose adjacent to them.
@@ -1770,13 +1802,17 @@ def _remove_unmatched_quote_lines(markdown: str, source_quotes: list[str]) -> tu
                 # the block.
                 span_start = cursor
 
-        # Widen the span forward to swallow blank separators + an
-        # orphan disclaimer paragraph.
+        # Widen the span forward to swallow blank separators + an orphan
+        # disclaimer OR an orphan quote back-reference paragraph (both
+        # reference the stripped quote and dangle without it).
         span_end = block_end
         cursor = block_end
         while cursor < n and not lines[cursor].strip():
             cursor += 1
-        if cursor < n and _looks_like_orphan_disclaimer(lines[cursor]):
+        if cursor < n and (
+            _looks_like_orphan_disclaimer(lines[cursor])
+            or _looks_like_orphan_quote_reference(lines[cursor])
+        ):
             span_end = cursor + 1
 
         strip_spans.append((span_start, span_end))
