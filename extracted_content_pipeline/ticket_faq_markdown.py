@@ -63,6 +63,12 @@ _MORTGAGE_ACTION_STEPS = (
     "Gather the mortgage statement, payment history, escrow record, payoff quote, or loss-mitigation notice tied to the issue.",
     "Send the servicer a written request or dispute with the dates, amounts, account number, and copies of the records you want reviewed.",
 )
+_FAILURE_RISK_RULES = (
+    ("blocked_access", ("cannot", "can't", "can not", "unable", "locked", "blocked", "denied")),
+    ("failed_workflow", ("failed", "fails", "not working", "does not work", "keeps timing out", "timed out", "missing")),
+    ("incorrect_record", ("wrong", "incorrect", "inaccurate", "error", "mistake", "does not recognize")),
+    ("money_or_account_risk", ("charged", "fee", "fees", "payment", "balance", "debt", "foreclosure", "fraud")),
+)
 DEFAULT_INTENT_RULES = (
     ("credit report disputes", (
         "credit report",
@@ -393,7 +399,7 @@ def build_ticket_faq_markdown(
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
             })
 
-    sorted_groups = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))
+    sorted_groups = sorted(groups.items(), key=_group_sort_key)
     if len(sorted_groups) > max_items:
         visible_groups = tuple(sorted_groups[: max(1, max_items - 1)])
         overflow_rows: list[dict[str, str]] = []
@@ -459,6 +465,17 @@ def _topic(
             if text:
                 return text.lower()
     return (_compact(evidence.get("source_title") or opportunity.get("source_title")) or "customer support issues").lower()
+
+
+def _group_sort_key(item: tuple[str, Sequence[Mapping[str, str]]]) -> tuple[int, int, int, str]:
+    topic, rows = item
+    score = _opportunity_score(topic, rows)
+    return (
+        -score["opportunity_score"],
+        -score["frequency"],
+        -score["failure_risk_score"],
+        topic.lower(),
+    )
 
 
 def _intent_topic(
@@ -528,10 +545,15 @@ def _item(
     steps = _article_steps(topic, action_context, support_contact=support_contact)
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
+    opportunity = _opportunity_score(topic, rows)
     return {
         "topic": topic,
         "question": question,
         "question_source": question_source,
+        "frequency": opportunity["frequency"],
+        "failure_risk_score": opportunity["failure_risk_score"],
+        "failure_risk_signals": opportunity["failure_risk_signals"],
+        "opportunity_score": opportunity["opportunity_score"],
         "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
         "action_items": _action_items(topic, action_context),
         "summary": summary,
@@ -544,6 +566,38 @@ def _item(
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
     }
+
+
+def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
+    frequency = len(_distinct_source_keys(rows))
+    failure_risk_signals = _failure_risk_signals(topic, rows)
+    failure_risk_score = len(failure_risk_signals)
+    return {
+        "frequency": frequency,
+        "failure_risk_score": failure_risk_score,
+        "failure_risk_signals": failure_risk_signals,
+        "opportunity_score": frequency * (1 + failure_risk_score),
+    }
+
+
+def _distinct_source_keys(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    values = (row.get("source_key") or row.get("source_id", "") for row in rows)
+    return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _failure_risk_signals(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
+    text = " ".join((
+        topic,
+        " ".join(_clean(row.get("source_title")) for row in rows),
+        " ".join(_clean(row.get("text")) for row in rows),
+    )).lower()
+    if not text:
+        return ()
+    signals = []
+    for signal, terms in _FAILURE_RISK_RULES:
+        if any(_keyword_matches(text, term) for term in terms):
+            signals.append(signal)
+    return tuple(signals)
 
 
 def _question(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, str]:
