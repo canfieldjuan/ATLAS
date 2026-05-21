@@ -90,6 +90,15 @@ def _norm(text: str) -> str:
     return " ".join(str(text).strip().lower().split())
 
 
+# Canonical display names for vendors whose bare common-word spelling is cited
+# interchangeably with the full product name (so the competitor tally does not
+# split them). Keyed by the bare lowercase form -> canonical display. The
+# competitor key is the lowercase of the canonical so e.g. "Monday" and
+# "Monday.com" collapse to one entry shown as "Monday.com". Extend as new
+# split-variant vendors surface in a category.
+_VENDOR_ALIASES = {"monday": "Monday.com"}
+
+
 # ---------------------------------------------------------------------------
 # Pure aggregation (no DB) -- unit-testable
 # ---------------------------------------------------------------------------
@@ -175,12 +184,14 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         for comp in _as_list(r.get("competitors")):
             if isinstance(comp, dict) and comp.get("name"):
                 raw = str(comp["name"]).strip()
-                key = re.sub(r"\s+crm$", "", raw.lower()).strip()
-                if not key:
+                base = re.sub(r"\s+crm$", "", raw.lower()).strip()
+                if not base:
                     continue
+                canonical = _VENDOR_ALIASES.get(base)  # None unless a known alias
+                key = canonical.lower() if canonical else base
                 slot = competitors[key]
                 slot["count"] += 1
-                slot["names"][raw] += 1
+                slot["names"][canonical or raw] += 1
                 slot["contexts"][str(comp.get("context") or "unspecified")] += 1
 
         for phrase in _as_list(r.get("pricing_phrases")):

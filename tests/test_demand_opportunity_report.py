@@ -115,3 +115,21 @@ def test_feature_gaps_and_competitors_rollup():
     # positive_aspects surfaced + case-normalized.
     assert data["works_well"][0]["count"] == 2
     assert "intuitive ui" in data["works_well"][0]["aspect"].lower()
+
+
+def test_vendor_alias_merges_bare_name_to_canonical():
+    # "Monday" / "monday" must collapse into "Monday.com" (not split entries).
+    reviews = [
+        _review("Asana", 5, ["features"], competitors=[{"name": "Monday", "context": "considering"}]),
+        _review("Trello", 5, ["features"], competitors=[{"name": "Monday.com", "context": "compared"}]),
+        _review("Jira", 5, ["features"], competitors=[{"name": "monday", "context": "considering"}]),
+    ]
+    data = dor.aggregate(reviews)
+    monday = [c for c in data["competitors"] if c["name"] == "Monday.com"]
+    assert len(monday) == 1
+    assert monday[0]["count"] == 3
+    assert monday[0]["contexts"] == {"considering": 2, "compared": 1}
+    # "Monday dev" is a distinct product variant -- must NOT merge.
+    reviews2 = [_review("Asana", 5, ["features"], competitors=[{"name": "Monday dev", "context": "compared"}])]
+    data2 = dor.aggregate(reviews2)
+    assert data2["competitors"][0]["name"] == "Monday dev"

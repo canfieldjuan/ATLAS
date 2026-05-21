@@ -78,7 +78,12 @@ well" section as a do-NOT-build counter-signal the operator weighs by hand.
 **Competitor normalization.** `competitors_mentioned[].name` is tallied by a
 normalized key (case-folded, trailing " CRM" stripped) so variants like
 `HubSpot` / `Hubspot` / `HubSpot CRM` collapse to one entry (HubSpot: 49, not
-a split 37/7/4/1); the most frequent raw spelling is shown.
+a split 37/7/4/1); the most frequent raw spelling is shown. A small curated
+`_VENDOR_ALIASES` map additionally folds a bare common-word spelling into its
+canonical product name where the corpus uses both interchangeably -- e.g.
+`Monday` -> `Monday.com` (PM smoke test: merges 19+17 into one 36x entry),
+while a distinct variant like `Monday dev` stays separate. Extend the map as
+new split-variant vendors surface per category.
 
 **Output (the structured report).** Markdown, per category, with:
 - Ranked opportunity table (theme, frequency, mean urgency, vendor breadth,
