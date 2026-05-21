@@ -168,17 +168,28 @@ Minimum checks:
 Do not make `geo_readiness` a single opaque score. Use named checks so operators
 can see what failed and fix the draft.
 
-Recommended order:
+Implementation status as of this audit refresh:
 
-1. Add `geo_readiness` to blog generated-asset rows and CSV export.
-2. Add content-level GEO checks to the extracted blog quality gate.
-3. Add public-route verification for GEO publish readiness.
-4. Only then update customer-facing copy from "answer-engine-friendly" to
-   "GEO-ready".
+1. `geo_readiness` is exposed in blog generated-asset rows and CSV export.
+2. Content-level SEO/AEO/GEO checks are wired into the extracted blog quality
+   gate and the extracted blog generation service.
+3. Public-route verification covers canonical URLs, SEO/social metadata,
+   BlogPosting JSON-LD, BreadcrumbList JSON-LD, sitemap inclusion, source-date
+   `lastmod`, indexability, and crawler-visible article bodies.
+
+Remaining or active implementation work:
+
+1. Add or preserve static chart evidence fallbacks for no-JavaScript crawlers.
+2. Add FAQPage schema and static FAQ-body publish verification when source posts
+   include FAQ entries.
+3. Decide whether frontend prerendering and the verifier should share a
+   generated source metadata manifest.
+4. Only then update customer-facing copy from "checked for readiness" to
+   broader fully SEO/AEO/GEO language.
 
 ## Customer-Facing Language
 
-Before implementation:
+Before checks:
 
 > Blog drafts include SEO metadata, FAQ answers, and answer-engine-friendly
 > article structure.
@@ -188,8 +199,12 @@ After draft-level checks:
 > Blog drafts are checked for GEO readiness: clear entities, answer-first
 > sections, concrete evidence, FAQ coverage, and safe citation structure.
 
-After draft and publish checks:
+After draft and current publish checks:
 
 > Blog posts are generated and published with SEO, AEO, and GEO readiness checks
 > for metadata, answer extraction, structured data, and crawler-visible article
 > pages.
+
+Avoid until chart and FAQ publish fallbacks are complete:
+
+> Fully optimized for SEO, AEO, and GEO.
