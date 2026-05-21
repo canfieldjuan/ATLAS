@@ -92,6 +92,14 @@ const DEFAULT_INGESTION_DEFAULT_FIELDS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_SOURCE = 'manual'
 const INGESTION_SAMPLE_LIMIT = 5
 const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
+const LANDING_PAGE_QUALITY_REPAIR_INPUT =
+  'landing_page_quality_repair_attempts'
+const MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
+const INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE = '__invalid__'
+const LANDING_PAGE_QUALITY_REPAIR_OPTIONS = Array.from(
+  { length: MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS + 1 },
+  (_, index) => String(index),
+)
 
 export default function ContentOpsNewRun() {
   const {
@@ -144,6 +152,10 @@ export default function ContentOpsNewRun() {
   const ingestionImportRequestIdRef = useRef(0)
   const ingestionFileLoadRequestIdRef = useRef(0)
   const ingestionFileInputRef = useRef<HTMLInputElement | null>(null)
+  const parsedInputsForControls = useMemo(
+    () => parseInputsJsonObject(inputsJson),
+    [inputsJson],
+  )
 
   if (error) {
     return <PageError error={error} onRetry={refresh} />
@@ -161,6 +173,14 @@ export default function ContentOpsNewRun() {
   const reasoningCapabilityHint = reasoningConfigured
     ? reasoningStatusHint(catalog.reasoning)
     : ''
+  const landingPageOutputSelected = request.outputs.includes('landing_page')
+  const landingPageRepairAttemptValue = landingPageOutputSelected
+    ? landingPageRepairAttemptSelectValue(parsedInputsForControls)
+    : ''
+  const landingPageRepairAttemptMessage = landingPageOutputSelected
+    ? landingPageRepairAttemptHelpText(parsedInputsForControls)
+    : ''
+  const landingPageRepairAttemptDisabled = !parsedInputsForControls.ok
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict
   // and plan panel so the user never sees a "Can run" badge or plan
@@ -187,6 +207,13 @@ export default function ContentOpsNewRun() {
     setIngestionImportState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
+  }
+
+  const handleLandingPageRepairAttemptsChange = (value: string) => {
+    const updated = updateLandingPageRepairAttemptsInputJson(inputsJson, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
   }
 
   const togglePreset = (presetId: string) => {
@@ -222,14 +249,14 @@ export default function ContentOpsNewRun() {
       }
 
   // Shared submit-time parse for both preview and plan. Validates the
-  // inputs JSON and the max-cost string draft against the backend's
-  // pydantic constraints before either round-trip.
+  // inputs JSON, landing-page repair override, and the max-cost string
+  // draft against backend constraints before either round-trip.
   const buildDomainRequest = (): ParsedRequest => {
     let parsedInputs: Record<string, unknown>
     try {
       const trimmed = inputsJson.trim()
       parsedInputs = trimmed ? JSON.parse(trimmed) : {}
-      if (typeof parsedInputs !== 'object' || Array.isArray(parsedInputs)) {
+      if (!isRecord(parsedInputs)) {
         throw new Error('inputs must be a JSON object')
       }
     } catch (err) {
@@ -237,6 +264,21 @@ export default function ContentOpsNewRun() {
         ok: false,
         kind: 'invalid_inputs_json',
         message: err instanceof Error ? err.message : String(err),
+      }
+    }
+
+    if (request.outputs.includes('landing_page')) {
+      const repairAttemptValue = parsedInputs[LANDING_PAGE_QUALITY_REPAIR_INPUT]
+      if (
+        repairAttemptValue !== null &&
+        typeof repairAttemptValue !== 'undefined' &&
+        !normalizeLandingPageRepairAttemptValue(repairAttemptValue).ok
+      ) {
+        return {
+          ok: false,
+          kind: 'invalid_inputs_json',
+          message: `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`,
+        }
       }
     }
 
@@ -674,6 +716,50 @@ export default function ContentOpsNewRun() {
             className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
             placeholder='{"target_account": "Acme", "offer": "Audit"}'
           />
+          {landingPageOutputSelected && (
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+              <label className="block text-sm">
+                <span className="text-slate-300">
+                  Landing page quality repair attempts
+                </span>
+                <select
+                  value={landingPageRepairAttemptValue}
+                  onChange={(e) =>
+                    handleLandingPageRepairAttemptsChange(e.target.value)
+                  }
+                  disabled={landingPageRepairAttemptDisabled}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {landingPageRepairAttemptValue ===
+                    INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE && (
+                    <option value={INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE}>
+                      Invalid value in inputs JSON
+                    </option>
+                  )}
+                  <option value="">Backend default (1)</option>
+                  {LANDING_PAGE_QUALITY_REPAIR_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option === '0'
+                        ? '0 - disable repair'
+                        : `${option} repair attempt${option === '1' ? '' : 's'}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p
+                className={clsx(
+                  'mt-2 text-xs',
+                  landingPageRepairAttemptValue ===
+                    INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE ||
+                    !parsedInputsForControls.ok
+                    ? 'text-amber-200'
+                    : 'text-slate-500',
+                )}
+              >
+                {landingPageRepairAttemptMessage}
+              </p>
+            </div>
+          )}
         </section>
 
         {/* Ingestion inspection */}
@@ -1287,6 +1373,122 @@ type ParsedIngestionRows =
 type ParsedIngestionDefaultFields =
   | { ok: true; fields: Record<string, unknown> }
   | { ok: false; message: string }
+
+type ParsedInputsJsonObject =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; message: string }
+
+type UpdatedInputsJson =
+  | { ok: true; value: string }
+  | { ok: false; message: string }
+
+function parseInputsJsonObject(value: string): ParsedInputsJsonObject {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value.trim() || '{}')
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+  if (!isRecord(parsed)) {
+    return { ok: false, message: 'Inputs JSON must be an object.' }
+  }
+  return { ok: true, value: { ...parsed } }
+}
+
+function landingPageRepairAttemptSelectValue(
+  parsed: ParsedInputsJsonObject,
+): string {
+  if (!parsed.ok) return ''
+
+  const raw = parsed.value[LANDING_PAGE_QUALITY_REPAIR_INPUT]
+  if (raw === null || typeof raw === 'undefined') return ''
+
+  const normalized = normalizeLandingPageRepairAttemptValue(raw)
+  return normalized.ok
+    ? String(normalized.value)
+    : INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE
+}
+
+function landingPageRepairAttemptHelpText(
+  parsed: ParsedInputsJsonObject,
+): string {
+  if (!parsed.ok) {
+    return `Fix inputs JSON before changing repair attempts: ${parsed.message}`
+  }
+
+  const raw = parsed.value[LANDING_PAGE_QUALITY_REPAIR_INPUT]
+  if (raw === null || typeof raw === 'undefined') {
+    return 'Uses the backend default: 1 repair attempt.'
+  }
+
+  const normalized = normalizeLandingPageRepairAttemptValue(raw)
+  if (!normalized.ok) {
+    return `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`
+  }
+
+  if (normalized.value === 0) {
+    return 'Quality repair is disabled for landing-page generation.'
+  }
+  return `Landing-page generation can make ${normalized.value} quality repair attempt${normalized.value === 1 ? '' : 's'}.`
+}
+
+function updateLandingPageRepairAttemptsInputJson(
+  current: string,
+  selected: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  if (selected === '') {
+    delete next[LANDING_PAGE_QUALITY_REPAIR_INPUT]
+  } else {
+    const normalized = normalizeLandingPageRepairAttemptValue(selected)
+    if (!normalized.ok) {
+      return {
+        ok: false,
+        message: `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`,
+      }
+    }
+    next[LANDING_PAGE_QUALITY_REPAIR_INPUT] = normalized.value
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function normalizeLandingPageRepairAttemptValue(
+  value: unknown,
+): { ok: true; value: number } | { ok: false } {
+  if (
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && !Number.isInteger(value))
+  ) {
+    return { ok: false }
+  }
+
+  let normalized: number
+  if (typeof value === 'number') {
+    normalized = value
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!/^\d+$/.test(trimmed)) return { ok: false }
+    normalized = Number(trimmed)
+  } else {
+    return { ok: false }
+  }
+
+  if (
+    !Number.isSafeInteger(normalized) ||
+    normalized < 0 ||
+    normalized > MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS
+  ) {
+    return { ok: false }
+  }
+  return { ok: true, value: normalized }
+}
 
 function parseIngestionRowsJson(value: string): ParsedIngestionRows {
   let parsed: unknown
