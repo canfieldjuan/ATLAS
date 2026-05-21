@@ -70,14 +70,22 @@ multi-fields:
 cross-vendor breadth = the share of distinct category vendors whose reviews
 show the theme. A pain that is widespread, intense, AND unsolved by every
 vendor in the category is a market gap (high opportunity); a pain isolated to
-one weak vendor is just that vendor's problem (low opportunity). Themes are
-discounted when the same vendors show strong `positive_aspects` on the
-adjacent capability.
+one weak vendor is just that vendor's problem (low opportunity). `positive_aspects`
+are not folded into the numeric score (mapping a positive to the pain theme it
+offsets is fuzzy); instead they are surfaced verbatim in a "what already works
+well" section as a do-NOT-build counter-signal the operator weighs by hand.
+
+**Competitor normalization.** `competitors_mentioned[].name` is tallied by a
+normalized key (case-folded, trailing " CRM" stripped) so variants like
+`HubSpot` / `Hubspot` / `HubSpot CRM` collapse to one entry (HubSpot: 49, not
+a split 37/7/4/1); the most frequent raw spelling is shown.
 
 **Output (the structured report).** Markdown, per category, with:
 - Ranked opportunity table (theme, frequency, mean urgency, vendor breadth,
   opportunity score).
 - Top feature gaps (verbatim, de-duplicated, with counts).
+- What already works well (top `positive_aspects`, de-duplicated) -- a
+  do-NOT-build counter-signal.
 - Pricing-pain summary (price-increase mentions, spend ranges).
 - Per-theme evidence: 2-3 `quotable_phrases` / complaint spans with the
   review source, so every claim is traceable (no fabricated numbers).
@@ -95,6 +103,15 @@ vendors are reported in the header for transparency. The markers are
 deliberately specific to avoid false-dropping legitimate reviews (a "Silver
 plan" tier or a "durable workflow" survive). The real fix is upstream
 vendor-name disambiguation; this keeps the report honest until then.
+
+**Filter limitation (known).** The markers are tuned to the contamination
+*shapes* actually observed for CRM (gaming/crafting, physical materials,
+audio) -- they are not a general off-topic classifier. A different off-topic
+domain can still leak (e.g. a stray medical "Mirena" mention surfaced in the
+CRM competitor list from a "Close"-keyword match). Per-category review of the
+output, plus marker additions when a new shape appears, is expected until the
+upstream disambiguation lands; the report header's dropped-count makes the
+filter's reach visible.
 
 **Human-in-the-loop.** Run on demand per category; the operator reads the
 report and refines or re-scopes -- nothing is auto-published. This matches the
@@ -142,6 +159,9 @@ report and refines or re-scopes -- nothing is auto-published. This matches the
   contract_lock_in surfaces as the most *intense* (urgency 6.68).
   "overall_dissatisfaction" is held out as a baseline, not ranked. Pricing-pain
   evidence is clean SaaS pricing after the filter (no video-game quotes).
+  Competitor map is normalized (HubSpot 49, merged from 4 spelling variants);
+  the "what works well" section surfaces top positive_aspects (Easy to use 11x,
+  customization, clean interface).
 - `scripts/local_pr_review.sh` -> plan shape, plan/code consistency,
   `git diff --check`.
 

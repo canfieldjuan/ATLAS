@@ -126,7 +126,13 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
     )
     baseline_count = 0
     feature_gaps: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "verbatim": None})
-    competitors: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "contexts": defaultdict(int)})
+    positive_aspects: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "verbatim": None})
+    # Keyed by normalized name (case-folded, trailing " CRM" stripped) so
+    # variants like "HubSpot" / "Hubspot" / "HubSpot CRM" tally as one; the
+    # most frequent raw spelling is used for display.
+    competitors: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "contexts": defaultdict(int), "names": defaultdict(int)}
+    )
     pricing_phrases: list[str] = []
     price_increase_count = 0
 
@@ -158,12 +164,24 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
             if feature_gaps[key]["verbatim"] is None:
                 feature_gaps[key]["verbatim"] = str(gap).strip()
 
+        for pos in _as_list(r.get("positive_aspects")):
+            key = _norm(pos)
+            if not key:
+                continue
+            positive_aspects[key]["count"] += 1
+            if positive_aspects[key]["verbatim"] is None:
+                positive_aspects[key]["verbatim"] = str(pos).strip()
+
         for comp in _as_list(r.get("competitors")):
             if isinstance(comp, dict) and comp.get("name"):
-                name = str(comp["name"]).strip()
-                competitors[name]["count"] += 1
-                ctx = str(comp.get("context") or "unspecified")
-                competitors[name]["contexts"][ctx] += 1
+                raw = str(comp["name"]).strip()
+                key = re.sub(r"\s+crm$", "", raw.lower()).strip()
+                if not key:
+                    continue
+                slot = competitors[key]
+                slot["count"] += 1
+                slot["names"][raw] += 1
+                slot["contexts"][str(comp.get("context") or "unspecified")] += 1
 
         for phrase in _as_list(r.get("pricing_phrases")):
             if phrase:
@@ -191,8 +209,19 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         ({"gap": v["verbatim"], "count": v["count"]} for v in feature_gaps.values()),
         key=lambda g: g["count"], reverse=True,
     )
+    works = sorted(
+        ({"aspect": v["verbatim"], "count": v["count"]} for v in positive_aspects.values()),
+        key=lambda w: w["count"], reverse=True,
+    )
     comps = sorted(
-        ({"name": n, "count": v["count"], "contexts": dict(v["contexts"])} for n, v in competitors.items()),
+        (
+            {
+                "name": max(v["names"].items(), key=lambda x: x[1])[0],
+                "count": v["count"],
+                "contexts": dict(v["contexts"]),
+            }
+            for v in competitors.values()
+        ),
         key=lambda c: c["count"], reverse=True,
     )
 
@@ -205,6 +234,7 @@ def aggregate(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         "baseline_overall_dissatisfaction": baseline_count,
         "themes": themes,
         "feature_gaps": gaps,
+        "works_well": works,
         "competitors": comps,
         "pricing": {
             "price_increase_mentions": price_increase_count,
@@ -247,6 +277,14 @@ def render_markdown(category: str, data: dict[str, Any]) -> str:
     if data["feature_gaps"]:
         for g in data["feature_gaps"][:20]:
             out.append(f"- ({g['count']}x) {g['gap']}")
+    else:
+        out.append("_None extracted._")
+    out.append("")
+    out.append("## What already works well (do NOT compete here)")
+    out.append("")
+    if data.get("works_well"):
+        for w in data["works_well"][:12]:
+            out.append(f"- ({w['count']}x) {w['aspect']}")
     else:
         out.append("_None extracted._")
     out.append("")

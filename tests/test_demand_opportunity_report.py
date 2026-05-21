@@ -92,15 +92,26 @@ def test_opportunity_ranking_rewards_breadth_and_urgency():
 
 def test_feature_gaps_and_competitors_rollup():
     reviews = [
-        _review("Close", 5, ["features"], feature_gaps=["deeper reporting", "Deeper Reporting"],
+        _review("Close", 5, ["features"],
+                feature_gaps=["deeper reporting", "Deeper Reporting"],
+                positive_aspects=["clean, intuitive UI"],
                 competitors=[{"name": "HubSpot", "context": "compared"}]),
-        _review("Pipedrive", 5, ["features"], feature_gaps=["deeper reporting"],
-                competitors=[{"name": "HubSpot", "context": "considering"}]),
+        _review("Pipedrive", 5, ["features"],
+                feature_gaps=["deeper reporting"],
+                positive_aspects=["Clean, intuitive UI"],
+                # name variants must merge into one competitor
+                competitors=[{"name": "Hubspot", "context": "considering"},
+                             {"name": "HubSpot CRM", "context": "compared"}]),
     ]
     data = dor.aggregate(reviews)
     top_gap = data["feature_gaps"][0]
     assert top_gap["count"] == 3  # case-normalized dedup across reviews
     assert "reporting" in top_gap["gap"].lower()
-    hubspot = next(c for c in data["competitors"] if c["name"] == "HubSpot")
-    assert hubspot["count"] == 2
-    assert hubspot["contexts"] == {"compared": 1, "considering": 1}
+    # HubSpot / Hubspot / HubSpot CRM collapse to one entry, count 3.
+    hub = [c for c in data["competitors"] if c["count"] == 3]
+    assert len(hub) == 1
+    assert hub[0]["name"].lower().startswith("hubspot")
+    assert hub[0]["contexts"] == {"compared": 2, "considering": 1}
+    # positive_aspects surfaced + case-normalized.
+    assert data["works_well"][0]["count"] == 2
+    assert "intuitive ui" in data["works_well"][0]["aspect"].lower()
