@@ -260,6 +260,7 @@ class _LandingPageService:
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        quality_repair_attempts: int | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -270,6 +271,7 @@ class _LandingPageService:
             "parse_retry_attempts": parse_retry_attempts,
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "quality_gates_enabled": quality_gates_enabled,
+            "quality_repair_attempts": quality_repair_attempts,
             "extras": dict(extras),
         })
         return _Result()
@@ -1004,6 +1006,22 @@ async def test_execute_threads_quality_gates_enabled_into_landing_page() -> None
 
     call = landing.calls[0]
     assert call["quality_gates_enabled"] is True
+    assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_quality_repair_attempts_into_landing_page() -> None:
+    landing = _LandingPageService()
+    await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {"campaign_name": "Q3", "offer": "Audit", "audience": "VPs"},
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    call = landing.calls[0]
+    assert call["quality_repair_attempts"] == 1
     assert call["extras"] == {}
 
 

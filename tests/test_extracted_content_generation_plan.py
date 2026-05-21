@@ -343,6 +343,7 @@ def test_plan_maps_landing_page_to_landing_page_generation_service():
         "max_tokens": 4096,
         "temperature": 0.3,
         "quality_gates_enabled": True,
+        "quality_repair_attempts": 1,
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
     }
