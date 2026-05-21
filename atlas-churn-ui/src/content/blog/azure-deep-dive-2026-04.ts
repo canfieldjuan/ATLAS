@@ -208,7 +208,7 @@ const post: BlogPost = {
 <h2 id="which-teams-feel-azure-pain-first">Which Teams Feel Azure Pain First</h2>
 <p>Pressure is surfacing most strongly with <strong>evaluators</strong>. The timing window is immediate: organizations with vSphere 7 license expirations within 2 days face forced decisions, while a broader window exists for teams approaching Broadcom renewal cycles or evaluating VMware alternatives.</p>
 <p>The 12 evaluation-stage evaluators in the dataset represent the sharpest pain signal. These are not casual browsers—they are active buyers comparing alternatives under time pressure. The vSphere 7 expiration deadline (2 days) and Broadcom pricing changes create a forcing function that turns latent dissatisfaction into operational urgency.</p>
-<p>For teams not facing immediate VMware deadlines, the pressure is lower but still present. Azure's $200 trial credit offers a retention tool for new customers, but one Capterra reviewer noted:</p>
+<p>For teams not facing immediate VMware deadlines, the pressure is lower but still present. Azure's $200 trial credit offers a retention tool for new customers.</p>
 <p>This suggests Azure uses promotional pricing to acquire customers, which may explain why pricing complaints persist even as trial credits appear in positive reviews. Once the trial credit expires (typically within 30 days), organizations face full pricing, which may trigger the pricing backlash signals visible in the dataset.</p>
 <h2 id="when-azure-friction-turns-into-action">When Azure Friction Turns Into Action</h2>
 <p>Timing signals cluster around three triggers:</p>

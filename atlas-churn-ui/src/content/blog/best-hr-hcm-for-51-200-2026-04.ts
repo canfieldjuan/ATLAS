@@ -185,7 +185,7 @@ const post: BlogPost = {
 <p>-- software reviewer</p>
 </blockquote>
 <p>This pricing backlash correlates with consolidation pressure. Teams evaluating BambooHR against bundled HRIS suites (like Gusto or Rippling) discover that payroll and international capabilities lag. When you're paying extra for features that competitors bundle, the math breaks down.</p>
-<p>A second pain point is <strong>onboarding friction at scale.</strong> One office manager reported hiring workflow bugs:</p>
+<p>A second pain point is <strong>onboarding friction at scale.</strong> One office manager reported hiring workflow bugs.</p>
 <p>These aren't catastrophic failures, but they create friction during high-volume hiring periods.</p>
 <h3 id="should-you-choose-bamboohr">Should You Choose BambooHR?</h3>
 <p>Yes, if:</p>

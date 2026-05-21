@@ -45,6 +45,27 @@ HTML of the 43 legacy posts:
 4. Leave generic follow-ons (`This pattern recurs:`) untouched -- the same
    accepted behavior as the fixed generator.
 
+A post-strip well-formedness audit (HTML tag balance + dangling-lead-in scan,
+neither of which `tsc` or the SEO analyzer checks) surfaced two follow-ups
+folded into this PR:
+
+5. **12 dangling lead-ins** across 8 posts where the fused-clause trim missed
+   a `.` immediately followed by `</strong>` (and over-long single-clause
+   lead-ins), leaving `...One office manager reported hiring workflow bugs:`
+   with no quote. Repaired with prose judgment: `:`->`.` where the clause
+   carries real substance (the skill's paraphrase-with-attribution option),
+   clause dropped where it was pure scaffolding.
+6. **`real-cost-of-copper` deep-repair.** The audit found this post was
+   contaminated by keyword-matched off-topic reviews (copper-the-metal, audio
+   cables, an ISP complaint, a health "28 day cycle" note), each shipped with
+   a disclaimer admitting it -- the same evidence-integrity hard-stop the
+   skill flags, in wording the analyzer's regex missed. Removed the Spectrum
+   and Optimus blockquotes, the five-item audio-gear "strengths" list, the
+   cryptic health-quote paragraph, and FAQ item #4 (which fed FAQPage schema);
+   reworded the prose that referenced them. Legitimate Copper-CRM analysis
+   (the 90/738 pricing stat, urgency distribution, the "spreadsheet with a
+   pretty interface" critique, satisfaction anchors) is preserved.
+
 ### Files touched
 
 - `plans/PR-Blog-Strip-Empty-Blockquotes-Data.md`
@@ -140,6 +161,12 @@ No generator code changes -- the producer already does this for new posts.
 - Dry-run diff spot-checked on `gusto-vs-workday`, `jira-vs-mondaycom`
   (10 removals each): real content preserved, lead-in clauses cleanly
   trimmed, no broken HTML.
+- Post-strip HTML well-formedness validator (tag balance + parser) across all
+  43 posts -> 0 issues; dangling-lead-in scan -> 0 (was 12 before the
+  follow-up fixes).
+- Broader misattribution-disclaimer scan across the corpus -> only
+  `real-cost-of-copper` (repaired here) and `close-deep-dive` (1 occurrence,
+  tracked separately) carried analyzer-missed disclaimer variants.
 - `git diff --check` -> passed.
 
 ## Estimated diff size

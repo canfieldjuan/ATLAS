@@ -183,14 +183,14 @@ const post: BlogPost = {
 -- reviewer on Reddit</p>
 </blockquote>
 <p>The pricing backlash is specific.</p>
-<p><strong>Workday reviewers cite feature strength and support gaps.</strong> One Capterra reviewer acknowledged the feature breadth despite design concerns:</p>
+<p><strong>Workday reviewers cite feature strength and support gaps.</strong> One Capterra reviewer acknowledged the feature breadth despite design concerns.</p>
 <p>But the support pain is acute.</p>
 <p>One long-tenured contractor described the context for their Workday experience:</p>
 <blockquote>
 <p>"I have been an independent contractor for a number of years but managed to maintain my Services Certificates with some partner work."
 -- reviewer on Reddit</p>
 </blockquote>
-<p><strong>The competitive pressure is real but not universal.</strong> One Reddit reviewer cited SAP People Intelligence as a superior alternative:</p>
+<p><strong>The competitive pressure is real but not universal.</strong> One Reddit reviewer cited SAP People Intelligence as a superior alternative.</p>
 <p>But the bundled suite consolidation pattern suggests customers evaluate alternatives without always switching. The displacement flow for Workday leans toward consolidation rather than outright replacement.</p>
 <p><strong>Retention factors are visible in both datasets.</strong> For Gusto, workflow automation and time savings keep small business owners engaged despite pricing friction. For Workday, feature breadth and integration capabilities provide enough value to tolerate support gaps. Both platforms show low explicit churn despite high complaint volume, which suggests the pain is real but not yet catastrophic for most customers.</p>
 <hr />

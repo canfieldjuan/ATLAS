@@ -157,7 +157,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <p>On the strength side, overall satisfaction appears most frequently in positive mentions, followed closely by UX, pricing, and features. Integration and performance round out the top-tier strengths, with support and reliability mentioned less frequently but still positively.</p>
 <p>The weakness profile concentrates heavily in two areas: UX and overall dissatisfaction. This creates an interesting tension—UX appears in both strength and weakness lists, suggesting the platform delivers divergent experiences depending on user technical skill, use case complexity, or organizational context.</p>
-<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with that satisfaction:</p>
+<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with that satisfaction.</p>
 <p>This duality—strong satisfaction among technical users who master LookML, alongside persistent learning curve complaints from those building advanced reports—defines Looker's current reviewer sentiment landscape.</p>
 <h2 id="where-looker-users-feel-the-most-pain">Where Looker Users Feel the Most Pain</h2>
 <p>Pain point analysis reveals where reviewer frustration clusters most intensely.</p>
@@ -235,7 +235,7 @@ const post: BlogPost = {
 <p>This limited account visibility is a constraint of the review sample. Public reviews rarely include company identifiers, so account-level signals depend on reviewers voluntarily disclosing organizational context or named-account witnesses appearing in the evidence.</p>
 <h2 id="how-looker-stacks-up-against-competitors">How Looker Stacks Up Against Competitors</h2>
 <p>Reviewers most frequently compare Looker to six alternatives: Tableau, Power BI, PowerBI (likely a variant mention of Power BI), Sitechecker, Looker Studio, and Metabase.</p>
-<p><strong>Tableau</strong> appears most often in competitive mentions. Reviewer evidence shows migration patterns in both directions. One Twitter reference highlighted a senior data analyst's experience switching from Power BI to Looker:</p>
+<p><strong>Tableau</strong> appears most often in competitive mentions. Reviewer evidence shows migration patterns in both directions. One Twitter reference highlighted a senior data analyst's experience switching from Power BI to Looker.</p>
 <p>This migration-in-progress signal suggests Looker wins some head-to-head evaluations against Power BI, at least among technical data analysts who value semantic modeling.</p>
 <p>Tableau's strength profile based on available evidence includes security and onboarding, with weaknesses in reliability and data migration. This positions Tableau as a potential alternative for organizations prioritizing onboarding ease and security controls over semantic modeling depth.</p>
 <p>Power BI's strength profile emphasizes UX and integration, with weaknesses in contract lock-in and onboarding. This creates an interesting contrast—Power BI's UX strength may appeal to the same non-technical users who struggle with Looker's learning curve, but Power BI's onboarding weakness and contract concerns may offset that advantage.</p>
