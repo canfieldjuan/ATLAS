@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { collectBlogSourceMetadata } from './blog-source-metadata.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const rootDir = resolve(import.meta.dirname, '..')
-const blogDir = join(rootDir, 'src/content/blog')
 const distDir = join(rootDir, 'dist')
 const sitemapPath = join(distDir, 'sitemap.xml')
 
@@ -16,122 +16,16 @@ function readText(path) {
   return readFileSync(path, 'utf-8')
 }
 
+function collectBlogPosts() {
+  try {
+    return collectBlogSourceMetadata(rootDir)
+  } catch (error) {
+    fail(error.message)
+  }
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function parseStringField(content, field) {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*'((?:\\\\'|[^'])*)'`, 'm')
-  const match = content.match(pattern)
-  if (!match) return ''
-  return match[1].replace(/\\'/g, "'")
-}
-
-function parseTemplateField(content, field) {
-  const pattern = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\`([\\s\\S]*?)\`\\s*,`, 'm')
-  const match = content.match(pattern)
-  return match ? match[1] : ''
-}
-
-function parseArrayField(content, field) {
-  const fieldMatch = new RegExp(`^\\s*${escapeRegExp(field)}:\\s*\\[`, 'm').exec(content)
-  if (!fieldMatch) return ''
-
-  const start = fieldMatch.index + fieldMatch[0].lastIndexOf('[')
-  let depth = 0
-  let quote = ''
-  let escaped = false
-
-  for (let index = start; index < content.length; index += 1) {
-    const char = content[index]
-
-    if (quote) {
-      if (escaped) {
-        escaped = false
-      } else if (char === '\\') {
-        escaped = true
-      } else if (char === quote) {
-        quote = ''
-      }
-      continue
-    }
-
-    if (char === '"' || char === "'" || char === '`') {
-      quote = char
-      continue
-    }
-
-    if (char === '[') depth += 1
-    if (char === ']') depth -= 1
-
-    if (depth === 0) {
-      return content.slice(start, index + 1)
-    }
-  }
-
-  fail(`Unclosed array field in blog source: ${field}`)
-}
-
-function parseChartsField(content, file) {
-  const chartsLiteral = parseArrayField(content, 'charts')
-  if (!chartsLiteral) return []
-
-  try {
-    return JSON.parse(chartsLiteral)
-  } catch (error) {
-    fail(`Invalid charts JSON in ${file}: ${error.message}`)
-  }
-}
-
-function chartPlaceholderIds(content) {
-  return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
-    .map(match => (match[1] || match[2] || '').trim())
-    .filter(Boolean)
-}
-
-function assertKnownChartPlaceholders(body, charts, slug) {
-  const chartIds = new Set(charts.map(chart => chart.chart_id))
-  const unknownChartIds = [...new Set(chartPlaceholderIds(body).filter(chartId => !chartIds.has(chartId)))]
-  if (unknownChartIds.length) {
-    fail(`/blog/${slug} source references missing chart fallback data: ${unknownChartIds.join(', ')}`)
-  }
-}
-
-function collectBlogPosts() {
-  const posts = []
-  for (const file of readdirSync(blogDir)) {
-    if (!file.endsWith('.ts') || file === 'index.ts') continue
-    const content = readText(join(blogDir, file))
-    const slug = parseStringField(content, 'slug')
-    const title = parseStringField(content, 'title')
-    const description = parseStringField(content, 'description')
-    const date = parseStringField(content, 'date')
-    const author = parseStringField(content, 'author')
-    const seoTitle = parseStringField(content, 'seo_title')
-    const seoDescription = parseStringField(content, 'seo_description')
-    const body = parseTemplateField(content, 'content')
-    const charts = parseChartsField(content, file)
-    if (!slug) fail(`Missing slug in ${file}`)
-    if (!title) fail(`Missing title in ${file}`)
-    if (!description) fail(`Missing description in ${file}`)
-    if (!date) fail(`Missing date in ${file}`)
-    if (!author) fail(`Missing author in ${file}`)
-    if (!body.trim()) fail(`Missing content in ${file}`)
-    assertKnownChartPlaceholders(body, charts, slug)
-    posts.push({
-      slug,
-      title,
-      description,
-      date,
-      author,
-      seoTitle,
-      seoDescription,
-      body,
-      charts,
-    })
-  }
-  if (!posts.length) fail('No blog posts found')
-  return posts.sort((a, b) => a.slug.localeCompare(b.slug))
 }
 
 function attrValue(tag, attr) {
@@ -196,7 +90,7 @@ function sourceBodyText(value) {
 }
 
 function expectedBodyPhrase(post) {
-  const text = sourceBodyText(post.body)
+  const text = sourceBodyText(post.content)
   const sentence = text
     .split(/(?<=[.!?])\s+/)
     .find(item => item.length >= 60 && /[A-Za-z]/.test(item))
