@@ -1037,7 +1037,9 @@ PR independently). The full contract lives in `AGENTS.md`; the highlights:
   as the lead line. Same shape goes in the commit message.
 - **Branch naming:** `claude/pr-<slice-name>` for builder branches;
   `claude/<topic>` for non-PR scratch.
-- **Open as draft** until the reviewer LGTMs.
+- **Open ready for review** by default. Do not open draft PRs unless the
+  operator explicitly asks for a draft; automated review tools do not review
+  draft PRs.
 - **Reviewer verdicts:** `BLOCKER` / `MAJOR` / `NIT` / `LGTM`. Reviewer
   reproduces the builder's verification commands; doesn't trust claims.
 - **No "while I was here" cleanups.** Plan and implementation ship together;
