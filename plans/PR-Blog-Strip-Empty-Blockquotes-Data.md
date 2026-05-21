@@ -190,6 +190,8 @@ No generator code changes -- the producer already does this for new posts.
 
 | Area | Estimated LOC |
 |---|---:|
-| 43 blog `.ts` posts (170 blockquotes + 12 lead-in trims + copper repair) | ~780 |
-| Plan doc | ~165 |
-| **Total** | **~945** |
+| 42 blog `.ts` posts (170 blockquotes + 12 lead-in trims + copper repair) | ~780 |
+| `close-deep-dive-2026-04.ts` removed (contaminated post pulled) | ~370 |
+| `insightly-vs-zoho-crm` related_slugs reference dropped | ~1 |
+| Plan doc | ~205 |
+| **Total** | **~1356** |
