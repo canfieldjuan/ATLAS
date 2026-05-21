@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
+_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
+_LANDING_PAGE_QUALITY_REPAIR_INPUT = "landing_page_quality_repair_attempts"
+
 
 @dataclass(frozen=True)
 class OutputDefinition:
@@ -28,6 +31,9 @@ class OutputDefinition:
     # Must mirror each *GenerationConfig.parse_retry_attempts default used in
     # generation_plan.py. If a service raises retries, update this field too.
     default_parse_retry_attempts: int = 1
+    # Must mirror each GenerationConfig quality-repair default. Only landing
+    # pages currently have a quality-repair LLM loop.
+    default_quality_repair_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -134,6 +140,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         estimated_unit_cost_usd=0.65,
         required_inputs=("offer", "audience"),
         reasoning_requirement="optional_host_context",
+        default_quality_repair_attempts=1,
     ),
     "sales_brief": OutputDefinition(
         id="sales_brief",
@@ -277,27 +284,102 @@ def resolve_outputs(request: ContentOpsRequest) -> tuple[str, ...]:
     return PRESETS["email_only"].outputs
 
 
-def retry_adjusted_unit_cost_usd(definition: OutputDefinition) -> float:
-    """Return the per-item preview budget including default parse retries."""
+def _nonnegative_int_input(
+    inputs: Mapping[str, Any],
+    key: str,
+    *,
+    max_value: int | None = None,
+) -> int | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, (bool, float)):
+        raise ValueError(f"{key} must be an integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be an integer") from None
+    if value < 0:
+        raise ValueError(f"{key} must be at least 0; got {value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"{key} must be at most {max_value}; got {value}")
+    return value
 
-    attempts = max(1, int(definition.default_parse_retry_attempts) + 1)
-    return definition.estimated_unit_cost_usd * attempts
+
+def _quality_repair_attempts_for_output(
+    output_id: str,
+    definition: OutputDefinition,
+    *,
+    inputs: Mapping[str, Any],
+    require_quality_gates: bool,
+) -> int:
+    """Return preview quality-repair attempts for one selected output."""
+
+    if not require_quality_gates:
+        return 0
+    repair_attempts = definition.default_quality_repair_attempts
+    if output_id == "landing_page":
+        override = _nonnegative_int_input(
+            inputs,
+            _LANDING_PAGE_QUALITY_REPAIR_INPUT,
+            max_value=_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
+        )
+        if override is not None:
+            repair_attempts = override
+    return max(0, int(repair_attempts))
 
 
-def estimate_cost_usd(outputs: Sequence[str], *, limit: int) -> float:
+def retry_adjusted_unit_cost_usd(
+    definition: OutputDefinition,
+    *,
+    quality_repair_attempts: int | None = None,
+) -> float:
+    """Return the per-item preview budget including parse and repair attempts."""
+
+    parse_attempts = max(1, int(definition.default_parse_retry_attempts) + 1)
+    repair_attempts = (
+        definition.default_quality_repair_attempts
+        if quality_repair_attempts is None
+        else quality_repair_attempts
+    )
+    repair_attempts = max(0, int(repair_attempts))
+    return definition.estimated_unit_cost_usd * parse_attempts * (repair_attempts + 1)
+
+
+def estimate_cost_usd(
+    outputs: Sequence[str],
+    *,
+    limit: int,
+    inputs: Mapping[str, Any] | None = None,
+    require_quality_gates: bool = True,
+) -> float:
     """Estimate cost from selected outputs and opportunity limit.
 
     The estimates are intentionally conservative placeholders. Generated
-    assets default to one parse retry, so preview budgets use the worst-case
-    attempt count instead of the first-call cost.
+    assets default to one parse retry, and landing pages can add quality repair
+    attempts. Preview budgets use the worst-case attempt count instead of the
+    first-call cost.
     """
 
     total = 0.0
+    provided_inputs = inputs or {}
     for output_id in outputs:
         definition = OUTPUT_CATALOG.get(output_id)
         if not definition:
             continue
-        total += retry_adjusted_unit_cost_usd(definition) * max(1, limit)
+        repair_attempts = _quality_repair_attempts_for_output(
+            output_id,
+            definition,
+            inputs=provided_inputs,
+            require_quality_gates=require_quality_gates,
+        )
+        total += (
+            retry_adjusted_unit_cost_usd(
+                definition,
+                quality_repair_attempts=repair_attempts,
+            )
+            * max(1, limit)
+        )
     return total
 
 
@@ -351,7 +433,12 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
 
     selected_outputs = tuple(output for output in outputs if output not in blocked)
     missing = missing_required_inputs(selected_outputs, request.inputs)
-    estimated_cost = estimate_cost_usd(selected_outputs, limit=request.limit)
+    estimated_cost = estimate_cost_usd(
+        selected_outputs,
+        limit=request.limit,
+        inputs=request.inputs,
+        require_quality_gates=request.require_quality_gates,
+    )
 
     if request.max_cost_usd is not None and estimated_cost > request.max_cost_usd:
         warnings.append(

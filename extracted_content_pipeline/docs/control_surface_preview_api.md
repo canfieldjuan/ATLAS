@@ -99,7 +99,9 @@ Current preset ids:
 
 The catalog endpoint exposes both `estimated_unit_cost_usd` and
 `estimated_retry_adjusted_unit_cost_usd`. Use the retry-adjusted value for
-budget UI and the preview response as the authoritative run estimate.
+budget UI and the preview response as the authoritative run estimate. The
+retry-adjusted catalog value includes default parse retry attempts and, for
+landing pages, the default quality-repair attempt.
 
 ## Preview Payload
 
@@ -148,13 +150,21 @@ Treat `can_run=false` as a hard stop for generation controls. The UI can still
 show the selected plan, but it should not enable the generate button until
 `missing_inputs`, `blocked_outputs`, and budget warnings are resolved.
 `estimated_cost_usd` is conservative: generated assets default to one parse
-retry, so preview budgets include the worst-case retry attempt count.
+retry, so preview budgets include the worst-case retry attempt count. Landing
+pages also include the quality-repair loop when quality gates are enabled:
+`landing_page_quality_repair_attempts` can raise, lower, or disable that repair
+multiplier for the request.
 
 > **Upgrade note (breaking):** Prior to 2026-05-08, `estimated_cost_usd`
 > reflected a single LLM call per output. It now reflects worst-case retry
 > attempts (default: 2 calls per generated asset). Operators with existing
 > `max_cost_usd` budgets should multiply their previous limit by
 > `default_parse_retry_attempts + 1` (default: x2).
+>
+> Landing pages can cost more than the generic x2 default when quality gates
+> are enabled because quality repair can trigger another parsed-generation
+> pass. With the default landing-page settings, preview uses
+> `(parse_retry_attempts + 1) * (quality_repair_attempts + 1)`.
 
 ## Plan Payload
 

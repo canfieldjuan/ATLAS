@@ -49,6 +49,7 @@ export interface ContentOpsOutputDefinition {
   implemented: boolean
   estimated_unit_cost_usd: number
   default_parse_retry_attempts: number
+  default_quality_repair_attempts: number
   estimated_retry_adjusted_unit_cost_usd: number
   required_inputs: string[]
   default_max_items: number

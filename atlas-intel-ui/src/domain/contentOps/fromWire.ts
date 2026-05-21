@@ -57,6 +57,7 @@ export function fromWireOutputDefinition(
     implemented: wire.implemented,
     estimatedUnitCostUsd: wire.estimated_unit_cost_usd,
     defaultParseRetryAttempts: wire.default_parse_retry_attempts,
+    defaultQualityRepairAttempts: wire.default_quality_repair_attempts,
     estimatedRetryAdjustedUnitCostUsd: wire.estimated_retry_adjusted_unit_cost_usd,
     requiredInputs: [...wire.required_inputs],
     defaultMaxItems: wire.default_max_items,

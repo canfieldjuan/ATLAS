@@ -161,6 +161,147 @@ def test_preview_budget_gate_uses_retry_adjusted_cost():
     assert "Estimated cost exceeds max_cost_usd: 2.20 > 1.10" in preview["warnings"]
 
 
+def test_preview_landing_page_cost_includes_default_quality_repair_attempt():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 2.6
+
+
+def test_preview_landing_page_cost_uses_quality_repair_attempt_override_zero():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 0,
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 1.3
+
+
+def test_preview_landing_page_cost_uses_quality_repair_attempt_override_string():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": "3",
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 5.2
+
+
+def test_preview_landing_page_cost_accepts_quality_repair_attempt_override_max():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 10,
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 14.3
+
+
+def test_preview_landing_page_repair_cost_can_block_budget():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "max_cost_usd": 2.5,
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["estimated_cost_usd"] == 2.6
+    assert "Estimated cost exceeds max_cost_usd: 2.60 > 2.50" in preview["warnings"]
+
+
+def test_preview_landing_page_cost_ignores_quality_repair_when_gates_disabled():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "require_quality_gates": False,
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 3,
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 1.3
+
+
+def test_preview_landing_page_repair_override_is_not_validated_when_gates_disabled():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "require_quality_gates": False,
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+                "landing_page_quality_repair_attempts": 50,
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 1.3
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (-1, "landing_page_quality_repair_attempts must be at least 0"),
+        (11, "landing_page_quality_repair_attempts must be at most 10"),
+        (True, "landing_page_quality_repair_attempts must be an integer"),
+        (1.5, "landing_page_quality_repair_attempts must be an integer"),
+        ("many", "landing_page_quality_repair_attempts must be an integer"),
+    ],
+)
+def test_preview_rejects_invalid_landing_page_quality_repair_attempt_override(
+    value,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        preview_from_mapping(
+            {
+                "outputs": ["landing_page"],
+                "inputs": {
+                    "offer": "Churn audit",
+                    "audience": "B2B SaaS founders",
+                    "landing_page_quality_repair_attempts": value,
+                },
+            }
+        )
+
+
 def test_preview_keeps_signal_extraction_blocked_without_source_material():
     preview = preview_from_mapping(
         {
