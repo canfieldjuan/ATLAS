@@ -57,6 +57,18 @@ def test_evaluate_landing_page_no_slug_blocks() -> None:
     assert "no_slug" in codes
 
 
+def test_evaluate_landing_page_invalid_slug_blocks() -> None:
+    report = evaluate_landing_page(_input(slug="Landing Page"))
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "invalid_slug:Landing Page" in blocker_msgs
+
+
+def test_evaluate_landing_page_generic_slug_blocks() -> None:
+    report = evaluate_landing_page(_input(slug="landing-page"))
+    codes = {f.code for f in report.blockers}
+    assert "invalid_slug" in codes
+
+
 def test_evaluate_landing_page_no_hero_headline_blocks() -> None:
     report = evaluate_landing_page(_input(hero={"subheadline": "x", "cta_label": "y", "cta_url": "/z"}))
     codes = {f.code for f in report.blockers}
@@ -86,6 +98,20 @@ def test_evaluate_landing_page_partial_cta_still_blocks() -> None:
     assert any(f.code == "no_cta" for f in report.blockers)
 
 
+def test_evaluate_landing_page_placeholder_cta_url_blocks() -> None:
+    report = evaluate_landing_page(_input(cta={"label": "Demo", "url": "#"}))
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "placeholder_cta_url:#" in blocker_msgs
+
+
+def test_evaluate_landing_page_javascript_cta_url_blocks() -> None:
+    report = evaluate_landing_page(
+        _input(cta={"label": "Demo", "url": "javascript:void(0)"})
+    )
+    codes = {f.code for f in report.blockers}
+    assert "placeholder_cta_url" in codes
+
+
 def test_evaluate_landing_page_no_sections_blocks() -> None:
     report = evaluate_landing_page(_input(sections=()))
     codes = {f.code for f in report.blockers}
@@ -107,6 +133,57 @@ def test_evaluate_landing_page_section_missing_body_blocks_per_section() -> None
     assert "section_missing_body:1" in blocker_msgs
 
 
+def test_evaluate_landing_page_generic_section_title_warns() -> None:
+    sections = (_section(title="Overview"),)
+    report = evaluate_landing_page(_input(sections=sections))
+    warning_msgs = {f.message for f in report.warnings}
+    assert "generic_section_title:0:Overview" in warning_msgs
+
+
+def test_evaluate_landing_page_missing_meta_title_tag_warns() -> None:
+    report = evaluate_landing_page(
+        _input(
+            meta={
+                "description": (
+                    "Acme catches renewal pressure 90 days early so you can "
+                    "prevent unplanned churn at scale."
+                ),
+            },
+        )
+    )
+    codes = {f.code for f in report.warnings}
+    assert "missing_meta_title_tag" in codes
+
+
+def test_evaluate_landing_page_long_meta_title_tag_warns() -> None:
+    report = evaluate_landing_page(
+        _input(
+            meta={
+                "title_tag": "A" * 71,
+                "description": (
+                    "Acme catches renewal pressure 90 days early so you can "
+                    "prevent unplanned churn at scale."
+                ),
+            },
+        )
+    )
+    codes = {f.code for f in report.warnings}
+    assert "meta_title_tag_too_long" in codes
+
+
+def test_evaluate_landing_page_metadata_inconsistent_warns() -> None:
+    report = evaluate_landing_page(
+        _input(
+            meta={
+                "title_tag": "Unrelated Payroll Workflow",
+                "description": "Payroll approvals for finance teams and accountants.",
+            },
+        )
+    )
+    codes = {f.code for f in report.warnings}
+    assert "metadata_inconsistent" in codes
+
+
 def test_evaluate_landing_page_meta_description_too_short_warns() -> None:
     """Below the configured min for SEO."""
     policy = QualityPolicy(name="lp_policy", thresholds={"min_meta_description_chars": 200})
@@ -120,6 +197,19 @@ def test_evaluate_landing_page_meta_description_missing_warns() -> None:
     report = evaluate_landing_page(_input(meta={}), policy=policy)
     codes = {f.code for f in report.warnings}
     assert "missing_meta_description" in codes
+
+
+def test_evaluate_landing_page_unresolved_placeholders_block_across_surfaces() -> None:
+    sections = (_section(body="Use {{missing_claim}} before launch."),)
+    report = evaluate_landing_page(_input(sections=sections))
+    blocker_msgs = {f.message for f in report.blockers}
+    assert "unresolved_placeholder:{{missing_claim}}" in blocker_msgs
+
+
+def test_evaluate_landing_page_todo_placeholder_blocks() -> None:
+    report = evaluate_landing_page(_input(hero={"headline": "TODO", "subheadline": "x"}))
+    codes = {f.code for f in report.blockers}
+    assert "unresolved_placeholder" in codes
 
 
 def test_evaluate_landing_page_blocked_phrasing_word_boundary_does_not_match_substring() -> None:

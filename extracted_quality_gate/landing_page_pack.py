@@ -54,6 +54,54 @@ from .types import (
 )
 
 
+_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_GENERIC_SLUGS = frozenset({"landing-page", "campaign", "demo", "offer", "page"})
+_PLACEHOLDER_URLS = frozenset({"#", "/#", "javascript:void(0)", "javascript:;"})
+_UNRESOLVED_TOKEN_RE = re.compile(
+    r"\{\{[^{}]+\}\}|\{\{[^{}]+\}|\b(?:todo|tbd|lorem ipsum)\b",
+    re.IGNORECASE,
+)
+_GENERIC_SECTION_TITLES = frozenset({
+    "benefits",
+    "conclusion",
+    "features",
+    "introduction",
+    "overview",
+    "summary",
+})
+_STOPWORDS = frozenset({
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "before",
+    "business",
+    "can",
+    "company",
+    "customer",
+    "customers",
+    "for",
+    "from",
+    "have",
+    "into",
+    "landing",
+    "page",
+    "problem",
+    "problems",
+    "same",
+    "that",
+    "the",
+    "their",
+    "this",
+    "turn",
+    "use",
+    "with",
+    "your",
+})
+
+
 _DEFAULT_THRESHOLDS: Mapping[str, Any] = {
     "min_sections": 1,
     "min_meta_description_chars": 0,
@@ -113,6 +161,15 @@ def evaluate_landing_page(
         findings.append(GateFinding(code="no_title", message="no_title", severity=GateSeverity.BLOCKER))
     if not slug:
         findings.append(GateFinding(code="no_slug", message="no_slug", severity=GateSeverity.BLOCKER))
+    elif not _slug_quality(slug):
+        findings.append(
+            GateFinding(
+                code="invalid_slug",
+                message=f"invalid_slug:{slug}",
+                severity=GateSeverity.BLOCKER,
+                metadata={"slug": slug},
+            )
+        )
 
     # ---- Hero ----
     headline = str(hero.get("headline") or "").strip()
@@ -146,6 +203,15 @@ def evaluate_landing_page(
                 metadata={"has_label": bool(cta_label), "has_url": bool(cta_url)},
             )
         )
+    elif _placeholder_url(cta_url):
+        findings.append(
+            GateFinding(
+                code="placeholder_cta_url",
+                message=f"placeholder_cta_url:{cta_url}",
+                severity=GateSeverity.BLOCKER,
+                metadata={"url": cta_url},
+            )
+        )
 
     # ---- Sections ----
     min_sections = _threshold_int(policy, "min_sections")
@@ -169,6 +235,15 @@ def evaluate_landing_page(
                     metadata={"section_index": index},
                 )
             )
+        elif section_title.lower() in _GENERIC_SECTION_TITLES:
+            findings.append(
+                GateFinding(
+                    code="generic_section_title",
+                    message=f"generic_section_title:{index}:{section_title}",
+                    severity=GateSeverity.WARNING,
+                    metadata={"section_index": index, "title": section_title},
+                )
+            )
         section_body = str(section.get("body_markdown") or "").strip()
         if not section_body:
             findings.append(
@@ -180,7 +255,25 @@ def evaluate_landing_page(
                 )
             )
 
-    # ---- SEO meta description ----
+    # ---- SEO metadata ----
+    title_tag = str(meta.get("title_tag") or "").strip()
+    if not title_tag:
+        findings.append(
+            GateFinding(
+                code="missing_meta_title_tag",
+                message="missing_meta_title_tag",
+                severity=GateSeverity.WARNING,
+            )
+        )
+    elif len(title_tag) > 70:
+        findings.append(
+            GateFinding(
+                code="meta_title_tag_too_long",
+                message=f"meta_title_tag_too_long:{len(title_tag)}>70",
+                severity=GateSeverity.WARNING,
+                metadata={"length": len(title_tag), "max": 70},
+            )
+        )
     min_meta_chars = _threshold_int(policy, "min_meta_description_chars")
     description = str(meta.get("description") or "").strip()
     if min_meta_chars > 0:
@@ -201,6 +294,32 @@ def evaluate_landing_page(
                     metadata={"length": len(description), "min": min_meta_chars},
                 )
             )
+    if not _metadata_consistent(title=title, hero=hero, sections=sections, meta=meta):
+        findings.append(
+            GateFinding(
+                code="metadata_inconsistent",
+                message="metadata_inconsistent",
+                severity=GateSeverity.WARNING,
+            )
+        )
+
+    # ---- Placeholder/template safety ----
+    unresolved_tokens = _unresolved_tokens(
+        title=title,
+        hero=hero,
+        cta=cta,
+        meta=meta,
+        sections=sections,
+    )
+    for token in unresolved_tokens:
+        findings.append(
+            GateFinding(
+                code="unresolved_placeholder",
+                message=f"unresolved_placeholder:{token}",
+                severity=GateSeverity.BLOCKER,
+                metadata={"token": token},
+            )
+        )
 
     # ---- Blocked phrasing (case-insensitive word-boundary) ----
     phrases = _blocked_phrases(policy)
@@ -250,6 +369,98 @@ def evaluate_landing_page(
                 )
 
     return _build_report(findings=findings, sections=sections, policy=policy)
+
+
+def _slug_quality(value: str) -> bool:
+    slug = str(value or "").strip()
+    return bool(_SLUG_RE.fullmatch(slug)) and slug not in _GENERIC_SLUGS
+
+
+def _placeholder_url(value: str) -> bool:
+    url = str(value or "").strip().lower()
+    return url in _PLACEHOLDER_URLS or url.startswith("javascript:")
+
+
+def _metadata_consistent(
+    *,
+    title: str,
+    hero: Mapping[str, Any],
+    sections: Sequence[Mapping[str, Any]],
+    meta: Mapping[str, Any],
+) -> bool:
+    metadata_text = _normalize_text(" ".join((
+        str(meta.get("title_tag") or ""),
+        str(meta.get("description") or ""),
+        str(meta.get("og_title") or ""),
+    )))
+    if not metadata_text:
+        return False
+    visible_text = _normalize_text(" ".join((
+        title,
+        _mapping_text(hero),
+        " ".join(
+            f"{section.get('title') or ''} {section.get('body_markdown') or ''}"
+            for section in sections
+        ),
+    )))
+    return _contains_any(metadata_text, _key_terms(visible_text))
+
+
+def _unresolved_tokens(
+    *,
+    title: str,
+    hero: Mapping[str, Any],
+    cta: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    sections: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    haystack_parts = [title, _mapping_text(hero), _mapping_text(cta), _mapping_text(meta)]
+    for section in sections:
+        haystack_parts.append(_mapping_text(section))
+    haystack = "\n".join(part for part in haystack_parts if part)
+    tokens: list[str] = []
+    for match in _UNRESOLVED_TOKEN_RE.finditer(haystack):
+        token = match.group(0).strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    return tuple(tokens)
+
+
+def _mapping_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return " ".join(_mapping_text(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return " ".join(_mapping_text(item) for item in value)
+    return str(value or "").strip()
+
+
+def _normalize_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _key_terms(value: Any) -> tuple[str, ...]:
+    normalized = _normalize_text(value)
+    if not normalized:
+        return ()
+    words = [
+        word for word in normalized.split()
+        if len(word) >= 4 and word not in _STOPWORDS
+    ]
+    terms: list[str] = []
+    seen: set[str] = set()
+    if len(words) > 1:
+        phrase = " ".join(words)
+        terms.append(phrase)
+        seen.add(phrase)
+    for word in words:
+        if word not in seen:
+            terms.append(word)
+            seen.add(word)
+    return tuple(terms)
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
 
 
 def _build_report(
