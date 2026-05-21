@@ -67,6 +67,35 @@ function parseChartsField(content, file) {
   }
 }
 
+function parseFaqField(content, file) {
+  const faqLiteral = parseArrayField(content, 'faq')
+  if (!faqLiteral) return []
+
+  try {
+    const faq = JSON.parse(faqLiteral)
+    if (!Array.isArray(faq)) {
+      throw new Error('faq field must be an array')
+    }
+    return faq.map((item, index) => {
+      if (!item || typeof item !== 'object') {
+        throw new Error(`faq item ${index + 1} must be an object`)
+      }
+      if (typeof item.question !== 'string' || !item.question.trim()) {
+        throw new Error(`faq item ${index + 1} missing question`)
+      }
+      if (typeof item.answer !== 'string' || !item.answer.trim()) {
+        throw new Error(`faq item ${index + 1} missing answer`)
+      }
+      return {
+        question: item.question,
+        answer: item.answer,
+      }
+    })
+  } catch (error) {
+    throw new Error(`Invalid faq JSON in blog source ${file}: ${error.message}`)
+  }
+}
+
 export function chartPlaceholderIds(content) {
   return [...content.matchAll(/<p>\s*\{\{chart:([^}]+)\}\}\s*<\/p>|\{\{chart:([^}]+)\}\}/g)]
     .map(match => (match[1] || match[2] || '').trim())
@@ -98,6 +127,7 @@ export function collectBlogSourceMetadata(rootDir) {
     const seoDescription = parseStringField(source, 'seo_description')
     const content = parseTemplateField(source, 'content')
     const charts = parseChartsField(source, file)
+    const faq = parseFaqField(source, file)
 
     if (!slug) throw new Error(`Missing slug in blog source: ${file}`)
     if (!title) throw new Error(`Missing title in blog source: ${file}`)
@@ -118,6 +148,7 @@ export function collectBlogSourceMetadata(rootDir) {
       seoDescription,
       content,
       charts,
+      faq,
     })
   }
 

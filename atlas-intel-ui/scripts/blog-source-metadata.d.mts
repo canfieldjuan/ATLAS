@@ -15,6 +15,11 @@ export interface ChartSpec {
   }
 }
 
+export interface FaqItem {
+  question: string
+  answer: string
+}
+
 export interface BlogSourceMetadata {
   file: string
   slug: string
@@ -26,6 +31,7 @@ export interface BlogSourceMetadata {
   seoDescription: string
   content: string
   charts: ChartSpec[]
+  faq: FaqItem[]
 }
 
 export function chartPlaceholderIds(content: string): string[]

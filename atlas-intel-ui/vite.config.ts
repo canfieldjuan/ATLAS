@@ -14,6 +14,7 @@ import {
   type BlogSourceMetadata,
   type ChartSpec,
   type ChartValue,
+  type FaqItem,
 } from './scripts/blog-source-metadata.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
@@ -148,8 +149,26 @@ function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
   )
 }
 
+function buildFaqHtml(faq: FaqItem[]): string {
+  if (!faq.length) return ''
+
+  const items = faq
+    .map(item => `        <div>
+          <h3>${escapeHtml(item.question)}</h3>
+          <p>${escapeHtml(item.answer)}</p>
+        </div>`)
+    .join('\n')
+
+  return `
+      <section data-prerendered-blog-faq="true">
+        <h2>Frequently Asked Questions</h2>
+${items}
+      </section>`
+}
+
 function buildBlogBodyHtml(post: BlogSourceMetadata): string {
   const articleHtml = marked.parse(renderChartFallbacks(post.content, post.charts), { async: false }) as string
+  const faqHtml = buildFaqHtml(post.faq)
   return `
     <article data-prerendered-blog-article="true">
       <header>
@@ -162,7 +181,24 @@ function buildBlogBodyHtml(post: BlogSourceMetadata): string {
       <section data-prerendered-blog-content="true">
         ${articleHtml}
       </section>
+      ${faqHtml}
     </article>`
+}
+
+function buildFaqJsonLd(faq: FaqItem[]): object | null {
+  if (!faq.length) return null
+
+  return {
+    '@type': 'FAQPage',
+    mainEntity: faq.map(item => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: item.answer,
+      },
+    })),
+  }
 }
 
 function buildHeadHtml(route: PrerenderedRoute): string {
@@ -205,6 +241,40 @@ function prerenderPlugin() {
       for (const post of collectBlogSourceMetadata(import.meta.dirname)) {
         const seoTitle = post.seoTitle || post.title
         const seoDesc = post.seoDescription || post.description
+        const faqJsonLd = buildFaqJsonLd(post.faq)
+        const graph: object[] = [
+          {
+            '@type': 'BlogPosting',
+            headline: seoTitle,
+            description: seoDesc,
+            datePublished: post.date,
+            dateModified: post.date,
+            image: DEFAULT_OG_IMAGE,
+            author: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+              sameAs: ATLAS_SAME_AS,
+            },
+            publisher: {
+              '@type': 'Organization',
+              name: 'Atlas Intelligence',
+              url: BASE_URL,
+              sameAs: ATLAS_SAME_AS,
+              logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
+            },
+            mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
+          },
+          {
+            '@type': 'BreadcrumbList',
+            itemListElement: [
+              { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
+              { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
+              { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
+            ],
+          },
+        ]
+        if (faqJsonLd) graph.push(faqJsonLd)
+
         blogRoutes.push({
           path: `/blog/${post.slug}`,
           title: `${seoTitle} | Atlas Intelligence`,
@@ -214,37 +284,7 @@ function prerenderPlugin() {
           bodyHtml: buildBlogBodyHtml(post),
           jsonLd: {
             '@context': 'https://schema.org',
-            '@graph': [
-              {
-                '@type': 'BlogPosting',
-                headline: seoTitle,
-                description: seoDesc,
-                datePublished: post.date,
-                dateModified: post.date,
-                image: DEFAULT_OG_IMAGE,
-                author: {
-                  '@type': 'Organization',
-                  name: 'Atlas Intelligence',
-                  sameAs: ATLAS_SAME_AS,
-                },
-                publisher: {
-                  '@type': 'Organization',
-                  name: 'Atlas Intelligence',
-                  url: BASE_URL,
-                  sameAs: ATLAS_SAME_AS,
-                  logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
-                },
-                mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
-              },
-              {
-                '@type': 'BreadcrumbList',
-                itemListElement: [
-                  { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
-                  { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
-                  { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
-                ],
-              },
-            ],
+            '@graph': graph,
           },
         })
       }

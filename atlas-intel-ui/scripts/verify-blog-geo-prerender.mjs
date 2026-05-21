@@ -246,6 +246,20 @@ function assertCrawlerVisibleArticle(html, post) {
     }
   }
 
+  if (post.faq.length) {
+    if (!html.includes('data-prerendered-blog-faq="true"')) {
+      fail(`/blog/${post.slug} missing prerendered FAQ section`)
+    }
+    for (const item of post.faq) {
+      if (!visibleText.includes(item.question)) {
+        fail(`/blog/${post.slug} prerendered FAQ missing question: ${item.question}`)
+      }
+      if (!visibleText.includes(item.answer)) {
+        fail(`/blog/${post.slug} prerendered FAQ missing answer for: ${item.question}`)
+      }
+    }
+  }
+
   const phrase = expectedBodyPhrase(post)
   if (!visibleText.includes(phrase)) {
     fail(`/blog/${post.slug} prerendered body missing source phrase: ${phrase}`)
@@ -262,6 +276,25 @@ function assertBreadcrumbs(node, canonical, slug) {
   const last = items[items.length - 1]
   if (!last || last.item !== canonical) {
     fail(`/blog/${slug} breadcrumb final item must be ${canonical}`)
+  }
+}
+
+function assertFaqPage(node, post) {
+  const { slug } = post
+  const entities = Array.isArray(node.mainEntity) ? node.mainEntity : []
+  if (entities.length !== post.faq.length) {
+    fail(`/blog/${slug} FAQPage must include ${post.faq.length} questions`)
+  }
+
+  for (const item of post.faq) {
+    const question = entities.find(entity => entity && entity.name === item.question)
+    if (!question || !typeMatches(question, 'Question')) {
+      fail(`/blog/${slug} FAQPage missing question: ${item.question}`)
+    }
+    const answer = question.acceptedAnswer
+    if (!answer || !typeMatches(answer, 'Answer') || answer.text !== item.answer) {
+      fail(`/blog/${slug} FAQPage answer mismatch for: ${item.question}`)
+    }
   }
 }
 
@@ -309,6 +342,12 @@ function verifyBlogPage(post, sitemap) {
   const blogPosting = nodes.find(node => typeMatches(node, 'BlogPosting'))
   if (!blogPosting) fail(`/blog/${slug} missing BlogPosting JSON-LD`)
   assertBlogPosting(blogPosting, post, canonical, ogImageValue)
+
+  if (post.faq.length) {
+    const faqPage = nodes.find(node => typeMatches(node, 'FAQPage'))
+    if (!faqPage) fail(`/blog/${slug} missing FAQPage JSON-LD`)
+    assertFaqPage(faqPage, post)
+  }
 
   const breadcrumbs = nodes.find(node => typeMatches(node, 'BreadcrumbList'))
   if (!breadcrumbs) fail(`/blog/${slug} missing BreadcrumbList JSON-LD`)
