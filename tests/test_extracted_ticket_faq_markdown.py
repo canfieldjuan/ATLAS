@@ -130,22 +130,25 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     assert result.source_count == 4
     assert result.ticket_source_count == 4
     assert [item["topic"] for item in result.items] == [
-        "email and profile updates",
         "reporting friction",
+        "email and profile updates",
     ]
     assert [item["ticket_count"] for item in result.items] == [2, 2]
     assert result.items[0]["summary"].startswith(
-        "Customers are asking about email and profile updates across 2 ticket sources."
+        "Customers are asking about reporting friction across 2 ticket sources."
     )
     assert result.items[0]["steps"] == (
-        "Open your profile, account settings, or login settings and find the email, password, or account field you need to change.",
-        "Save the change, then check the old and new inboxes for a confirmation message.",
+        "Open the reporting or analytics area and choose the date range you need.",
+        "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
         "If it still does not work, contact support at 1-800-555-0100 and include the cited ticket details.",
     )
-    assert "the field is locked" in result.items[0]["when_to_contact_support"]
+    assert result.items[0]["failure_risk_score"] == 1
+    assert result.items[0]["failure_risk_signals"] == ("blocked_access",)
+    assert result.items[0]["opportunity_score"] == 4
+    assert "the export is missing" in result.items[0]["when_to_contact_support"]
     assert result.items[0]["evidence_quotes"] == (
-        '`ticket-acme-1` - Change login email: "How do I change my login email?"',
-        '`ticket-acme-2` - Update account email: "I need to update the email on my account."',
+        '`ticket-northstar-1` - Export campaign reports: "How do we export campaign attribution data before renewal?"',
+        '`ticket-northstar-2` - Reporting dashboard export: "We cannot export the reporting dashboard for analysts."',
     )
     assert "How do I change my login email?" in result.markdown
     assert "How do we export campaign attribution data before renewal?" in result.markdown
@@ -202,6 +205,128 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     assert "I need to update the email on my account." in result.markdown
     assert result.output_checks["uses_user_vocabulary"] is True
     assert result.output_checks["condensed"] is True
+
+
+def test_build_ticket_faq_markdown_ranks_by_frequency_times_failure_risk() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email update",
+            "evidence": [{
+                "text": "How do I change my email?",
+                "source_id": "ticket-email-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email settings",
+            "evidence": [{
+                "text": "I need to update the email on my account.",
+                "source_id": "ticket-email-2",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email profile",
+            "evidence": [{
+                "text": "Where can I edit the email address?",
+                "source_id": "ticket-email-3",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Billing failure",
+            "evidence": [{
+                "text": "The payment failed and the balance is wrong.",
+                "source_id": "ticket-billing-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Billing locked",
+            "evidence": [{
+                "text": "I cannot pay because the billing page is locked.",
+                "source_id": "ticket-billing-2",
+                "source_type": "support_ticket",
+            }],
+        },
+    ])
+
+    assert [item["topic"] for item in result.items] == [
+        "billing and payments",
+        "email and profile updates",
+    ]
+    assert result.items[0]["frequency"] == 2
+    assert result.items[0]["failure_risk_signals"] == (
+        "blocked_access",
+        "failed_workflow",
+        "incorrect_record",
+        "money_or_account_risk",
+    )
+    assert result.items[0]["failure_risk_score"] == 4
+    assert result.items[0]["opportunity_score"] == 10
+    assert result.items[1]["frequency"] == 3
+    assert result.items[1]["failure_risk_score"] == 0
+    assert result.items[1]["opportunity_score"] == 3
+
+
+def test_build_ticket_faq_markdown_uses_frequency_tiebreak_after_opportunity_score() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email blocked",
+            "evidence": [{
+                "text": "I cannot update the email address.",
+                "source_id": "ticket-email-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email settings",
+            "evidence": [{
+                "text": "How do I change the email address?",
+                "source_id": "ticket-email-2",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email profile",
+            "evidence": [{
+                "text": "Where do I edit the email address?",
+                "source_id": "ticket-email-3",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Webhook failure",
+            "evidence": [{
+                "text": "The API webhook failed.",
+                "source_id": "ticket-integration-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Webhook error",
+            "evidence": [{
+                "text": "The integration sync shows the wrong status.",
+                "source_id": "ticket-integration-2",
+                "source_type": "support_ticket",
+            }],
+        },
+    ])
+
+    assert [(item["topic"], item["frequency"], item["opportunity_score"]) for item in result.items] == [
+        ("email and profile updates", 3, 6),
+        ("integration setup", 2, 6),
+    ]
 
 
 def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -> None:
@@ -827,8 +952,8 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
 
     assert rendered.h1 == ["Customer Ticket FAQ"]
     assert rendered.h2 == [
-        "1. How do I change my login email?",
-        "2. How do we export campaign attribution data before renewal?",
+        "1. How do we export campaign attribution data before renewal?",
+        "2. How do I change my login email?",
     ]
     assert rendered.strong.count("What to do next:") == 2
     assert rendered.strong.count("When to contact support:") == 2
@@ -1460,6 +1585,9 @@ def test_build_ticket_faq_markdown_counts_distinct_source_ids_per_item() -> None
 
     assert result.items[0]["evidence_count"] == 2
     assert result.items[0]["source_ids"] == ("ticket-1",)
+    assert result.items[0]["frequency"] == 1
+    assert result.items[0]["failure_risk_score"] == 1
+    assert result.items[0]["opportunity_score"] == 2
     assert result.ticket_source_count == 1
     assert "A customer asked about reporting friction" in result.markdown
 
@@ -1570,13 +1698,17 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert result["diagnostics"]["ticket_counts"] == [2, 2]
     assert result["diagnostics"]["items"][0] == {
         "rank": 1,
-        "topic": "email and profile updates",
-        "question": "How do I change my login email?",
+        "topic": "reporting friction",
+        "question": "How do we export campaign attribution data before renewal?",
         "question_source": "customer_wording",
+        "frequency": 2,
+        "failure_risk_score": 1,
+        "failure_risk_signals": ["blocked_access"],
+        "opportunity_score": 4,
         "ticket_count": 2,
         "evidence_count": 2,
         "source_id_count": 2,
-        "first_source_id": "ticket-acme-1",
+        "first_source_id": "ticket-northstar-1",
         "step_count": 3,
     }
 
