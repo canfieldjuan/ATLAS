@@ -1509,6 +1509,7 @@ def test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncat
 
 def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     output = tmp_path / "ticket_faq.md"
+    result_output = tmp_path / "ticket_faq_result.json"
 
     completed = subprocess.run(
         [
@@ -1523,6 +1524,8 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
             "1-800-555-0100",
             "--output",
             str(output),
+            "--result-output",
+            str(result_output),
         ],
         check=True,
         capture_output=True,
@@ -1535,6 +1538,27 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert "Ticket sources used: 4" in markdown
     assert "ticket-acme-1" in markdown
     assert "contact support at 1-800-555-0100" in markdown
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["status"] == "ok"
+    assert result["source_count"] == 4
+    assert result["ticket_source_count"] == 4
+    assert result["failed_output_checks"] == []
+    assert result["output"]["markdown_path"] == str(output)
+    assert result["diagnostics"]["question_source_counts"] == {
+        "customer_wording": 2,
+    }
+    assert result["diagnostics"]["ticket_counts"] == [2, 2]
+    assert result["diagnostics"]["items"][0] == {
+        "rank": 1,
+        "topic": "email and profile updates",
+        "question": "How do I change my login email?",
+        "question_source": "customer_wording",
+        "ticket_count": 2,
+        "evidence_count": 2,
+        "source_id_count": 2,
+        "first_source_id": "ticket-acme-1",
+        "step_count": 3,
+    }
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
@@ -1626,13 +1650,36 @@ def test_ticket_faq_cli_fails_required_output_checks_for_weak_rows(tmp_path: Pat
             "ticket-1,2026-05-01,Unique one,The export button moved.,exports",
             "ticket-2,2026-05-01,Unique two,Billing receipt is missing.,billing",
     )
+    result_output = tmp_path / "failed_result.json"
 
-    completed = _run_ticket_faq_cli(source, "--require-output-checks")
+    completed = _run_ticket_faq_cli(
+        source,
+        "--require-output-checks",
+        "--result-output",
+        str(result_output),
+    )
 
     assert completed.returncode == 1
     assert "FAQ output checks failed" in completed.stderr
     assert "condensed" in completed.stderr
     assert "uses_user_vocabulary" not in completed.stderr
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["status"] == "failed_output_checks"
+    assert result["failed_output_checks"] == ["condensed"]
+    assert result["diagnostics"]["rendered_ticket_source_count"] == 2
+    assert result["diagnostics"]["unrepresented_ticket_sources"] == 0
+    assert result["diagnostics"]["output_check_details"] == [
+        {
+            "check": "condensed",
+            "passed": False,
+            "why": (
+                "The FAQ produced one item per ticket source, so the output was not condensed. "
+                "ticket_source_count=2, generated=2."
+            ),
+        },
+        {"check": "has_action_items", "passed": True},
+        {"check": "uses_user_vocabulary", "passed": True},
+    ]
 
 
 def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> None:
