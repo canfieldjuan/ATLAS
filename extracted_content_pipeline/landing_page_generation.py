@@ -41,6 +41,10 @@ from .landing_page_ports import (
     LandingPageSection,
     MarketingCampaign,
 )
+from .landing_page_repair_contract import (
+    LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
+    normalize_landing_page_quality_repair_attempts,
+)
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     campaign_reasoning_context_payload,
@@ -69,7 +73,7 @@ class LandingPageGenerationConfig:
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
     quality_gates_enabled: bool = True
-    quality_repair_attempts: int = 1
+    quality_repair_attempts: int = LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT
     parse_retry_attempts: int = 1
     parse_retry_response_excerpt_chars: int = 800
 
@@ -240,12 +244,6 @@ class LandingPageGenerationService:
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
     ) -> LandingPageGenerationResult:
-        prompt_template = self._skills.get_prompt(self._config.skill_name)
-        if not prompt_template:
-            raise ValueError(
-                f"Landing-page generation skill not found: {self._config.skill_name}"
-            )
-
         # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
         resolved_temperature = (
             self._config.temperature if temperature is None else float(temperature)
@@ -273,8 +271,17 @@ class LandingPageGenerationService:
         resolved_quality_repair_attempts = (
             self._config.quality_repair_attempts
             if quality_repair_attempts is None
-            else int(quality_repair_attempts)
+            else quality_repair_attempts
         )
+        resolved_quality_repair_attempts = normalize_landing_page_quality_repair_attempts(
+            resolved_quality_repair_attempts
+        )
+
+        prompt_template = self._skills.get_prompt(self._config.skill_name)
+        if not prompt_template:
+            raise ValueError(
+                f"Landing-page generation skill not found: {self._config.skill_name}"
+            )
 
         if not str(campaign.name or "").strip():
             return LandingPageGenerationResult(

@@ -191,5 +191,15 @@
         ]
       }
     }
+  },
+  "input_contracts": {
+    "landing_page_quality_repair_attempts": {
+      "key": "landing_page_quality_repair_attempts",
+      "label": "Landing page quality repair attempts",
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "default": 1
+    }
   }
 }

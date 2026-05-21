@@ -32,6 +32,7 @@ import {
   type ContentOpsIngestionDiagnostics,
   type ContentOpsIngestionImportResponse,
   type ContentOpsExecutionResult,
+  type ContentOpsInputContractView,
   type ContentOpsRequest,
   type CampaignReasoningContextView,
   type ContentOpsStepReasoningAudit,
@@ -94,12 +95,15 @@ const INGESTION_SAMPLE_LIMIT = 5
 const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
 const LANDING_PAGE_QUALITY_REPAIR_INPUT =
   'landing_page_quality_repair_attempts'
-const MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
 const INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE = '__invalid__'
-const LANDING_PAGE_QUALITY_REPAIR_OPTIONS = Array.from(
-  { length: MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS + 1 },
-  (_, index) => String(index),
-)
+const LEGACY_LANDING_PAGE_REPAIR_ATTEMPT_CONTRACT: IntegerInputContract = {
+  key: LANDING_PAGE_QUALITY_REPAIR_INPUT,
+  label: 'Landing page quality repair attempts',
+  type: 'integer',
+  min: 0,
+  max: 10,
+  default: 1,
+}
 
 export default function ContentOpsNewRun() {
   const {
@@ -174,13 +178,26 @@ export default function ContentOpsNewRun() {
     ? reasoningStatusHint(catalog.reasoning)
     : ''
   const landingPageOutputSelected = request.outputs.includes('landing_page')
+  const landingPageRepairAttemptContract = landingPageOutputSelected
+    ? integerInputContract(catalog, LANDING_PAGE_QUALITY_REPAIR_INPUT)
+    : null
+  const landingPageRepairAttemptOptions = landingPageRepairAttemptContract
+    ? integerInputOptions(landingPageRepairAttemptContract)
+    : []
   const landingPageRepairAttemptValue = landingPageOutputSelected
-    ? landingPageRepairAttemptSelectValue(parsedInputsForControls)
+    ? landingPageRepairAttemptSelectValue(
+        parsedInputsForControls,
+        landingPageRepairAttemptContract,
+      )
     : ''
   const landingPageRepairAttemptMessage = landingPageOutputSelected
-    ? landingPageRepairAttemptHelpText(parsedInputsForControls)
+    ? landingPageRepairAttemptHelpText(
+        parsedInputsForControls,
+        landingPageRepairAttemptContract,
+      )
     : ''
-  const landingPageRepairAttemptDisabled = !parsedInputsForControls.ok
+  const landingPageRepairAttemptDisabled =
+    !parsedInputsForControls.ok || !landingPageRepairAttemptContract
 
   // Codex P2 fix: any form mutation invalidates a stale preview verdict
   // and plan panel so the user never sees a "Can run" badge or plan
@@ -210,7 +227,11 @@ export default function ContentOpsNewRun() {
   }
 
   const handleLandingPageRepairAttemptsChange = (value: string) => {
-    const updated = updateLandingPageRepairAttemptsInputJson(inputsJson, value)
+    const updated = updateLandingPageRepairAttemptsInputJson(
+      inputsJson,
+      value,
+      landingPageRepairAttemptContract,
+    )
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -268,16 +289,24 @@ export default function ContentOpsNewRun() {
     }
 
     if (request.outputs.includes('landing_page')) {
+      const repairAttemptContract =
+        landingPageRepairAttemptContract ??
+        LEGACY_LANDING_PAGE_REPAIR_ATTEMPT_CONTRACT
       const repairAttemptValue = parsedInputs[LANDING_PAGE_QUALITY_REPAIR_INPUT]
       if (
         repairAttemptValue !== null &&
         typeof repairAttemptValue !== 'undefined' &&
-        !normalizeLandingPageRepairAttemptValue(repairAttemptValue).ok
+        !normalizeLandingPageRepairAttemptValue(
+          repairAttemptValue,
+          repairAttemptContract,
+        ).ok
       ) {
         return {
           ok: false,
           kind: 'invalid_inputs_json',
-          message: `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`,
+          message: landingPageRepairAttemptErrorMessage(
+            repairAttemptContract,
+          ),
         }
       }
     }
@@ -736,8 +765,12 @@ export default function ContentOpsNewRun() {
                       Invalid value in inputs JSON
                     </option>
                   )}
-                  <option value="">Backend default (1)</option>
-                  {LANDING_PAGE_QUALITY_REPAIR_OPTIONS.map((option) => (
+                  <option value="">
+                    {landingPageRepairAttemptContract
+                      ? `Backend default (${landingPageRepairAttemptContract.default})`
+                      : 'Backend default'}
+                  </option>
+                  {landingPageRepairAttemptOptions.map((option) => (
                     <option key={option} value={option}>
                       {option === '0'
                         ? '0 - disable repair'
@@ -1400,13 +1433,14 @@ function parseInputsJsonObject(value: string): ParsedInputsJsonObject {
 
 function landingPageRepairAttemptSelectValue(
   parsed: ParsedInputsJsonObject,
+  contract: IntegerInputContract | null,
 ): string {
-  if (!parsed.ok) return ''
+  if (!parsed.ok || !contract) return ''
 
   const raw = parsed.value[LANDING_PAGE_QUALITY_REPAIR_INPUT]
   if (raw === null || typeof raw === 'undefined') return ''
 
-  const normalized = normalizeLandingPageRepairAttemptValue(raw)
+  const normalized = normalizeLandingPageRepairAttemptValue(raw, contract)
   return normalized.ok
     ? String(normalized.value)
     : INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE
@@ -1414,19 +1448,23 @@ function landingPageRepairAttemptSelectValue(
 
 function landingPageRepairAttemptHelpText(
   parsed: ParsedInputsJsonObject,
+  contract: IntegerInputContract | null,
 ): string {
   if (!parsed.ok) {
     return `Fix inputs JSON before changing repair attempts: ${parsed.message}`
   }
+  if (!contract) {
+    return `${LANDING_PAGE_QUALITY_REPAIR_INPUT} contract is missing from the control-surface catalog.`
+  }
 
   const raw = parsed.value[LANDING_PAGE_QUALITY_REPAIR_INPUT]
   if (raw === null || typeof raw === 'undefined') {
-    return 'Uses the backend default: 1 repair attempt.'
+    return `Uses the backend default: ${contract.default} repair attempt${contract.default === 1 ? '' : 's'}.`
   }
 
-  const normalized = normalizeLandingPageRepairAttemptValue(raw)
+  const normalized = normalizeLandingPageRepairAttemptValue(raw, contract)
   if (!normalized.ok) {
-    return `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`
+    return landingPageRepairAttemptErrorMessage(contract)
   }
 
   if (normalized.value === 0) {
@@ -1438,19 +1476,26 @@ function landingPageRepairAttemptHelpText(
 function updateLandingPageRepairAttemptsInputJson(
   current: string,
   selected: string,
+  contract: IntegerInputContract | null,
 ): UpdatedInputsJson {
   const parsed = parseInputsJsonObject(current)
   if (!parsed.ok) return parsed
+  if (!contract) {
+    return {
+      ok: false,
+      message: `${LANDING_PAGE_QUALITY_REPAIR_INPUT} contract is missing from the control-surface catalog.`,
+    }
+  }
 
   const next = { ...parsed.value }
   if (selected === '') {
     delete next[LANDING_PAGE_QUALITY_REPAIR_INPUT]
   } else {
-    const normalized = normalizeLandingPageRepairAttemptValue(selected)
+    const normalized = normalizeLandingPageRepairAttemptValue(selected, contract)
     if (!normalized.ok) {
       return {
         ok: false,
-        message: `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from 0 to ${MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS}.`,
+        message: landingPageRepairAttemptErrorMessage(contract),
       }
     }
     next[LANDING_PAGE_QUALITY_REPAIR_INPUT] = normalized.value
@@ -1461,6 +1506,7 @@ function updateLandingPageRepairAttemptsInputJson(
 
 function normalizeLandingPageRepairAttemptValue(
   value: unknown,
+  contract: IntegerInputContract,
 ): { ok: true; value: number } | { ok: false } {
   if (
     typeof value === 'boolean' ||
@@ -1482,12 +1528,67 @@ function normalizeLandingPageRepairAttemptValue(
 
   if (
     !Number.isSafeInteger(normalized) ||
-    normalized < 0 ||
-    normalized > MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS
+    normalized < contract.min ||
+    normalized > contract.max
   ) {
     return { ok: false }
   }
   return { ok: true, value: normalized }
+}
+
+type IntegerInputContract = ContentOpsInputContractView & {
+  min: number
+  max: number
+  default: number
+}
+
+function integerInputContract(
+  catalog: ContentOpsCatalog,
+  key: string,
+): IntegerInputContract | null {
+  const contract = catalog.inputContracts[key]
+  if (
+    !contract ||
+    contract.type !== 'integer' ||
+    typeof contract.min !== 'number' ||
+    typeof contract.max !== 'number' ||
+    typeof contract.default !== 'number' ||
+    !Number.isSafeInteger(contract.min) ||
+    !Number.isSafeInteger(contract.max) ||
+    !Number.isSafeInteger(contract.default) ||
+    contract.min > contract.max ||
+    contract.default < contract.min ||
+    contract.default > contract.max
+  ) {
+    if (key === LANDING_PAGE_QUALITY_REPAIR_INPUT) {
+      const landingPage = catalog.outputs.find((output) => output.id === 'landing_page')
+      return {
+        ...LEGACY_LANDING_PAGE_REPAIR_ATTEMPT_CONTRACT,
+        default: landingPage?.defaultQualityRepairAttempts ??
+          LEGACY_LANDING_PAGE_REPAIR_ATTEMPT_CONTRACT.default,
+      }
+    }
+    return null
+  }
+  return {
+    ...contract,
+    min: contract.min,
+    max: contract.max,
+    default: contract.default,
+  }
+}
+
+function integerInputOptions(contract: IntegerInputContract): string[] {
+  return Array.from(
+    { length: contract.max - contract.min + 1 },
+    (_, index) => String(contract.min + index),
+  )
+}
+
+function landingPageRepairAttemptErrorMessage(
+  contract: IntegerInputContract,
+): string {
+  return `${LANDING_PAGE_QUALITY_REPAIR_INPUT} must be an integer from ${contract.min} to ${contract.max}.`
 }
 
 function parseIngestionRowsJson(value: string): ParsedIngestionRows {

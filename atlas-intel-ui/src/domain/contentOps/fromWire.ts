@@ -17,6 +17,7 @@ import type {
   ContentOpsIngestionImportResponse as WireIngestionImportResponse,
   ContentOpsIngestionInspectRequest as WireIngestionInspectRequest,
   ContentOpsExecutionResult as WireExecutionResult,
+  ContentOpsInputContract as WireInputContract,
   ContentOpsOutputDefinition as WireOutputDefinition,
   ContentOpsPreset as WirePreset,
   ContentOpsPreviewResponse,
@@ -32,6 +33,7 @@ import type {
   ContentOpsIngestionImportResponse,
   ContentOpsIngestionInspectRequest,
   ContentOpsExecutionResult,
+  ContentOpsInputContractView,
   CampaignReasoningContextView,
   ContentOpsRequest,
   ContentOpsStepExecution,
@@ -76,6 +78,19 @@ export function fromWirePreset(wire: WirePreset): ControlSurfacePresetView {
   }
 }
 
+export function fromWireInputContract(
+  wire: WireInputContract,
+): ContentOpsInputContractView {
+  return {
+    key: wire.key,
+    label: wire.label,
+    type: wire.type,
+    min: wire.min,
+    max: wire.max,
+    default: wire.default,
+  }
+}
+
 export function fromWireCatalog(
   wire: ContentOpsCatalogResponse,
 ): ContentOpsCatalog {
@@ -94,6 +109,12 @@ export function fromWireCatalog(
       capabilities: copyReasoningCapabilities(wire.reasoning.capabilities),
     },
     ingestionProfiles: [...wire.ingestion_profiles],
+    inputContracts: Object.fromEntries(
+      Object.entries(wire.input_contracts ?? {}).map(([key, contract]) => [
+        key,
+        fromWireInputContract(contract),
+      ]),
+    ),
   }
 }
 

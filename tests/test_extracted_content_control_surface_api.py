@@ -127,6 +127,14 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["email_campaign"]["estimated_retry_adjusted_unit_cost_usd"] == 0.36
     assert outputs["landing_page"]["default_quality_repair_attempts"] == 1
     assert outputs["landing_page"]["estimated_retry_adjusted_unit_cost_usd"] == 2.6
+    assert payload["input_contracts"]["landing_page_quality_repair_attempts"] == {
+        "key": "landing_page_quality_repair_attempts",
+        "label": "Landing page quality repair attempts",
+        "type": "integer",
+        "min": 0,
+        "max": 10,
+        "default": 1,
+    }
     assert outputs["email_campaign"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"

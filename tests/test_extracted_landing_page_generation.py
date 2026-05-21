@@ -220,6 +220,21 @@ def test_parse_landing_page_response_accepts_missing_hero_for_quality_pack_to_ju
 
 
 @pytest.mark.asyncio
+async def test_generate_rejects_direct_quality_repair_attempt_above_contract_max() -> None:
+    service, _landing_pages, _llm, _skills, _rp = _service()
+
+    with pytest.raises(
+        ValueError,
+        match="landing_page_quality_repair_attempts must be at most 10",
+    ):
+        await service.generate(
+            scope=TenantScope(account_id="acct-1"),
+            campaign=_campaign(),
+            quality_repair_attempts=11,
+        )
+
+
+@pytest.mark.asyncio
 async def test_generate_blocks_with_no_hero_headline_when_response_omits_hero() -> None:
     """End-to-end: parser accepts the candidate, quality pack fires no_hero_headline."""
     response = json.dumps({

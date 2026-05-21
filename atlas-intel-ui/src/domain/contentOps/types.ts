@@ -43,6 +43,15 @@ export interface ControlSurfacePresetView {
   outputs: string[]
 }
 
+export interface ContentOpsInputContractView {
+  key: string
+  label: string
+  type: string
+  min?: number
+  max?: number
+  default?: string | number | boolean | null
+}
+
 export interface ContentOpsCatalog {
   outputs: OutputDefinitionView[]
   presets: ControlSurfacePresetView[]
@@ -60,6 +69,7 @@ export interface ContentOpsCatalog {
       | Record<string, ReasoningCapabilityStatus>
   }
   ingestionProfiles: string[]
+  inputContracts: Record<string, ContentOpsInputContractView>
 }
 
 export interface ReasoningCapabilityStatus {
