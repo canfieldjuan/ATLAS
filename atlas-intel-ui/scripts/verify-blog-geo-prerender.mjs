@@ -33,6 +33,17 @@ function parseTemplateField(content, field) {
   return match ? match[1] : ''
 }
 
+function parseChartsField(content, file) {
+  const match = content.match(/^\s*charts:\s*(\[[\s\S]*?\])\s*,\s*content:/m)
+  if (!match) return []
+
+  try {
+    return JSON.parse(match[1])
+  } catch (error) {
+    fail(`Invalid charts JSON in ${file}: ${error.message}`)
+  }
+}
+
 function collectBlogPosts() {
   const posts = []
   for (const file of readdirSync(blogDir)) {
@@ -46,6 +57,7 @@ function collectBlogPosts() {
     const seoTitle = parseStringField(content, 'seo_title')
     const seoDescription = parseStringField(content, 'seo_description')
     const body = parseTemplateField(content, 'content')
+    const charts = parseChartsField(content, file)
     if (!slug) fail(`Missing slug in ${file}`)
     if (!title) fail(`Missing title in ${file}`)
     if (!description) fail(`Missing description in ${file}`)
@@ -61,6 +73,7 @@ function collectBlogPosts() {
       seoTitle,
       seoDescription,
       body,
+      charts,
     })
   }
   if (!posts.length) fail('No blog posts found')
@@ -271,6 +284,18 @@ function assertCrawlerVisibleArticle(html, post) {
   }
   if (!visibleText.includes(post.author)) {
     fail(`/blog/${post.slug} prerendered body missing source author`)
+  }
+  if (html.includes('{{chart:')) {
+    fail(`/blog/${post.slug} prerendered body still contains chart placeholders`)
+  }
+
+  for (const chart of post.charts) {
+    if (!html.includes(`data-prerendered-chart="${chart.chart_id}"`)) {
+      fail(`/blog/${post.slug} missing prerendered chart fallback for ${chart.chart_id}`)
+    }
+    if (!visibleText.includes(chart.title)) {
+      fail(`/blog/${post.slug} prerendered chart fallback missing title ${chart.title}`)
+    }
   }
 
   const phrase = expectedBodyPhrase(post)
