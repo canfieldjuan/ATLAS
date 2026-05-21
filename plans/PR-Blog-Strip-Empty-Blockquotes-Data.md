@@ -65,6 +65,20 @@ folded into this PR:
    reworded the prose that referenced them. Legitimate Copper-CRM analysis
    (the 90/738 pricing stat, urgency distribution, the "spreadsheet with a
    pretty interface" critique, satisfaction anchors) is preserved.
+7. **`close-deep-dive` pulled.** Re-reading the post during the audit showed
+   its evidence layer is almost entirely keyword-match noise: the whole
+   "What Reviewers Actually Say" section quotes off-topic reviews ("closing
+   the accounts", "close my account", a G2 form prompt, "CloseAI's deep
+   research"), the competitor list is nonsense (Genshin characters, a Sony
+   camera, Android -- the post admits they "do not align with the CRM
+   category"), and two dangling disclaimers remain. Unlike copper there is no
+   real evidence base to anchor a repair, so the post is removed
+   (`git rm`; the `import.meta.glob` loader and the sitemap/prerender derive
+   from the blog directory, so deleting the file de-publishes it) and the one
+   inbound `related_slugs` reference (in `insightly-vs-zoho-crm-2026-04`) is
+   dropped. Root cause is upstream: the common-word vendor name "Close" (like
+   "Copper") keyword-matches unrelated reviews in the corpus -- a
+   disambiguation gap to fix before these vendors are regenerated.
 
 ### Files touched
 
@@ -162,11 +176,14 @@ No generator code changes -- the producer already does this for new posts.
   (10 removals each): real content preserved, lead-in clauses cleanly
   trimmed, no broken HTML.
 - Post-strip HTML well-formedness validator (tag balance + parser) across all
-  43 posts -> 0 issues; dangling-lead-in scan -> 0 (was 12 before the
+  posts -> 0 issues; dangling-lead-in scan -> 0 (was 12 before the
   follow-up fixes).
 - Broader misattribution-disclaimer scan across the corpus -> only
-  `real-cost-of-copper` (repaired here) and `close-deep-dive` (1 occurrence,
-  tracked separately) carried analyzer-missed disclaimer variants.
+  `real-cost-of-copper` (repaired here) and `close-deep-dive` (pulled here)
+  carried analyzer-missed disclaimer variants; after both, the corpus audit
+  reports `Clean posts: 78`, `0 CRITICAL`.
+- `npm run build` -> `Sitemap generated with 82 URLs`, `Pre-rendered 82
+  public routes` (was 83; close-deep-dive removed), no TS errors.
 - `git diff --check` -> passed.
 
 ## Estimated diff size

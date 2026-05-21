@@ -125,7 +125,7 @@ const post: BlogPost = {
     "answer": "Insightly users cite dashboard functionality, contact management with visual elements, and training resources. Zoho CRM users remain for free tier functionality, satisfactory UX when support is not required, and existing integration investments."
   }
 ],
-  related_slugs: ["close-deep-dive-2026-04", "switch-to-zoho-crm-2026-04", "insightly-deep-dive-2026-04", "freshsales-deep-dive-2026-04"],
+  related_slugs: ["switch-to-zoho-crm-2026-04", "insightly-deep-dive-2026-04", "freshsales-deep-dive-2026-04"],
   cta: {
   "headline": "Want the full picture?",
   "body": "Download the full Insightly vs Zoho CRM benchmark report to see complete complaint breakdowns, buyer segment analysis, and displacement flow patterns across the CRM category.",
