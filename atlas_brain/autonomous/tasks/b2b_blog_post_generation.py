@@ -1583,9 +1583,18 @@ def _quote_matches_source(quote_text: str, source_quotes: list[str]) -> bool:
 # Disclaimer-prose patterns. When a blockquote block is stripped, an
 # adjacent paragraph matching one of these patterns is itself orphaned
 # (it references content that no longer exists) and stripped along
-# with the block. These match the seo-geo-aeo-blog-post skill's v1.4.0
+# with the block. These match the seo-geo-aeo-blog-post skill's
 # detection patterns -- the audit catches the same shapes post-publish,
-# and this stripper catches them upstream during generation.
+# and this stripper catches them upstream during generation. Keep this
+# tuple in sync with the skill's detectAcknowledgedMisattribution patterns.
+#
+# The second group was added after a corpus audit found off-topic
+# keyword-match quotes (copper-the-metal, audio gear, an ISP complaint, a
+# financial-planning note) shipped with disclaimers whose wording the
+# original four patterns missed -- e.g. "references X rather than CRM
+# software", "does not directly reference Copper CRM", "may reflect data
+# noise". Validated against the published corpus: the additions match only
+# the genuine disclaimers, with zero false positives on legitimate prose.
 _ORPHAN_DISCLAIMER_RES = (
     re.compile(r"that quote is from a .{0,60}? discussion, not a", re.IGNORECASE),
     re.compile(r"misattributed in the source data", re.IGNORECASE),
@@ -1595,6 +1604,16 @@ _ORPHAN_DISCLAIMER_RES = (
         re.IGNORECASE,
     ),
     re.compile(r"(?:quote|review) is misattributed", re.IGNORECASE),
+    # Off-topic keyword-match disclaimers (corpus-audit additions).
+    re.compile(
+        r"references?\s+.{0,60}?\s+rather than\s+.{0,40}?"
+        r"(?:crm|software|the (?:software )?product|the platform)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:does not|doesn't|do not|did not)\s+(?:directly\s+)?reference\b", re.IGNORECASE),
+    re.compile(r"\bdata noise\b", re.IGNORECASE),
+    re.compile(r"lacked?\s+(?:crm|product|vendor|software)[- ]specific context", re.IGNORECASE),
+    re.compile(r"not every mention of\s+.{0,40}?\s+refers to", re.IGNORECASE),
 )
 
 

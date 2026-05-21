@@ -555,6 +555,47 @@ def test_orphan_disclaimer_alone_stripped_when_no_intro():
     assert "Some normal prose without a colon ending." in out
 
 
+def test_orphan_disclaimer_offtopic_keyword_match_variants_stripped():
+    """Off-topic keyword-match disclaimers (corpus-audit additions) are
+    swept along with their stripped blockquote, the same as the original
+    acknowledged-misattribution patterns. These wordings shipped in
+    production posts (copper-the-metal, audio gear, an ISP complaint, a
+    financial-planning note) before the pattern set was widened."""
+    variants = [
+        "While the quote references internet service providers rather than CRM software, the sentiment mirrors hidden-fee complaints.",
+        "This quote does not directly reference Copper CRM, but the erosion of trust is similar.",
+        "This appears to reference audio equipment rather than the software product, indicating data noise in the corpus.",
+        "Two complaints came from community platforms but lacked CRM-specific context.",
+        'Not every mention of "Copper" and "pricing" refers to the software product.',
+    ]
+    for disclaimer in variants:
+        markdown = (
+            "## Section\n\n"
+            "> an off-topic quote that does not ground\n\n"
+            f"{disclaimer}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "off-topic quote" not in out, disclaimer
+        assert disclaimer not in out, f"disclaimer survived: {disclaimer}"
+        assert "## Section" in out
+
+
+def test_offtopic_pattern_does_not_sweep_nondisclaimer_following_prose():
+    """False-positive guard: prose adjacent to a STRIPPED block that merely
+    contains 'rather than' (without the 'reference ... CRM/software' shape)
+    is NOT treated as a disclaimer. Only disclaimer-shaped wording is swept;
+    legitimate analysis survives."""
+    markdown = (
+        "## Section\n\n"
+        "> ungrounded quote\n\n"
+        "Buyers value simplicity rather than feature depth, a recurring theme.\n"
+    )
+    out, _removed = _remove_unmatched_quote_lines(markdown, [])
+    assert "ungrounded quote" not in out  # block stripped (fail-closed)
+    # Not disclaimer-shaped -> preserved.
+    assert "Buyers value simplicity rather than feature depth" in out
+
+
 def test_orphan_prose_preserved_for_kept_blocks():
     """When a block is KEPT (its quotes ground), the surrounding intro
     and prose are also preserved. The orphan-prose cleanup only fires
