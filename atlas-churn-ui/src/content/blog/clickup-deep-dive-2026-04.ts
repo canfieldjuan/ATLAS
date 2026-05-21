@@ -171,7 +171,7 @@ const post: BlogPost = {
 <ul>
 <li><strong>Overall dissatisfaction</strong> (252 mentions): The same users who report satisfaction also surface frustration. This dual pattern suggests that ClickUp's value comes with trade-offs users accept but don't love.</li>
 <li><strong>Pricing friction</strong> (142 mentions): Multiple reviewers cite pricing increases that outpace perceived value. One user on Trustpilot reported a jump "from $9 a month to the last suggested price of $29," prompting an explicit abandonment signal.</li>
-<li><strong>UX complexity</strong> (135 mentions): Navigation confusion emerges as consolidation deepens. The Group Director quoted earlier also noted difficulty understanding "what all of the different levels of folders, lists, tasks, can do and what they should be used for. Notifications can be cleaned up."</li>
+<li><strong>UX complexity</strong> (135 mentions): Navigation confusion emerges as consolidation deepens. Reviewers also note difficulty understanding "what all of the different levels of folders, lists, tasks, can do and what they should be used for. Notifications can be cleaned up."</li>
 <li><strong>Feature gaps</strong> (79 mentions): Despite breadth, specific workflow needs remain unmet. Users report missing capabilities that force workarounds or external tools.</li>
 <li><strong>Performance issues</strong> (63 mentions): Load times, sync delays, and interface lag surface when teams scale usage.</li>
 <li><strong>Support responsiveness</strong> (16 mentions): Users report slow or insufficient support when troubleshooting complex configurations.</li>

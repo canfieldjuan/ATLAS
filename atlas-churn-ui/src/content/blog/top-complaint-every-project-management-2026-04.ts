@@ -191,7 +191,7 @@ const post: BlogPost = {
 <h2 id="clickup-the-1-complaint-is-overall-dissatisfaction">ClickUp: The #1 Complaint Is Overall Dissatisfaction</h2>
 <p>ClickUp has 24 reviews with complaints and a 2.6 urgency score. Like Asana, the top complaint is overall dissatisfaction.</p>
 <p>ClickUp markets itself as the "everything app" for productivity. Reviewers describe feature overload, steep learning curves, and workflows that feel over-engineered for simple use cases.</p>
-<p>The Reddit reviewer migrating from Asana to ClickUp (quoted earlier) described the experience as "the worst...so far." That's a double-edged signal: dissatisfaction with Asana pushed the switch, but ClickUp's complexity created new friction.</p>
+<p>One Reddit reviewer migrating from Asana to ClickUp described the experience as "the worst...so far." That's a double-edged signal: dissatisfaction with Asana pushed the switch, but ClickUp's complexity created new friction.</p>
 <p>ClickUp's challenge is the inverse of Trello's. Where Trello is too simple for complex projects, ClickUp can feel too complex for straightforward ones. The "everything app" promise attracts teams looking for consolidation, but the learning curve and feature sprawl create onboarding drag.</p>
 <p><strong>What ClickUp does well:</strong> Depth. If your team needs custom fields, multiple view types, time tracking, goals, docs, and chat in one tool, ClickUp delivers. The trade-off is complexity. Teams that invest in configuration and training see returns. Teams that don't often churn.</p>
 <h2 id="every-tool-has-a-flaw-pick-the-one-you-can-live-with">Every Tool Has a Flaw -- Pick the One You Can Live With</h2>

@@ -252,7 +252,7 @@ const post: BlogPost = {
 </ol>
 <h2 id="what-reviewers-say-across-the-marketing-automation-market">What Reviewers Say Across the Marketing Automation Market</h2>
 <p>Direct reviewer voices anchor this landscape in visible evidence. Here is what teams are saying:</p>
-<p>This quote captures the core tension: platforms deliver value, but pricing renewal triggers evaluation.</p>
+<p>The core tension: platforms deliver value, but pricing renewal triggers evaluation.</p>
 <p>Dollar-specific comparisons are common. Teams actively benchmark pricing and cite explicit gaps.</p>
 <blockquote>
 <p>"I have been a big fan of MailChimp over the years."</p>
