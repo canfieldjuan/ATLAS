@@ -47,6 +47,11 @@ _GENERIC_QUESTION_PHRASES = (
     "filing this complaint",
     "this complaint is about",
 )
+_REDACTION_TOKEN_RE = re.compile(r"\bX{2,}\b", re.IGNORECASE)
+_REDACTED_DATE_RE = re.compile(r"\bX{2}/X{2}/(?:X{2,4}|\d{2,4})\b", re.IGNORECASE)
+_REDACTED_MONEY_RE = re.compile(r"\{\$|\$\s*X{2,}", re.IGNORECASE)
+_TRAILING_TITLE_RE = re.compile(r"\b(?:mr|mrs|ms|dr)\.?$", re.IGNORECASE)
+_QUOTE_ARTIFACT_RE = re.compile(r"(?:''|``)")
 _MORTGAGE_INTENT_TERMS = (
     "mortgage",
     "home loan",
@@ -84,6 +89,11 @@ DEFAULT_INTENT_RULES = (
     )),
     ("mortgage servicing issues", _MORTGAGE_INTENT_TERMS),
     ("reporting friction", ("export", "report", "dashboard", "attribution")),
+    ("opening an account", ("opening an account", "open an account", "opened an account")),
+    ("closing an account", ("closing an account", "close an account", "closed an account")),
+    ("getting a credit card", ("getting a credit card", "applied for a credit card")),
+    ("advertising", ("advertising", "promotion offer", "promotional offer")),
+    ("other transaction problem", ("transaction problem", "failed scheduled transaction")),
     ("manual follow-up", ("handoff", "follow-up", "workflow", "automation", "manual")),
     ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
     ("email and profile updates", ("change my email", "update the email", "email address", "profile")),
@@ -136,7 +146,15 @@ _ACTION_RULES = (
         "Compare the notice with your payment, settlement, insurance, or provider records before you pay or share more information.",
     )),
     (_MORTGAGE_INTENT_TERMS, _MORTGAGE_ACTION_STEPS),
-    (("export", "report", "dashboard", "attribution"), (
+    (("opening an account", "open an account", "opened an account", "early warning services", "identity theft"), (
+        "Gather the application, account-opening notice, denial reason, identity-theft report, or bank message tied to the issue.",
+        "Ask the bank or card issuer in writing to explain the account decision, fraud record, bonus term, or access restriction and keep copies of the response.",
+    )),
+    (("getting a credit card", "applied for a credit card", "credit card application", "activate card"), (
+        "Gather the card application, offer, denial notice, account terms, or activation message tied to the issue.",
+        "Ask the issuer to explain the decision, promotion, account status, or card record in writing before you reapply or activate anything.",
+    )),
+    (("export", "dashboard", "attribution", "analytics report", "download report", "report export"), (
         "Open the reporting or analytics area and choose the date range you need.",
         "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
     )),
@@ -369,6 +387,20 @@ def build_ticket_faq_markdown(
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
             })
 
+    sorted_groups = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))
+    if len(sorted_groups) > max_items:
+        visible_groups = tuple(sorted_groups[: max(1, max_items - 1)])
+        overflow_rows: list[dict[str, str]] = []
+        for _topic_name, rows in sorted_groups[len(visible_groups):]:
+            overflow_rows.extend(rows)
+        if len(visible_groups) == max_items:
+            topic, rows = visible_groups[0]
+            selected_groups = ((topic, [*rows, *overflow_rows]),)
+        else:
+            selected_groups = (*visible_groups, ("other support issues", overflow_rows))
+    else:
+        selected_groups = tuple(sorted_groups)
+
     items = tuple(
         _item(
             topic,
@@ -376,7 +408,7 @@ def build_ticket_faq_markdown(
             max_evidence_per_item=max_evidence_per_item,
             support_contact=support_contact,
         )
-        for topic, rows in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0].lower()))[:max_items]
+        for topic, rows in selected_groups
     )
     return TicketFAQMarkdownResult(
         markdown=_render(title=title, items=items, source_count=len(opportunities), ticket_source_count=len(source_keys)),
@@ -481,17 +513,21 @@ def _item(
     source_keys = (row.get("source_key") or row.get("source_id", "") for row in rows)
     source_ids = tuple(dict.fromkeys(value for value in source_keys if value))
     snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
+    action_context = " / ".join((
+        snippets,
+        " / ".join(_clean(row.get("source_title")) for row in display_rows if _clean(row.get("source_title"))),
+    ))
     question, question_source = _question(topic, display_rows)
     summary = _summary(topic=topic, rows=display_rows, source_count=len(source_ids))
-    steps = _article_steps(topic, snippets, support_contact=support_contact)
-    escalation = _escalation_guidance(topic, snippets, support_contact=support_contact)
+    steps = _article_steps(topic, action_context, support_contact=support_contact)
+    escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     return {
         "topic": topic,
         "question": question,
         "question_source": question_source,
         "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
-        "action_items": _action_items(topic, snippets),
+        "action_items": _action_items(topic, action_context),
         "summary": summary,
         "steps": steps,
         "when_to_contact_support": escalation,
@@ -639,6 +675,7 @@ def _usable_question(value: str) -> bool:
         and len(value) <= MAX_EXTRACTED_QUESTION_CHARS
         and lowered not in _GENERIC_QUESTION_TEXTS
         and not any(phrase in lowered for phrase in _GENERIC_QUESTION_PHRASES)
+        and not _looks_malformed_question(value)
     )
 
 
@@ -649,6 +686,24 @@ def _normalize_question_text(value: str) -> str:
     return f"{candidate}?"
 
 
+def _looks_malformed_question(value: str) -> bool:
+    text = _compact(value)
+    if not text:
+        return True
+    if (
+        _REDACTED_DATE_RE.search(text)
+        or _REDACTED_MONEY_RE.search(text)
+        or _QUOTE_ARTIFACT_RE.search(text)
+        or _TRAILING_TITLE_RE.search(text.rstrip("?.!,;: "))
+    ):
+        return True
+    if _REDACTION_TOKEN_RE.search(text):
+        return True
+    if text.count('"') % 2:
+        return True
+    return False
+
+
 def _policy_question(topic: str) -> str:
     normalized = _topic_label(topic).lower()
     if normalized == "credit report disputes":
@@ -657,7 +712,17 @@ def _policy_question(topic: str) -> str:
         return "What should I do if a collector says I owe a debt I do not recognize?"
     if normalized == "mortgage servicing issues":
         return "What should I do if my mortgage servicer will not fix a payment, payoff, foreclosure, or modification issue?"
-    return ""
+    if normalized == "opening an account":
+        return "What should I do if a bank will not open an account or says my account was opened incorrectly?"
+    if normalized == "closing an account":
+        return "What should I do if I cannot close an account or recover the remaining funds?"
+    if normalized == "getting a credit card":
+        return "What should I do if my card application, offer, or activation does not look right?"
+    if normalized == "advertising":
+        return "What should I do if a financial product advertisement or offer seems wrong?"
+    if normalized == "other transaction problem":
+        return "What should I do if a transaction was scheduled, blocked, or processed incorrectly?"
+    return f"What should I do about {normalized}?"
 
 
 def _render(
@@ -752,7 +817,27 @@ def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str
             f"{_support_sentence(support_contact)} if the servicer will not explain "
             "the payment, payoff, foreclosure, modification, escrow, or insurance issue in writing."
         )
-    if any(term in text for term in ("export", "report", "dashboard", "attribution")):
+    if topic in {"opening an account", "closing an account", "getting a credit card"} or any(
+        term in text
+        for term in (
+            "opening an account",
+            "open an account",
+            "opened an account",
+            "closing an account",
+            "close an account",
+            "closed an account",
+            "getting a credit card",
+            "applied for a credit card",
+            "credit card application",
+            "early warning services",
+            "identity theft",
+        )
+    ):
+        return (
+            f"{_support_sentence(support_contact)} if the bank or card issuer "
+            "will not explain the decision, account status, fraud record, or card issue in writing."
+        )
+    if any(term in text for term in ("export", "dashboard", "attribution", "analytics report", "download report", "report export")):
         return (
             f"{_support_sentence(support_contact)} if the export is missing, "
             "locked by plan or role, or still unavailable after an admin checks permissions."
