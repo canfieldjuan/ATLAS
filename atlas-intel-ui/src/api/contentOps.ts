@@ -66,6 +66,15 @@ export interface ContentOpsPreset {
   outputs: string[]
 }
 
+export interface ContentOpsInputContract {
+  key: string
+  label: string
+  type: 'integer' | string
+  min?: number
+  max?: number
+  default?: string | number | boolean | null
+}
+
 export interface ContentOpsCatalogResponse {
   outputs: ContentOpsOutputDefinition[]
   presets: ContentOpsPreset[]
@@ -83,6 +92,7 @@ export interface ContentOpsCatalogResponse {
       | Record<string, ContentOpsReasoningCapabilityStatus>
   }
   ingestion_profiles: string[]
+  input_contracts: Record<string, ContentOpsInputContract>
 }
 
 export interface ContentOpsReasoningCapabilityStatus {

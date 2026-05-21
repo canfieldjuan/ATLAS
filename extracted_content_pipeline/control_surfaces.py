@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
-_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS = 10
-_LANDING_PAGE_QUALITY_REPAIR_INPUT = "landing_page_quality_repair_attempts"
+from .landing_page_repair_contract import (
+    LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
+    landing_page_quality_repair_attempts_from_inputs,
+)
 
 
 @dataclass(frozen=True)
@@ -28,11 +30,10 @@ class OutputDefinition:
     required_inputs: tuple[str, ...] = ()
     default_max_items: int = 1
     reasoning_requirement: str = "absent"
-    # Must mirror each *GenerationConfig.parse_retry_attempts default used in
-    # generation_plan.py. If a service raises retries, update this field too.
+    # Must mirror each *GenerationConfig.parse_retry_attempts default used by
+    # the generation services. If a service raises retries, update this field too.
     default_parse_retry_attempts: int = 1
-    # Must mirror each GenerationConfig quality-repair default. Only landing
-    # pages currently have a quality-repair LLM loop.
+    # Non-landing-page outputs have no quality-repair LLM loop.
     default_quality_repair_attempts: int = 0
 
 
@@ -140,7 +141,7 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         estimated_unit_cost_usd=0.65,
         required_inputs=("offer", "audience"),
         reasoning_requirement="optional_host_context",
-        default_quality_repair_attempts=1,
+        default_quality_repair_attempts=LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     ),
     "sales_brief": OutputDefinition(
         id="sales_brief",
@@ -284,28 +285,6 @@ def resolve_outputs(request: ContentOpsRequest) -> tuple[str, ...]:
     return PRESETS["email_only"].outputs
 
 
-def _nonnegative_int_input(
-    inputs: Mapping[str, Any],
-    key: str,
-    *,
-    max_value: int | None = None,
-) -> int | None:
-    raw = inputs.get(key)
-    if raw is None:
-        return None
-    if isinstance(raw, (bool, float)):
-        raise ValueError(f"{key} must be an integer")
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        raise ValueError(f"{key} must be an integer") from None
-    if value < 0:
-        raise ValueError(f"{key} must be at least 0; got {value}")
-    if max_value is not None and value > max_value:
-        raise ValueError(f"{key} must be at most {max_value}; got {value}")
-    return value
-
-
 def _quality_repair_attempts_for_output(
     output_id: str,
     definition: OutputDefinition,
@@ -315,17 +294,17 @@ def _quality_repair_attempts_for_output(
 ) -> int:
     """Return preview quality-repair attempts for one selected output."""
 
-    if not require_quality_gates:
-        return 0
     repair_attempts = definition.default_quality_repair_attempts
     if output_id == "landing_page":
-        override = _nonnegative_int_input(
+        override = landing_page_quality_repair_attempts_from_inputs(
             inputs,
-            _LANDING_PAGE_QUALITY_REPAIR_INPUT,
-            max_value=_MAX_LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS,
         )
+        if not require_quality_gates:
+            return 0
         if override is not None:
             repair_attempts = override
+    elif not require_quality_gates:
+        return 0
     return max(0, int(repair_attempts))
 
 

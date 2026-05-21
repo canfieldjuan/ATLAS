@@ -224,6 +224,24 @@ def test_preview_landing_page_cost_accepts_quality_repair_attempt_override_max()
     assert preview["estimated_cost_usd"] == 14.3
 
 
+def test_preview_validates_landing_page_repair_attempt_even_when_gates_disabled():
+    with pytest.raises(
+        ValueError,
+        match="landing_page_quality_repair_attempts must be at most 10",
+    ):
+        preview_from_mapping(
+            {
+                "outputs": ["landing_page"],
+                "require_quality_gates": False,
+                "inputs": {
+                    "offer": "Churn audit",
+                    "audience": "B2B SaaS founders",
+                    "landing_page_quality_repair_attempts": 11,
+                },
+            }
+        )
+
+
 def test_preview_landing_page_repair_cost_can_block_budget():
     preview = preview_from_mapping(
         {
@@ -250,23 +268,6 @@ def test_preview_landing_page_cost_ignores_quality_repair_when_gates_disabled():
                 "offer": "Churn audit",
                 "audience": "B2B SaaS founders",
                 "landing_page_quality_repair_attempts": 3,
-            },
-        }
-    )
-
-    assert preview["can_run"] is True
-    assert preview["estimated_cost_usd"] == 1.3
-
-
-def test_preview_landing_page_repair_override_is_not_validated_when_gates_disabled():
-    preview = preview_from_mapping(
-        {
-            "outputs": ["landing_page"],
-            "require_quality_gates": False,
-            "inputs": {
-                "offer": "Churn audit",
-                "audience": "B2B SaaS founders",
-                "landing_page_quality_repair_attempts": 50,
             },
         }
     )

@@ -41,6 +41,10 @@ from ..control_surfaces import (
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..ingestion_diagnostics import inspect_ingestion_rows
+from ..landing_page_repair_contract import (
+    LANDING_PAGE_QUALITY_REPAIR_INPUT,
+    landing_page_quality_repair_input_contract,
+)
 from ..reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
     ReasoningPreset,
@@ -123,6 +127,9 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
             "manual",
             "existing_evidence",
         ),
+        "input_contracts": {
+            LANDING_PAGE_QUALITY_REPAIR_INPUT: landing_page_quality_repair_input_contract(),
+        },
     }
 
 
@@ -161,6 +168,10 @@ def _compose_describe_response(
         },
         "reasoning": dict(reasoning_status),
         "ingestion_profiles": list(static["ingestion_profiles"]),
+        "input_contracts": {
+            key: dict(value)
+            for key, value in static["input_contracts"].items()
+        },
     }
 
 
