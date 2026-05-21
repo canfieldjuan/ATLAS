@@ -246,10 +246,7 @@ const post: BlogPost = {
 </blockquote>
 <p>This quote provides counterevidence to the small business concentration pattern, demonstrating that Insightly can serve specific use cases in larger organizations. The emphasis on migration ease and profile compilation suggests that the platform handles foundational CRM requirements competently, even at enterprise scale.</p>
 <p>Storage limit frustration surfaces in community feedback, with one account explicitly discontinuing usage after capacity constraints. While the full quote context remains limited, the signal indicates that pricing tier restrictions create acute churn risk when usage growth exceeds plan limits.</p>
-<p>Dashboard functionality emerges as a retention anchor in positive reviews. One reviewer noted after one year of usage:</p>
-<blockquote>
-<p>-- verified reviewer on G2</p>
-</blockquote>
+<p>Dashboard functionality emerges as a retention anchor in positive reviews.</p>
 <p>The incomplete quote suggests dashboard design played a role in initial purchase decision and continued usage, reinforcing the visual design strength identified in the quantitative analysis. This pattern indicates that Insightly's interface differentiation creates genuine value for specific buyer segments, even as support and feature gaps drive evaluation activity among other users.</p>
 <h2 id="the-bottom-line-on-insightly">The Bottom Line on Insightly</h2>
 <p>Insightly occupies a defensible but constrained position in the small business CRM market. The platform delivers genuine value for teams prioritizing visual contact management, straightforward onboarding, and cost-effective deployment. Dashboard design, data migration ease, and training resources create retention anchors that keep satisfied users engaged despite feature limitations.</p>

@@ -134,10 +134,7 @@ const post: BlogPost = {
 <h2 id="where-are-zoho-crm-users-coming-from">Where Are Zoho CRM Users Coming From?</h2>
 <p>Reviewers document switching from 4 competitor platforms. The chart below shows the distribution of migration sources mentioned in the analyzed sample.</p>
 <p>{{chart:sources-bar}}</p>
-<p>The migration sources span different software categories, suggesting Zoho CRM serves as a consolidation target for teams managing multiple tools. One reviewer described the shift:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>The migration sources span different software categories, suggesting Zoho CRM serves as a consolidation target for teams managing multiple tools.</p>
 <p>Salesforce appears as a migration source despite its market dominance, indicating that pricing or complexity concerns drive some teams toward Zoho CRM's feature set. Slack's presence in the migration data suggests teams are consolidating communication and CRM workflows into a single platform.</p>
 <p>The sample size for explicit switching mentions (4) is small, which limits confidence in ranking competitors by migration volume. However, the presence of enterprise-grade alternatives like Salesforce alongside collaboration tools like Slack points to Zoho CRM's positioning as a cost-effective, integrated option.</p>
 <p>One small business reviewer noted:</p>
@@ -152,14 +149,8 @@ const post: BlogPost = {
 <p>{{chart:pain-bar}}</p>
 <p>Pricing complaints appear most frequently, followed by UX friction and overall dissatisfaction. Contract lock-in, data migration complexity, and performance issues also surface but with lower frequency in the analyzed sample.</p>
 <h3 id="pricing-friction">Pricing friction</h3>
-<p>Reviewers report pricing backlash when paid tier value doesn't match expectations. One paying customer described the gap:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
-<p>The complaint suggests a mismatch between paid support expectations and delivered service quality. Another reviewer contrasted free and paid experiences:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Reviewers report pricing backlash when paid tier value doesn't match expectations.</p>
+<p>The complaint suggests a mismatch between paid support expectations and delivered service quality.</p>
 <p>This pattern—positive free-tier experience followed by paid-tier support friction—appears in multiple reviews. The shift from immediate chat support to bot-mediated ticket routing creates a perception gap when customers upgrade.</p>
 <p>The pricing pain category doesn't necessarily indicate that Zoho CRM is expensive compared to competitors. Instead, reviewers signal that the support experience on paid tiers doesn't justify the cost increase over the free version.</p>
 <h3 id="ux-and-feature-friction">UX and feature friction</h3>
@@ -178,10 +169,6 @@ const post: BlogPost = {
 <h3 id="support-experience-patterns">Support experience patterns</h3>
 <p>The support pain category clusters around a specific shift: from human-first to bot-gated ticketing. Reviewers who used the free tier for years report functional support, but paying customers describe 30-minute bot interactions before reaching human assistance.</p>
 <p>This pattern appears immediately following support escalation failures or during annual renewal periods when paying customers reassess value. The timing hook matters because it influences whether teams renew or begin evaluating alternatives.</p>
-<p>One counterevidence signal tempers the support complaint narrative:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
 <p>This suggests the free tier remains functional for teams with minimal support needs. The friction emerges when paying customers expect elevated support quality and encounter the same bot-mediated workflow.</p>
 <h3 id="migration-timing-and-urgency">Migration timing and urgency</h3>
 <p>The review data includes urgency signals, with several reviews scoring 10.0 on a 0-10 scale. High urgency correlates with active evaluation language like "ISO real world feedback" and "migration war stories."</p>
@@ -240,10 +227,7 @@ const post: BlogPost = {
 <p>Zoho CRM attracts users from 4 documented competitor platforms, with pricing and UX concerns driving most migration decisions. The review data, spanning 963 total reviews and 271 enriched signals, reveals specific patterns that matter for teams evaluating a switch.</p>
 <h3 id="support-experience-matters-at-renewal">Support experience matters at renewal</h3>
 <p>The most distinctive pattern in the data is paid-tier support degradation. Reviewers who used Zoho CRM's free tier for years report positive experiences, but paying customers describe a shift from immediate chat support to bot-mediated ticket routing.</p>
-<p>This creates friction at annual renewal periods when paying customers reassess value. One reviewer's experience captures the gap:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>This creates friction at annual renewal periods when paying customers reassess value.</p>
 <p>For teams considering Zoho CRM, this pattern suggests using the free tier to validate workflows before upgrading, and budgeting extra time for support escalation during the first 90 days on a paid plan.</p>
 <h3 id="integration-ecosystem-drives-retention">Integration ecosystem drives retention</h3>
 <p>Despite support friction, reviewers remain on Zoho CRM due to integration investments and satisfactory UX when support isn't required. The integration mention data (Zoho CRM native: 17, Zapier: 10, Outlook: 7, Twilio: 6, Gmail: 5) shows where teams anchor their workflows.</p>

@@ -153,37 +153,19 @@ const post: BlogPost = {
 <p>Complaint categories cluster differently across the two platforms. Jira reviewers cite UX friction, feature overload, and onboarding complexity. Monday.com reviewers emphasize pricing frustration, support barriers, and learning curve challenges.</p>
 <p>{{chart:pain-comparison-bar}}</p>
 <h3 id="jira-pain-patterns">Jira Pain Patterns</h3>
-<p>Jira's most visible complaint pattern centers on interface complexity accumulation. Reviewers in Q2 2026 describe navigation friction when managing multiple projects or boards. A client service manager noted:</p>
-<blockquote>
-<p>-- Client service manager, verified reviewer on G2</p>
-</blockquote>
+<p>Jira's most visible complaint pattern centers on interface complexity accumulation. Reviewers in Q2 2026 describe navigation friction when managing multiple projects or boards.</p>
 <p>This signal ties to bundled suite consolidation pressure. The reviewer reports shifting from chat-based ticket management to Jira's centralized ticketing system, claiming improved productivity despite the navigation learning curve. The contradiction—simultaneous complaint and productivity gain—suggests interface friction does not always block adoption, but it does create onboarding drag.</p>
-<p>Feature overload appears in solo user and small team contexts. One reviewer switching to Notion for project management stated:</p>
-<blockquote>
-<p>-- Reviewer on Twitter/X</p>
-</blockquote>
+<p>Feature overload appears in solo user and small team contexts.</p>
 <p>This pattern recurs among users evaluating simpler alternatives like Basecamp or Notion. The complaint is not that Jira lacks features, but that feature density creates cognitive overhead for workflows that do not require enterprise-scale project tracking.</p>
 <p>Jira's onboarding friction surfaces in recent reviews, though the sample size is small. New users report time investment required to configure workflows, understand issue hierarchies, and navigate permissions. These complaints do not appear uniformly—some reviewers praise Jira's configurability—but when onboarding friction appears, it clusters with UX and feature complexity complaints.</p>
 <h3 id="mondaycom-pain-patterns">Monday.com Pain Patterns</h3>
-<p>Monday.com's complaint patterns emphasize pricing backlash and support friction. One reviewer reported an unexpected billing increase:</p>
-<blockquote>
-<p>-- Reviewer on Trustpilot</p>
-</blockquote>
-<p>This signal represents an outlier in severity, but it aligns with a broader pattern: reviewers describe difficulty canceling subscriptions, persistent sales outreach after opt-out attempts, and frustration with billing transparency. The same reviewer mentioned support friction:</p>
-<blockquote>
-<p>-- Reviewer on Trustpilot</p>
-</blockquote>
+<p>Monday.com's complaint patterns emphasize pricing backlash and support friction.</p>
+<p>This signal represents an outlier in severity, but it aligns with a broader pattern: reviewers describe difficulty canceling subscriptions, persistent sales outreach after opt-out attempts, and frustration with billing transparency.</p>
 <p>Support complaints for Monday.com appear in multiple contexts: cancellation requests, billing disputes, and trial gate friction. Former users revisiting the platform report encountering mandatory trial requirements and persistent sales contact despite previous opt-out requests. These patterns suggest monetization and access friction, not product capability gaps.</p>
-<p>Monday.com's UX complaints focus on learning curve challenges for new users. A senior art director noted:</p>
-<blockquote>
-<p>-- Diretor de arte sênior, verified reviewer on G2</p>
-</blockquote>
+<p>Monday.com's UX complaints focus on learning curve challenges for new users.</p>
 <p>This complaint differs from Jira's interface complexity pattern. Monday.com reviewers cite customization depth as the friction source, while Jira reviewers cite feature density and multi-project navigation. Both create onboarding drag, but the underlying causes diverge.</p>
 <p>Monday.com shows fewer integration and feature gap complaints than Jira in this sample. This may reflect product positioning (Monday.com emphasizes visual workflows over technical issue tracking) or sample composition (fewer enterprise users with complex integration requirements). The data does not support claims about Monday.com's integration capability—only that integration complaints appear less frequently in the 13 signals analyzed.</p>
-<p>Counterevidence exists for both platforms. Despite pricing frustration, one Monday.com reviewer stated:</p>
-<blockquote>
-<p>-- Reviewer on Trustpilot</p>
-</blockquote>
+<p>Counterevidence exists for both platforms.</p>
 <p>This suggests the product delivers value when users can access and afford it, but monetization friction creates departure pressure. Similarly, Jira reviewers who complain about interface complexity often acknowledge centralized visibility benefits. One reviewer noted that Jira consolidates all updates in one place, avoiding scattered ticket management across multiple tools.</p>
 <h2 id="who-is-churning-buyer-profile-breakdown">Who Is Churning? Buyer Profile Breakdown</h2>
 <p>Buyer segment patterns differ between Jira and Monday.com, though small sample sizes limit confidence. Jira's 49 complaint signals include 9 economic buyers, 16 end users, 2 evaluators, and 1 champion. Monday.com's 13 signals include 2 economic buyers, 4 end users, 2 evaluators, and 1 champion.</p>
@@ -215,15 +197,7 @@ const post: BlogPost = {
 <p>-- Customer Support Specialist, verified reviewer on G2</p>
 </blockquote>
 <p>This same reviewer acknowledged learning curve friction but valued centralized visibility. The contradiction—simultaneous complaint and praise—appears frequently in Jira reviews. Users tolerate interface complexity when centralized project tracking justifies the investment.</p>
-<p>Another Jira reviewer evaluating alternatives stated:</p>
-<blockquote>
-<p>-- Reviewer on Reddit</p>
-</blockquote>
 <p>This signal illustrates workflow fragmentation frustration. The reviewer uses Notion for documentation and Jira for issue tracking, but context loss between tools creates friction. The complaint is not about Jira's capability—it is about multi-tool workflow overhead.</p>
-<p>A solo team operator considering Notion mentioned:</p>
-<blockquote>
-<p>-- Reviewer on Twitter/X</p>
-</blockquote>
 <p>This pattern recurs: small teams cite feature overload, while larger teams cite navigation complexity. The complaint content differs by team size and workflow scope.</p>
 <p>Monday.com reviewers describe pricing and support friction more frequently than interface complaints. One reviewer reported:</p>
 <blockquote>
@@ -231,15 +205,7 @@ const post: BlogPost = {
 <p>-- Reviewer on Reddit</p>
 </blockquote>
 <p>This opener preceded a complaint about billing and trial gate friction. The casual tone contrasts with the frustration expressed in the full review, suggesting the reviewer expected straightforward access but encountered monetization barriers.</p>
-<p>Another Monday.com reviewer stated:</p>
-<blockquote>
-<p>-- Reviewer on Trustpilot</p>
-</blockquote>
 <p>This reviewer acknowledged core utility despite pricing concerns. The return visit suggests the product remained relevant, but cost remained a barrier. The signal does not specify whether the reviewer ultimately subscribed or departed again.</p>
-<p>A senior art director noted:</p>
-<blockquote>
-<p>-- Diretor de arte sênior, verified reviewer on G2</p>
-</blockquote>
 <p>This complaint ties to bundled suite consolidation. The reviewer was managing a workflow migration, and customization depth created onboarding friction during the transition. The signal does not indicate whether the learning curve resolved or remained a persistent issue.</p>
 <p>Reviewer language reveals nuance absent from aggregate metrics. Jira users tolerate complexity for centralized visibility. Monday.com users acknowledge utility despite pricing frustration. Both platforms retain users who complain, suggesting switching costs or lack of alternatives outweigh dissatisfaction in many cases.</p>
 <p>The key insight: reviewer complaints do not always predict departure. They reveal friction points that may or may not exceed switching thresholds. Jira's interface complexity and Monday.com's pricing friction create adoption drag, but neither creates universal departure patterns in the 62 signals analyzed.</p>

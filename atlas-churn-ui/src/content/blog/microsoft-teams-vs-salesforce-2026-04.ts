@@ -138,14 +138,8 @@ const post: BlogPost = {
 <p>The core metrics reveal asymmetric pressure. Microsoft Teams shows 34 signals with an average urgency of 1.9, while Salesforce registers 74 signals at 3.2 urgency. The 1.3-point urgency gap reflects different pain drivers: Windows 11 upgrade friction for Microsoft Teams versus pricing backlash for Salesforce.</p>
 <p>{{chart:head2head-bar}}</p>
 <p>Microsoft Teams signals cluster around end users (17 signals, 0% churn rate) and economic buyers (3 signals, 0% churn rate). Salesforce shows broader role distribution: economic buyers (12 signals, 0% churn rate), evaluators (7 signals, 0% churn rate), and end users (13 signals, 0% churn rate). The decision-maker churn rate divergence—0% for Microsoft Teams, 16.7% for Salesforce—suggests Salesforce faces higher defection risk among budget holders.</p>
-<p>Review volume skews toward Salesforce, reflecting both its larger market footprint and the intensity of pricing discussions in March-April 2026. Agentforce pricing at $550/user/month versus Microsoft Dynamics 365 at $65/user/month created an explicit comparison anchor that appears repeatedly in witness evidence. One reviewer noted:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
-<p>Microsoft Teams signals concentrate in the Windows 11 upgrade window (March 2026), when performance and cost trade-offs became visible to small business buyers. One reviewer reported:</p>
-<blockquote>
-<p>-- reviewer on trustpilot</p>
-</blockquote>
+<p>Review volume skews toward Salesforce, reflecting both its larger market footprint and the intensity of pricing discussions in March-April 2026. Agentforce pricing at $550/user/month versus Microsoft Dynamics 365 at $65/user/month created an explicit comparison anchor that appears repeatedly in witness evidence.</p>
+<p>Microsoft Teams signals concentrate in the Windows 11 upgrade window (March 2026), when performance and cost trade-offs became visible to small business buyers.</p>
 <p>The sample includes 81 verified platform reviews and 1,616 community platform signals, with Reddit contributing 1,613 signals. This distribution reflects where pricing and technical frustration surfaces most visibly: community forums rather than structured review sites.</p>
 <p>Recommendation ratios were not consistently available across both vendors in the supplied data, limiting direct satisfaction comparison. However, urgency and churn rate differences provide clear differentiation. Salesforce's 3.2 urgency score positions it in the high-pressure zone, while Microsoft Teams' 1.9 score suggests lower immediate switching intent despite Windows 11 friction.</p>
 <p>The 74-to-34 signal ratio does not indicate Salesforce is universally worse. It reflects higher reviewer activation around pricing announcements and evaluation deadlines (May 1 emerged as a decision anchor in Salesforce witness evidence). Microsoft Teams signals concentrate around Windows 11 rollout timing, suggesting event-driven complaint patterns rather than sustained dissatisfaction.</p>
@@ -197,10 +191,6 @@ const post: BlogPost = {
 <li>Microsoft Teams signals concentrate in small businesses hit by Windows 11 upgrade costs. One reviewer mentioned the system "costing us time and money," language typical of resource-constrained buyers.</li>
 <li>Salesforce signals include enterprise buyers calculating per-seat and per-execution costs. The $550/user/month Agentforce pricing and $2,000-$6,000 setup costs suggest mid-market and enterprise segments where total cost of ownership becomes a board-level concern.</li>
 </ul>
-<p>One witness excerpt captures the Salesforce buyer calculation:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>This language—explicit dollar amounts, workflow examples, cost-per-execution math—indicates a buyer performing ROI analysis rather than expressing general dissatisfaction.</p>
 <p>Microsoft Teams shows end-user-driven complaints but economic-buyer retention. Salesforce shows economic-buyer-driven urgency with end-user frustration as a secondary signal. This role distribution difference explains the urgency gap: economic buyers hold budget authority and switching power, while end users express frustration without triggering vendor changes.</p>
 <p>The 0% churn rate across most individual roles for both vendors suggests switching friction remains high despite pain. Bundled suite consolidation, integration dependencies, and data migration costs create inertia. The 16.7% decision-maker churn rate for Salesforce indicates that when economic buyers do move, they move decisively—but most remain anchored.</p>
@@ -214,10 +204,7 @@ const post: BlogPost = {
 <p><strong>Causal trigger:</strong> Windows 11 forced upgrade combined with bundled suite pricing pressure for Microsoft Teams. Agentforce pricing announcement at $550/user/month versus Microsoft Dynamics 365 at $65/user/month for Salesforce. Both triggers surfaced in March 2026, creating a simultaneous comparison window.</p>
 <p><strong>Why now:</strong> Immediate post-Windows 11 upgrade window (March-April 2026) exposed performance and cost trade-offs for Microsoft Teams small business buyers. March-April 2026 represents peak pricing backlash visibility for Salesforce, with May 1 emerging as a decision anchor in witness evidence. Buyers are actively calculating cost gaps and setup burdens during this window.</p>
 <p><strong>Counterevidence:</strong> Microsoft Teams customers remain despite frustration due to deep Microsoft 365 integration, acceptable performance for well-resourced users, and feature breadth that serves diverse collaboration needs when properly configured. One Solution Architect reported being "more productive" despite UX friction.</p>
-<p>Salesforce customers remain anchored by integration breadth and feature depth. However, both areas show contradictory weakness evidence, suggesting retention is fragile rather than durable. One reviewer noted:</p>
-<blockquote>
-<p>-- reviewer on software_advice</p>
-</blockquote>
+<p>Salesforce customers remain anchored by integration breadth and feature depth. However, both areas show contradictory weakness evidence, suggesting retention is fragile rather than durable.</p>
 <p>This positive sentiment coexists with pricing backlash, indicating Salesforce retains loyalty among users who value capabilities despite cost concerns.</p>
 <p><strong>Which vendor fares better?</strong> Microsoft Teams shows lower urgency and zero decision-maker churn in this sample, but the sample skews toward Salesforce (74 signals vs 34). Adjusting for signal volume, Microsoft Teams benefits from bundled suite lock-in that Salesforce cannot replicate at the same depth.</p>
 <p>Salesforce faces higher immediate risk due to decision-maker churn rate (16.7%) and pricing backlash intensity. The $550/user/month Agentforce pricing versus $65/user/month alternatives creates an explicit value gap that economic buyers can quantify. Setup costs adding $2,000-$6,000 per agent before licensing compound the perception of poor ROI.</p>
@@ -228,33 +215,16 @@ const post: BlogPost = {
 <li><strong>For buyers evaluating in March-April 2026:</strong> Salesforce faces higher urgency due to May 1 decision anchor and explicit cost comparisons. Microsoft Teams faces lower urgency but Windows 11 rollout creates event-driven complaint spikes.</li>
 </ul>
 <p>The verdict is not a universal ranking. Microsoft Teams benefits from ecosystem lock-in and lower urgency in this sample. Salesforce faces higher decision-maker churn risk driven by pricing backlash. Both vendors retain customers through integration dependencies and feature breadth, but Salesforce's retention appears more fragile due to cost-value perception gaps among economic buyers.</p>
-<p>One witness excerpt captures the Salesforce pricing tension:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
 <p>This explicit dollar comparison, surfacing in March-April 2026, represents the decisive factor: Salesforce pricing backlash activated decision-makers in a way Windows 11 upgrade friction did not for Microsoft Teams.</p>
 <h2 id="what-reviewers-say-about-microsoft-teams-and-salesforce">What Reviewers Say About Microsoft Teams and Salesforce</h2>
 <p>Direct reviewer language grounds the comparison in lived experience rather than aggregate metrics.</p>
 <p><strong>Microsoft Teams reviewer voices:</strong></p>
-<p>Windows 11 upgrade friction dominates recent signals. One reviewer on Trustpilot captured the cost frustration:</p>
-<blockquote>
-<p>-- reviewer on trustpilot</p>
-</blockquote>
-<p>UX confusion appears in verified platform reviews. A Solution Architect on G2 noted:</p>
-<blockquote>
-<p>-- Solution Architect, verified reviewer on G2</p>
-</blockquote>
+<p>Windows 11 upgrade friction dominates recent signals.</p>
+<p>UX confusion appears in verified platform reviews.</p>
 <p>Despite these complaints, the same Solution Architect reported being "more productive," indicating Microsoft Teams serves users who can navigate its complexity. This counterevidence suggests frustration coexists with functional value.</p>
 <p>Competitor pressure appears in switching language. One reviewer mentioned moving "off to Apple, Google or Linux world. Good riddance!" This displacement signal indicates Windows 11 upgrade demands exceeded tolerance for some small business buyers.</p>
 <p><strong>Salesforce reviewer voices:</strong></p>
-<p>Pricing backlash concentrates in March-April 2026. One reviewer on Reddit captured the Agentforce cost shock:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
-<p>Another reviewer calculated cost-per-execution gaps:</p>
-<blockquote>
-<p>-- reviewer on reddit</p>
-</blockquote>
+<p>Pricing backlash concentrates in March-April 2026.</p>
 <p>This language—explicit dollar amounts, workflow examples, cost-per-execution math—indicates buyers performing ROI analysis rather than expressing general dissatisfaction.</p>
 <p>May 1 emerged as a decision anchor in witness evidence, suggesting evaluation deadlines cluster in this window. One reviewer noted:</p>
 <blockquote>
@@ -262,10 +232,7 @@ const post: BlogPost = {
 <p>-- reviewer on reddit</p>
 </blockquote>
 <p>This phrase appeared in the context of pricing relief or alternative evaluation, suggesting active switching intent rather than passive dissatisfaction.</p>
-<p>Counterevidence appears in positive sentiment. One reviewer on Software Advice noted:</p>
-<blockquote>
-<p>-- reviewer on software_advice</p>
-</blockquote>
+<p>Counterevidence appears in positive sentiment.</p>
 <p>This positive sentiment coexists with pricing backlash, indicating Salesforce retains loyalty among users who value capabilities despite cost concerns.</p>
 <p><strong>Comparison table:</strong></p>
 <table>

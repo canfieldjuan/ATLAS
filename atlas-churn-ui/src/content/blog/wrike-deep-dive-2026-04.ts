@@ -184,14 +184,6 @@ const post: BlogPost = {
 <li><strong>Contract lock-in</strong>: Perceived difficulty exiting or switching</li>
 <li><strong>Onboarding</strong>: Complexity in advanced feature adoption</li>
 </ul>
-<p>One Event Production Manager captured both sides:</p>
-<blockquote>
-<p>-- Event Production Manager on TrustRadius</p>
-</blockquote>
-<p>Yet the same reviewer also noted:</p>
-<blockquote>
-<p>-- Event Production Manager on TrustRadius</p>
-</blockquote>
 <p>This duality—strong fundamentals paired with specific, persistent gaps—defines the Wrike experience in the current dataset.</p>
 <h2 id="where-wrike-users-feel-the-most-pain">Where Wrike Users Feel the Most Pain</h2>
 <p>Pain categories distribute unevenly. Pricing and overall dissatisfaction dominate, followed by UX, support, integration, and features.</p>

@@ -142,22 +142,10 @@ const post: BlogPost = {
 <p>Pain categories differ sharply between Gusto and Workday. For Gusto, pricing complaints dominate. For Workday, support quality and feature gaps lead the list. The chart below compares six pain categories across both platforms.</p>
 <p>{{chart:pain-comparison-bar}}</p>
 <p><strong>Gusto's pricing friction is concrete and recurring.</strong> One business owner flagged pricing at $55 as steep but remained satisfied overall. Another reviewer reported hidden fees and unauthorized fund pulls to cover taxes, even when taxes were handled separately. The pattern suggests aggressive billing enforcement rather than transparent pricing communication.</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
 <p>The timing matters. Reviewers describe cash flow disruptions when funds are withdrawn within 24 hours of objections. One witness highlight shows a competitor switch signal tied directly to pricing backlash, indicating that some customers do leave when billing enforcement crosses a threshold.</p>
 <p>But not all pricing complaints lead to churn. A CEO with a 5-employee company noted cost concerns but reported productivity gains from automated payroll that outweighed the frustration. The workflow substitution pattern suggests small business owners tolerate pricing friction when time savings are clear.</p>
-<blockquote>
-<p>-- CEO, verified reviewer on TrustRadius</p>
-</blockquote>
 <p><strong>Workday's support and training failures are acute and specific.</strong> One March 2026 reviewer described training as "botched," comparing it to standardized testing. Another reviewer faced termination threats tied to quality reviews, with an effective date of March 10, 2026, despite not having the chance to complete the process.</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>The support pain is not universal. One Capterra reviewer acknowledged "a lot of great features" despite noting the platform is "behind in its design and construct." This counterevidence suggests feature breadth and integration capabilities keep customers engaged even when support disappoints.</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
 <p><strong>Competitive pressure shows up differently for each vendor.</strong> Gusto faces workflow substitution and competitor switches tied to pricing. Workday faces bundled suite consolidation pressure, with one Reddit reviewer citing SAP People Intelligence as a solution that "outperforms Workday—even when using the full suite." The displacement mode for Workday leans toward consolidation rather than outright replacement.</p>
 <p><strong>Overall dissatisfaction patterns are visible but not dominant.</strong> For Gusto, one Software Advice reviewer cited issues tied to a transition to Elevate, a platform change that disrupted workflows. For Workday, dissatisfaction ties more to support gaps than product capability. Both platforms show retention despite friction, which suggests the pain is real but manageable for most customers.</p>
 <h2 id="who-is-churning-buyer-profile-breakdown">Who Is Churning? Buyer Profile Breakdown</h2>
@@ -194,35 +182,15 @@ const post: BlogPost = {
 <p>"In the past year or so we have encountered tons of problems with Gusto."
 -- reviewer on Reddit</p>
 </blockquote>
-<p>The pricing backlash is specific. One business owner called out the $55 monthly cost:</p>
-<blockquote>
-<p>-- Owner, verified reviewer on G2</p>
-</blockquote>
-<p>And the hidden fee complaint ties directly to cash flow disruption:</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
-<p><strong>Workday reviewers cite feature strength and support gaps.</strong> One Capterra reviewer acknowledged the feature breadth despite design concerns:</p>
-<blockquote>
-<p>-- verified reviewer on Capterra</p>
-</blockquote>
-<p>But the support pain is acute. The March 2026 training failure was described bluntly:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Another Reddit reviewer described the termination threat tied to quality reviews:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>The pricing backlash is specific.</p>
+<p><strong>Workday reviewers cite feature strength and support gaps.</strong> One Capterra reviewer acknowledged the feature breadth despite design concerns.</p>
+<p>But the support pain is acute.</p>
 <p>One long-tenured contractor described the context for their Workday experience:</p>
 <blockquote>
 <p>"I have been an independent contractor for a number of years but managed to maintain my Services Certificates with some partner work."
 -- reviewer on Reddit</p>
 </blockquote>
-<p><strong>The competitive pressure is real but not universal.</strong> One Reddit reviewer cited SAP People Intelligence as a superior alternative:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p><strong>The competitive pressure is real but not universal.</strong> One Reddit reviewer cited SAP People Intelligence as a superior alternative.</p>
 <p>But the bundled suite consolidation pattern suggests customers evaluate alternatives without always switching. The displacement flow for Workday leans toward consolidation rather than outright replacement.</p>
 <p><strong>Retention factors are visible in both datasets.</strong> For Gusto, workflow automation and time savings keep small business owners engaged despite pricing friction. For Workday, feature breadth and integration capabilities provide enough value to tolerate support gaps. Both platforms show low explicit churn despite high complaint volume, which suggests the pain is real but not yet catastrophic for most customers.</p>
 <hr />

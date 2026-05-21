@@ -153,19 +153,9 @@ const post: BlogPost = {
 <p>If your business requires enterprise-level features and you have budget for ongoing development, Magento's pricing may be justified. If you're a smaller team hoping to grow into the platform, the cost curve may steepen faster than revenue growth supports.</p>
 <h2 id="bigcommerce-the-1-complaint-is-ux">BigCommerce: The #1 Complaint Is Ux</h2>
 <p>User experience is the top complaint in 54 BigCommerce reviews. Reviewers describe a clunky interface, unintuitive workflows, and a learning curve that slows down team productivity.</p>
-<p>But BigCommerce also surfaces the most striking pricing complaint in the dataset. One verified reviewer on Software Advice reported:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
+<p>But BigCommerce also surfaces the most striking pricing complaint in the dataset.</p>
 <p>That's a pricing backlash signal, not a usability complaint. The reviewer describes being forced to pay nearly 3 times their agreed rate as their business scaled. That kind of pricing increase erodes trust and triggers immediate competitor evaluation.</p>
-<p>Yet BigCommerce also shows strong positive signals. A Director of Technology on TrustRadius wrote:</p>
-<blockquote>
-<p>-- Director of Technology, verified reviewer on TrustRadius</p>
-</blockquote>
-<p>Another excerpt from the same reviewer:</p>
-<blockquote>
-<p>-- Director of Technology, verified reviewer on TrustRadius</p>
-</blockquote>
+<p>Yet BigCommerce also shows strong positive signals.</p>
 <p>The uptime claim is exceptional. 99.9999% uptime translates to roughly 30 seconds of downtime per year. That's a powerful counterweight to usability complaints. The reviewer also highlights security, speed, and ease of use as strengths.</p>
 <p>BigCommerce's tension is clear: operational stability is strong, but usability friction and pricing unpredictability create switching pressure. The urgency score of 1.7 suggests complaints exist but don't always trigger immediate action.</p>
 <p>If your team values uptime and security above interface polish, BigCommerce's trade-off may work. If pricing transparency and predictable cost scaling matter more, the forced increase pattern is a red flag.</p>

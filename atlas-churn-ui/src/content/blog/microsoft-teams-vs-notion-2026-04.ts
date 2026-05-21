@@ -190,35 +190,17 @@ const post: BlogPost = {
 <h2 id="what-reviewers-say-about-microsoft-teams-and-notion">What Reviewers Say About Microsoft Teams and Notion</h2>
 <p>Direct reviewer language keeps this comparison grounded. The quotes below reflect the specific frustrations and trade-offs that drive urgency scores and churn signals.</p>
 <p><strong>Microsoft Teams: Windows 11 Friction and Ecosystem Costs</strong></p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
-<p>This quote captures the immediate impact of the March 2026 Windows 11 rollout on small businesses. The forced upgrade introduced performance and cost trade-offs that were not anticipated, and the reviewer's frustration centers on features they did not request.</p>
-<blockquote>
-<p>-- Solution Architect, verified reviewer on G2</p>
-</blockquote>
-<p>This counterevidence shows that even users who report higher productivity due to bundled suite consolidation still encounter UX friction. The learning curve for new users and notification overload are recurring themes in Microsoft Teams feedback.</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>Reviewer feedback captures the immediate impact of the March 2026 Windows 11 rollout on small businesses. The forced upgrade introduced performance and cost trade-offs that were not anticipated, with frustration centering on features users did not request.</p>
+<p>Counterevidence shows that even users who report higher productivity due to bundled suite consolidation still encounter UX friction. The learning curve for new users and notification overload are recurring themes in Microsoft Teams feedback.</p>
 <p>This workflow automation comparison illustrates the financial scrutiny applied to bundled Microsoft 365 services. The 10x cost difference highlights the premium paid for integration convenience, which some reviewers find acceptable and others do not.</p>
 <p><strong>Notion: Pricing Backlash and Vendor Lock-In</strong></p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
-<p>This quote reflects the immediate financial impact of Notion's pricing increase. The $288 annual spend for a Business plan, combined with limited usage and product complexity, created buyer's remorse that escalated into a churn signal.</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p>Reviewer feedback reflects the immediate financial impact of Notion's pricing increase. The $288 annual spend for a Business plan, combined with limited usage and product complexity, created buyer's remorse that escalated into a churn signal.</p>
 <p>This statement captures the long-term concern that extends beyond pricing. Reviewers describe feeling trapped by data portability challenges and the effort required to migrate workflows to a new platform. The phrase "quietly getting tighter" suggests that switching costs are increasing over time, even as frustration mounts.</p>
 <blockquote>
 <p>For all the things that need better tables and formulas, I went to Coda.</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This displacement signal shows that feature gaps are driving evaluations of alternatives. The reviewer did not abandon Notion entirely but shifted specific workflows to a competitor, reflecting a hybrid approach that may precede full migration.</p>
-<blockquote>
-<p>-- Student and Owner, verified reviewer on G2</p>
-</blockquote>
 <p>This counterevidence shows that Notion's complexity is a double-edged sword. Users who invest time in learning the platform report higher productivity, but the initial learning curve remains a barrier for teams without dedicated champions.</p>
 <blockquote>
 <p>Hey all, I'm trying to switch as much as I can to European alternatives to US ones.</p>

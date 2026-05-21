@@ -160,18 +160,12 @@ const post: BlogPost = {
 <p>The solution is very approachable to use, while maintaining a wide array of security tools to combat modern and emerging threats.</p>
 <p>-- verified reviewer on Gartner, Chief Information Security Officer, Gov't/PS/ED &lt;5,000 Employees, Education</p>
 </blockquote>
-<p>Weakness mentions concentrate in overall dissatisfaction and pricing. The pricing friction is explicit and quantified. One verified reviewer on PeerSpot stated:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
+<p>Weakness mentions concentrate in overall dissatisfaction and pricing. The pricing friction is explicit and quantified.</p>
 <p>The strength-to-weakness ratio suggests SentinelOne maintains loyalty through functionality despite pricing and UX friction. Reviewers who remain do so because the EDR capabilities outweigh the cost concern at enterprise scale.</p>
 <h2 id="where-sentinelone-users-feel-the-most-pain">Where SentinelOne Users Feel the Most Pain</h2>
 <p>Pain patterns reveal where reviewer dissatisfaction concentrates. The radar chart shows relative intensity across six categories.</p>
 <p>{{chart:pain-radar}}</p>
-<p>Overall dissatisfaction and pricing dominate the pain profile. UX friction appears as a secondary concern, with reviewers mentioning centralized management becoming restrictive. One reviewer noted:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
+<p>Overall dissatisfaction and pricing dominate the pain profile. UX friction appears as a secondary concern, with reviewers mentioning centralized management becoming restrictive.</p>
 <p>Security and data migration concerns appear at lower intensity, suggesting these are not primary friction points for most reviewers. Contract lock-in mentions are minimal, indicating that switching barriers are not a top-of-mind complaint in this sample.</p>
 <p>The pain distribution aligns with the pricing-driven thesis: reviewers feel cost pressure first, followed by operational friction in management workflows. The security functionality itself generates fewer complaints, supporting the claim that customers stay for the EDR capabilities despite other friction.</p>
 <h2 id="the-sentinelone-ecosystem-integrations-use-cases">The SentinelOne Ecosystem: Integrations &amp; Use Cases</h2>
@@ -248,10 +242,6 @@ const post: BlogPost = {
 <li>SentinelOne weaknesses: reliability, contract lock-in</li>
 </ul>
 <p>Both vendors face contract lock-in concerns, suggesting that EDR category switching friction is a common pattern, not a SentinelOne-specific issue. The technical debt mentions for CrowdStrike and reliability mentions for SentinelOne suggest different operational pain points despite similar feature strength.</p>
-<p>One reviewer directly addressed the comparison:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
 <p>This counterevidence suggests that while SMB buyers find SentinelOne costly, enterprise buyers view it as competitively priced when functionality is factored in. The competitive landscape is active, with reviewers evaluating multiple alternatives simultaneously.</p>
 <h2 id="where-sentinelone-sits-in-the-b2b-software-market">Where SentinelOne Sits in the B2B Software Market</h2>
 <p>The EDR category exhibits high churn velocity with moderate price pressure. The market regime is classified as "high churn," with an average churn velocity of 0.16 and average price pressure of 0.04. Regime confidence sits at 0.8, indicating an established pattern with limited sample size constraining certainty.</p>

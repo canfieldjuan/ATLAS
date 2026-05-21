@@ -149,19 +149,7 @@ const post: BlogPost = {
 <p>Zoho Desk fits teams already committed to the Zoho ecosystem or those prioritizing integration simplicity over best-in-class helpdesk features. If you're evaluating helpdesk tools in isolation, pricing may not justify the choice.</p>
 <h2 id="freshdesk-the-1-complaint-is-pricing">Freshdesk: The #1 Complaint Is Pricing</h2>
 <p>Freshdesk's pricing complaints appear in 36 reviews with an urgency score of 3.5—the highest in the analysis. Reviewers report aggressive contract enforcement, difficult cancellation processes, and poor vendor responsiveness during renewal windows.</p>
-<p>One software reviewer noted contract lock-in frustration:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
-<p>Another reviewer on Twitter shared a specific ROI claim:</p>
-<blockquote>
-<p>-- reviewer on Twitter</p>
-</blockquote>
 <p>The context: the claim references savings after switching <em>to</em> Freshdesk, not away from it. But the broader pattern in reviews suggests that once teams are in, getting out is harder than expected.</p>
-<p>A counterpoint appears in a verified review:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>The tension: Freshdesk works functionally. The complaints center on vendor behavior—contract terms, support responsiveness, and pricing changes—not the product itself.</p>
 <p>Strengths: Freshdesk handles standard helpdesk workflows well. Ticket management, automation, and knowledge base features are solid. The platform scales for growing teams without requiring a full enterprise solution.</p>
 <p>Weaknesses: Pricing complaints often coincide with renewal windows, particularly for customers with multi-year commitments. Support quality concerns appear alongside contract enforcement issues. Reviewers report that cancellation processes involve friction, including delayed responses and retention tactics.</p>
@@ -186,10 +174,6 @@ const post: BlogPost = {
 <p>Help Scout fits teams that want a lightweight, email-focused helpdesk and don't need advanced automation, multi-channel support, or deep integrations. If your needs are simple, it may work. If you're scaling or need robust features, expect to outgrow it.</p>
 <h2 id="hubspot-the-1-complaint-is-pricing">HubSpot: The #1 Complaint Is Pricing</h2>
 <p>HubSpot's pricing complaints appear in 3 reviews with an urgency score of 2.5. The sample size is small, but the pattern is consistent with HubSpot's broader reputation: powerful features at a premium price.</p>
-<p>One reviewer on Twitter mentioned HubSpot in the context of switching:</p>
-<blockquote>
-<p>-- reviewer on Twitter</p>
-</blockquote>
 <p>The context: evaluating HubSpot as an alternative to another tool. HubSpot frequently appears in competitive evaluations, but pricing is a recurring friction point.</p>
 <p>Strengths: HubSpot integrates helpdesk functionality into a broader CRM and marketing automation platform. If you're already using HubSpot for sales or marketing, adding the Service Hub makes sense. The unified data model means support tickets, sales activity, and marketing engagement all live in one system.</p>
 <p>Weaknesses: Pricing scales quickly. HubSpot's tiered model means that advanced features—automation, reporting, multi-channel support—require higher-tier plans. Teams that only need helpdesk functionality often find the cost hard to justify.</p>

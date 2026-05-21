@@ -141,19 +141,10 @@ const post: BlogPost = {
 <h2 id="help-scout-vs-zendesk-by-the-numbers">Help Scout vs Zendesk: By the Numbers</h2>
 <p>{{chart:head2head-bar}}</p>
 <p>Help Scout and Zendesk differ not just in scale, but in the type of friction reviewers report. Help Scout's 15 signals carry a lower average urgency (2.2), suggesting complaints are chronic rather than acute. Zendesk's 12 signals carry higher urgency (3.3), pointing to operational disruptions, billing disputes, or support failures that demand immediate resolution.</p>
-<p>Help Scout reviewers focus on workflow gaps. A Customer Success Manager on G2 explicitly stated:</p>
-<blockquote>
-<p>-- Customer Success Manager, verified reviewer on G2</p>
-</blockquote>
-<p>That complaint is not about a broken feature. It is about a missing workflow anchor that forces context switching and manual lookups. The same pattern appears in a TrustRadius review:</p>
-<blockquote>
-<p>-- reviewer on TrustRadius</p>
-</blockquote>
+<p>Help Scout reviewers focus on workflow gaps.</p>
+<p>That complaint is not about a broken feature. It is about a missing workflow anchor that forces context switching and manual lookups.</p>
 <p>These are not deal-breakers for teams that do not rely on deep CRM integration or advanced folder hierarchies. But for teams that do, the friction compounds over time.</p>
-<p>Zendesk reviewers, by contrast, report billing confusion, support delays, and operational breakdowns. One account was charged $138 for two users on November 13, 2024, despite not using the service. Another reviewer described weeks of confusion following a cancellation request on May 14, 2025, including prorated billing disputes. A third reviewer on Trustpilot reported:</p>
-<blockquote>
-<p>-- reviewer on Trustpilot</p>
-</blockquote>
+<p>Zendesk reviewers, by contrast, report billing confusion, support delays, and operational breakdowns. One account was charged $138 for two users on November 13, 2024, despite not using the service. Another reviewer described weeks of confusion following a cancellation request on May 14, 2025, including prorated billing disputes.</p>
 <p>The phrase itself is neutral, but the context is not. The reviewer was describing a support interaction where the vendor acknowledged frustration but did not resolve the underlying issue—a pattern that surfaces when support teams are overwhelmed or constrained by policy.</p>
 <p>The urgency gap (1.1 points) is not trivial. It suggests Zendesk reviewers are more likely to be in active evaluation or escalation mode, while Help Scout reviewers are tolerating friction while exploring alternatives.</p>
 <h2 id="where-each-vendor-falls-short">Where Each Vendor Falls Short</h2>
@@ -163,18 +154,12 @@ const post: BlogPost = {
 <p>Help Scout's integration limitations are not hypothetical. A Customer Success Manager on G2 explicitly cited the lack of CRM connectivity as a dislike, noting the need for easy access to client history when handling tickets. That is a workflow substitution signal: the reviewer is manually bridging a gap that should be automated.</p>
 <p>Customization depth also surfaces as a recurring friction point. A TrustRadius reviewer criticized the inability to create folders or customize specific pages, suggesting the product's simplicity—a strength for some teams—becomes a constraint for others.</p>
 <p>Help Scout's support weakness mentions show a recent uptick: 1 mention in the recent window versus 0 in prior periods. That is a small sample, but it aligns with the broader claim plan: support friction is emerging as a secondary pain point, likely tied to integration gaps that force users to contact support for workarounds.</p>
-<p>Help Scout retains customers primarily through strong support experience satisfaction and acceptable pricing perception. A named-account reviewer at Verkada explicitly endorsed the product:</p>
-<blockquote>
-<p>-- reviewer on Software Advice</p>
-</blockquote>
+<p>Help Scout retains customers primarily through strong support experience satisfaction and acceptable pricing perception.</p>
 <p>That endorsement is not generic. It is tied to customer satisfaction outcomes, suggesting the core value proposition holds for accounts where CRM integration is not a requirement.</p>
 <h3 id="zendesk-pricing-support-and-operational-friction">Zendesk: Pricing, Support, and Operational Friction</h3>
 <p>Zendesk's pain categories are more acute. Pricing disputes appear in multiple reviews, including the November 13, 2024 charge of $138 for two unused users and the May 14, 2025 cancellation dispute that dragged on for weeks. Those are not complaints about list price. They are complaints about billing transparency, cancellation friction, and support responsiveness during disputes.</p>
 <p>Support delays surface as a common pattern. A Trustpilot reviewer described a support interaction where the vendor acknowledged frustration but did not resolve the issue. That is a support erosion signal: the team is present but ineffective, either due to policy constraints or capacity limits.</p>
-<p>Operational complexity also surfaces. A Software Advice reviewer noted:</p>
-<blockquote>
-<p>-- reviewer on Software Advice</p>
-</blockquote>
+<p>Operational complexity also surfaces.</p>
 <p>That is counterevidence: the reviewer acknowledges pricing and complexity as weaknesses but remains due to feature capabilities that improve efficiency. However, that retention anchor is vulnerable when operational issues—like email delivery failures or billing disputes—prevent access to those features.</p>
 <h3 id="category-level-context">Category-Level Context</h3>
 <p>The helpdesk category exhibits intense price-driven competition with a displacement intensity of 14.0 and a high-churn market structure. Zendesk's outflow to Freshdesk and Intercom is not an anomaly—it is a symptom of price sensitivity driving vendor switching behavior across the category.</p>
@@ -223,25 +208,9 @@ const post: BlogPost = {
 <li>Zendesk accounts are vulnerable on pricing disputes, billing transparency, and support responsiveness. The November 13, 2024 and May 14, 2025 billing disputes are outlier signals, but they point to systemic friction. The timing window is also immediate: accounts experiencing operational disruption (email delivery failures, billing disputes) are already in active evaluation mode.</li>
 </ul>
 <h3 id="help-scout-reviewer-voices">Help Scout Reviewer Voices</h3>
-<p>A Customer Success Manager on G2 described the CRM integration gap:</p>
-<blockquote>
-<p>-- Customer Success Manager, verified reviewer on G2</p>
-</blockquote>
 <p>That is not a feature request. It is a workflow blocker. The reviewer is manually looking up client history in a separate system before responding to tickets, adding latency and context-switching friction to every interaction.</p>
-<p>A TrustRadius reviewer criticized customization limits:</p>
-<blockquote>
-<p>-- reviewer on TrustRadius</p>
-</blockquote>
 <p>The phrasing is terse, but the signal is clear: the product's simplicity becomes a constraint when teams need folder hierarchies or page-level customization.</p>
-<p>A Software Advice reviewer offered a full-throated endorsement:</p>
-<blockquote>
-<p>-- reviewer on Software Advice</p>
-</blockquote>
 <p>That is a named-account signal, meaning the reviewer is tied to a specific organization (Verkada) and is speaking from operational experience. The phrase "fun and easy" is not generic marketing language—it is a signal that the core value proposition (support experience quality) is delivering on its promise for accounts where CRM integration is not a requirement.</p>
-<p>Another Software Advice reviewer reinforced that endorsement:</p>
-<blockquote>
-<p>-- reviewer on Software Advice</p>
-</blockquote>
 <p>That is a recommendation signal with explicit advocacy. The reviewer is not just satisfied—they are willing to publicly endorse the product and recommend it to peers.</p>
 <h3 id="zendesk-reviewer-voices">Zendesk Reviewer Voices</h3>
 <p>A Gartner reviewer praised multi-channel orchestration:</p>

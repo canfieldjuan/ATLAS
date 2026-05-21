@@ -162,14 +162,6 @@ const post: BlogPost = {
 <h2 id="what-market-regime-are-we-in">What Market Regime Are We In?</h2>
 <p>The CRM category is currently in a <strong>price competition</strong> regime. Reviewers report heightened sensitivity to pricing changes, with pricing complaints appearing in the top three pain categories for five of the eight vendors analyzed.</p>
 <p>HubSpot is systematically absorbing share from competitors, primarily driven by pricing advantages. The displacement intensity is 26.0, and the stable market structure shows clear platform consolidation. Pipedrive leads the outbound flow with 19 displacement mentions, followed by Zoho CRM with 6 mentions and Nutshell with 4 mentions.</p>
-<p>One reviewer on Reddit described the timing pressure:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
-<p>Another reviewer highlighted pricing frustration at month-end:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>These patterns suggest that month-end periods—when compensation reviews and performance evaluations occur—create natural windows for external opportunity consideration. The timing hook is not unique to one vendor, but recurs across the category.</p>
 <p>Counterevidence exists. Despite pricing frustration, some customers remain due to overall satisfaction with the platform, acceptable pricing for certain segments, positive UX experiences, and reliable performance. However, these retention anchors are vulnerable to competitive pressure on pricing-related value propositions.</p>
 <h2 id="which-vendors-face-the-highest-churn-risk">Which Vendors Face the Highest Churn Risk?</h2>

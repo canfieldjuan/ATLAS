@@ -164,10 +164,6 @@ const post: BlogPost = {
 <p>Displacement intensity sits at 69.0, a moderate level that suggests steady but not explosive switching activity. The market structure remains stable: vendors compete on feature breadth, UX polish, and pricing flexibility rather than disruptive new capabilities.</p>
 <p>UX-related switching drives most of the displacement flow. ClickUp faces significant outbound pressure, with 10 mentions of teams moving to Asana and 2 to Monday.com. Jira shows end-user dissatisfaction concentrated in UX complaints (12 reviews cite UX pain) and faces displacement toward both Asana (5 mentions) and ClickUp (3 mentions).</p>
 <p>Asana emerges as the primary beneficiary, capturing inbound flows from both ClickUp and Jira. Reviewers cite feature-driven competition rather than price wars as the primary catalyst.</p>
-<p>One reviewer on Reddit compared per-seat pricing across three vendors:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
 <p>The comparison highlights pricing variance but does not establish causation for switching decisions. Teams evaluate total cost of ownership, not just per-seat pricing.</p>
 <h2 id="which-vendors-face-the-highest-churn-risk">Which Vendors Face the Highest Churn Risk?</h2>
 <p>Churn urgency varies significantly across the 10 vendors in scope. The chart below ranks seven vendors by average urgency score, derived from reviewer sentiment, switching intent, and complaint intensity.</p>
@@ -187,25 +183,16 @@ const post: BlogPost = {
 <p>Overall dissatisfaction leads the list, followed by UX friction and pricing backlash. Support quality, feature gaps, and performance issues round out the top six.</p>
 <p><strong>Overall dissatisfaction</strong> appears in reviews that cite multiple pain points without isolating a single root cause. These reviews often describe a gradual erosion of satisfaction rather than a single breaking point.</p>
 <p><strong>UX friction</strong> clusters around navigation complexity, feature discoverability, and learning curve. Jira and ClickUp face the most intense UX complaints, while Basecamp and Teamwork receive relatively positive UX mentions.</p>
-<p><strong>Pricing backlash</strong> takes two forms: unexpected renewal charges and feature lock-out after free trials. One verified reviewer on Software Advice wrote:</p>
-<blockquote>
-<p>-- verified reviewer on Software Advice</p>
-</blockquote>
-<p>The quote illustrates a common pattern: annual contracts with no prorated refunds create acute dissatisfaction when usage drops or teams attempt to cancel mid-cycle.</p>
+<p><strong>Pricing backlash</strong> takes two forms: unexpected renewal charges and feature lock-out after free trials.</p>
+<p>Annual contracts with no prorated refunds create acute dissatisfaction when usage drops or teams attempt to cancel mid-cycle.</p>
 <p><strong>Support quality</strong> complaints focus on slow response times, limited availability, and unhelpful resolutions. Smartsheet and Monday.com face the most support-related churn signals.</p>
-<p><strong>Feature gaps</strong> appear when teams outgrow a tool's native capabilities or discover missing functionality during onboarding. One reviewer on PeerSpot noted:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
+<p><strong>Feature gaps</strong> appear when teams outgrow a tool's native capabilities or discover missing functionality during onboarding.</p>
 <p>The comment reflects a broader pattern: teams expect continuous feature development, not static feature sets.</p>
 <p><strong>Performance issues</strong> include slow load times, sync delays, and mobile app instability. These complaints appear less frequently than UX or pricing pain but carry high urgency when they occur.</p>
 <h2 id="basecamp-strengths-weaknesses">Basecamp: Strengths &amp; Weaknesses</h2>
 <p>Basecamp maintains a 4.4 average rating across 19 reviews in the analysis window. The vendor positions itself as a simple, opinionated alternative to feature-heavy platforms.</p>
 <p><strong>Strengths:</strong><br />
 Reviewers praise Basecamp's feature set, data migration simplicity, and pricing transparency. The flat-rate pricing model appeals to teams frustrated by per-seat charges elsewhere. One strength mention highlights:</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p><strong>Weaknesses:</strong><br />
 Support quality emerges as the primary pain point. Nineteen reviews mention support issues, often tied to slow response times or limited availability outside business hours.</p>
 <p>UX complaints focus on navigation and feature organization. Some reviewers describe Basecamp's opinionated design as a strength; others cite it as a limitation when workflows diverge from the platform's assumptions.</p>

@@ -144,14 +144,6 @@ const post: BlogPost = {
 <p>The HR / HCM category in 2026 operates in a <strong>fragmented market regime</strong>. No single vendor commands overwhelming market share, and buyers frequently evaluate two or three platforms before making a final decision. This fragmentation creates opportunity for both incumbents and challengers, but it also means buyers face decision fatigue and integration complexity.</p>
 <p>Consolidation pressure is rising. Reviewers report frustration with tool sprawl—separate systems for payroll, benefits administration, time tracking, and compliance—and many cite a desire to collapse those functions into a single HRIS. This trend favors platforms like Rippling and Gusto, which bundle payroll, benefits, and HR workflows into one interface. BambooHR, historically strong in core HR and onboarding, faces displacement pressure when buyers discover its payroll and international capabilities lag behind dedicated solutions.</p>
 <p>The claim plan for this analysis identifies a <strong>stable market regime</strong> with moderate displacement intensity (6.0 on an internal scale). Active vendor competition exists without catastrophic disruption. BambooHR faces the highest displacement pressure, with customers evaluating Gusto, HiBob, and new HRIS alternatives driven by overall dissatisfaction. Rippling shows concentrated UX pain across all buyer personas—champion, economic buyer, and end user—while actively targeting Deel and Gusto, suggesting feature-driven competitive dynamics rather than price wars.</p>
-<p>One witness highlight captures the consolidation pressure:</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
-<p>Another reviewer flags a capability gap that pushes buyers toward specialized tools:</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
 <p>These signals suggest buyers discover BambooHR's payroll and international capabilities lag dedicated solutions when scaling or expanding geographically. Consolidation pressure drives buyers toward bundled HRIS suites, exposing BambooHR's payroll limitations against specialized tools.</p>
 <h2 id="which-vendors-face-the-highest-churn-risk">Which Vendors Face the Highest Churn Risk?</h2>
 <p>Churn urgency varies across the four vendors. We rank them by the intensity of switching signals, complaint volume, and explicit displacement mentions in public reviews.</p>
@@ -167,10 +159,7 @@ const post: BlogPost = {
 <p>In the past year or so we have encountered tons of problems with Gusto</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
-<p>BambooHR's urgency reflects pricing backlash and payroll limitations. Reviewers report that upfront costs feel steep, and add-ons are required for functionality they expected in the base package. One witness highlight notes:</p>
-<blockquote>
-<p>-- software reviewer on Software Advice</p>
-</blockquote>
+<p>BambooHR's urgency reflects pricing backlash and payroll limitations. Reviewers report that upfront costs feel steep, and add-ons are required for functionality they expected in the base package.</p>
 <p>Rippling's lower urgency score does not mean the platform is immune to churn. UX pain clusters across all buyer personas, and support complaints appear frequently. Workday's urgency reflects enterprise-scale friction—long implementation cycles, support delays, and contract rigidity—but its installed base and switching costs keep churn velocity moderate.</p>
 <h2 id="what-keeps-coming-up-across-hr-hcm-vendors">What Keeps Coming Up Across HR / HCM Vendors</h2>
 <p>Pain patterns recur across all four vendors, not just inside one product. This suggests category-level challenges that no platform has fully solved.</p>
@@ -185,10 +174,6 @@ const post: BlogPost = {
 <li><strong>Pricing</strong>: Upfront costs, per-employee fees, and required add-ons generate backlash, particularly for BambooHR.</li>
 </ol>
 <p>These pain categories do not distribute evenly. BambooHR's pain pressure concentrates in UX, pricing, and overall dissatisfaction. Gusto's concentrates in UX, contract lock-in, and support. Rippling's concentrates in UX, support, and onboarding. Workday's concentrates in support, overall dissatisfaction, and UX.</p>
-<p>One Office Manager on TrustRadius described an onboarding friction point:</p>
-<blockquote>
-<p>-- Office Manager on TrustRadius</p>
-</blockquote>
 <p>This witness highlight illustrates how onboarding friction or hiring workflow bugs create immediate dissatisfaction windows. No strong seasonal or deadline-driven urgency was observed in the dataset, but these early-stage pain points can accelerate evaluation timelines when they compound with other frustrations.</p>
 <h2 id="bamboohr-strengths-weaknesses">BambooHR: Strengths &amp; Weaknesses</h2>
 <p>BambooHR holds a 4.3 average rating across 42 reviews in scope. Pain pressure concentrates in UX, pricing, and overall dissatisfaction. Strengths cluster around integration, onboarding, and features. Weaknesses include contract lock-in, reliability, and support.</p>

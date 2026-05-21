@@ -175,9 +175,6 @@ const post: BlogPost = {
 <p><strong>Onboarding simplicity.</strong> Teams report that getting started with Asana is faster than with more complex alternatives.</p>
 <h3 id="asanas-weaknesses">Asana's Weaknesses</h3>
 <p><strong>Pricing friction and auto-renewal shock.</strong> The most acute pain signal centers on unexpected annual charges. A common pattern emerges: users opt into an annual plan, forget about it, then discover a $265+ charge when the renewal hits—especially problematic when usage has dropped.</p>
-<blockquote>
-<p>-- software reviewer</p>
-</blockquote>
 <p>Reviewers report that cancellation is difficult before the renewal date, and there are no prorated refunds. This creates a sense of being trapped.</p>
 <p><strong>Recurring task limitations.</strong> Asana's calendar view and recurring-task engine lack flexibility. A marketing associate noted:</p>
 <blockquote>

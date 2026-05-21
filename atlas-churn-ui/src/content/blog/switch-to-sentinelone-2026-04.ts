@@ -120,9 +120,6 @@ const post: BlogPost = {
 <p>SentinelOne has become a frequent destination for teams evaluating endpoint security alternatives. Analysis of 488 total reviews between March 3 and April 8, 2026 reveals documented migration patterns from 3 competitor platforms, with active evaluation signals present in the review corpus.</p>
 <p>This guide examines where SentinelOne users are coming from, what triggers the switch, and what practical migration considerations emerge from reviewer experience. The analysis draws on 328 enriched reviews across verified platforms (G2, Gartner Peer Insights, PeerSpot) and community sources (Reddit), with 35 reviews from verified platforms and 293 from community discussions.</p>
 <p>The data reflects self-selected reviewer feedback during a high-churn market period. Pricing friction appears as an explicit barrier at $7 to $10 per agent per month, particularly for SMB buyers, while enterprise reviewers more often frame the same price point as competitive for EDR functionality.</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
 <p>This pricing perception split creates a natural segmentation in the migration pipeline. Teams switching to SentinelOne cite autonomous threat detection, rollback capabilities, and consolidation benefits as primary drivers, while those hesitating flag cost and centralized management complexity.</p>
 <h2 id="where-are-sentinelone-users-coming-from">Where Are SentinelOne Users Coming From?</h2>
 <p>Migration source patterns reveal three primary competitors teams are leaving for SentinelOne: Carbon Black, Microsoft Defender for Endpoint (MDE), and Sophos.</p>
@@ -138,10 +135,7 @@ const post: BlogPost = {
 <h2 id="what-triggers-the-switch">What Triggers the Switch?</h2>
 <p>Complaint patterns cluster around six primary pain categories that drive teams to evaluate SentinelOne as an alternative.</p>
 <p>{{chart:pain-bar}}</p>
-<p>UX friction leads the complaint distribution. Reviewers describe centralized management as powerful but occasionally constraining:</p>
-<blockquote>
-<p>-- reviewer on Software Advice</p>
-</blockquote>
+<p>UX friction leads the complaint distribution.</p>
 <p>This feedback points to a trade-off: the same centralization that enables enterprise-scale policy enforcement can create workflow friction when devices lose connectivity or require localized exceptions.</p>
 <p>Overall dissatisfaction appears as the second most common pain category. This broad bucket captures reviewers who cite multiple compounding issues rather than a single dealbreaker. The pattern suggests accumulated friction rather than catastrophic failure drives evaluation activity.</p>
 <p>Support issues rank third. Reviewers mention response times and resolution quality, though positive support experiences also appear in the corpus. One Gartner reviewer highlighted responsiveness:</p>
@@ -149,10 +143,7 @@ const post: BlogPost = {
 <p>The technical support documentation for the API is good and if I ever have any issues I know I can get a response pretty quickly via a vendor case.
 -- CYBER SECURITY ENGINEER on Gartner Peer Insights, 500M - 1B USD Banking</p>
 </blockquote>
-<p>Pricing complaints occupy the fourth position. The $7 to $10 per agent per month range creates a perception split: enterprise buyers frame it as competitive, while SMB reviewers cite it as a barrier. One PeerSpot reviewer explicitly contrasted these perspectives:</p>
-<blockquote>
-<p>-- verified reviewer on PeerSpot</p>
-</blockquote>
+<p>Pricing complaints occupy the fourth position. The $7 to $10 per agent per month range creates a perception split: enterprise buyers frame it as competitive, while SMB reviewers cite it as a barrier.</p>
 <p>Feature gaps and data migration complexity round out the top complaint categories. Feature mentions tend to focus on integration breadth and workflow automation rather than core detection capabilities. Data migration concerns appear primarily in community discussions where teams evaluate switching costs.</p>
 <p>The complaint distribution reveals no single catastrophic failure mode. Instead, migration triggers emerge from accumulated friction across UX, support, and pricing dimensions, with teams seeking consolidation and automation benefits that outweigh switching costs.</p>
 <p>Active evaluation signals appear in the review corpus, with reviewers mentioning competitor comparisons and decision timelines. One Reddit comment captured this dynamic:</p>

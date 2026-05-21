@@ -172,19 +172,9 @@ const post: BlogPost = {
 <p>This reflects Brevo's core strength: reliable email delivery and campaign templating for repetitive outreach workflows.</p>
 <p><strong>Integration breadth</strong> appears across use-case mentions. Reviewers reference integrations with ClickUp, Canva, Elastic, Evernote, and API-first workflows. While not universally praised, the ecosystem supports common CRM and marketing stacks.</p>
 <h3 id="brevos-key-friction-points">Brevo's Key Friction Points</h3>
-<p><strong>Pricing escalation and value misalignment</strong> emerge as the dominant pain category. Reviewers report sticker shock when scaling contact volumes or upgrading to the Professional plan ($449/month). One Reddit reviewer articulated the tension:</p>
-<blockquote>
-<p>-- reviewer on Reddit</p>
-</blockquote>
+<p><strong>Pricing escalation and value misalignment</strong> emerge as the dominant pain category. Reviewers report sticker shock when scaling contact volumes or upgrading to the Professional plan ($449/month).</p>
 <p>This signals active evaluation of alternatives when pricing crosses psychological thresholds. The 60x jump from Starter ($8/month) to Professional ($449/month) without clear feature differentiation fuels skepticism.</p>
-<p><strong>Support inconsistency and automation complexity</strong> contradict the "ease of use" narrative. A Directora (Director-level role) flagged:</p>
-<blockquote>
-<p>-- reviewer on TrustRadius</p>
-</blockquote>
-<p>And one named account reported:</p>
-<blockquote>
-<p>-- reviewer on TrustPilot</p>
-</blockquote>
+<p><strong>Support inconsistency and automation complexity</strong> contradict the "ease of use" narrative.</p>
 <p>These outliers suggest support quality varies significantly by issue type, region, or tier. WhatsApp and advanced automation workflows expose gaps between the "simple" marketing automation promise and actual complexity.</p>
 <p><strong>Competitive feature parity concerns</strong> appear in comparisons to ActiveCampaign, Klaviyo, and MailerLite. Reviewers weigh Brevo's breadth against deeper feature sets in specialized domains (e.g., SMS, advanced segmentation).</p>
 <hr />
