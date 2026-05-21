@@ -340,9 +340,9 @@ const post: BlogPost = {
 <p>-- reviewer on reddit</p>
 </blockquote>
 <p>This is an explicit switching signal. The reviewer is ready to leave and wants to know which competitors make migration easy. The urgency score (10.0) reflects how far this reviewer has moved beyond dissatisfaction into active evaluation.</p>
-<p>This is the UX complexity anchor. A Group Director—a senior role managing client operations—reports a basic visibility gap that undermines coordination. The complaint is specific, operational, and tied to daily workflow friction.</p>
-<p>The same Group Director expands the complaint: navigation confusion across the folder/list/task hierarchy, plus notification overload. This is counterevidence to ClickUp's UX strengths—the platform's flexibility creates complexity that even senior users struggle to master.</p>
-<p>Pricing friction distilled into one sentence. The reviewer abandoned ClickUp after this increase, showing that pricing changes can cross the threshold where dissatisfaction converts to churn.</p>
+<p>UX complexity appears in operational complaints about visibility gaps that undermine coordination. These complaints are specific, workflow-driven, and tied to daily friction rather than abstract preference.</p>
+<p>Navigation confusion across the folder/list/task hierarchy, plus notification overload, serves as counterevidence to ClickUp's UX strengths. The platform's flexibility creates complexity that even senior users can struggle to master.</p>
+<p>Pricing friction shows up when price increases cross the threshold where dissatisfaction converts to churn. In those cases, the complaint is not just cost; it is whether the added cost feels justified by incremental value.</p>
 <p>These quotes reveal the pattern: ClickUp delivers feature breadth and customization depth that attract users, but navigation complexity, notification overload, and pricing friction accumulate as usage deepens. Some users accept the trade-off. Others—like the Reddit reviewer asking about import tools—decide the friction isn't worth it.</p>
 <h2 id="the-bottom-line-on-clickup">The Bottom Line on ClickUp</h2>
 <p>ClickUp is a high-feature, high-complexity platform that delivers on its consolidation promise for teams willing to accept navigation confusion and notification overload in exchange for feature breadth.</p>
