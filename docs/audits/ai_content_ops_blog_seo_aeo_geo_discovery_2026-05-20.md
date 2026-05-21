@@ -5,20 +5,38 @@
 
 ## Short Answer
 
-Atlas partially generates SEO and AEO-ready blog drafts today.
+Atlas can generate, persist, review, and publish blog drafts with SEO/AEO/GEO
+readiness checks on the current AI Content Ops path.
 
-It now has a first-pass GEO contract in
-`docs/audits/ai_content_ops_blog_geo_contract_2026-05-20.md`, but the contract
-is not fully implemented as a validator yet. At the time of the original audit,
-at least one AI Content Ops persistence path did not appear to write the
-generated SEO fields into the public `blog_posts` columns that the public API
-and frontend read.
+This audit originally found that the extracted AI Content Ops blog path could
+generate SEO fields but did not prove they survived into public/publishable
+surfaces. That gap is now closed by the merged PR chain listed below.
 
 The safest current claim is:
 
-> The blog generator can produce SEO and answer-engine-ready drafts when the run uses the SEO/AEO prompt and the publishing path preserves the generated metadata.
+> Blog drafts include SEO metadata, FAQ answers, answer-engine-friendly
+> structure, and GEO readiness checks. Published blog pages are covered by
+> crawler-visible SEO/GEO verification.
 
-Avoid claiming fully automated SEO, AEO, and GEO optimization until the gaps below are closed.
+Still avoid claiming guaranteed AI-engine placement or "fully optimized" SEO,
+AEO, and GEO outcomes.
+
+## Closeout Status
+
+The follow-up chain that closed this audit:
+
+- PR #665: persisted extracted blog SEO fields into first-class `blog_posts`
+  columns and hydrated them back into `BlogPostDraft.metadata`.
+- PR #669: added SEO/AEO readiness to generated blog draft export rows.
+- PR #671: made missing SEO/AEO fields block generated blog saves.
+- PR #672: defined the first-class GEO draft/publish contract.
+- PR #674: added GEO readiness to generated blog draft export rows.
+- PR #676: made missing GEO draft structure block generated blog saves.
+- PR #678: added a targeted GEO repair loop.
+- PR #682 and PR #683: added local and CI publish-level GEO verification.
+- PR #688 and PR #690: surfaced readiness in the Atlas Intel review UI.
+- PR #691 and PR #693: verified publish metadata, FAQ schema, and JSON-LD.
+- PR #698: prerendered crawler-visible article bodies.
 
 ## What Exists
 
@@ -98,7 +116,7 @@ This path also has fallback logic for missing SEO title, SEO description, and ta
 
 ### Gap 1: GEO Is Not a First-Class Contract
 
-Status: definition added, implementation still pending.
+Status: closed for the current product contract.
 
 The prompts mention AI answer engines and include AEO patterns that overlap with GEO. A first-class product definition now exists in:
 
@@ -106,16 +124,20 @@ The prompts mention AI answer engines and include AEO patterns that overlap with
 
 That contract defines GEO as Generative Engine Optimization: structuring a blog post so AI answer engines can understand the topic, extract a useful answer, identify the entities involved, and cite or summarize the page without needing hidden context.
 
-The system can produce GEO-friendly content, but the repo does not yet fully
-prove or enforce "GEO-ready" as a distinct output.
+The repo now exposes GEO readiness in generated-asset export/review output,
+blocks generated drafts that miss the draft-level GEO contract, and verifies
+publish-level crawler-visible output in the Atlas Intel UI build path.
 
-Needed:
+Implemented:
 
-- add `geo_readiness` to generated-asset review/export output
-- add draft-level GEO checks to the blog quality gate
-- add publish-level checks for crawler-visible HTML and structured data
+- `geo_readiness` in generated-asset review/export output
+- draft-level GEO checks in the blog quality gate
+- publish-level checks for crawler-visible HTML, SEO metadata, JSON-LD, and
+  article body content
 
 ### Gap 2: AI Content Ops Blog Persistence May Bury SEO Fields
+
+Status: closed by PR #665.
 
 The newer extracted AI Content Ops blog service builds a `BlogPostDraft` with SEO fields in `draft.metadata`.
 
@@ -123,7 +145,9 @@ Relevant file:
 
 - `extracted_content_pipeline/blog_generation.py`
 
-But `PostgresBlogPostRepository.save_drafts()` writes only core draft fields and stores metadata under `data_context["_metadata"]`.
+`PostgresBlogPostRepository.save_drafts()` now writes the generated SEO fields
+into the first-class `blog_posts` columns while still preserving the metadata
+bag under `data_context["_metadata"]`.
 
 Relevant file:
 
@@ -146,23 +170,23 @@ Those columns exist in:
 
 - `atlas_brain/storage/migrations/120_blog_seo.sql`
 
-Risk:
-
-Generated SEO/AEO metadata from the extracted AI Content Ops Station path may be saved in `data_context["_metadata"]` but not exposed to the public API or frontend as SEO fields.
+Risk status: closed for the extracted Content Ops blog-post repository.
 
 ### Gap 3: Quality Gate Does Not Validate SEO/AEO/GEO Metadata
 
-`extracted_quality_gate.blog_pack.evaluate_blog_post()` validates long-form blog quality, word count, chart placeholders, internal links, quote use, unsupported data claims, and related content quality issues.
+Status: closed for the extracted Content Ops blog generator.
 
-It does not appear to validate:
+`extracted_quality_gate.blog_pack.evaluate_blog_post()` now validates long-form blog quality, word count, chart placeholders, internal links, quote use, unsupported data claims, SEO/AEO metadata, and GEO draft structure when the caller opts into those checks.
 
-- `seo_title` length or keyword placement
-- `seo_description` length or keyword inclusion
+The extracted blog generator opts into checks for:
+
+- `seo_title` presence and length
+- `seo_description` presence and length
 - target keyword presence
-- FAQ count or answer quality
+- secondary keyword presence
+- FAQ count
 - answer-first section format
 - question-style H2 usage
-- BlogPosting/FAQ schema readiness
 - GEO/AEO citable-section requirements as a named score
 
 Relevant files:
@@ -170,53 +194,66 @@ Relevant files:
 - `extracted_quality_gate/blog_pack.py`
 - `extracted_content_pipeline/blog_generation.py`
 
-Risk:
-
-The prompt asks for SEO/AEO, but the quality gate does not independently enforce it before a draft is saved.
+Risk status: closed for save-time draft validation. Publish-time schema and
+crawler-visible checks are handled by the Atlas Intel publish verifier.
 
 ### Gap 4: Two Blog Generation Paths Are Easy to Confuse
+
+Status: mitigated for the current AI Content Ops path.
 
 There are at least two relevant paths:
 
 1. Legacy/autonomous blog generation, which writes SEO fields directly.
 2. Extracted AI Content Ops `BlogPostGenerationService`, which stores SEO fields in draft metadata and relies on a repository that does not write the first-class SEO columns.
 
-Risk:
-
-We may be looking at a working SEO implementation in one path while the actual AI Content Ops Station path used by the product has a weaker contract.
+Risk status: the extracted AI Content Ops path now has its own persistence,
+quality, export, review UI, and publish verification contracts. The legacy
+autonomous path remains separate and should not be used as evidence for future
+extracted-path claims unless a PR explicitly wires or tests both.
 
 ### Gap 5: Current Product Claim Needs Careful Wording
 
-The repo supports this claim:
+The repo now supports this claim:
 
-> Generates data-backed blog drafts with SEO fields, FAQ output, and AEO-style structure.
+> Generates data-backed blog drafts with SEO metadata, FAQ output,
+> answer-engine-friendly structure, GEO readiness checks, and publish-surface
+> verification.
 
-The repo does not yet fully support this stronger claim:
+The repo still should not claim:
 
 > Automatically generates, validates, and publishes fully SEO/GEO/AEO optimized blog posts.
 
-## Discovery Questions
+## Resolved Discovery Questions
 
-1. Which blog path powers the AI Content Ops Station experience we want to sell: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py` or `extracted_content_pipeline/blog_generation.py`?
-2. When a customer generates a blog post from the Station, does the draft get published through the DB/API path or exported to static frontend `.ts` content?
-3. Which GEO checks should block draft save versus only show in review output?
-4. What should the report show the customer: raw generated article, SEO fields, AEO checklist, GEO checklist, or all of those?
-5. What proof do we need before saying the output is SEO/GEO/AEO-ready?
+1. The AI Content Ops Station path is `extracted_content_pipeline/blog_generation.py`
+   with host-injected blueprint, LLM, skill, and repository ports.
+2. Generated blog drafts persist through `PostgresBlogPostRepository`; public
+   static/frontend publishing remains a separate route with its own verifier.
+3. SEO/AEO and draft-level GEO blockers run before save on the extracted blog
+   generator. Export/review rows also show readiness summaries for operators.
+4. Review/export output shows the raw generated article plus SEO/AEO and GEO
+   readiness summaries. The Atlas Intel UI renders both compact labels and a
+   readiness breakdown.
+5. The current proof is test and CI coverage for first-class SEO persistence,
+   save-time quality gates, review/export readiness, review UI visibility,
+   and publish-level crawler-visible verification.
 
 ## Recommended Next Slice
 
-Before changing copy or selling this as SEO/GEO/AEO generation, tighten the product contract:
+No active follow-up remains from this audit. The next Content Ops blog
+SEO/GEO slice should require a new concrete trigger, such as:
 
-1. Add first-class SEO fields to the extracted AI Content Ops `BlogPostDraft` persistence path, or map `metadata` into the existing public SEO columns.
-2. Add a small GEO readiness summary to blog draft export/review output.
-3. Add tests proving that a generated blog draft persists `seo_title`, `seo_description`, `target_keyword`, `secondary_keywords`, and `faq` into the fields read by the public API.
-4. Add publish-level GEO checks before claiming fully SEO/GEO/AEO-ready pages.
+1. A live generated blog draft fails a readiness check for a reason operators
+   cannot understand or fix.
+2. A public publish verifier misses a crawler-visible SEO/GEO regression.
+3. The product changes the public claim beyond the safe wording below.
 
 ## Suggested Customer-Facing Language For Now
 
 Use:
 
-> Blog drafts include SEO metadata, FAQ answers, and answer-engine-friendly article structure.
+> Blog drafts include SEO metadata, FAQ answers, answer-engine-friendly article
+> structure, and GEO readiness checks.
 
 Avoid until validated:
 
