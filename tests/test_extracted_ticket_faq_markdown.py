@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
 SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
 SUPPORT_TICKET_BUNDLE = ROOT / "extracted_content_pipeline/examples/support_ticket_bundle.json"
+FAQ_CUSTOM_RULES = ROOT / "extracted_content_pipeline/examples/faq_custom_rules.json"
 
 
 class _RenderedFAQHTML(HTMLParser):
@@ -2523,6 +2524,48 @@ def test_ticket_faq_cli_accepts_json_rule_file(tmp_path: Path) -> None:
     assert result["config"]["vocabulary_gap_rules"] == [["SSO", "single sign-on"]]
     assert result["diagnostics"]["items"][0]["topic"] == "data freshness"
     assert result["diagnostics"]["term_mappings"][0]["customer_term"] == "SSO"
+
+
+def test_ticket_faq_cli_checked_rule_file_example_affects_output(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,SSO sync,How do I enable SSO after warehouse sync?,sync",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Single sign-on setup",
+        "--rule-file",
+        str(FAQ_CUSTOM_RULES),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["rule_files"] == [str(FAQ_CUSTOM_RULES)]
+    assert result["config"]["custom_intent_rules"] == [
+        {
+            "topic": "data freshness",
+            "keywords": ["warehouse sync", "connector lag"],
+        }
+    ]
+    assert result["config"]["vocabulary_gap_rules"] == [["SSO", "single sign-on"]]
+    assert result["diagnostics"]["items"][0]["topic"] == "data freshness"
+    assert result["diagnostics"]["term_mappings"][0] == {
+        "customer_term": "SSO",
+        "documentation_term": "Single sign-on setup",
+        "failure_risk_score": 0,
+        "failure_risk_signals": [],
+        "first_source_id": "ticket-1",
+        "opportunity_score": 1,
+        "rank": 1,
+        "source_id_count": 1,
+        "topic": "data freshness",
+        "zero_result_source_count": 0,
+    }
 
 
 def test_ticket_faq_cli_rule_flags_take_precedence_over_rule_file(tmp_path: Path) -> None:
