@@ -2,8 +2,8 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'crm-landscape-2026-04',
-  title: 'CRM Landscape 2026: 8 Vendors Compared by Real User Data',
-  description: 'A comprehensive market overview of the CRM landscape based on 1,054 enriched reviews across 8 vendors. Covers churn urgency, recurring pain patterns, and vendor-by-vendor strengths and weaknesses.',
+  title: 'CRM Landscape 2026: 7 Vendors Compared by Real User Data',
+  description: 'A comprehensive market overview of the CRM landscape based on 1,054 enriched reviews across 7 vendors. Covers churn urgency, recurring pain patterns, and vendor-by-vendor strengths and weaknesses.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
   tags: ["crm", "market-landscape", "comparison", "b2b-intelligence"],
@@ -119,8 +119,8 @@ const post: BlogPost = {
   },
   "booking_url": "https://churnsignals.co"
 },
-  seo_title: 'CRM Software Comparison 2026: 8 Vendors by User Reviews',
-  seo_description: 'Compare 8 CRM vendors using 1,054 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
+  seo_title: 'CRM Software Comparison 2026: 7 Vendors by User Reviews',
+  seo_description: 'Compare 7 CRM vendors using 1,054 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
   target_keyword: 'CRM software comparison',
   secondary_keywords: ["best CRM software", "CRM vendor comparison", "CRM churn signals"],
   faq: [
@@ -130,7 +130,7 @@ const post: BlogPost = {
   },
   {
     "question": "What are the most common pain points across CRM platforms?",
-    "answer": "The most frequent complaints cluster around overall dissatisfaction, pricing, and user experience. These three categories account for the majority of negative sentiment across all 8 vendors analyzed between February 25 and April 7, 2026."
+    "answer": "The most frequent complaints cluster around overall dissatisfaction, pricing, and user experience. These three categories account for the majority of negative sentiment across all 7 vendors analyzed between February 25 and April 7, 2026."
   },
   {
     "question": "How many reviews were analyzed for this CRM comparison?",
@@ -155,7 +155,7 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<p>The CRM market in 2026 is crowded, competitive, and under pricing pressure. Between February 25 and April 7, 2026, we analyzed 1,054 enriched reviews across 8 major vendors to map the current landscape. The sample includes 147 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 907 community reviews from Reddit and similar forums.</p>
+<p>The CRM market in 2026 is crowded, competitive, and under pricing pressure. Between February 25 and April 7, 2026, we analyzed 1,054 enriched reviews across 7 major vendors to map the current landscape. The sample includes 147 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 907 community reviews from Reddit and similar forums.</p>
 <p>This analysis covers 1,054 total churn signals with an average urgency score of 2.1 across the category. The goal is not to crown a winner, but to show which vendors face the highest churn risk, which pain points recur across platforms, and where each product holds strength or shows weakness.</p>
 <p>The CRM category is in a price competition regime. HubSpot is emerging as the dominant consolidator, capturing displacement flows from Pipedrive (19 mentions), Zoho CRM (6 mentions), and Nutshell (4 mentions). The unidirectional flow pattern and absence of counter-displacement signals suggest a durable consolidation trend rather than cyclical competition.</p>
 <p>This is a self-selected sample. Reviewers who take the time to write are not representative of all users. Treat the findings as sentiment and pattern evidence, not universal product truth.</p>
@@ -165,7 +165,7 @@ const post: BlogPost = {
 <p>These patterns suggest that month-end periods—when compensation reviews and performance evaluations occur—create natural windows for external opportunity consideration. The timing hook is not unique to one vendor, but recurs across the category.</p>
 <p>Counterevidence exists. Despite pricing frustration, some customers remain due to overall satisfaction with the platform, acceptable pricing for certain segments, positive UX experiences, and reliable performance. However, these retention anchors are vulnerable to competitive pressure on pricing-related value propositions.</p>
 <h2 id="which-vendors-face-the-highest-churn-risk">Which Vendors Face the Highest Churn Risk?</h2>
-<p>Churn urgency varies significantly across the 8 vendors. Urgency scores reflect the intensity and frequency of switching signals in the review sample, not absolute churn rates.</p>
+<p>Churn urgency varies significantly across the 7 vendors. Urgency scores reflect the intensity and frequency of switching signals in the review sample, not absolute churn rates.</p>
 <p>{{chart:vendor-urgency}}</p>
 <p>Copper and Freshsales show the highest urgency scores. Copper's 24 reviews in scope reveal concentrated pain in overall dissatisfaction and pricing. Freshsales' 31 reviews cluster around features, overall dissatisfaction, and user experience.</p>
 <p>Close, Pipedrive, and Insightly sit in the middle range. Close's 12 reviews show pricing and UX pressure, while Insightly's 26 reviews highlight features and support as recurring pain points.</p>

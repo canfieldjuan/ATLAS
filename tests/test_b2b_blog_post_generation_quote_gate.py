@@ -1533,6 +1533,36 @@ def test_market_landscape_blueprint_routes_quotes_through_contract_gate():
     assert quote["field"] == "pricing_phrases"
 
 
+def test_market_landscape_headline_vendor_count_reflects_rendered_chart():
+    """D8: the headline "{N} major vendors" must reflect the vendors actually
+    rendered in the urgency chart (one bar per vendor with signals), NOT the
+    independent category-wide ctx["vendor_count"]. The published crm-landscape
+    claimed "8 vendors" while the chart showed 7. Here ctx says 8 but only 7
+    vendor_signals carry signals -> the hook section must read 7. Reverting to
+    ctx["vendor_count"] fails this."""
+    data = {
+        "data_context": {"category": "CRM"},
+        "quotes": [],
+        "vendor_signals": [
+            {"vendor": f"Vendor {i}",
+             "signals": [{"pain_category": "pricing", "avg_urgency": 5.0}]}
+            for i in range(7)
+        ],
+    }
+    ctx = {
+        "slug": "crm-landscape-2026",
+        "category": "CRM",
+        "vendor_count": 8,  # independent category-wide count (the overclaiming source)
+        "total_reviews": 1200,
+        "avg_urgency": 6.5,
+    }
+    blueprint = _blueprint_market_landscape(ctx, data)
+    hook = next(s for s in blueprint.sections if s.id == "hook")
+    assert hook.key_stats["vendor_count"] == 7   # rendered, not ctx's 8
+    assert "7 major vendors" in hook.data_summary
+    assert "8 major vendors" not in hook.data_summary
+
+
 def test_pain_point_roundup_blueprint_routes_quotes_through_contract_gate():
     row = _v4_row(
         text="Salesforce reporting takes forever to load and constantly times out",
