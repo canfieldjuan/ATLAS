@@ -4,6 +4,9 @@ from extracted_content_pipeline.skills.registry import (
     LocalSkillRegistry,
     get_skill_registry,
 )
+from extracted_content_pipeline.landing_page_section_contract import (
+    LANDING_PAGE_SECTION_KINDS,
+)
 
 
 def test_local_skill_registry_reads_packaged_campaign_prompt() -> None:
@@ -105,6 +108,8 @@ def test_packaged_landing_page_prompt_requests_aeo_geo_section_metadata() -> Non
     assert "same answer at the start of `body_markdown`" in prompt
     assert "Do not force a FAQ section" in prompt
     assert "supports answer extraction" in prompt
+    for kind in LANDING_PAGE_SECTION_KINDS:
+        assert kind in prompt
 
 
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:
