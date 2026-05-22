@@ -13,6 +13,7 @@
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
  *   PATCH /content-assets/landing_page/drafts/{id}
+ *   POST /content-assets/landing_page/drafts/{id}/repair
  *   POST /content-assets/{asset}/drafts/review
  *   POST /content-assets/{asset}/drafts/review-batch
  *
@@ -300,6 +301,16 @@ export interface GeneratedAssetDraftMetadata {
   [key: string]: unknown
 }
 
+export interface GeneratedAssetRepairResult {
+  requested?: number
+  generated?: number
+  skipped?: number
+  saved_ids?: string[]
+  errors?: Array<Record<string, unknown>>
+  quality_repair_history?: GeneratedAssetRepairHistoryEntry[] | string
+  [key: string]: unknown
+}
+
 export interface GeneratedAssetDraft {
   id?: string
   title?: string
@@ -343,6 +354,7 @@ export interface GeneratedAssetDraft {
   passed_output_checks?: number
   seo_aeo_readiness?: GeneratedAssetReadiness | string
   geo_readiness?: GeneratedAssetReadiness | string
+  repair_result?: GeneratedAssetRepairResult | string
   structured_data?: Record<string, unknown> | string
   robots?: string
   persona?: string
@@ -631,6 +643,17 @@ export function updateGeneratedLandingPageDraft(
     'landing_page',
     `/drafts/${encodeURIComponent(id)}`,
     { ...body },
+  )
+}
+
+/** POST /content-assets/landing_page/drafts/{id}/repair -- repair a generated landing page draft. */
+export function repairGeneratedLandingPageDraft(
+  id: string,
+): Promise<GeneratedAssetDraft> {
+  return postAssetJson<GeneratedAssetDraft>(
+    'landing_page',
+    `/drafts/${encodeURIComponent(id)}/repair`,
+    {},
   )
 }
 
