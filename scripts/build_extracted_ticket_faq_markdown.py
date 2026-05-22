@@ -90,6 +90,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--vocabulary-gap-rule",
+        action="append",
+        default=[],
+        help=(
+            "Comma-separated customer/documentation aliases used for "
+            "vocabulary-gap suggestions. Repeat to provide multiple rules."
+        ),
+    )
+    parser.add_argument(
         "--require-output-checks",
         action="store_true",
         help="Fail when generated FAQ output checks are not all true.",
@@ -114,6 +123,8 @@ def main(argv: list[str] | None = None) -> int:
             date.fromisoformat(args.as_of_date)
         except ValueError:
             raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
+    vocabulary_gap_rules = _parse_vocabulary_gap_rules(args.vocabulary_gap_rule)
+    args.vocabulary_gap_rules = vocabulary_gap_rules
 
     loaded = load_source_campaign_opportunities_from_file(
         args.path,
@@ -130,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
         documentation_terms=args.documentation_term,
+        vocabulary_gap_rules=vocabulary_gap_rules,
     )
     failed_checks = _failed_output_checks(result.output_checks)
     if args.result_output:
@@ -186,6 +198,9 @@ def _result_payload(
             "require_output_checks": bool(args.require_output_checks),
             "support_contact": args.support_contact,
             "documentation_terms": list(args.documentation_term),
+            "vocabulary_gap_rules": [
+                list(rule) for rule in args.vocabulary_gap_rules
+            ],
         },
         "source_count": result.source_count,
         "ticket_source_count": result.ticket_source_count,
@@ -206,6 +221,31 @@ def _result_payload(
             "items": [_item_summary(index, item) for index, item in enumerate(items, start=1)],
         },
     }
+
+
+def _parse_vocabulary_gap_rules(values: list[str]) -> tuple[tuple[str, ...], ...]:
+    rules: list[tuple[str, ...]] = []
+    for value in values:
+        terms = _parse_vocabulary_gap_rule_terms(value)
+        if len(terms) < 2:
+            raise SystemExit(
+                "--vocabulary-gap-rule must include at least two comma-separated terms"
+            )
+        rules.append(terms)
+    return tuple(rules)
+
+
+def _parse_vocabulary_gap_rule_terms(value: str) -> tuple[str, ...]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for part in value.split(","):
+        term = part.strip()
+        key = term.lower()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+    return tuple(terms)
 
 
 def _output_check_details(
