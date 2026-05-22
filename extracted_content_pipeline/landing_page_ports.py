@@ -201,6 +201,28 @@ class LandingPageRepository(Protocol):
     ) -> Sequence[LandingPageDraft]:
         """Return drafts filtered by tenant scope and optional facets."""
 
+    async def get_draft(
+        self,
+        landing_page_id: str,
+        *,
+        scope: TenantScope,
+    ) -> LandingPageDraft | None:
+        """Return one tenant-scoped landing-page draft by id, or None on miss."""
+
+    async def update_draft(
+        self,
+        landing_page_id: str,
+        draft: LandingPageDraft,
+        *,
+        scope: TenantScope,
+    ) -> LandingPageDraft | None:
+        """Update editable draft fields and return the updated row.
+
+        Implementations must keep the update tenant-scoped and must not mutate
+        approved rows. Editing an approved public landing page would bypass the
+        review flow.
+        """
+
     async def get_public_approved_draft(
         self,
         landing_page_id: str,

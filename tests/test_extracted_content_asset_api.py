@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -54,6 +56,44 @@ class _PublicLandingPagePool(_Pool):
             row for row in self.rows
             if row.get("id") == landing_page_id and row.get("status") == "approved"
         ]
+
+
+class _EditableLandingPagePool(_Pool):
+    def __init__(self, row=None) -> None:
+        super().__init__(rows=[])
+        self.row = dict(row) if row is not None else None
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        if "UPDATE landing_pages" not in str(query):
+            if (
+                self.row is not None
+                and "account_id" in self.row
+                and self.row["account_id"] != args[1]
+            ):
+                return []
+            return [] if self.row is None else [self.row]
+        if (
+            self.row is None
+            or self.row.get("status") == "approved"
+            or (
+                "account_id" in self.row
+                and self.row["account_id"] != args[1]
+            )
+        ):
+            return []
+        self.row.update({
+            "id": args[0],
+            "title": args[2],
+            "slug": args[3],
+            "hero": json.loads(args[4]),
+            "sections": json.loads(args[5]),
+            "cta": json.loads(args[6]),
+            "meta": json.loads(args[7]),
+            "reference_ids": json.loads(args[8]),
+            "status": "draft",
+        })
+        return [self.row]
 
 
 def _report_row():
@@ -397,6 +437,153 @@ def test_generated_asset_router_exports_landing_page_csv() -> None:
     query, args = pool.fetch_calls[0]
     assert "FROM landing_pages" in query
     assert args == ("", "draft", "acme-launch", "acme-launch", 20)
+
+
+def test_generated_asset_router_updates_landing_page_draft_with_readiness() -> None:
+    row = {**_ready_landing_page_row(), "status": "rejected"}
+    pool = _EditableLandingPagePool(row)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={
+            "title": "Edited support retention page",
+            "meta": {
+                **row["meta"],
+                "title_tag": "Edited Support Retention for VP Engineering",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["title"] == "Edited support retention page"
+    assert body["status"] == "draft"
+    assert body["seo_aeo_readiness"]["status"] == "ready"
+    assert body["geo_readiness"]["status"] == "ready"
+    assert len(pool.fetch_calls) == 2
+    select_query, select_args = pool.fetch_calls[0]
+    assert "FROM landing_pages" in select_query
+    assert select_args == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct_1",
+    )
+    update_query, update_args = pool.fetch_calls[1]
+    assert "UPDATE landing_pages" in update_query
+    assert "status <> 'approved'" in update_query
+    assert update_args[0:4] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct_1",
+        "Edited support retention page",
+        "acme-support-retention",
+    )
+
+
+def test_generated_asset_router_blocks_approved_landing_page_edit() -> None:
+    pool = _EditableLandingPagePool(_ready_landing_page_row())
+
+    response = _client(pool).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={"title": "Edited title"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "approved landing pages cannot be edited"
+    assert len(pool.fetch_calls) == 1
+
+
+def test_generated_asset_router_returns_404_for_missing_landing_page_edit() -> None:
+    pool = _EditableLandingPagePool()
+
+    response = _client(pool).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={"title": "Edited title"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page draft not found"
+    assert len(pool.fetch_calls) == 1
+
+
+def test_generated_asset_router_returns_404_for_cross_tenant_landing_page_edit() -> None:
+    row = {**_ready_landing_page_row(), "status": "draft", "account_id": "acct_1"}
+    pool = _EditableLandingPagePool(row)
+
+    response = _client(pool, scope=TenantScope(account_id="acct_2")).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={"title": "Edited title"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page draft not found"
+    assert len(pool.fetch_calls) == 1
+
+
+def test_generated_asset_router_ignores_status_and_metadata_mass_assignment() -> None:
+    row = {
+        **_ready_landing_page_row(),
+        "status": "quality_blocked",
+        "metadata": {
+            "scope": {"account_id": "acct_1", "user_id": "user_1"},
+            "generation_usage": {"input_tokens": 10},
+        },
+    }
+    pool = _EditableLandingPagePool(row)
+
+    response = _client(pool, scope=TenantScope(account_id="acct_1")).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={
+            "title": "Edited support retention page",
+            "status": "approved",
+            "metadata": {"scope": {"account_id": "acct_2", "user_id": "user_2"}},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Edited support retention page"
+    assert body["status"] == "draft"
+    assert body["metadata"]["scope"] == {"account_id": "acct_1", "user_id": "user_1"}
+    update_query, update_args = pool.fetch_calls[1]
+    assert "metadata =" not in update_query
+    assert "approved" not in update_args
+
+
+def test_generated_asset_router_rejects_non_landing_page_edit() -> None:
+    pool = _Pool()
+
+    response = _client(pool).patch(
+        "/content-assets/blog_post/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={"title": "Edited title"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only landing_page drafts can be edited"
+    assert pool.fetch_calls == []
+
+
+def test_generated_asset_router_rejects_empty_landing_page_edit_payload() -> None:
+    pool = _EditableLandingPagePool({**_ready_landing_page_row(), "status": "draft"})
+
+    response = _client(pool).patch(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111",
+        json={"campaign_name": "not-editable"},
+    )
+
+    assert response.status_code == 400
+    assert "payload must include at least one editable landing page field" in (
+        response.json()["detail"]
+    )
 
 
 def test_generated_asset_router_returns_public_approved_landing_page() -> None:

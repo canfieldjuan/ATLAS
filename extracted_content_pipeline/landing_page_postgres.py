@@ -234,6 +234,69 @@ class PostgresLandingPageRepository:
         rows = await self.pool.fetch(sql, *params)
         return tuple(_row_to_draft(row_to_dict(row)) for row in rows)
 
+    async def get_draft(
+        self,
+        landing_page_id: str,
+        *,
+        scope: TenantScope,
+    ) -> LandingPageDraft | None:
+        rows = await self.pool.fetch(
+            """
+            SELECT id, campaign_name, persona, value_prop, title, slug,
+                   hero, sections, cta, meta, reference_ids, metadata, status
+              FROM landing_pages
+             WHERE id = $1
+               AND account_id = $2
+             LIMIT 1
+            """,
+            landing_page_id,
+            scope.account_id or "",
+        )
+        if not rows:
+            return None
+        return _row_to_draft(row_to_dict(rows[0]))
+
+    async def update_draft(
+        self,
+        landing_page_id: str,
+        draft: LandingPageDraft,
+        *,
+        scope: TenantScope,
+    ) -> LandingPageDraft | None:
+        sections_payload = [_coerce_section(s).as_dict() for s in draft.sections]
+        reference_ids_payload = [str(r) for r in draft.reference_ids]
+        rows = await self.pool.fetch(
+            """
+            UPDATE landing_pages
+               SET title = $3,
+                   slug = $4,
+                   hero = $5::jsonb,
+                   sections = $6::jsonb,
+                   cta = $7::jsonb,
+                   meta = $8::jsonb,
+                   reference_ids = $9::jsonb,
+                   status = 'draft',
+                   updated_at = NOW()
+             WHERE id = $1
+               AND account_id = $2
+               AND status <> 'approved'
+            RETURNING id, campaign_name, persona, value_prop, title, slug,
+                      hero, sections, cta, meta, reference_ids, metadata, status
+            """,
+            landing_page_id,
+            scope.account_id or "",
+            draft.title,
+            draft.slug,
+            json_dump_jsonb(dict(draft.hero or {})),
+            json_dump_jsonb(sections_payload),
+            json_dump_jsonb(dict(draft.cta or {})),
+            json_dump_jsonb(dict(draft.meta or {})),
+            json_dump_jsonb(reference_ids_payload),
+        )
+        if not rows:
+            return None
+        return _row_to_draft(row_to_dict(rows[0]))
+
     async def get_public_approved_draft(
         self,
         landing_page_id: str,

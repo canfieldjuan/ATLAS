@@ -27,10 +27,12 @@ from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
 from ..landing_page_export import (
     export_landing_page_drafts,
+    landing_page_draft_export_row,
     public_landing_page_draft_row,
     public_landing_page_robots,
 )
 from ..landing_page_postgres import PostgresLandingPageRepository
+from ..landing_page_ports import LandingPageDraft, LandingPageSection
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
 from ..sales_brief_export import export_sales_brief_drafts
@@ -329,6 +331,47 @@ def create_generated_asset_router(
             "missing_ids": missing_ids,
         }
 
+    @router.patch("/{asset}/drafts/{draft_id}")
+    async def update_landing_page_draft(
+        asset: str,
+        draft_id: str,
+        payload: dict[str, Any] = Body(...),
+    ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
+        if asset_name != "landing_page":
+            raise HTTPException(
+                status_code=400,
+                detail="only landing_page drafts can be edited",
+            )
+        try:
+            landing_page_id = str(UUID(draft_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Landing page draft not found") from None
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = _tenant_scope(scope)
+        repository = PostgresLandingPageRepository(pool)
+        existing = await repository.get_draft(landing_page_id, scope=tenant)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Landing page draft not found")
+        if existing.status == "approved":
+            raise HTTPException(
+                status_code=409,
+                detail="approved landing pages cannot be edited",
+            )
+        updated_draft = _patched_landing_page_draft(existing, payload)
+        updated = await repository.update_draft(
+            landing_page_id,
+            updated_draft,
+            scope=tenant,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=409,
+                detail="landing page draft could not be edited",
+            )
+        return landing_page_draft_export_row(updated)
+
     return router
 
 
@@ -527,6 +570,122 @@ def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:
             user_id=str(value.get("user_id") or "") or None,
         )
     return TenantScope()
+
+
+_LANDING_PAGE_EDITABLE_FIELDS = frozenset({
+    "title",
+    "slug",
+    "hero",
+    "sections",
+    "cta",
+    "meta",
+    "reference_ids",
+})
+
+
+def _patched_landing_page_draft(
+    existing: LandingPageDraft,
+    payload: Mapping[str, Any],
+) -> LandingPageDraft:
+    fields = set(payload).intersection(_LANDING_PAGE_EDITABLE_FIELDS)
+    if not fields:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "payload must include at least one editable landing page field: "
+                + ", ".join(sorted(_LANDING_PAGE_EDITABLE_FIELDS))
+            ),
+        )
+    return LandingPageDraft(
+        id=existing.id,
+        status="draft",
+        campaign_name=existing.campaign_name,
+        persona=existing.persona,
+        value_prop=existing.value_prop,
+        title=_patch_text(payload, "title", existing.title),
+        slug=_patch_text(payload, "slug", existing.slug),
+        hero=_patch_mapping(payload, "hero", existing.hero),
+        sections=_patch_sections(payload, "sections", existing.sections),
+        cta=_patch_mapping(payload, "cta", existing.cta),
+        meta=_patch_mapping(payload, "meta", existing.meta),
+        reference_ids=_patch_string_list(
+            payload,
+            "reference_ids",
+            existing.reference_ids,
+        ),
+        metadata=dict(existing.metadata or {}),
+    )
+
+
+def _patch_text(payload: Mapping[str, Any], key: str, current: str) -> str:
+    if key not in payload:
+        return current
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{key} must be a string")
+    return value.strip()
+
+
+def _patch_mapping(
+    payload: Mapping[str, Any],
+    key: str,
+    current: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if key not in payload:
+        return dict(current or {})
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        raise HTTPException(status_code=400, detail=f"{key} must be an object")
+    return dict(value)
+
+
+def _patch_sections(
+    payload: Mapping[str, Any],
+    key: str,
+    current: Sequence[LandingPageSection],
+) -> Sequence[LandingPageSection]:
+    if key not in payload:
+        return tuple(current or ())
+    value = payload.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise HTTPException(status_code=400, detail=f"{key} must be a list")
+    sections: list[LandingPageSection] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{key}[{index}] must be an object",
+            )
+        metadata = item.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{key}[{index}].metadata must be an object",
+            )
+        sections.append(
+            LandingPageSection(
+                id=str(item.get("id") or ""),
+                title=str(item.get("title") or ""),
+                body_markdown=str(
+                    item.get("body_markdown") or item.get("body") or ""
+                ),
+                metadata=dict(metadata),
+            )
+        )
+    return tuple(sections)
+
+
+def _patch_string_list(
+    payload: Mapping[str, Any],
+    key: str,
+    current: Sequence[str],
+) -> Sequence[str]:
+    if key not in payload:
+        return tuple(str(item) for item in current)
+    value = payload.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise HTTPException(status_code=400, detail=f"{key} must be a list")
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 __all__ = [
