@@ -55,6 +55,13 @@ function landingPageHtml({ loc = `${SITE_URL}/lp/111/acme-page` } = {}) {
 </html>`
 }
 
+function landingPageHtmlWithTitle(title, loc = `${SITE_URL}/lp/111/acme-page`) {
+  return landingPageHtml({ loc }).replace(
+    '<title>Acme Support FAQ Report</title>',
+    `<title>${title}</title>`,
+  )
+}
+
 test('verifyLandingPagePrerender passes when lp sitemap entry has static HTML contract', () => {
   withTempDist((distDir) => {
     const loc = `${SITE_URL}/lp/111/acme-page`
@@ -82,6 +89,31 @@ test('verifyLandingPagePrerender fails when lp sitemap entry lacks static HTML',
 
     assert.equal(result.checked, 1)
     assert.match(result.failures[0], /missing .*index\.html/)
+  })
+})
+
+test('verifyLandingPagePrerender fails when static HTML keeps the fallback title', () => {
+  withTempDist((distDir) => {
+    const loc = `${SITE_URL}/lp/111/acme-page`
+    writeSitemap(distDir, [loc])
+    writeLandingPageHtml(
+      distDir,
+      '/lp/111/acme-page',
+      landingPageHtmlWithTitle(
+        'Atlas Intelligence \u2014 Amazon Review Monitoring & Competitor Signals',
+        loc,
+      ),
+    )
+
+    const result = verifyLandingPagePrerender({
+      distDir,
+      logger: { log() {} },
+    })
+
+    assert.equal(result.checked, 1)
+    assert.ok(
+      result.failures.includes('/lp/111/acme-page has missing or fallback <title>'),
+    )
   })
 })
 
