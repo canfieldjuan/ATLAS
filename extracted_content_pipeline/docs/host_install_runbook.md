@@ -256,7 +256,10 @@ The JSON object accepts optional `intent_rules` entries shaped as
 `{"topic": "...", "keywords": ["...", "..."]}` and optional
 `vocabulary_gap_rules` entries shaped as `["customer term", "documentation term"]`.
 Documentation-term files are UTF-8 plain text with one term per line; blank
-lines and `#` comment lines are ignored.
+lines and `#` comment lines are ignored. JSON, JSONL, and CSV documentation
+exports are also accepted when rows use common fields such as
+`documentation_term`, `term`, `heading`, `title`, `page_title`, `name`, or
+`label`.
 Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 `--vocabulary-gap-rule` flags take precedence over file rules. Rule-file values
 use the same CLI delimiter guardrails: intent topics cannot contain `=` or `,`,
