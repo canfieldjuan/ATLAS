@@ -17,7 +17,9 @@ import {
   type FaqItem,
 } from './scripts/blog-source-metadata.mjs'
 import {
+  fetchLandingPagePrerenderEntries,
   fetchLandingPageSitemapUrls,
+  resolveLandingPagePublicApiBase,
   resolveLandingPageSitemapUrl,
 } from './scripts/landing-page-sitemap-bridge.mjs'
 
@@ -110,6 +112,19 @@ interface PrerenderedRoute {
   ogType: string
   jsonLd?: object
   bodyHtml?: string
+  robots?: string
+}
+
+interface PublicLandingPagePrerenderEntry {
+  path: string
+  loc: string
+  page: Record<string, unknown>
+}
+
+interface LandingPageSectionView {
+  id: string
+  title: string
+  body: string
 }
 
 function escapeHtml(value: string): string {
@@ -222,38 +237,191 @@ function buildFaqJsonLd(faq: FaqItem[]): object | null {
 function buildHeadHtml(route: PrerenderedRoute): string {
   const { title, description, canonical, ogType, jsonLd } = route
   const lines = [
-    `<meta name="description" content="${description}" />`,
-    `<link rel="canonical" href="${canonical}" />`,
-    `<meta property="og:title" content="${title}" />`,
-    `<meta property="og:description" content="${description}" />`,
-    `<meta property="og:url" content="${canonical}" />`,
-    `<meta property="og:type" content="${ogType}" />`,
+    `<meta name="description" content="${escapeHtml(description)}" />`,
+    `<link rel="canonical" href="${escapeHtml(canonical)}" />`,
+    `<meta property="og:title" content="${escapeHtml(title)}" />`,
+    `<meta property="og:description" content="${escapeHtml(description)}" />`,
+    `<meta property="og:url" content="${escapeHtml(canonical)}" />`,
+    `<meta property="og:type" content="${escapeHtml(ogType)}" />`,
     `<meta property="og:site_name" content="Atlas Intelligence" />`,
     `<meta property="og:image" content="${DEFAULT_OG_IMAGE}" />`,
     `<meta property="og:image:width" content="1200" />`,
     `<meta property="og:image:height" content="630" />`,
     `<meta name="twitter:card" content="summary_large_image" />`,
-    `<meta name="twitter:title" content="${title}" />`,
-    `<meta name="twitter:description" content="${description}" />`,
+    `<meta name="twitter:title" content="${escapeHtml(title)}" />`,
+    `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
     `<meta name="twitter:image" content="${DEFAULT_OG_IMAGE}" />`,
   ]
+  if (route.robots) {
+    lines.push(`<meta name="robots" content="${escapeHtml(route.robots)}" />`)
+  }
   if (jsonLd) {
     lines.push(
-      `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>`,
+      `<script type="application/ld+json">${jsonLdScriptContent(jsonLd)}</script>`,
     )
   }
   return lines.map(l => `    ${l}`).join('\n')
 }
 
+function jsonLdScriptContent(value: object): string {
+  return JSON.stringify(value).replace(/</g, '\\u003c')
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> =>
+      Boolean(item && typeof item === 'object' && !Array.isArray(item)),
+    )
+    : []
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function safePublicHref(value: string): string {
+  const href = value.trim()
+  const normalized = href.toLowerCase()
+  if (
+    normalized.startsWith('https://') ||
+    normalized.startsWith('http://') ||
+    normalized.startsWith('mailto:') ||
+    normalized.startsWith('tel:') ||
+    normalized.startsWith('/') ||
+    normalized.startsWith('#')
+  ) {
+    return href
+  }
+  return ''
+}
+
+function landingPageSections(value: unknown): LandingPageSectionView[] {
+  return recordList(value)
+    .map((section) => ({
+      id: textValue(section.id),
+      title: textValue(section.title) || textValue(section.heading),
+      body: textValue(section.body_markdown) || textValue(section.body),
+    }))
+    .filter((section) => section.title || section.body)
+}
+
+function paragraphHtml(value: string): string {
+  return value
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => `<p>${escapeHtml(part).replace(/\n/g, '<br />')}</p>`)
+    .join('\n')
+}
+
+function structuredDataWithCanonical(value: unknown, canonical: string): object | undefined {
+  const raw = recordValue(value)
+  if (!raw) return undefined
+  const graph = recordList(raw['@graph'])
+  if (graph.length === 0) return raw
+  return {
+    ...raw,
+    '@graph': graph.map((node) => {
+      const type = node['@type']
+      if (type === 'WebPage') {
+        return { ...node, '@id': `${canonical}#webpage`, url: canonical }
+      }
+      if (type === 'FAQPage') {
+        return {
+          ...node,
+          '@id': `${canonical}#faq`,
+          mainEntityOfPage: { '@id': `${canonical}#webpage` },
+        }
+      }
+      return node
+    }),
+  }
+}
+
+function buildLandingPageBodyHtml(page: Record<string, unknown>): string {
+  const hero = recordValue(page.hero)
+  const cta = recordValue(page.cta)
+  const sections = landingPageSections(page.sections)
+  const title = textValue(hero?.headline) || textValue(page.title)
+  const subheadline =
+    textValue(hero?.subheadline) || textValue(page.value_prop)
+  const persona = textValue(page.persona)
+  const ctaLabel = textValue(cta?.label) || textValue(hero?.cta_label)
+  const ctaUrl = safePublicHref(textValue(cta?.url) || textValue(hero?.cta_url))
+  const sectionHtml = sections.map((section, index) => `
+      <section data-prerendered-landing-page-section="${escapeHtml(section.id || String(index + 1))}">
+        <h2>${escapeHtml(section.title || `Section ${index + 1}`)}</h2>
+        ${paragraphHtml(section.body)}
+      </section>`).join('\n')
+  const ctaHtml = ctaLabel && ctaUrl
+    ? `
+      <p>
+        <a href="${escapeHtml(ctaUrl)}">${escapeHtml(ctaLabel)}</a>
+      </p>`
+    : ''
+
+  return `
+    <article data-prerendered-landing-page="true">
+      <header>
+        ${persona ? `<p>${escapeHtml(persona)}</p>` : ''}
+        <h1>${escapeHtml(title)}</h1>
+        ${subheadline ? `<p>${escapeHtml(subheadline)}</p>` : ''}
+        ${ctaHtml}
+      </header>
+      ${sectionHtml}
+      ${ctaHtml ? `
+      <section data-prerendered-landing-page-cta="true">
+        <h2>${escapeHtml(textValue(page.title) || title)}</h2>
+        ${subheadline ? `<p>${escapeHtml(subheadline)}</p>` : ''}
+        ${ctaHtml}
+      </section>` : ''}
+    </article>`
+}
+
+function landingPageRoute(entry: PublicLandingPagePrerenderEntry): PrerenderedRoute {
+  const page = entry.page
+  const hero = recordValue(page.hero)
+  const meta = recordValue(page.meta)
+  const title = textValue(meta?.title_tag) || textValue(page.title) || 'Landing Page'
+  const description =
+    textValue(meta?.description) ||
+    textValue(hero?.subheadline) ||
+    textValue(page.value_prop) ||
+    title
+  return {
+    path: entry.path,
+    title,
+    description,
+    canonical: entry.loc,
+    ogType: 'website',
+    bodyHtml: buildLandingPageBodyHtml(page),
+    jsonLd: structuredDataWithCanonical(page.structured_data, entry.loc),
+    robots: textValue(page.robots) || 'noindex,follow',
+  }
+}
+
 function prerenderPlugin() {
   return {
     name: 'prerender-public-routes',
-    closeBundle() {
+    async closeBundle() {
       const distDir = resolve(import.meta.dirname, 'dist')
       const indexHtmlPath = join(distDir, 'index.html')
       if (!existsSync(indexHtmlPath)) return
 
       const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
+      const landingPageRoutes = (
+        await fetchLandingPagePrerenderEntries({
+          sitemapUrl: resolveLandingPageSitemapUrl(),
+          publicSiteUrl: BASE_URL,
+          apiBaseUrl: resolveLandingPagePublicApiBase(),
+        }) as PublicLandingPagePrerenderEntry[]
+      ).map(landingPageRoute)
 
       const blogRoutes: PrerenderedRoute[] = []
       for (const post of collectBlogSourceMetadata(import.meta.dirname)) {
@@ -363,6 +531,7 @@ function prerenderPlugin() {
           ogType: 'website',
         },
         ...blogRoutes,
+        ...landingPageRoutes,
       ]
 
       let count = 0
@@ -372,7 +541,7 @@ function prerenderPlugin() {
         const rendered = baseHtml
           .replace(
             /<title>[^<]*<\/title>/,
-            `<title>${route.title}</title>`,
+            `<title>${escapeHtml(route.title)}</title>`,
           )
           .replace('</head>', `${headHtml}\n  </head>`)
           .replace('<div id="root"></div>', `<div id="root">${route.bodyHtml || ''}</div>`)
