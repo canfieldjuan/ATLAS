@@ -29,6 +29,8 @@ _EXPORT_COLUMNS = (
     "generation_output_tokens",
     "generation_total_tokens",
     "generation_parse_attempts",
+    "generation_quality_repair_attempts",
+    "generation_quality_repair_history",
     "reasoning_context_used",
     "reasoning_wedge",
     "reasoning_confidence",
@@ -131,6 +133,12 @@ def _metadata_summary(value: Any) -> JsonDict:
         "generation_output_tokens": usage.get("output_tokens"),
         "generation_total_tokens": usage.get("total_tokens"),
         "generation_parse_attempts": metadata.get("generation_parse_attempts"),
+        "generation_quality_repair_attempts": metadata.get(
+            "generation_quality_repair_attempts"
+        ),
+        "generation_quality_repair_history": metadata.get(
+            "generation_quality_repair_history"
+        ),
         "reasoning_context_used": bool(reasoning),
         "reasoning_wedge": reasoning.get("wedge"),
         "reasoning_confidence": reasoning.get("confidence"),

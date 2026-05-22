@@ -124,6 +124,21 @@ def _draft(**overrides) -> LandingPageDraft:
                 "total_tokens": 18,
             },
             "generation_parse_attempts": 2,
+            "generation_quality_repair_attempts": 1,
+            "generation_quality_repair_history": [
+                {
+                    "attempt": 0,
+                    "passed": False,
+                    "blockers": ["missing proof"],
+                    "repair_issues": ["add evidence"],
+                },
+                {
+                    "attempt": 1,
+                    "passed": True,
+                    "blockers": [],
+                    "repair_issues": [],
+                },
+            ],
             "reasoning_context": {
                 "wedge": "price_squeeze",
                 "confidence": "high",
@@ -268,6 +283,21 @@ async def test_export_landing_page_drafts_derives_review_summary_fields() -> Non
     assert row["generation_output_tokens"] == 6
     assert row["generation_total_tokens"] == 18
     assert row["generation_parse_attempts"] == 2
+    assert row["generation_quality_repair_attempts"] == 1
+    assert row["generation_quality_repair_history"] == [
+        {
+            "attempt": 0,
+            "passed": False,
+            "blockers": ["missing proof"],
+            "repair_issues": ["add evidence"],
+        },
+        {
+            "attempt": 1,
+            "passed": True,
+            "blockers": [],
+            "repair_issues": [],
+        },
+    ]
     assert row["reasoning_context_used"] is True
     assert row["reasoning_wedge"] == "price_squeeze"
     assert row["reasoning_confidence"] == "high"
@@ -377,6 +407,8 @@ async def test_export_landing_page_drafts_defaults_summary_fields_without_metada
     assert row["generation_output_tokens"] is None
     assert row["generation_total_tokens"] is None
     assert row["generation_parse_attempts"] is None
+    assert row["generation_quality_repair_attempts"] is None
+    assert row["generation_quality_repair_history"] is None
     assert row["reasoning_context_used"] is False
     assert row["reasoning_wedge"] is None
     assert row["reasoning_confidence"] is None
@@ -434,6 +466,15 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
                 "generation_output_tokens": 6,
                 "generation_total_tokens": 18,
                 "generation_parse_attempts": 1,
+                "generation_quality_repair_attempts": 1,
+                "generation_quality_repair_history": [
+                    {
+                        "attempt": 1,
+                        "passed": True,
+                        "blockers": [],
+                        "repair_issues": [],
+                    },
+                ],
                 "reasoning_context_used": True,
                 "reasoning_wedge": "price_squeeze",
                 "reasoning_confidence": "high",
@@ -460,6 +501,11 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
     assert as_dict["rows"][0]["reasoning_wedge"] == "price_squeeze"
     assert "campaign_name,persona,value_prop" in csv_text
     assert "generation_input_tokens,generation_output_tokens" in csv_text
+    assert (
+        "generation_quality_repair_attempts,generation_quality_repair_history"
+        in csv_text
+    )
     assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in csv_text
     assert "passed_output_checks,output_checks,seo_aeo_readiness,geo_readiness" in csv_text
+    assert '"[{""attempt"":1,""passed"":true' in csv_text
     assert "price_squeeze" in csv_text
