@@ -246,6 +246,136 @@ async def test_list_drafts_handles_pre_decoded_jsonb_columns() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_draft_filters_by_id_and_scope() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "draft",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "title",
+            "slug": "slug",
+            "hero": {"headline": "Hero text"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "L"},
+            "meta": {"title_tag": "tt"},
+            "reference_ids": ["r1"],
+            "metadata": {"key": "value"},
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    draft = await repo.get_draft(
+        "11111111-1111-1111-1111-111111111111",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert draft is not None
+    assert draft.id == "11111111-1111-1111-1111-111111111111"
+    assert draft.status == "draft"
+    assert draft.hero["headline"] == "Hero text"
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "FROM landing_pages" in sql
+    assert "id = $1" in sql
+    assert "account_id = $2" in sql
+    assert args == ("11111111-1111-1111-1111-111111111111", "acct-1")
+
+
+@pytest.mark.asyncio
+async def test_get_draft_returns_none_on_miss() -> None:
+    pool = _Pool()
+    repo = PostgresLandingPageRepository(pool)
+
+    draft = await repo.get_draft(
+        "11111111-1111-1111-1111-111111111111",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert draft is None
+
+
+@pytest.mark.asyncio
+async def test_update_draft_updates_editable_fields_and_returns_row() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "draft",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "updated title",
+            "slug": "updated-slug",
+            "hero": {"headline": "Updated hero"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "Book"},
+            "meta": {"title_tag": "Updated"},
+            "reference_ids": ["r1"],
+            "metadata": {"key": "value"},
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+    draft = LandingPageDraft(
+        campaign_name="acme",
+        persona="vp",
+        value_prop="vp",
+        title="updated title",
+        slug="updated-slug",
+        hero={"headline": "Updated hero"},
+        sections=(LandingPageSection(id="s1", title="T", body_markdown="B"),),
+        cta={"label": "Book"},
+        meta={"title_tag": "Updated"},
+        reference_ids=("r1",),
+        metadata={"key": "value"},
+    )
+
+    updated = await repo.update_draft(
+        "11111111-1111-1111-1111-111111111111",
+        draft,
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated is not None
+    assert updated.title == "updated title"
+    assert updated.slug == "updated-slug"
+    assert updated.status == "draft"
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "UPDATE landing_pages" in sql
+    assert "status <> 'approved'" in sql
+    assert "RETURNING id" in sql
+    assert args[0:4] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct-1",
+        "updated title",
+        "updated-slug",
+    )
+    assert json.loads(args[4]) == {"headline": "Updated hero"}
+    assert json.loads(args[5])[0]["id"] == "s1"
+    assert json.loads(args[6]) == {"label": "Book"}
+    assert json.loads(args[7]) == {"title_tag": "Updated"}
+    assert json.loads(args[8]) == ["r1"]
+
+
+@pytest.mark.asyncio
+async def test_update_draft_returns_none_on_miss_or_approved_row() -> None:
+    pool = _Pool()
+    repo = PostgresLandingPageRepository(pool)
+
+    updated = await repo.update_draft(
+        "11111111-1111-1111-1111-111111111111",
+        _draft(),
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated is None
+    assert len(pool.fetch_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_public_approved_draft_filters_by_id_and_approved_status() -> None:
     pool = _Pool()
     pool.fetch_rows = [

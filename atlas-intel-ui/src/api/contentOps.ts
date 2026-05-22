@@ -12,6 +12,7 @@
  *   POST /content-ops/execute
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
+ *   PATCH /content-assets/landing_page/drafts/{id}
  *   POST /content-assets/{asset}/drafts/review
  *   POST /content-assets/{asset}/drafts/review-batch
  *
@@ -395,6 +396,16 @@ export interface GeneratedAssetBatchReviewResponse {
   missing_ids: string[]
 }
 
+export interface GeneratedLandingPageDraftUpdate {
+  title?: string
+  slug?: string
+  hero?: Record<string, unknown>
+  sections?: Array<Record<string, unknown>>
+  cta?: Record<string, unknown>
+  meta?: Record<string, unknown>
+  reference_ids?: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Internal fetch plumbing
 // ---------------------------------------------------------------------------
@@ -516,6 +527,26 @@ async function postAssetJson<T>(
   return rawJson<T>(res)
 }
 
+async function patchAssetJson<T>(
+  asset: GeneratedAssetType,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const url = `${ASSETS_BASE}/${asset}${path}`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const text = await rawText(res)
+    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
 async function getAssetText(
   asset: GeneratedAssetType,
   path: string,
@@ -588,6 +619,18 @@ export function reviewGeneratedAssetDrafts(
     asset,
     '/drafts/review-batch',
     { ids, status },
+  )
+}
+
+/** PATCH /content-assets/landing_page/drafts/{id} -- edit a generated landing page draft. */
+export function updateGeneratedLandingPageDraft(
+  id: string,
+  body: GeneratedLandingPageDraftUpdate,
+): Promise<GeneratedAssetDraft> {
+  return patchAssetJson<GeneratedAssetDraft>(
+    'landing_page',
+    `/drafts/${encodeURIComponent(id)}`,
+    { ...body },
   )
 }
 
