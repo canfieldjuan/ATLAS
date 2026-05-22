@@ -10,7 +10,10 @@ import re
 from typing import Any
 
 from .campaign_ports import TenantScope
-from .campaign_source_adapters import source_rows_to_campaign_opportunities
+from .campaign_source_adapters import (
+    source_material_to_source_rows,
+    source_rows_to_campaign_opportunities,
+)
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -18,7 +21,14 @@ DEFAULT_TICKET_SOURCE_TYPES = (
     "ticket",
     "support_ticket",
     "case",
+    "chat",
+    "chat_transcript",
     "conversation",
+    "transcript",
+    "sales_call",
+    "meeting",
+    "sales_objection",
+    "objection",
     "complaint",
     "search_log",
     "search_query",
@@ -850,7 +860,10 @@ def _render(
         lines.extend([
             "No ticket FAQ items were generated.",
             "",
-            "Provide source rows with support-ticket, case, conversation, or complaint evidence.",
+            (
+                "Provide source rows with support-ticket, case, conversation, "
+                "chat, transcript, objection, search, or complaint evidence."
+            ),
             "",
         ])
         return "\n".join(lines)
@@ -1181,32 +1194,7 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
     if isinstance(source_material, str):
         text = source_material.strip()
         return [{"text": text, "source_type": "support_ticket"}] if text else []
-    if isinstance(source_material, Mapping):
-        for key in (
-            "support_tickets",
-            "tickets",
-            "cases",
-            "conversations",
-            "complaints",
-            "search_logs",
-            "site_searches",
-            "search_queries",
-            "zero_result_searches",
-            "zero_result_queries",
-            "sources",
-            "rows",
-            "data",
-            "opportunities",
-        ):
-            value = source_material.get(key)
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-                rows = list(value)
-                if rows:
-                    return rows
-        return [dict(source_material)]
-    if isinstance(source_material, Sequence) and not isinstance(source_material, (bytes, bytearray)):
-        return list(source_material)
-    return []
+    return source_material_to_source_rows(source_material)
 
 
 __all__ = [

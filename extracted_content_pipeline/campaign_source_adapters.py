@@ -21,8 +21,11 @@ SourceDataFormat = Literal["auto", "json", "jsonl", "csv"]
 
 _ROW_LIST_KEYS = (
     "sources",
+    "opportunities",
     "documents",
     "reviews",
+    "chats",
+    "chat_transcripts",
     "transcripts",
     "calls",
     "call_transcripts",
@@ -42,6 +45,8 @@ _ROW_LIST_KEYS = (
     "renewal_notes",
     "subscriptions",
     "subscription_notes",
+    "sales_objections",
+    "objections",
     "complaints",
     "search_logs",
     "site_searches",
@@ -63,6 +68,9 @@ _ROW_LIST_KEYS = (
 _SOURCE_ID_KEYS = (
     "source_id",
     "id",
+    "chat_id",
+    "sales_objection_id",
+    "objection_id",
     "review_id",
     "transcript_id",
     "call_id",
@@ -89,12 +97,14 @@ _SOURCE_ID_KEYS = (
     "conversation_id",
     "conversation_number",
     "request_id",
+    "message_id",
     "survey_id",
     "response_id",
     "feedback_id",
 )
 _TEXT_KEYS = (
     "text",
+    "chat_transcript",
     "review_text",
     "transcript",
     "content",
@@ -107,6 +117,10 @@ _TEXT_KEYS = (
     "search_terms",
     "search_phrase",
     "zero_result_query",
+    "objection",
+    "objection_text",
+    "buyer_objection",
+    "sales_objection",
     "complaint",
     "complaint_narrative",
     "consumer_complaint_narrative",
@@ -235,6 +249,14 @@ _CANONICAL_VALUE_ALIAS_KEYS = (
 # travel as context on notes without changing the evidence row type.
 _SOURCE_TYPE_PRECEDENCE = (
     (("review_text",), "review"),
+    ((
+        "objection",
+        "objection_text",
+        "buyer_objection",
+        "sales_objection",
+        "sales_objection_id",
+        "objection_id",
+    ), "sales_objection"),
     (("transcript",), "transcript"),
     ((
         "search_query",
@@ -250,6 +272,7 @@ _SOURCE_TYPE_PRECEDENCE = (
         "query_id",
         "zero_result_query_id",
     ), "search_log"),
+    (("chat_id",), "chat"),
     (("call_id", "recording_id"), "sales_call"),
     (("meeting_id",), "meeting"),
     (("deal_id", "opportunity_id"), "crm_deal"),
@@ -386,6 +409,19 @@ def source_rows_to_campaign_opportunities(
         opportunities=normalized.opportunities,
         warnings=tuple(warnings) + normalized.warnings,
     )
+
+
+def source_material_to_source_rows(source_material: Any) -> list[Any]:
+    """Expand a source-material object, bundle, or row list into source rows."""
+
+    if isinstance(source_material, Mapping):
+        return _source_rows_from_bundle(source_material)
+    if isinstance(source_material, Sequence) and not isinstance(
+        source_material,
+        (str, bytes, bytearray),
+    ):
+        return list(source_material)
+    return []
 
 
 def parse_default_fields(values: Sequence[str] | None) -> dict[str, str]:
@@ -853,6 +889,7 @@ __all__ = [
     "parse_default_fields",
     "parse_default_fields_with_booking_url_or_exit",
     "parse_default_fields_or_exit",
+    "source_material_to_source_rows",
     "source_row_to_campaign_opportunity",
     "source_rows_to_campaign_opportunities",
 ]

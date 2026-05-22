@@ -1262,6 +1262,66 @@ async def test_ticket_faq_service_accepts_search_log_source_material() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ticket_faq_service_accepts_chat_transcript_source_material() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "chats": [
+                {
+                    "chat_id": "chat-1",
+                    "subject": "Attribution export",
+                    "messages": [
+                        {
+                            "speaker": "customer",
+                            "message": "How do I export the attribution dashboard?",
+                        },
+                        {
+                            "speaker": "agent",
+                            "message": "I can send the export steps.",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert result.ticket_source_count == 1
+    assert result.items[0]["topic"] == "reporting friction"
+    assert result.items[0]["source_ids"] == ("chat-1",)
+    assert result.items[0]["question"] == "How do I export the attribution dashboard?"
+    assert "`chat-1` - Attribution export" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_accepts_sales_objection_source_material() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "sales_objections": [
+                {
+                    "objection_id": "obj-1",
+                    "objection_text": "We cannot export attribution reports before renewal.",
+                }
+            ]
+        },
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert result.ticket_source_count == 1
+    assert result.items[0]["topic"] == "reporting friction"
+    assert result.items[0]["source_ids"] == ("obj-1",)
+    assert result.items[0]["question"] == "How do we export attribution reports before renewal?"
+    assert "`obj-1`" in result.markdown
+
+
+@pytest.mark.asyncio
 async def test_ticket_faq_service_saves_generated_markdown_when_repository_configured() -> None:
     repository = _FAQRepository()
     service = TicketFAQMarkdownService(ticket_faqs=repository)
@@ -1292,7 +1352,14 @@ async def test_ticket_faq_service_saves_generated_markdown_when_repository_confi
         "ticket",
         "support_ticket",
         "case",
+        "chat",
+        "chat_transcript",
         "conversation",
+        "transcript",
+        "sales_call",
+        "meeting",
+        "sales_objection",
+        "objection",
         "complaint",
         "search_log",
         "search_query",
