@@ -658,6 +658,81 @@ def test_quote_reference_does_not_sweep_generic_or_witness_followon():
         assert follow in out, follow          # follow-on preserved
 
 
+def test_orphan_question_reference_matches_question_shapes():
+    """#745 hardening: back-references to a quoted *question* (G2 form
+    prompts ARE questions) must be detected, not just "quote"/"excerpt"
+    shapes. The detector previously missed "This open-ended question ..."
+    and "This question format ..." follow-ons left behind when a
+    form-prompt blockquote was stripped."""
+    # Question-shaped back-references -> orphaned.
+    assert _looks_like_orphan_quote_reference(
+        "This open-ended question from a verified review described the rollout as confusing."
+    )
+    assert _looks_like_orphan_quote_reference(
+        "This question format suggests a structured review prompt rather than a candid opinion."
+    )
+    # "This quote is a question rather than a statement ..." already matched
+    # on the leading "This quote", but pin it so the merged pattern keeps it.
+    assert _looks_like_orphan_quote_reference(
+        "This quote is a question rather than a statement, but it signals active evaluation."
+    )
+    # Existing negatives still hold: generic follow-ons and aggregate
+    # witness references are NOT orphan quote back-references.
+    assert not _looks_like_orphan_quote_reference("This pattern recurs across the dataset.")
+    assert not _looks_like_orphan_quote_reference(
+        "The witness evidence shows workflow migration at the team level."
+    )
+    # Rhetorical "The question is/isn't ..." author prose references NO quote
+    # and must NOT be flagged. A bare-"question" pattern false-positived on
+    # these against the live corpus (help-scout-vs-zendesk, real-cost-of-
+    # woocommerce); the pattern is narrowed to quoted-question artifacts only.
+    assert not _looks_like_orphan_quote_reference(
+        "The question is not which vendor is objectively better."
+    )
+    assert not _looks_like_orphan_quote_reference(
+        "The question isn't whether WooCommerce is expensive in absolute terms."
+    )
+
+
+def test_orphan_question_reference_swept_with_block():
+    """A stripped blockquote followed by a question-shaped back-reference
+    is swept along with the block, the same as a "This quote ..." ref. These
+    are the #745 power-bi ("a question rather than a statement") and
+    switch-to-woocommerce ("This open-ended question ...") danglers."""
+    for follow in (
+        "This open-ended question from a verified review hints at active evaluation.",
+        "This question format suggests a structured review prompt, not a candid take.",
+    ):
+        markdown = (
+            "## Section\n\n"
+            "> a form-prompt quote that gets stripped (empty source pool)\n\n"
+            f"{follow}\n"
+        )
+        out, _removed = _remove_unmatched_quote_lines(markdown, [])
+        assert "gets stripped" not in out
+        assert follow not in out, follow
+        assert "## Section" in out
+
+
+def test_question_reference_after_kept_block_survives():
+    """Parity with the "This quote ..." guard: a question-shaped follow-on
+    after a KEPT (grounded) block survives -- the quote it references is
+    present, so the reference is legitimate. The sweep only fires on
+    stripped blocks, so the kept block protects it."""
+    follow = "This open-ended question mirrors the evaluation fatigue common in the category."
+    assert _looks_like_orphan_quote_reference(follow)  # matcher would flag it...
+    source = ["evaluation fatigue is common in this high-churn category"]
+    markdown = (
+        "## Section\n\n"
+        "> evaluation fatigue is common in this high-churn category\n\n"
+        f"{follow}\n"
+    )
+    out, removed = _remove_unmatched_quote_lines(markdown, source)
+    assert removed == 0                            # block grounds -> nothing stripped
+    assert "evaluation fatigue is common" in out   # the quote is kept
+    assert follow in out                           # ...and the reference survives
+
+
 def test_orphan_prose_preserved_for_kept_blocks():
     """When a block is KEPT (its quotes ground), the surrounding intro
     and prose are also preserved. The orphan-prose cleanup only fires

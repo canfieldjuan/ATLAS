@@ -1669,13 +1669,31 @@ def _looks_like_orphan_disclaimer(line: str) -> bool:
 
 
 # Quote back-reference patterns. A paragraph that points at a specific quote
-# ("That/This quote", "This/The excerpt", or "quoted earlier") is orphaned when
-# the quote it references was stripped, leaving a dangling non-sequitur. Kept
-# in sync with the seo-geo-aeo-blog-post skill's orphaned_quote_reference
-# detector. Aggregate "the witness ..." references and generic follow-ons
-# ("This pattern recurs ...") are deliberately NOT matched.
+# ("That/This quote", "This/The excerpt", "quoted earlier", or a back-reference
+# to a quoted *question* like "This open-ended question ..." / "This question
+# format ...") is orphaned when the quote it references was stripped, leaving a
+# dangling non-sequitur. The "question" shapes were added after #745: removing
+# G2 form-PROMPT blockquotes (which ARE questions -- "What do you like best
+# about X?") left follow-ons like "This open-ended question from a verified
+# review ..." that the quote/excerpt-only pattern missed. Kept in sync with the
+# seo-geo-aeo-blog-post skill's orphaned_quote_reference detector. Aggregate
+# "the witness ..." references and generic follow-ons ("This pattern recurs
+# ...") are deliberately NOT matched.
+#
+# NOTE on the #745 "stacked reference" case (two consecutive ref paragraphs
+# after one blockquote, only the first legit): that lives in the audit
+# detector, which scans finished documents. The generator's sweep below only
+# fires on the single paragraph immediately following a *stripped* block
+# (_remove_unmatched_quote_lines forward-widen), so it never evaluates refs
+# after a *kept* block -- the stacked shape structurally cannot arise here.
+# The "question" branch is deliberately NARROW: only quoted-question artifacts
+# ("open-ended question", "question format") -- NOT a bare "question". Matching
+# bare "question" false-positives on rhetorical author prose ("The question is
+# not which vendor ...", "The question isn't whether ...") that references no
+# quote (caught when this ran against the live corpus).
 _ORPHAN_QUOTE_REF_RE = re.compile(
-    r"^(?:that quote|this quote|the quote\b|this excerpt|the excerpt)\b",
+    r"^(?:that|this|the)\s+"
+    r"(?:quote|excerpt|open[- ]ended\s+question|question\s+format)\b",
     re.IGNORECASE,
 )
 _QUOTED_EARLIER_RE = re.compile(r"\bquoted earlier\b", re.IGNORECASE)
