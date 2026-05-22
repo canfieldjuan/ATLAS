@@ -283,6 +283,9 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert density["input_profile"]["usable_source_ratio"] < 0.1
     assert density["input_profile"]["skipped_row_count"] == 954
     assert density["input_profile"]["warnings_by_code"]["missing_source_text"] == 954
+    assert density["faq_run_summary"]["warning_count"] == 954
+    assert density["faq_run_summary"]["generated"] == 8
+    assert density["faq_run_summary"]["output_checks"]["failed_checks"] == ["condensed"]
 
     assert output_checks["ok"] is False
     assert output_checks["input_profile"]["raw_row_count"] == 1000
@@ -291,6 +294,9 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert output_checks["input_profile"]["skipped_row_count"] == 0
     assert output_checks["failure"]["type"] == "output_checks"
     assert output_checks["failure"]["failed_output_checks"]
+    assert output_checks["faq_run_summary"]["weighted_source_volume"] == 1000
+    assert output_checks["faq_run_summary"]["warning_count"] == 0
+    assert output_checks["faq_run_summary"]["output_checks"]["failed"] == 2
 
 
 @pytest.mark.parametrize("overrides,message", [

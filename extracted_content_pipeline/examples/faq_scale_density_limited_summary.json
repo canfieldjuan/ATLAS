@@ -17,6 +17,38 @@
     "warning_sample": [],
     "usable_source_ratio": 0.046
   },
+  "faq_run_summary": {
+    "status": "failed_output_checks",
+    "source_count": 46,
+    "ticket_source_count": 46,
+    "generated": 8,
+    "weighted_source_volume": 46,
+    "source_channel_counts": {
+      "complaints": 46
+    },
+    "zero_result_search_source_count": 0,
+    "output_checks": {
+      "passed": 2,
+      "failed": 1,
+      "total": 3,
+      "failed_checks": [
+        "condensed"
+      ]
+    },
+    "item_score_distribution": {
+      "count": 8,
+      "min": 2,
+      "max": 14,
+      "average": 6.25,
+      "bands": {
+        "zero": 0,
+        "low_1_to_4": 3,
+        "medium_5_to_9": 4,
+        "high_10_plus": 1
+      }
+    },
+    "warning_count": 954
+  },
   "failure": {
     "type": "output_checks",
     "exit_code": 1,
