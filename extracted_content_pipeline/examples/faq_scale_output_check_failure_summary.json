@@ -34,6 +34,13 @@
         "uses_user_vocabulary"
       ]
     },
+    "vocabulary_gaps": {
+      "term_mapping_count": 0,
+      "mapped_topic_count": 0,
+      "zero_result_mapping_count": 0,
+      "max_opportunity_score": 0,
+      "top_customer_terms": []
+    },
     "item_score_distribution": {
       "count": 12,
       "min": 1,
