@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from html import escape as html_escape
@@ -48,6 +49,7 @@ ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[
 SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
+_LANDING_PAGE_REPAIR_LOCK_NAMESPACE = "content-assets:landing-page-repair"
 
 
 def _require_fastapi() -> None:
@@ -125,6 +127,60 @@ async def _resolve_required_provider(
     if value is None:
         raise HTTPException(status_code=503, detail=detail)
     return value
+
+
+def _landing_page_repair_lock_key(scope: TenantScope, landing_page_id: str) -> str:
+    account_id = _clean(scope.account_id) or "unscoped"
+    return f"account={account_id}:landing_page={landing_page_id}"
+
+
+@asynccontextmanager
+async def _landing_page_repair_lock(
+    pool: Any,
+    *,
+    scope: TenantScope,
+    landing_page_id: str,
+):
+    """Hold a DB-backed session advisory lock for one repair request.
+
+    The extracted router can run against simple fake pools in tests and host
+    environments. When the injected pool does not expose asyncpg-style
+    ``acquire()``, the context degrades to no locking instead of changing the
+    port contract for every host.
+    """
+
+    acquire = getattr(pool, "acquire", None)
+    if not callable(acquire):
+        yield True
+        return
+
+    lock_key = _landing_page_repair_lock_key(scope, landing_page_id)
+    conn = await _maybe_await(acquire())
+    try:
+        acquired = bool(await conn.fetchval(
+            """
+            SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))
+            """,
+            _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
+            lock_key,
+        ))
+        if not acquired:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            await conn.fetchval(
+                """
+                SELECT pg_advisory_unlock(hashtext($1), hashtext($2))
+                """,
+                _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
+                lock_key,
+            )
+    finally:
+        release = getattr(pool, "release", None)
+        if callable(release):
+            await _maybe_await(release(conn))
 
 
 def _api_limit(value: int | None, config: GeneratedAssetApiConfig) -> int:
@@ -417,31 +473,41 @@ def create_generated_asset_router(
                 status_code=409,
                 detail="approved landing pages cannot be repaired",
             )
-        llm = await _resolve_required_provider(llm_provider, detail="LLM unavailable")
-        skills = await _resolve_required_provider(
-            skills_provider,
-            detail="Landing page generation skills unavailable",
-        )
-        result = await LandingPageGenerationService(
-            landing_pages=repository,
-            llm=llm,
-            skills=skills,
-        ).repair_draft(scope=tenant, draft=existing)
-        result_payload = result.as_dict()
-        if result.generated == 0 and result.skipped > 0:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "message": "landing page draft could not be repaired",
-                    "repair_result": result_payload,
-                },
+        async with _landing_page_repair_lock(
+            pool,
+            scope=tenant,
+            landing_page_id=landing_page_id,
+        ) as repair_lock_acquired:
+            if not repair_lock_acquired:
+                raise HTTPException(
+                    status_code=409,
+                    detail="landing page draft repair already in progress",
+                )
+            llm = await _resolve_required_provider(llm_provider, detail="LLM unavailable")
+            skills = await _resolve_required_provider(
+                skills_provider,
+                detail="Landing page generation skills unavailable",
             )
-        refreshed = await repository.get_draft(landing_page_id, scope=tenant)
-        if refreshed is None:
-            raise HTTPException(status_code=404, detail="Landing page draft not found")
-        row = landing_page_draft_export_row(refreshed)
-        row["repair_result"] = result_payload
-        return row
+            result = await LandingPageGenerationService(
+                landing_pages=repository,
+                llm=llm,
+                skills=skills,
+            ).repair_draft(scope=tenant, draft=existing)
+            result_payload = result.as_dict()
+            if result.generated == 0 and result.skipped > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "landing page draft could not be repaired",
+                        "repair_result": result_payload,
+                    },
+                )
+            refreshed = await repository.get_draft(landing_page_id, scope=tenant)
+            if refreshed is None:
+                raise HTTPException(status_code=404, detail="Landing page draft not found")
+            row = landing_page_draft_export_row(refreshed)
+            row["repair_result"] = result_payload
+            return row
 
     return router
 

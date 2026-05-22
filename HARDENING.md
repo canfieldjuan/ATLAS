@@ -34,4 +34,28 @@ register under `docs/technical-debt/`.
 > kept separate to avoid append-collisions with the concurrent
 > content-ops-station sessions. Scan that file too when working those lanes.
 
-None yet.
+## 2026-05-22
+
+### Surface skipped landing-page repair locks
+- File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
+- Description: Pools without `acquire()` skip the advisory-lock guard without an operator-visible signal.
+- Why it matters: A host misconfiguration could silently disable duplicate-spend protection.
+- Effort: S
+- Category: polish
+- Found during: PR-Landing-Page-Repair-Cost-Guard review
+
+### Consider a wider advisory-lock hash key
+- File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
+- Description: `hashtext()` is 32-bit, so unrelated draft lock keys could theoretically collide.
+- Why it matters: A collision would create a false `409` for an unrelated draft repair.
+- Effort: S
+- Category: correctness
+- Found during: PR-Landing-Page-Repair-Cost-Guard review
+
+### Revisit repair lock connection hold time
+- File/location: `extracted_content_pipeline/api/generated_assets.py`, `repair_landing_page_draft`
+- Description: The advisory-lock connection stays checked out while the LLM repair runs.
+- Why it matters: This is acceptable for operator-triggered repair, but higher repair volume could turn LLM latency into pool pressure.
+- Effort: M
+- Category: tech-debt
+- Found during: PR-Landing-Page-Repair-Cost-Guard review
