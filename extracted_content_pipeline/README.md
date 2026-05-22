@@ -196,7 +196,7 @@ Reusable customer glossary and intent mappings can live in a JSON rule file:
 python scripts/build_extracted_ticket_faq_markdown.py \
   extracted_content_pipeline/examples/support_ticket_sources.csv \
   --source-format csv \
-  --documentation-term "Single sign-on setup" \
+  --documentation-term-file extracted_content_pipeline/examples/faq_documentation_terms.txt \
   --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
   --result-output support_ticket_faq_result.json \
   --output support_ticket_faq.md
@@ -217,8 +217,10 @@ The rule file accepts two optional arrays:
 
 Intent rules group customer language under a product-specific FAQ topic.
 Vocabulary-gap rules map customer terms to documentation terms passed with
-`--documentation-term`, so the result JSON and Markdown can suggest alternate
-phrasing. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
+`--documentation-term` or `--documentation-term-file`, so the result JSON and
+Markdown can suggest alternate phrasing. Documentation-term files are UTF-8
+plain text with one term per line; blank lines and `#` comment lines are
+ignored. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 `--vocabulary-gap-rule` flags are placed before file rules, so command-line
 overrides win when multiple rules match. Rule-file values use the same CLI
 delimiter guardrails: intent topics cannot contain `=` or `,`, and keywords or
