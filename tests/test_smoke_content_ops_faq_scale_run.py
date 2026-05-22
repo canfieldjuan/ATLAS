@@ -14,6 +14,14 @@ SPEC = importlib.util.spec_from_file_location("smoke_content_ops_faq_scale_run",
 assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
+FAQ_CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
+FAQ_SPEC = importlib.util.spec_from_file_location(
+    "build_extracted_ticket_faq_markdown",
+    FAQ_CLI,
+)
+assert FAQ_SPEC is not None and FAQ_SPEC.loader is not None
+faq_cli = importlib.util.module_from_spec(FAQ_SPEC)
+FAQ_SPEC.loader.exec_module(faq_cli)
 SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
 FAILURE_EXAMPLES = {
     "density": ROOT / "extracted_content_pipeline/examples/faq_scale_density_limited_summary.json",
@@ -276,8 +284,10 @@ def test_raw_row_profile_returns_none_for_unrecognized_shape(tmp_path: Path) -> 
 def test_faq_scale_failure_examples_separate_density_from_output_checks() -> None:
     density = json.loads(FAILURE_EXAMPLES["density"].read_text(encoding="utf-8"))
     output_checks = json.loads(FAILURE_EXAMPLES["output_checks"].read_text(encoding="utf-8"))
+    expected_summary_shape = _mapping_shape(_runtime_faq_run_summary())
 
     assert density["ok"] is False
+    assert _mapping_shape(density["faq_run_summary"]) == expected_summary_shape
     assert density["input_profile"]["raw_row_count"] == 1000
     assert density["input_profile"]["usable_source_count"] == 46
     assert density["input_profile"]["usable_source_ratio"] < 0.1
@@ -288,6 +298,7 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert density["faq_run_summary"]["output_checks"]["failed_checks"] == ["condensed"]
 
     assert output_checks["ok"] is False
+    assert _mapping_shape(output_checks["faq_run_summary"]) == expected_summary_shape
     assert output_checks["input_profile"]["raw_row_count"] == 1000
     assert output_checks["input_profile"]["usable_source_count"] == 1000
     assert output_checks["input_profile"]["usable_source_ratio"] == 1.0
@@ -297,6 +308,46 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert output_checks["faq_run_summary"]["weighted_source_volume"] == 1000
     assert output_checks["faq_run_summary"]["warning_count"] == 0
     assert output_checks["faq_run_summary"]["output_checks"]["failed"] == 2
+
+
+def _runtime_faq_run_summary() -> dict[str, object]:
+    return faq_cli._run_summary(
+        result=argparse.Namespace(
+            output_checks={
+                "condensed": False,
+                "has_action_items": True,
+                "uses_user_vocabulary": True,
+            },
+            source_count=2,
+            ticket_source_count=2,
+        ),
+        failed_checks=["condensed"],
+        source_mix={
+            "weighted_source_volume": 2,
+            "source_channel_counts": {"support_tickets": 2},
+            "zero_result_search_source_count": 0,
+        },
+        item_summaries=[{"opportunity_score": 1}],
+        warnings=[],
+    )
+
+
+def _mapping_shape(value: object, path: str = "") -> object:
+    if not isinstance(value, dict):
+        return type(value).__name__
+    if path == "source_channel_counts":
+        return {
+            "<source_channel>": sorted(
+                {type(item).__name__ for item in value.values()}
+            )
+        }
+    return {
+        str(key): _mapping_shape(
+            item,
+            str(key) if not path else f"{path}.{key}",
+        )
+        for key, item in sorted(value.items())
+    }
 
 
 @pytest.mark.parametrize("overrides,message", [
