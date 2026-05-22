@@ -2487,6 +2487,223 @@ def test_ticket_faq_cli_uses_first_matching_custom_intent_rule(tmp_path: Path) -
     assert result["diagnostics"]["items"][0]["topic"] == "first topic"
 
 
+def test_ticket_faq_cli_accepts_json_rule_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,SSO sync,How do I enable SSO after warehouse sync?,sync",
+    )
+    rule_file = tmp_path / "faq_rules.json"
+    rule_file.write_text(
+        json.dumps({
+            "intent_rules": [
+                {"topic": "data freshness", "keywords": ["warehouse sync"]}
+            ],
+            "vocabulary_gap_rules": [["SSO", "single sign-on"]],
+        }),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Single sign-on setup",
+        "--rule-file",
+        str(rule_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["rule_files"] == [str(rule_file)]
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "data freshness", "keywords": ["warehouse sync"]}
+    ]
+    assert result["config"]["vocabulary_gap_rules"] == [["SSO", "single sign-on"]]
+    assert result["diagnostics"]["items"][0]["topic"] == "data freshness"
+    assert result["diagnostics"]["term_mappings"][0]["customer_term"] == "SSO"
+
+
+def test_ticket_faq_cli_rule_flags_take_precedence_over_rule_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+    rule_file = tmp_path / "faq_rules.json"
+    rule_file.write_text(
+        json.dumps({
+            "intent_rules": [
+                {"topic": "file topic", "keywords": ["warehouse sync"]}
+            ]
+        }),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--rule-file",
+        str(rule_file),
+        "--intent-rule",
+        "cli topic=warehouse sync",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "cli topic", "keywords": ["warehouse sync"]},
+        {"topic": "file topic", "keywords": ["warehouse sync"]},
+    ]
+    assert result["diagnostics"]["items"][0]["topic"] == "cli topic"
+
+
+def test_ticket_faq_cli_vocabulary_flags_take_precedence_over_rule_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,SSO setup,How do I enable SSO for my team?,auth",
+    )
+    rule_file = tmp_path / "faq_rules.json"
+    rule_file.write_text(
+        json.dumps({"vocabulary_gap_rules": [["login", "authentication"]]}),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Single sign-on setup",
+        "--rule-file",
+        str(rule_file),
+        "--vocabulary-gap-rule",
+        "SSO,single sign-on",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["vocabulary_gap_rules"] == [
+        ["SSO", "single sign-on"],
+        ["login", "authentication"],
+    ]
+    assert result["diagnostics"]["term_mappings"][0]["customer_term"] == "SSO"
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ([], "--rule-file must contain a JSON object"),
+        ({"unknown": []}, "--rule-file contains unsupported key(s): unknown"),
+        ({"intent_rules": "bad"}, "--rule-file intent_rules must be an array"),
+        (
+            {"intent_rules": ["bad"]},
+            "--rule-file intent_rules[1] must be an object",
+        ),
+        (
+            {"intent_rules": [{"topic": "data freshness", "keywords": "bad"}]},
+            "--rule-file intent_rules[1].keywords must be an array",
+        ),
+        (
+            {"intent_rules": [{"topic": "data freshness", "keywords": []}]},
+            "--rule-file intent_rules[1] is invalid",
+        ),
+        (
+            {"intent_rules": [{"topic": "data=freshness", "keywords": ["sync"]}]},
+            "--rule-file intent_rules[1].topic cannot contain delimiter",
+        ),
+        (
+            {"intent_rules": [{"topic": "data freshness", "keywords": ["sync,lag"]}]},
+            "--rule-file intent_rules[1].keywords cannot contain delimiter",
+        ),
+        (
+            {"intent_rules": [{"topic": "data freshness", "keywords": [5]}]},
+            "--rule-file intent_rules[1].keywords must contain string values",
+        ),
+        (
+            {"vocabulary_gap_rules": "bad"},
+            "--rule-file vocabulary_gap_rules must be an array",
+        ),
+        (
+            {"vocabulary_gap_rules": ["bad"]},
+            "--rule-file vocabulary_gap_rules[1] must be an array",
+        ),
+        (
+            {"vocabulary_gap_rules": [["SSO"]]},
+            "--rule-file vocabulary_gap_rules[1] is invalid",
+        ),
+        (
+            {"vocabulary_gap_rules": [["SSO,login", "single sign-on"]]},
+            "--rule-file vocabulary_gap_rules[1] cannot contain delimiter",
+        ),
+        (
+            {"vocabulary_gap_rules": [["SSO", None]]},
+            "--rule-file vocabulary_gap_rules[1] must contain string values",
+        ),
+    ],
+)
+def test_ticket_faq_cli_rejects_invalid_rule_file(
+    tmp_path: Path,
+    payload: object,
+    message: str,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+    rule_file = tmp_path / "faq_rules.json"
+    rule_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--rule-file",
+        str(rule_file),
+    )
+
+    assert completed.returncode == 1
+    assert message in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_missing_rule_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--rule-file",
+        str(tmp_path / "missing.json"),
+    )
+
+    assert completed.returncode == 1
+    assert "--rule-file not found:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_malformed_rule_file_json(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+    rule_file = tmp_path / "faq_rules.json"
+    rule_file.write_text("{", encoding="utf-8")
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--rule-file",
+        str(rule_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--rule-file must be valid JSON:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
 def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_path: Path) -> None:
     source = _write_source_csv(
         tmp_path,
