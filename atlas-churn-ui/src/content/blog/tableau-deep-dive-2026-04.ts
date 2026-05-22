@@ -230,28 +230,36 @@ const post: BlogPost = {
 <p>For a broader view of how other platforms fare in reviewer sentiment, see our <a href="https://churnsignals.co/blog/hubspot-deep-dive-2026-03">HubSpot Deep Dive</a> and <a href="https://churnsignals.co/blog/zoom-deep-dive-2026-04">Zoom Deep Dive</a> analyses.</p>
 <h2 id="the-bottom-line-on-tableau">The Bottom Line on Tableau</h2>
 <p>Tableau's reviewer data reveals a platform with strong technical capabilities and a loyal power-user base, but persistent friction around cost, complexity, and broad user adoption. The synthesis wedge identified in the data -- <strong>segment mismatch</strong> -- captures the core tension: Tableau delivers exceptional value for technical analytics teams, but struggles to achieve the broad, self-service adoption many organizations seek.</p>
-<p><strong>What the data suggests Tableau does exceptionally well:</strong>
-- Advanced visualization capabilities that power users describe as unmatched
-- Deep integration with modern data stacks (Snowflake, Python, dbt)
-- Enterprise deployment options (Server, Cloud) with governance features
-- Strong community resources and documentation</p>
-<p><strong>Where reviewers consistently report friction:</strong>
-- Pricing that scales poorly for broad deployment (per-user licensing)
-- Performance issues with large datasets and real-time dashboards
-- UX complexity that limits self-service adoption among non-technical users
-- Tableau Prep gaps that force third-party ETL tool adoption</p>
+<p><strong>What the data suggests Tableau does exceptionally well:</strong></p>
+<ul>
+<li>Advanced visualization capabilities that power users describe as unmatched</li>
+<li>Deep integration with modern data stacks (Snowflake, Python, dbt)</li>
+<li>Enterprise deployment options (Server, Cloud) with governance features</li>
+<li>Strong community resources and documentation</li>
+</ul>
+<p><strong>Where reviewers consistently report friction:</strong></p>
+<ul>
+<li>Pricing that scales poorly for broad deployment (per-user licensing)</li>
+<li>Performance issues with large datasets and real-time dashboards</li>
+<li>UX complexity that limits self-service adoption among non-technical users</li>
+<li>Tableau Prep gaps that force third-party ETL tool adoption</li>
+</ul>
 <p><strong>Timing context:</strong> One 140-seat account is in active evaluation stage right now, with pricing pain driving consideration of Lightdash and Quicksight alternatives. This represents meaningful near-term churn risk, though the overall churn signal rate (5% of enriched reviews) remains relatively low compared to other data and analytics platforms.</p>
 <p><strong>Market regime context:</strong> In a platform consolidation market, Tableau competes on ecosystem depth and enterprise integration, not disruptive innovation. This favors incumbents with established user bases, but creates vulnerability to pricing pressure and cloud-native challengers.</p>
-<p><strong>Who should consider Tableau:</strong>
-- Organizations with dedicated analytics teams and technical user bases
-- Buyers prioritizing visualization flexibility and advanced analytics over ease of use
-- Enterprises with complex data governance and deployment requirements
-- Teams already invested in Salesforce or cloud data warehouses (Snowflake, BigQuery)</p>
-<p><strong>Who should proceed cautiously:</strong>
-- Organizations seeking broad, self-service BI adoption across non-technical users
-- Small to mid-market buyers with limited budgets for per-user licensing
-- Teams without dedicated analytics resources to manage deployment and training
-- Buyers prioritizing Microsoft ecosystem integration (Power BI may fit better)</p>
+<p><strong>Who should consider Tableau:</strong></p>
+<ul>
+<li>Organizations with dedicated analytics teams and technical user bases</li>
+<li>Buyers prioritizing visualization flexibility and advanced analytics over ease of use</li>
+<li>Enterprises with complex data governance and deployment requirements</li>
+<li>Teams already invested in Salesforce or cloud data warehouses (Snowflake, BigQuery)</li>
+</ul>
+<p><strong>Who should proceed cautiously:</strong></p>
+<ul>
+<li>Organizations seeking broad, self-service BI adoption across non-technical users</li>
+<li>Small to mid-market buyers with limited budgets for per-user licensing</li>
+<li>Teams without dedicated analytics resources to manage deployment and training</li>
+<li>Buyers prioritizing Microsoft ecosystem integration (Power BI may fit better)</li>
+</ul>
 <p>The data does not suggest Tableau is failing or losing ground dramatically. The 5% churn signal rate and low end-user churn rate indicate a stable, satisfied core user base. The friction appears in deployment breadth and cost scaling, not core product capability.</p>
 <p>For organizations where Tableau's strengths align with their needs -- technical teams, complex visualization requirements, enterprise scale -- reviewer sentiment remains positive. For organizations seeking lower-cost, easier-to-adopt alternatives for broad user populations, the competitive pressure from Power BI and cloud-native options is real and growing.</p>
 <p>To see how other enterprise platforms navigate similar challenges, explore our <a href="https://churnsignals.co/blog/copper-deep-dive-2026-04">Copper Deep Dive</a> analysis.</p>

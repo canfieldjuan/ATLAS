@@ -171,55 +171,75 @@ While most vendors deliver functional interfaces, reviewers report that onboardi
 This is the most volatile pain point. Reviewers report that initial pricing is competitive, but renewal increases are steep. The phrase "pricing backlash" captures the pattern: teams choose a vendor based on cost, then face significant increases 12–24 months in. This creates renewal-window vulnerability—a key moment when competitors can win deals.</p>
 <p>Secondary pain patterns include integration lag (Freshdesk's third-party integrations, Zendesk's API complexity), contract lock-in (both Freshdesk and Zendesk), and performance issues during high-volume periods (Zendesk cited by small businesses handling rapid ticket growth).</p>
 <h2 id="freshdesk-strengths-weaknesses">Freshdesk: Strengths &amp; Weaknesses</h2>
-<p><strong>Strengths:</strong>
-- Data migration capabilities are cited as a competitive advantage. Reviewers moving from other platforms report smooth data transfer.
-- User experience is generally positive. The interface is intuitive enough that new team members ramp quickly.
-- Feature breadth at mid-market price points appeals to growing teams.</p>
-<p><strong>Weaknesses:</strong>
-- Integration maintenance is a pain point. Third-party integrations (especially WooCommerce) are community-maintained and lag behind official updates.
-- Contract cancellation is difficult. Multiple reviewers report that the cancellation process is opaque and time-consuming.
-- Pricing increases at renewal are steep. Teams report 30–50% increases when renewing, particularly at the 3-year mark.</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Data migration capabilities are cited as a competitive advantage. Reviewers moving from other platforms report smooth data transfer.</li>
+<li>User experience is generally positive. The interface is intuitive enough that new team members ramp quickly.</li>
+<li>Feature breadth at mid-market price points appeals to growing teams.</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Integration maintenance is a pain point. Third-party integrations (especially WooCommerce) are community-maintained and lag behind official updates.</li>
+<li>Contract cancellation is difficult. Multiple reviewers report that the cancellation process is opaque and time-consuming.</li>
+<li>Pricing increases at renewal are steep. Teams report 30–50% increases when renewing, particularly at the 3-year mark.</li>
+</ul>
 <p><strong>Verdict:</strong> Freshdesk is a strong cost alternative to Zendesk, but integration depth and renewal pricing are friction points. Best for teams prioritizing cost and comfortable managing integration lag.</p>
 <h2 id="happyfox-strengths-weaknesses">HappyFox: Strengths &amp; Weaknesses</h2>
-<p><strong>Strengths:</strong>
-- User experience is praised for simplicity. HappyFox reviewers note that the platform is easy to learn and configure without heavy customization.
-- Support responsiveness is stronger than larger competitors. Smaller team size means faster resolution on support tickets.
-- Overall satisfaction is high relative to sample size (11 reviews, 4.5 rating).</p>
-<p><strong>Weaknesses:</strong>
-- Limited data on major pain points. The smaller review sample makes it harder to identify systematic issues.
-- Feature breadth may lag larger competitors. HappyFox is positioned as a simpler, lighter alternative, which appeals to small teams but limits enterprise use cases.</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>User experience is praised for simplicity. HappyFox reviewers note that the platform is easy to learn and configure without heavy customization.</li>
+<li>Support responsiveness is stronger than larger competitors. Smaller team size means faster resolution on support tickets.</li>
+<li>Overall satisfaction is high relative to sample size (11 reviews, 4.5 rating).</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Limited data on major pain points. The smaller review sample makes it harder to identify systematic issues.</li>
+<li>Feature breadth may lag larger competitors. HappyFox is positioned as a simpler, lighter alternative, which appeals to small teams but limits enterprise use cases.</li>
+</ul>
 <p><strong>Verdict:</strong> HappyFox is best for small teams (under 50 people) prioritizing ease of use and responsive support. Not recommended for teams needing deep integrations or multi-channel support at scale.</p>
 <h2 id="help-scout-strengths-weaknesses">Help Scout: Strengths &amp; Weaknesses</h2>
-<p><strong>Strengths:</strong>
-- Support quality is a differentiator. Help Scout reviewers explicitly praise responsive, helpful support.
-- User experience is clean and approachable. The platform avoids the complexity of larger competitors.
-- Overall satisfaction is solid (4.4 rating across 11 reviews).</p>
-<p><strong>Weaknesses:</strong>
-- Pricing complaints are consistent. Help Scout is positioned as premium for its size, and reviewers note that cost is a barrier for growing teams.
-- Data migration from other platforms is cited as difficult. Reviewers report that switching to Help Scout requires manual effort.
-- Feature limitations emerge as teams scale. Reviewers note that advanced automation and reporting are weaker than Zendesk or Freshdesk.</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Support quality is a differentiator. Help Scout reviewers explicitly praise responsive, helpful support.</li>
+<li>User experience is clean and approachable. The platform avoids the complexity of larger competitors.</li>
+<li>Overall satisfaction is solid (4.4 rating across 11 reviews).</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Pricing complaints are consistent. Help Scout is positioned as premium for its size, and reviewers note that cost is a barrier for growing teams.</li>
+<li>Data migration from other platforms is cited as difficult. Reviewers report that switching to Help Scout requires manual effort.</li>
+<li>Feature limitations emerge as teams scale. Reviewers note that advanced automation and reporting are weaker than Zendesk or Freshdesk.</li>
+</ul>
 <p><strong>Verdict:</strong> Help Scout works well for small, support-focused teams (under 100 people) willing to pay premium pricing for responsive support. Not ideal for teams needing broad feature depth or cost efficiency.</p>
 <h2 id="zendesk-strengths-weaknesses">Zendesk: Strengths &amp; Weaknesses</h2>
-<p><strong>Strengths:</strong>
-- Feature breadth is unmatched. Zendesk offers extensive automation, reporting, and multi-channel support (email, chat, phone, social).
-- Reliability at scale is strong. Reviewers managing high ticket volumes (small businesses with 200+ daily tickets) report that Zendesk handles load well.
-- Integration ecosystem is mature. Official integrations with CRMs, e-commerce platforms, and communication tools are robust.</p>
-<p><strong>Weaknesses:</strong>
-- Support quality is inconsistent. Reviewers report slow response times and difficulty escalating issues. One reviewer noted being "drowning in support tickets" without adequate vendor support.
-- Pricing is aggressive. Zendesk is the most expensive option on a per-seat basis, and reviewers cite this as the primary reason for evaluating competitors.
-- Contract lock-in is frustrating. Zendesk's multi-year contracts with steep renewal increases create friction at decision windows.
-- Onboarding complexity is steep. Reviewers note that implementation requires significant internal effort, particularly for custom workflows.</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Feature breadth is unmatched. Zendesk offers extensive automation, reporting, and multi-channel support (email, chat, phone, social).</li>
+<li>Reliability at scale is strong. Reviewers managing high ticket volumes (small businesses with 200+ daily tickets) report that Zendesk handles load well.</li>
+<li>Integration ecosystem is mature. Official integrations with CRMs, e-commerce platforms, and communication tools are robust.</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Support quality is inconsistent. Reviewers report slow response times and difficulty escalating issues. One reviewer noted being "drowning in support tickets" without adequate vendor support.</li>
+<li>Pricing is aggressive. Zendesk is the most expensive option on a per-seat basis, and reviewers cite this as the primary reason for evaluating competitors.</li>
+<li>Contract lock-in is frustrating. Zendesk's multi-year contracts with steep renewal increases create friction at decision windows.</li>
+<li>Onboarding complexity is steep. Reviewers note that implementation requires significant internal effort, particularly for custom workflows.</li>
+</ul>
 <p><strong>Verdict:</strong> Zendesk is best for large teams (200+ people) or enterprises needing extensive feature depth and multi-channel support. Avoid if cost is a primary concern or if your team lacks implementation bandwidth.</p>
 <h2 id="zoho-desk-strengths-weaknesses">Zoho Desk: Strengths &amp; Weaknesses</h2>
-<p><strong>Strengths:</strong>
-- Ecosystem integration is powerful. Teams already using Zoho CRM, Zoho Analytics, or other Zoho products report seamless workflows.
-- Support quality is praised. Zoho Desk reviewers note responsive support and helpful documentation.
-- Performance is reliable. Reviewers report fast response times and stability, even under load.
-- Pricing is competitive, especially for teams using other Zoho products.</p>
-<p><strong>Weaknesses:</strong>
-- Onboarding friction is notable. Reviewers report that initial setup is complex, particularly for teams unfamiliar with Zoho's ecosystem.
-- Integration outside the Zoho ecosystem is limited. Teams needing to connect to non-Zoho tools report friction.
-- User experience can feel dated. Reviewers note that the interface is functional but less polished than Zendesk or Freshdesk.</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+<li>Ecosystem integration is powerful. Teams already using Zoho CRM, Zoho Analytics, or other Zoho products report seamless workflows.</li>
+<li>Support quality is praised. Zoho Desk reviewers note responsive support and helpful documentation.</li>
+<li>Performance is reliable. Reviewers report fast response times and stability, even under load.</li>
+<li>Pricing is competitive, especially for teams using other Zoho products.</li>
+</ul>
+<p><strong>Weaknesses:</strong></p>
+<ul>
+<li>Onboarding friction is notable. Reviewers report that initial setup is complex, particularly for teams unfamiliar with Zoho's ecosystem.</li>
+<li>Integration outside the Zoho ecosystem is limited. Teams needing to connect to non-Zoho tools report friction.</li>
+<li>User experience can feel dated. Reviewers note that the interface is functional but less polished than Zendesk or Freshdesk.</li>
+</ul>
 <p><strong>Verdict:</strong> Zoho Desk is ideal for teams already invested in the Zoho ecosystem or those prioritizing cost and support quality. Not recommended for teams needing broad third-party integrations or premium UI/UX.</p>
 <h2 id="choosing-the-right-helpdesk-platform">Choosing the Right Helpdesk Platform</h2>
 <p>The helpdesk market offers five viable options, each with distinct positioning:</p>
