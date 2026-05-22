@@ -685,13 +685,19 @@ def _weighted_frequency(rows: Sequence[Mapping[str, Any]]) -> int:
     return sum(weights.values())
 
 
-def _source_weight(*rows: Mapping[str, Any]) -> int:
+def source_row_weight(*rows: Mapping[str, Any]) -> int:
+    """Return the represented source volume for normalized source rows."""
+
     for row in rows:
         for key in _SOURCE_WEIGHT_KEYS:
             weight = _integer_or_none(_field_value(row, key))
             if weight is not None and weight > 0:
                 return weight
     return 1
+
+
+def _source_weight(*rows: Mapping[str, Any]) -> int:
+    return source_row_weight(*rows)
 
 
 def _term_mappings(

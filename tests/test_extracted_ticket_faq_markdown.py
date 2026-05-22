@@ -2247,6 +2247,9 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert result["diagnostics"]["source_mix"] == {
         "source_channel_counts": {"support_tickets": 4},
         "source_type_counts": {"support_ticket": 4},
+        "weighted_source_volume": 4,
+        "weighted_source_volume_by_channel": {"support_tickets": 4},
+        "weighted_source_volume_by_type": {"support_ticket": 4},
         "zero_result_search_source_count": 0,
     }
     assert result["diagnostics"]["ticket_counts"] == [2, 2]
@@ -2323,6 +2326,11 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
                 "search_count": "25",
             },
             {
+                "query_id": "search-1",
+                "search_query": "export report",
+                "search_count": "10",
+            },
+            {
                 "chat_id": "chat-1",
                 "message": "How do I change my login email?",
             },
@@ -2342,18 +2350,31 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
 
     assert completed.returncode == 0
     result = json.loads(result_output.read_text(encoding="utf-8"))
-    assert result["source_count"] == 4
+    assert result["source_count"] == 5
     assert result["diagnostics"]["source_mix"] == {
         "source_channel_counts": {
             "chats": 1,
             "sales_inputs": 1,
-            "search_logs": 1,
+            "search_logs": 2,
             "support_tickets": 1,
         },
         "source_type_counts": {
             "chat": 1,
             "sales_objection": 1,
-            "search_log": 1,
+            "search_log": 2,
+            "support_ticket": 1,
+        },
+        "weighted_source_volume": 28,
+        "weighted_source_volume_by_channel": {
+            "chats": 1,
+            "sales_inputs": 1,
+            "search_logs": 25,
+            "support_tickets": 1,
+        },
+        "weighted_source_volume_by_type": {
+            "chat": 1,
+            "sales_objection": 1,
+            "search_log": 25,
             "support_ticket": 1,
         },
         "zero_result_search_source_count": 1,
