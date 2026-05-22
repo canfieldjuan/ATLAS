@@ -166,27 +166,59 @@ def _ready_draft(**overrides) -> LandingPageDraft:
             id="problem",
             title="Support problems that keep coming back",
             body_markdown=(
-                "Support problems keep coming back when VP Engineering teams "
-                "cannot see where customers get stuck before renewal pressure "
-                "builds."
+                "VP Engineering teams catch pressure early when repeated "
+                "support issues are turned into visible answers before "
+                "renewal risk builds. Support problems keep coming back when "
+                "teams cannot see where customers get stuck."
             ),
+            metadata={
+                "order": 1,
+                "kind": "problem",
+                "primary_question": "Why do support problems become renewal risk?",
+                "answer_summary": (
+                    "VP Engineering teams catch pressure early when repeated "
+                    "support issues are turned into visible answers before "
+                    "renewal risk builds."
+                ),
+            },
         ),
         LandingPageSection(
             id="solution",
             title="A workflow for catching pressure early",
             body_markdown=(
-                "The solution helps teams catch pressure early by turning the "
-                "same repeated support signals into a clear page and follow-up "
-                "workflow."
+                "The solution helps VP Engineering teams catch pressure early "
+                "by turning repeated support signals into a clear page and "
+                "follow-up workflow."
             ),
+            metadata={
+                "order": 2,
+                "kind": "solution",
+                "primary_question": "How does the workflow catch pressure early?",
+                "answer_summary": (
+                    "The solution helps VP Engineering teams catch pressure "
+                    "early by turning repeated support signals into a clear "
+                    "page and follow-up workflow."
+                ),
+            },
         ),
         LandingPageSection(
-            id="faq",
+            id="buyer_questions",
             title="Questions buyers ask before rollout",
             body_markdown=(
-                "This section answers implementation, pricing, and security "
-                "questions before the buyer has to email the team."
+                "VP Engineering buyers can answer implementation, pricing, "
+                "and security questions before they have to email the team. "
+                "This keeps the conversion path clear during rollout review."
             ),
+            metadata={
+                "order": 3,
+                "kind": "objection",
+                "primary_question": "What should buyers know before rollout?",
+                "answer_summary": (
+                    "VP Engineering buyers can answer implementation, "
+                    "pricing, and security questions before they have to "
+                    "email the team."
+                ),
+            },
         ),
     )
     draft = LandingPageDraft(
@@ -393,6 +425,92 @@ async def test_export_landing_page_drafts_surfaces_incomplete_readiness() -> Non
         "conversion_path_clarity",
         "claim_safety",
     ]
+
+
+@pytest.mark.asyncio
+async def test_export_landing_page_drafts_scores_section_metadata_readiness() -> None:
+    result = await export_landing_page_drafts(
+        _Repository(drafts=[
+            _ready_draft(
+                hero={
+                    "headline": "Start the review",
+                    "subheadline": "For busy operators.",
+                    "cta_label": "Book a demo",
+                    "cta_url": "/demo",
+                },
+                sections=(
+                    LandingPageSection(
+                        id="customer_friction",
+                        title="Customer friction before renewal",
+                        body_markdown=(
+                            "VP Engineering teams catch pressure early by "
+                            "turning repeated support issues into visible "
+                            "answers before renewal risk builds. Customers "
+                            "stop waiting for the same basic answer."
+                        ),
+                        metadata={
+                            "kind": "problem",
+                            "primary_question": (
+                                "Why does repeated customer friction matter?"
+                            ),
+                            "answer_summary": (
+                                "VP Engineering teams catch pressure early by "
+                                "turning repeated support issues into visible "
+                                "answers before renewal risk builds."
+                            ),
+                        },
+                    ),
+                    LandingPageSection(
+                        id="clearer_answers",
+                        title="Clearer answers before customers wait",
+                        body_markdown=(
+                            "VP Engineering teams use a workflow to turn "
+                            "repeated support signals into clearer answers "
+                            "before customers wait on another reply."
+                        ),
+                        metadata={
+                            "kind": "solution",
+                            "primary_question": (
+                                "How do teams turn repeat tickets into answers?"
+                            ),
+                            "answer_summary": (
+                                "VP Engineering teams use a workflow to turn "
+                                "repeated support signals into clearer answers "
+                                "before customers wait on another reply."
+                            ),
+                        },
+                    ),
+                    LandingPageSection(
+                        id="before_rollout",
+                        title="Before rollout questions",
+                        body_markdown=(
+                            "VP Engineering buyers can answer implementation "
+                            "and pricing concerns before they book time with "
+                            "the team. That keeps review moving without "
+                            "another support handoff."
+                        ),
+                        metadata={
+                            "kind": "objection",
+                            "primary_question": "What should buyers know first?",
+                            "answer_summary": (
+                                "VP Engineering buyers can answer "
+                                "implementation and pricing concerns before "
+                                "they book time with the team."
+                            ),
+                        },
+                    ),
+                ),
+            )
+        ]),
+        scope=TenantScope(account_id="acct_1"),
+    )
+
+    row = result.rows[0]
+    assert row["seo_aeo_readiness"]["checks"]["answer_first_hero"] is False
+    assert row["seo_aeo_readiness"]["checks"]["problem_solution_clarity"] is True
+    assert row["seo_aeo_readiness"]["checks"]["objection_coverage"] is True
+    assert row["geo_readiness"]["checks"]["answer_extractability"] is True
+    assert row["geo_readiness"]["checks"]["section_semantics"] is True
 
 
 @pytest.mark.asyncio

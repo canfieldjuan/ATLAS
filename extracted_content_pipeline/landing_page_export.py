@@ -196,6 +196,32 @@ _GENERIC_SECTION_TITLES = frozenset({
     "overview",
     "summary",
 })
+_SECTION_KINDS = frozenset({
+    "problem",
+    "solution",
+    "how_it_works",
+    "proof",
+    "pricing",
+    "faq",
+    "objection",
+    "conversion",
+})
+_QUESTION_SECTION_KINDS = frozenset({
+    "problem",
+    "solution",
+    "how_it_works",
+    "faq",
+    "objection",
+})
+_PROBLEM_SECTION_KINDS = frozenset({"problem"})
+_SOLUTION_SECTION_KINDS = frozenset({"solution", "how_it_works"})
+_OBJECTION_SECTION_KINDS = frozenset({
+    "faq",
+    "objection",
+    "pricing",
+    "proof",
+    "how_it_works",
+})
 _STOPWORDS = frozenset({
     "about",
     "after",
@@ -313,11 +339,17 @@ def _answer_first_hero(draft: LandingPageDraft, hero_text: str) -> bool:
 
 def _problem_solution_clarity(draft: LandingPageDraft) -> bool:
     section_text = " ".join(
-        f"{section.id} {section.title} {section.body_markdown}"
+        f"{section.id} {section.title} {section.body_markdown} "
+        f"{_mapping_text(section.metadata)}"
         for section in draft.sections
     )
-    has_problem = bool(_PROBLEM_RE.search(section_text))
-    has_solution = bool(_SOLUTION_RE.search(section_text))
+    section_kinds = {_section_kind(section) for section in draft.sections}
+    has_problem = bool(_PROBLEM_RE.search(section_text)) or bool(
+        section_kinds.intersection(_PROBLEM_SECTION_KINDS)
+    )
+    has_solution = bool(_SOLUTION_RE.search(section_text)) or bool(
+        section_kinds.intersection(_SOLUTION_SECTION_KINDS)
+    )
     value_terms = _key_terms(draft.value_prop)
     return (
         has_problem
@@ -335,6 +367,8 @@ def _audience_specificity(draft: LandingPageDraft, text: str) -> bool:
 
 def _objection_coverage(draft: LandingPageDraft) -> bool:
     for section in draft.sections:
+        if _section_kind(section) in _OBJECTION_SECTION_KINDS:
+            return True
         if _OBJECTION_SECTION_RE.search(f"{section.id} {section.title}"):
             return True
     return False
@@ -353,9 +387,17 @@ def _offer_entity_clarity(draft: LandingPageDraft, text: str) -> bool:
 def _answer_extractability(draft: LandingPageDraft) -> bool:
     hero_text = _mapping_text(draft.hero)
     words = hero_text.split()
-    if len(words) < 12 or len(words) > 90:
+    if 12 <= len(words) <= 90 and _answer_first_hero(draft, hero_text):
+        return True
+    if not draft.sections:
         return False
-    return _answer_first_hero(draft, hero_text)
+    summary = _section_answer_summary(draft.sections[0])
+    if not _section_answer_summary_visible(draft.sections[0]):
+        return False
+    return _contains_any(
+        _normalize_text(summary),
+        _key_terms(draft.persona, draft.value_prop, draft.title),
+    )
 
 
 def _section_semantics(draft: LandingPageDraft) -> bool:
@@ -365,7 +407,45 @@ def _section_semantics(draft: LandingPageDraft) -> bool:
         title = _clean_text(section.title)
         if len(title) < 4 or title.lower() in _GENERIC_SECTION_TITLES:
             return False
+        kind = _section_kind(section)
+        if kind not in _SECTION_KINDS:
+            return False
+        if _section_requires_visible_answer(section) and not _section_answer_summary_visible(section):
+            return False
     return True
+
+
+def _section_kind(section: LandingPageSection) -> str:
+    return _normalize_kind(_metadata_mapping(section.metadata).get("kind"))
+
+
+def _normalize_kind(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", _clean_text(value).lower()).strip("_")
+
+
+def _section_primary_question(section: LandingPageSection) -> str:
+    return _clean_text(_metadata_mapping(section.metadata).get("primary_question"))
+
+
+def _section_answer_summary(section: LandingPageSection) -> str:
+    return _clean_text(_metadata_mapping(section.metadata).get("answer_summary"))
+
+
+def _section_requires_visible_answer(section: LandingPageSection) -> bool:
+    return bool(_section_primary_question(section)) or (
+        _section_kind(section) in _QUESTION_SECTION_KINDS
+    )
+
+
+def _section_answer_summary_visible(section: LandingPageSection) -> bool:
+    summary = _section_answer_summary(section)
+    body = _clean_text(section.body_markdown)
+    words = summary.split()
+    if len(words) < 6 or len(words) > 90:
+        return False
+    normalized_summary = _normalize_text(summary)
+    normalized_body = _normalize_text(body)
+    return bool(normalized_summary and normalized_body.startswith(normalized_summary))
 
 
 def _trust_signal_visibility(draft: LandingPageDraft, text: str) -> bool:
