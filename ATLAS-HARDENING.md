@@ -29,6 +29,22 @@ parked and note in the plan's Deferred.
 
 ## 2026-05-22
 
+### Deep-dive quote lead-ins can name a platform the quote isn't from
+- File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py`, the reviewer/strengths section that surfaces `quote_highlights` to the LLM (around the `quote_highlights = _blog_quote_highlights(...)` call in `_blueprint_vendor_deep_dive`).
+- Description: the LLM-written prose lead-in for a quote can name a platform that doesn't match the quote's `source_name`. The blockquote attribution uses `source_name` correctly; only the free-text lead-in drifts. Found in zoho-crm-deep-dive: "verified reviewer on G2" prose against a Slashdot-source quote (fixed in the published post by D6; the generator can recur).
+- Why it matters: a prose-vs-attribution mismatch that's data-untruthful but only caught at audit; future deep-dives can repeat it.
+- Effort: M (prompt-guidance change in the section goal/data_summary; uncertain effectiveness -- the LLM doesn't always honor narrow phrasing constraints).
+- Category: correctness
+- Found during: D6
+
+### Orphaned quote lead-in in salesforce-deep-dive (no quote follows)
+- File/location: `atlas-churn-ui/src/content/blog/salesforce-deep-dive-2026-04.ts` L159; generator-side, the strengths section in `_blueprint_vendor_deep_dive` that emits a colon-terminated quote lead-in.
+- Description: L159 reads "...One verified reviewer on G2 notes the platform's ability to handle intricate workflows:" but no blockquote follows (L160 is unrelated prose) -- a dangling lead-in promising a quote that isn't there. Separate defect class from D6's platform-mismatch (this is an orphaned intro, not a source mismatch); pre-existing, surfaced while scoping D6.
+- Why it matters: misleading published content (promises a reviewer quote that never appears). Likely a stripped/never-emitted quote leaving its lead-in. Candidate for a follow-up data fix (drop the dangling lead-in) + a generator guard (don't emit a quote lead-in without a quote).
+- Effort: S (data: drop the line) / M (generator guard)
+- Category: correctness
+- Found during: D6
+
 ### Deep-dive strengths/weaknesses chart fallback cannot show true strengths
 - File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py` ~L8092 (and the byte-identical `extracted_content_pipeline` mirror), the `if len(strengths) + len(weaknesses) < 3 and signals:` fallback in `_blueprint_vendor_deep_dive`.
 - Description: when the product profile is too thin, the "Strengths vs Weaknesses" chart is built only from pain-category signals, which carry weakness data only -- so the `strengths` series is always 0 (a one-sided chart). D4 made the bucketing truthful (all pain -> weaknesses) but did not give the fallback a real strengths source.
