@@ -1303,6 +1303,40 @@ def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
     assert {"segment_timing", "timing_signals", "account_pressure", "market_position", "reviewer_voice"} <= section_ids
 
 
+def test_deep_dive_sw_chart_buckets_pain_signals_as_weaknesses():
+    """D4: when the profile is thin and the strengths/weaknesses chart falls back
+    to pain signals, those signals are all complaints -- a low-urgency pain is
+    NOT a strength. Every fallback entry must be a weakness (strengths == 0);
+    previously urgency < 3.0 was mislabeled as a strength (e.g.
+    "overall_dissatisfaction" rendered as a top strength). Reverting the
+    bucketing fails this."""
+    blueprint = blog_mod._blueprint_vendor_deep_dive(
+        {
+            "vendor": "Pipedrive",
+            "category": "CRM",
+            "review_count": 42,
+            "profile_richness": 4,
+            "slug": "pipedrive-deep-dive-2026-04",
+        },
+        {
+            "profile": {"strengths": [], "weaknesses": []},  # thin -> signals fallback
+            "quotes": [],
+            "data_context": {"vendor": "Pipedrive", "category": "CRM",
+                             "review_period": "2026-02 to 2026-04"},
+            "signals": [
+                {"pain_category": "pricing", "avg_urgency": 8.0, "signal_count": 50, "feature_gaps": []},
+                {"pain_category": "ux", "avg_urgency": 2.0, "signal_count": 30, "feature_gaps": []},
+            ],
+        },
+    )
+    sw = next(c for c in blueprint.charts if c.chart_id == "strengths-weaknesses")
+    assert sw.data, "fallback should still produce a chart"
+    assert all(row["strengths"] == 0 for row in sw.data)   # no pain labeled a strength
+    assert all(row["weaknesses"] > 0 for row in sw.data)
+    ux = next(r for r in sw.data if r["name"] == "ux")     # low-urgency pain
+    assert ux["strengths"] == 0 and ux["weaknesses"] == 30
+
+
 def test_blueprint_vendor_deep_dive_uses_sparse_account_preview():
     blueprint = blog_mod._blueprint_vendor_deep_dive(
         {

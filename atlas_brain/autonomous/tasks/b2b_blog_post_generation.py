@@ -8090,19 +8090,20 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     weaknesses = profile.get("weaknesses", [])
     # When the product profile is too thin, build from review sentiment
     if len(strengths) + len(weaknesses) < 3 and signals:
+        # D4: pain-category signals are all complaints -- a low-urgency pain is
+        # NOT a strength. Bucket every pain category as a weakness. This fallback
+        # cannot yield true strengths (those need a separate strengths source --
+        # parked in ATLAS-HARDENING.md). Previously urgency < 3.0 was mislabeled as a
+        # "strength", so e.g. "overall_dissatisfaction" rendered as a top strength.
         area_map: dict[str, dict] = {}
         for s in signals:
             cat = s.get("pain_category", "")
             if not cat or cat in ("None", "null", "none"):
                 continue
-            urg = float(s.get("avg_urgency", 0))
             cnt = int(s.get("signal_count", 1))
             area_map.setdefault(cat, {"name": cat, "strengths": 0, "weaknesses": 0})
-            if urg >= 3.0:
-                area_map[cat]["weaknesses"] += cnt
-            else:
-                area_map[cat]["strengths"] += cnt
-        sw_data = sorted(area_map.values(), key=lambda x: x["strengths"] + x["weaknesses"], reverse=True)[:8]
+            area_map[cat]["weaknesses"] += cnt
+        sw_data = sorted(area_map.values(), key=lambda x: x["weaknesses"], reverse=True)[:8]
     elif strengths or weaknesses:
         # Merge by area so each bar shows strength vs weakness evidence
         area_map: dict[str, dict] = {}
