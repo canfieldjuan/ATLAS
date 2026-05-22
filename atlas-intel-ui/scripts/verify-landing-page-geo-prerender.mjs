@@ -4,6 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
 const defaultDistDir = join(rootDir, 'dist')
+const FALLBACK_TITLE_RE =
+  /^Atlas Intelligence\s+(?:-|\u2014)\s+Amazon Review Monitoring & Competitor Signals$/
 
 function readText(path) {
   return readFileSync(path, 'utf8')
@@ -85,6 +87,10 @@ function hasJsonLdGraph(html) {
   })
 }
 
+function isFallbackTitle(title) {
+  return FALLBACK_TITLE_RE.test(title)
+}
+
 function verifyLandingPage(url, distDir, fail) {
   const htmlPath = landingPageHtmlPath(url.path, distDir)
   if (!existsSync(htmlPath)) {
@@ -94,7 +100,7 @@ function verifyLandingPage(url, distDir, fail) {
 
   const html = readText(htmlPath)
   const title = html.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim() || ''
-  if (!title || title === 'Atlas Intelligence - Amazon Review Monitoring & Competitor Signals') {
+  if (!title || isFallbackTitle(title)) {
     fail(`${url.path} has missing or fallback <title>`)
   }
 
