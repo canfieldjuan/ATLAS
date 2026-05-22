@@ -2666,6 +2666,50 @@ def test_ticket_faq_cli_accepts_csv_documentation_term_file(tmp_path: Path) -> N
     )
 
 
+def test_ticket_faq_cli_accepts_suffixless_csv_documentation_term_file_with_format(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms_export"
+    term_file.write_text(
+        "\n".join((
+            "title,slug",
+            "Single sign-on setup,sso",
+            "Download report,download-report",
+            "Dashboard analytics,dashboard",
+            "",
+        )),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--documentation-term-format",
+        "csv",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_term_format"] == "csv"
+    assert result["config"]["documentation_terms"] == [
+        "Single sign-on setup",
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
 def test_ticket_faq_cli_accepts_bom_and_multiline_csv_documentation_term_file(
     tmp_path: Path,
 ) -> None:
@@ -2809,6 +2853,32 @@ def test_ticket_faq_cli_rejects_unrecognized_jsonl_documentation_term_fields(
     assert completed.returncode == 1
     assert "--documentation-term-file has no recognized term fields:" in completed.stderr
     assert "expected one of: documentation_term" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_applies_documentation_term_format_to_suffixless_file(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms_export"
+    term_file.write_text(
+        "title,slug\nDownload report,download-report\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--documentation-term-format",
+        "json",
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file must be valid JSON:" in completed.stderr
     assert "Traceback" not in completed.stderr
 
 

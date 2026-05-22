@@ -37,6 +37,7 @@ _DOCUMENTATION_TERM_LIST_KEYS = (
     "data",
 )
 _DOCUMENTATION_TERM_KEY_HINT = ", ".join(_DOCUMENTATION_TERM_ROW_KEYS)
+_DOCUMENTATION_TERM_FORMATS = ("auto", "text", "json", "jsonl", "csv")
 _EMPTY_JSONL_LINE = object()
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
@@ -147,6 +148,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--documentation-term-format",
+        choices=_DOCUMENTATION_TERM_FORMATS,
+        default="auto",
+        help=(
+            "Format for documentation-term files. Defaults to suffix-based "
+            "auto detection."
+        ),
+    )
+    parser.add_argument(
         "--vocabulary-gap-rule",
         action="append",
         default=[],
@@ -202,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     documentation_terms = _cli_documentation_terms(
         args.documentation_term,
         args.documentation_term_file,
+        args.documentation_term_format,
     )
     args.documentation_terms = documentation_terms
     file_rules = _load_rule_files(args.rule_file)
@@ -305,6 +316,7 @@ def _result_payload(
             "documentation_term_files": [
                 str(path) for path in args.documentation_term_file
             ],
+            "documentation_term_format": args.documentation_term_format,
             "documentation_terms": list(args.documentation_terms),
             "vocabulary_gap_rules": [
                 list(rule) for rule in args.vocabulary_gap_rules
@@ -588,25 +600,40 @@ def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
 def _cli_documentation_terms(
     inline_terms: list[str],
     files: list[Path],
+    file_format: str = "auto",
 ) -> tuple[str, ...]:
     terms: list[str] = []
     terms.extend(inline_terms)
     for path in files:
-        terms.extend(_load_cli_documentation_term_file(path))
+        terms.extend(_load_cli_documentation_term_file(path, file_format=file_format))
     return _clean_cli_documentation_terms(terms)
 
 
-def _load_cli_documentation_term_file(path: Path) -> tuple[str, ...]:
+def _load_cli_documentation_term_file(
+    path: Path,
+    *,
+    file_format: str = "auto",
+) -> tuple[str, ...]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise SystemExit(f"--documentation-term-file not found: {path}") from None
     suffix = path.suffix.lower()
-    if suffix == ".json":
+    resolved_format = file_format
+    if resolved_format == "auto":
+        if suffix == ".json":
+            resolved_format = "json"
+        elif suffix == ".jsonl":
+            resolved_format = "jsonl"
+        elif suffix == ".csv":
+            resolved_format = "csv"
+        else:
+            resolved_format = "text"
+    if resolved_format == "json":
         terms = _load_cli_documentation_term_json(text, path)
-    elif suffix == ".jsonl":
+    elif resolved_format == "jsonl":
         terms = _load_cli_documentation_term_jsonl(text, path)
-    elif suffix == ".csv":
+    elif resolved_format == "csv":
         terms = _load_cli_documentation_term_csv(text, path)
     else:
         terms = _load_cli_documentation_term_text(text)
