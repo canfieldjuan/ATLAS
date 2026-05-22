@@ -277,6 +277,10 @@ def _result_payload(
     question_source_counts = _count_by(items, "question_source")
     rendered_ticket_source_count = _rendered_ticket_source_count(items)
     warnings = load_warnings + [dict(warning) for warning in result.warnings]
+    source_mix = _source_mix_diagnostics(opportunities)
+    item_summaries = [
+        _item_summary(index, item) for index, item in enumerate(items, start=1)
+    ]
     return {
         "status": "failed_output_checks" if failed_checks else "ok",
         "input": {
@@ -317,7 +321,14 @@ def _result_payload(
         "diagnostics": {
             "output_check_details": _output_check_details(result, failed_checks, rendered_ticket_source_count),
             "question_source_counts": question_source_counts,
-            "source_mix": _source_mix_diagnostics(opportunities),
+            "run_summary": _run_summary(
+                result=result,
+                failed_checks=failed_checks,
+                source_mix=source_mix,
+                item_summaries=item_summaries,
+                warnings=warnings,
+            ),
+            "source_mix": source_mix,
             "ticket_counts": ticket_counts,
             "rendered_ticket_source_count": rendered_ticket_source_count,
             "unrepresented_ticket_sources": max(result.ticket_source_count - rendered_ticket_source_count, 0),
@@ -326,8 +337,76 @@ def _result_payload(
             "warning_count": len(warnings),
             "warnings": warnings[:50],
             "warnings_truncated": len(warnings) > 50,
-            "items": [_item_summary(index, item) for index, item in enumerate(items, start=1)],
+            "items": item_summaries,
         },
+    }
+
+
+def _run_summary(
+    *,
+    result: Any,
+    failed_checks: list[str],
+    source_mix: dict[str, Any],
+    item_summaries: list[dict[str, Any]],
+    warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    output_checks = dict(result.output_checks)
+    return {
+        "status": "failed_output_checks" if failed_checks else "ok",
+        "source_count": result.source_count,
+        "ticket_source_count": result.ticket_source_count,
+        "generated": len(item_summaries),
+        "weighted_source_volume": int(source_mix.get("weighted_source_volume") or 0),
+        "source_channel_counts": _clean_count_mapping(
+            source_mix.get("source_channel_counts")
+        ),
+        "zero_result_search_source_count": int(
+            source_mix.get("zero_result_search_source_count") or 0
+        ),
+        "output_checks": {
+            "passed": sum(1 for passed in output_checks.values() if passed is True),
+            "failed": len(failed_checks),
+            "total": len(output_checks),
+            "failed_checks": list(failed_checks),
+        },
+        "item_score_distribution": _item_score_distribution(item_summaries),
+        "warning_count": len(warnings),
+    }
+
+
+def _item_score_distribution(item_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    scores = [
+        _integer_or_zero(item.get("opportunity_score")) for item in item_summaries
+    ]
+    bands = {
+        "zero": 0,
+        "low_1_to_4": 0,
+        "medium_5_to_9": 0,
+        "high_10_plus": 0,
+    }
+    for score in scores:
+        if score <= 0:
+            bands["zero"] += 1
+        elif score <= 4:
+            bands["low_1_to_4"] += 1
+        elif score <= 9:
+            bands["medium_5_to_9"] += 1
+        else:
+            bands["high_10_plus"] += 1
+    if not scores:
+        return {
+            "count": 0,
+            "min": 0,
+            "max": 0,
+            "average": 0.0,
+            "bands": bands,
+        }
+    return {
+        "count": len(scores),
+        "min": min(scores),
+        "max": max(scores),
+        "average": round(sum(scores) / len(scores), 2),
+        "bands": bands,
     }
 
 
@@ -850,6 +929,13 @@ def _clean_count_mapping(value: Any) -> dict[str, int]:
             continue
         out[str(key)] = amount
     return dict(sorted(out.items()))
+
+
+def _integer_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _source_channel_counts_from_types(source_type_counts: dict[str, int]) -> dict[str, int]:
