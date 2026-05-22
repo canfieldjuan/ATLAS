@@ -117,13 +117,29 @@ def _valid_response(*, slug="acme-q3-launch") -> str:
                 "id": "problem",
                 "title": "The Problem",
                 "body_markdown": "Renewal pricing is the #1 churn driver.",
-                "metadata": {"order": 1},
+                "metadata": {
+                    "order": 1,
+                    "kind": "problem",
+                    "primary_question": "Why do renewal surprises cause churn?",
+                    "answer_summary": (
+                        "Renewal surprises create preventable churn because "
+                        "teams see pricing pressure too late."
+                    ),
+                },
             },
             {
                 "id": "solution",
                 "title": "The Solution",
                 "body_markdown": "Acme surfaces pressure signals in the first 30 days.",
-                "metadata": {"order": 2},
+                "metadata": {
+                    "order": 2,
+                    "kind": "solution",
+                    "primary_question": "How does Acme catch renewal pressure?",
+                    "answer_summary": (
+                        "Acme catches renewal pressure early by surfacing "
+                        "risk signals during the first 30 days."
+                    ),
+                },
             },
         ],
         "cta": {"label": "Book a 15-min demo", "url": "/demo", "variant": "primary"},
@@ -165,6 +181,7 @@ def test_parse_landing_page_response_strips_code_fences_and_extracts_first_objec
     assert parsed is not None
     assert parsed["title"] == "Acme Q3: Stop Renewal Surprises"
     assert parsed["sections"][0]["id"] == "problem"
+    assert parsed["sections"][0]["metadata"]["kind"] == "problem"
 
 
 def test_parse_landing_page_response_returns_none_when_required_fields_missing() -> None:
@@ -288,6 +305,12 @@ async def test_generate_persists_one_landing_page_per_call_via_save_drafts() -> 
     assert draft.hero["headline"] == "Stop renewal surprises"
     assert draft.cta["label"] == "Book a 15-min demo"
     assert draft.sections[0].id == "problem"
+    assert draft.sections[0].metadata["kind"] == "problem"
+    assert (
+        draft.sections[0].metadata["primary_question"]
+        == "Why do renewal surprises cause churn?"
+    )
+    assert "preventable churn" in draft.sections[0].metadata["answer_summary"]
     assert draft.metadata["generation_model"] == "test-model"
 
 

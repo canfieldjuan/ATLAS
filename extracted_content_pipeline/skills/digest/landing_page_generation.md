@@ -19,7 +19,12 @@ Output ONLY a single JSON object with this exact shape. No prose outside the JSO
       "id": "snake_case_section_id",
       "title": "Section heading",
       "body_markdown": "Section body in markdown",
-      "metadata": {"order": 1}
+      "metadata": {
+        "order": 1,
+        "kind": "problem | solution | how_it_works | proof | pricing | faq | objection | conversion",
+        "primary_question": "Buyer/search question this section answers, or empty string",
+        "answer_summary": "35-60 word direct answer that also appears as the first paragraph of body_markdown"
+      }
     }
   ],
   "cta": {
@@ -43,6 +48,9 @@ Field rules:
 - `hero.cta_label` / `hero.cta_url`: the hero's primary CTA. Reuse for the page-level `cta` block unless the page uses a hero-CTA + sticky-footer-CTA pattern.
 - `sections`: 3-6 ordered sections. Common shapes: problem / solution / how-it-works / proof / pricing / FAQ. Each section needs a non-empty `title` and `body_markdown`.
 - `sections.title`: use specific headings that describe the offer, audience, problem, or buyer question. Do not use generic headings such as "Overview", "Features", "Benefits", "Summary", "Introduction", or "Conclusion".
+- `sections.metadata.kind`: choose the section role from problem, solution, how_it_works, proof, pricing, faq, objection, or conversion.
+- `sections.metadata.primary_question`: include the plain-language buyer or search question the section answers when one is natural. Use an empty string when the section is not question-shaped.
+- `sections.metadata.answer_summary`: write a 35-60 word direct answer for problem, solution, how-it-works, FAQ, and objection sections. Put the same answer at the start of `body_markdown` so the answer is visible on the page, not hidden in metadata.
 - `cta`: page-level primary CTA (label + url required). Optional `secondary_label` / `secondary_url`. Do not output placeholder URLs such as `#`, `/#`, `javascript:void(0)`, or `javascript:;`.
 - `meta.title_tag`: always include a concrete SEO title tag, ideally 50-60 characters and no more than 70 characters.
 - `meta.description`: SEO meta description, 120-160 characters. Keep the title tag and description aligned with visible page copy.
@@ -52,6 +60,8 @@ Readiness rules:
 - The first viewport must make it clear what the offer is, who it is for, and why that reader should care.
 - Include a clear problem section and a clear solution or how-it-works section tied to `campaign.value_prop`.
 - Include objection coverage when the campaign gives enough context. This can be a FAQ, pricing, implementation, risk-reversal, comparison, security, or proof section.
+- Do not force a FAQ section when the campaign does not give enough real buyer questions. A useful how-it-works or objection section is better than fake FAQ content.
+- Start each section that poses or implies a buyer question with the direct answer in the first paragraph, then expand. This supports answer extraction without making the page read like a blog post.
 - If the campaign does not provide proof, testimonials, case studies, customer names, customer logos, or source ids, do not invent them. Use honest copy without fake social proof.
 - Do not leave unresolved placeholders or draft notes such as `{{claim}}`, `TODO`, `TBD`, or `lorem ipsum`.
 
