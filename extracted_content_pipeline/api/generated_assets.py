@@ -165,11 +165,15 @@ async def _landing_page_repair_lock(
 
     acquire = getattr(pool, "acquire", None)
     if not callable(acquire):
+        account_id = _clean(scope.account_id) or "unscoped"
         logger.warning(
-            "Landing page repair advisory lock skipped because pool has no acquire()",
+            "Landing page repair advisory lock skipped because pool has no "
+            "acquire() for account_id=%s landing_page_id=%s",
+            account_id,
+            landing_page_id,
             extra={
                 "landing_page_id": landing_page_id,
-                "account_id": _clean(scope.account_id) or None,
+                "account_id": account_id,
             },
         )
         yield True
