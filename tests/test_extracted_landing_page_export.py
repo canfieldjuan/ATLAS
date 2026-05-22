@@ -11,6 +11,7 @@ from extracted_content_pipeline.landing_page_export import (
     LandingPageDraftExportResult,
     export_landing_page_drafts,
     public_landing_page_draft_row,
+    public_landing_page_robots,
 )
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationConfig,
@@ -158,6 +159,8 @@ def _draft(**overrides) -> LandingPageDraft:
         meta=overrides.get("meta", draft.meta),
         reference_ids=overrides.get("reference_ids", draft.reference_ids),
         metadata=overrides.get("metadata", draft.metadata),
+        id=overrides.get("id", draft.id),
+        status=overrides.get("status", draft.status),
     )
 
 
@@ -268,6 +271,8 @@ def _ready_draft(**overrides) -> LandingPageDraft:
         meta=overrides.get("meta", draft.meta),
         reference_ids=overrides.get("reference_ids", draft.reference_ids),
         metadata=overrides.get("metadata", draft.metadata),
+        id=overrides.get("id", draft.id),
+        status=overrides.get("status", draft.status),
     )
 
 
@@ -358,14 +363,36 @@ def test_public_landing_page_draft_row_uses_renderer_allowlist() -> None:
         "sections",
         "cta",
         "meta",
+        "robots",
         "structured_data",
     }
     assert row["slug"] == "acme-q3-launch"
+    assert row["robots"] == "noindex,follow"
     assert row["structured_data"]["@context"] == "https://schema.org"
     assert "metadata" not in row
     assert "reference_ids" not in row
     assert "generation_input_tokens" not in row
     assert "reasoning_context_used" not in row
+    assert "seo_aeo_readiness" not in row
+    assert "geo_readiness" not in row
+
+
+def test_public_landing_page_robots_indexes_only_approved_ready_pages() -> None:
+    assert public_landing_page_robots(
+        _ready_draft(status="approved")
+    ) == "index,follow"
+
+
+def test_public_landing_page_robots_keeps_non_approved_pages_noindex() -> None:
+    assert public_landing_page_robots(
+        _ready_draft(status="draft")
+    ) == "noindex,follow"
+
+
+def test_public_landing_page_robots_keeps_incomplete_pages_noindex() -> None:
+    assert public_landing_page_robots(
+        _draft(status="approved")
+    ) == "noindex,follow"
 
 
 @pytest.mark.asyncio

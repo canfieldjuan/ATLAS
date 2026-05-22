@@ -114,6 +114,7 @@ export default function PublicLandingPage() {
   const jsonLd = structuredDataWithCanonical(page.structured_data, canonical)
   const ctaLabel = textValue(cta?.label) || textValue(hero?.cta_label)
   const ctaUrl = textValue(cta?.url) || textValue(hero?.cta_url)
+  const robots = textValue(page.robots) || 'noindex,follow'
 
   return (
     <>
@@ -123,7 +124,7 @@ export default function PublicLandingPage() {
         canonical={canonical}
         ogType="website"
         jsonLd={jsonLd}
-        robots="noindex,follow"
+        robots={robots}
       />
       <PublicLayout>
         <article>

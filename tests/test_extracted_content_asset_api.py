@@ -138,6 +138,95 @@ def _landing_page_row():
     }
 
 
+def _ready_landing_page_row():
+    return {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "status": "approved",
+        "campaign_name": "acme-support-retention",
+        "persona": "VP Engineering",
+        "value_prop": "Catch pressure early",
+        "title": "Acme support retention page",
+        "slug": "acme-support-retention",
+        "hero": {
+            "headline": "Catch support pressure before renewal risk builds",
+            "subheadline": (
+                "A landing page for VP Engineering teams that turns repeat "
+                "support signals into clearer answers before customers drift."
+            ),
+            "cta_label": "Book a demo",
+            "cta_url": "/demo",
+        },
+        "sections": [
+            {
+                "id": "problem",
+                "title": "Support problems that keep coming back",
+                "body_markdown": (
+                    "VP Engineering teams catch pressure early when repeated "
+                    "support issues are turned into visible answers before "
+                    "renewal risk builds. Support problems keep coming back "
+                    "when teams cannot see where customers get stuck."
+                ),
+                "metadata": {
+                    "kind": "problem",
+                    "primary_question": "Why do support problems become renewal risk?",
+                    "answer_summary": (
+                        "VP Engineering teams catch pressure early when repeated "
+                        "support issues are turned into visible answers before "
+                        "renewal risk builds."
+                    ),
+                },
+            },
+            {
+                "id": "solution",
+                "title": "A workflow for catching pressure early",
+                "body_markdown": (
+                    "The solution helps VP Engineering teams catch pressure early "
+                    "by turning repeated support signals into a clear page and "
+                    "follow-up workflow."
+                ),
+                "metadata": {
+                    "kind": "solution",
+                    "primary_question": "How does the workflow catch pressure early?",
+                    "answer_summary": (
+                        "The solution helps VP Engineering teams catch pressure "
+                        "early by turning repeated support signals into a clear "
+                        "page and follow-up workflow."
+                    ),
+                },
+            },
+            {
+                "id": "buyer_questions",
+                "title": "Questions buyers ask before rollout",
+                "body_markdown": (
+                    "VP Engineering buyers can answer implementation, pricing, "
+                    "and security questions before they have to email the team. "
+                    "This keeps the conversion path clear during rollout review."
+                ),
+                "metadata": {
+                    "kind": "objection",
+                    "primary_question": "What should buyers know before rollout?",
+                    "answer_summary": (
+                        "VP Engineering buyers can answer implementation, "
+                        "pricing, and security questions before they have to "
+                        "email the team."
+                    ),
+                },
+            },
+        ],
+        "cta": {"label": "Book a demo", "url": "/demo"},
+        "meta": {
+            "title_tag": "Acme Support Retention for VP Engineering",
+            "description": (
+                "See how VP Engineering teams catch support pressure early and "
+                "turn repeated customer questions into clearer retention pages."
+            ),
+            "og_title": "Acme Support Retention",
+        },
+        "reference_ids": ["r1"],
+        "metadata": {},
+    }
+
+
 def _sales_brief_row():
     return {
         "id": "brief-uuid-1",
@@ -336,8 +425,10 @@ def test_generated_asset_router_returns_public_approved_landing_page() -> None:
         "sections",
         "cta",
         "meta",
+        "robots",
         "structured_data",
     }
+    assert body["robots"] == "noindex,follow"
     assert "status" not in body
     assert "metadata" not in body
     assert "reference_ids" not in body
@@ -348,6 +439,21 @@ def test_generated_asset_router_returns_public_approved_landing_page() -> None:
     assert "FROM landing_pages" in query
     assert "status = 'approved'" in query
     assert args == ("11111111-1111-1111-1111-111111111111",)
+
+
+def test_generated_asset_router_indexes_public_ready_landing_page() -> None:
+    pool = _Pool(rows=[_ready_landing_page_row()])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["robots"] == "index,follow"
+    assert "seo_aeo_readiness" not in body
+    assert "geo_readiness" not in body
 
 
 def test_generated_asset_router_hides_non_public_landing_page() -> None:
