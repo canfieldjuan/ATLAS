@@ -676,6 +676,16 @@ def test_orphan_question_reference_matches_question_shapes():
     assert _looks_like_orphan_quote_reference(
         "This quote is a question rather than a statement, but it signals active evaluation."
     )
+    # The article x noun cross-product also matches these (same regex branch as
+    # the covered shapes): "that excerpt" (newly added vs the old
+    # this/the-excerpt-only pattern), and the article-led / no-hyphen
+    # open-ended-question forms. Pin them so the merged pattern keeps them.
+    for line in (
+        "That excerpt captures the migration frustration teams describe.",
+        "The open-ended question hints at an evaluation still in progress.",
+        "This open ended question reads as a dangling reference once the quote is gone.",
+    ):
+        assert _looks_like_orphan_quote_reference(line), line
     # Existing negatives still hold: generic follow-ons and aggregate
     # witness references are NOT orphan quote back-references.
     assert not _looks_like_orphan_quote_reference("This pattern recurs across the dataset.")
