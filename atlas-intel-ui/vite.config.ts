@@ -16,6 +16,10 @@ import {
   type ChartValue,
   type FaqItem,
 } from './scripts/blog-source-metadata.mjs'
+import {
+  fetchLandingPageSitemapUrls,
+  resolveLandingPageSitemapUrl,
+} from './scripts/landing-page-sitemap-bridge.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
@@ -31,17 +35,30 @@ interface SitemapUrl {
   changefreq: string
 }
 
+function dedupeSitemapUrls(urls: SitemapUrl[]): SitemapUrl[] {
+  const seen = new Set<string>()
+  return urls.filter(url => {
+    if (seen.has(url.loc)) return false
+    seen.add(url.loc)
+    return true
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Sitemap plugin
 // ---------------------------------------------------------------------------
 function sitemapPlugin() {
   return {
     name: 'generate-sitemap',
-    closeBundle() {
+    async closeBundle() {
       const posts = collectBlogSourceMetadata(import.meta.dirname)
+      const generatedLandingPageUrls = await fetchLandingPageSitemapUrls({
+        sitemapUrl: resolveLandingPageSitemapUrl(),
+        publicSiteUrl: BASE_URL,
+      })
 
       const today = new Date().toISOString().split('T')[0]
-      const urls: SitemapUrl[] = [
+      const urls = dedupeSitemapUrls([
         { loc: `${BASE_URL}/landing`, priority: '1.0', changefreq: 'weekly' },
         { loc: `${BASE_URL}/blog`, priority: '0.9', changefreq: 'daily' },
         ...posts.map(post => ({
@@ -50,8 +67,9 @@ function sitemapPlugin() {
           priority: '0.7',
           changefreq: 'monthly',
         })),
+        ...generatedLandingPageUrls,
         { loc: `${BASE_URL}/`, priority: '0.3', changefreq: 'monthly' },
-      ]
+      ])
 
       const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
