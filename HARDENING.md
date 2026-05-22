@@ -29,4 +29,9 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+> **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
+> lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
+> kept separate to avoid append-collisions with the concurrent
+> content-ops-station sessions. Scan that file too when working those lanes.
+
 None yet.

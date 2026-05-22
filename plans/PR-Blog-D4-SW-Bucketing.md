@@ -34,6 +34,7 @@ Thinnest real slice: make the strengths/weaknesses bucketing truthful.
 
 - `plans/PR-Blog-D4-SW-Bucketing.md`
 - `ATLAS-HARDENING.md`
+- `HARDENING.md`
 - `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py`
 - `extracted_content_pipeline/autonomous/tasks/b2b_blog_post_generation.py`
 - `tests/test_b2b_blog_post_generation.py`
@@ -65,7 +66,9 @@ consistent with the L165-166 strength prose (left unchanged, now agrees).
 
 **Parked hardening** in `ATLAS-HARDENING.md` (this session uses a separate hardening file from
 the root `HARDENING.md`, per the maintainer, to avoid colliding with the
-concurrent content-ops-station sessions):
+concurrent content-ops-station sessions). Per the #797 Codex P2, root
+`HARDENING.md` now carries a one-line pointer to `ATLAS-HARDENING.md` so the §3d
+"scan HARDENING.md at slice start" step still surfaces these entries:
 
 - The signals fallback cannot show TRUE strengths (one-sided chart) -- needs a
   separate strengths source. Effort M, polish.
@@ -93,6 +96,6 @@ D3-followup (frequency-view pain chart), D5/D6 (minor single-instance).
 | 2 generator copies (fallback bucketing) | ~24 |
 | Test | ~38 |
 | pipedrive data (5 chart flips + L163) | ~12 |
-| ATLAS-HARDENING.md (new file) | ~50 |
+| ATLAS-HARDENING.md (new file) + root HARDENING.md pointer | ~57 |
 | Plan doc | ~95 |
-| **Total** | **~220** |
+| **Total** | **~230** |
