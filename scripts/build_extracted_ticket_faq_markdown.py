@@ -48,6 +48,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     DEFAULT_TITLE,
     build_ticket_faq_markdown,
     is_zero_result_search_row,
+    source_row_weight,
 )
 
 _SOURCE_CHANNELS = {
@@ -332,17 +333,35 @@ def _result_payload(
 def _source_mix_diagnostics(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
     source_type_counts: dict[str, int] = {}
     source_channel_counts: dict[str, int] = {}
+    source_weights: dict[str, int] = {}
+    source_type_weights: dict[tuple[str, str], int] = {}
+    source_channel_weights: dict[tuple[str, str], int] = {}
     zero_result_search_sources: set[str] = set()
     for index, opportunity in enumerate(opportunities, start=1):
         source_type = _diagnostic_source_type(opportunity)
         source_type_counts[source_type] = source_type_counts.get(source_type, 0) + 1
         channel = _SOURCE_CHANNELS.get(source_type, "other")
         source_channel_counts[channel] = source_channel_counts.get(channel, 0) + 1
+        source_key = _diagnostic_source_key(opportunity, index)
+        weight = _diagnostic_source_weight(opportunity)
+        source_weights[source_key] = max(source_weights.get(source_key, 0), weight)
+        type_key = (source_type, source_key)
+        channel_key = (channel, source_key)
+        source_type_weights[type_key] = max(source_type_weights.get(type_key, 0), weight)
+        source_channel_weights[channel_key] = max(
+            source_channel_weights.get(channel_key, 0),
+            weight,
+        )
         if _is_zero_result_search_source(opportunity):
-            zero_result_search_sources.add(_diagnostic_source_key(opportunity, index))
+            zero_result_search_sources.add(source_key)
     return {
         "source_type_counts": dict(sorted(source_type_counts.items())),
         "source_channel_counts": dict(sorted(source_channel_counts.items())),
+        "weighted_source_volume": sum(source_weights.values()),
+        "weighted_source_volume_by_type": _weighted_counts_by_group(source_type_weights),
+        "weighted_source_volume_by_channel": _weighted_counts_by_group(
+            source_channel_weights
+        ),
         "zero_result_search_source_count": len(zero_result_search_sources),
     }
 
@@ -375,6 +394,17 @@ def _diagnostic_evidence_rows(opportunity: dict[str, Any]) -> tuple[dict[str, An
     if isinstance(evidence, list):
         return tuple(row for row in evidence if isinstance(row, dict))
     return ()
+
+
+def _diagnostic_source_weight(opportunity: dict[str, Any]) -> int:
+    return source_row_weight(opportunity, *_diagnostic_evidence_rows(opportunity))
+
+
+def _weighted_counts_by_group(weights: dict[tuple[str, str], int]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for (group, _source_key), weight in weights.items():
+        counts[group] = counts.get(group, 0) + weight
+    return dict(sorted(counts.items()))
 
 
 def _is_zero_result_search_source(
