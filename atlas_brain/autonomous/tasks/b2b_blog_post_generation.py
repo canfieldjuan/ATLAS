@@ -6129,8 +6129,14 @@ async def _gather_data(
         vendor_names.append(topic_ctx["vendor_b"])
     if topic_ctx.get("from_vendor"):
         vendor_names.append(topic_ctx["from_vendor"])
-    # For category-level topics, pull all vendors in the category
+    # For category-level topics (landscape/roundup/best-fit), pull all vendors
+    # in the category AND remember the category. The corpus counts below then
+    # scope to the category, not to "any review mentioning a category vendor" --
+    # counting by vendor mention overstates the corpus because free-form
+    # community threads name many products across categories (D7).
+    category_scope: str | None = None
     if not vendor_names and topic_ctx.get("category"):
+        category_scope = topic_ctx["category"]
         cat_rows = await pool.fetch(
             "SELECT DISTINCT vm.vendor_name "
             "FROM b2b_reviews r "
@@ -6142,7 +6148,27 @@ async def _gather_data(
 
     # APPROVED-ENRICHMENT-READ: churn_signals.intent_to_leave
     # Reason: inline aggregate query, structurally coupled to product output
-    if vendor_names:
+    if category_scope:
+        # Category-level topic: scope the headline corpus to the category, not
+        # to vendor mentions (D7 -- mention-scoping over-counts via off-category
+        # community cross-mentions; CRM read ~5,931 mention-scoped vs ~1,133
+        # category-scoped enriched).
+        ctx_row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total_reviews,
+                COUNT(*) FILTER (WHERE enrichment_status = 'enriched') AS enriched,
+                COUNT(*) FILTER (WHERE (enrichment->'churn_signals'->>'intent_to_leave')::boolean = true) AS churn_intent,
+                MIN(imported_at)::date AS earliest,
+                MAX(imported_at)::date AS latest
+            FROM b2b_reviews
+            WHERE product_category = $1
+              AND duplicate_of_review_id IS NULL
+              AND source = ANY($2)
+            """,
+            category_scope, ctx_sources,
+        )
+    elif vendor_names:
         ctx_row = await pool.fetchrow(
             """
             SELECT
@@ -6207,7 +6233,7 @@ async def _gather_data(
             data["data_context"][vk] = topic_ctx[vk]
 
     # Source distribution and data quality metadata
-    source_dist = await _fetch_source_distribution(pool, vendor_names)
+    source_dist = await _fetch_source_distribution(pool, vendor_names, category=category_scope)
     data["data_context"]["source_distribution"] = source_dist
     data["data_context"]["data_source_label"] = "Public B2B software review platforms"
     data["data_context"]["data_disclaimer"] = (
@@ -6878,24 +6904,49 @@ async def _fetch_category_overview_entry(pool, category: str) -> dict[str, Any] 
     return None
 
 
-async def _fetch_source_distribution(pool, vendor_names: list[str]) -> dict[str, Any]:
-    """Return review counts by source platform for the given vendors."""
-    if not vendor_names:
-        return {"sources": [], "verified_count": 0, "community_count": 0}
+async def _fetch_source_distribution(
+    pool, vendor_names: list[str], *, category: str | None = None,
+) -> dict[str, Any]:
+    """Return review counts by source platform.
+
+    D7: ``category`` selects the scope. A category-level topic
+    (landscape/roundup/best-fit) MUST count reviews IN the category, not every
+    review that merely MENTIONS one of the category's vendors -- free-form
+    community threads (Reddit etc.) name many products across categories, so
+    mention-scoping overstates the corpus and inflates the community split (CRM:
+    5,931 mention-scoped / community 5,442 vs 1,133 / 963 category-scoped). A
+    vendor-level topic passes ``category=None`` and keeps vendor-mention scope.
+    """
     allowed = _blog_source_allowlist()
-    rows = await pool.fetch(
-        """
-        SELECT COALESCE(r.source, 'unknown') AS src, COUNT(DISTINCT r.id) AS cnt
-        FROM b2b_reviews r
-        JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
-        WHERE vm.vendor_name = ANY($1) AND r.enrichment_status = 'enriched'
-          AND r.duplicate_of_review_id IS NULL
-          AND r.source = ANY($2)
-        GROUP BY r.source
-        ORDER BY cnt DESC
-        """,
-        vendor_names, allowed,
-    )
+    if category:
+        rows = await pool.fetch(
+            """
+            SELECT COALESCE(r.source, 'unknown') AS src, COUNT(DISTINCT r.id) AS cnt
+            FROM b2b_reviews r
+            WHERE r.product_category = $1 AND r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
+              AND r.source = ANY($2)
+            GROUP BY r.source
+            ORDER BY cnt DESC
+            """,
+            category, allowed,
+        )
+    elif vendor_names:
+        rows = await pool.fetch(
+            """
+            SELECT COALESCE(r.source, 'unknown') AS src, COUNT(DISTINCT r.id) AS cnt
+            FROM b2b_reviews r
+            JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
+            WHERE vm.vendor_name = ANY($1) AND r.enrichment_status = 'enriched'
+              AND r.duplicate_of_review_id IS NULL
+              AND r.source = ANY($2)
+            GROUP BY r.source
+            ORDER BY cnt DESC
+            """,
+            vendor_names, allowed,
+        )
+    else:
+        return {"sources": [], "verified_count": 0, "community_count": 0}
     sources = [{"name": r["src"], "count": r["cnt"]} for r in rows]
     verified = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") in VERIFIED_SOURCES)
     community = sum(r["cnt"] for r in rows if r["src"].lower().replace(" ", "_") not in VERIFIED_SOURCES)
