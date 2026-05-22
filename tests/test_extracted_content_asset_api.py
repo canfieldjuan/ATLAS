@@ -97,6 +97,40 @@ class _EditableLandingPagePool(_Pool):
         return [self.row]
 
 
+class _RepairLockConnection:
+    def __init__(self, pool, *, acquired: bool) -> None:
+        self.pool = pool
+        self.acquired = acquired
+
+    async def fetchval(self, query, *args):
+        self.pool.lock_calls.append((str(query), args))
+        if "pg_try_advisory_lock" in str(query):
+            return self.acquired
+        if "pg_advisory_unlock" in str(query):
+            self.pool.unlocked = True
+            return True
+        raise AssertionError(f"unexpected lock query: {query}")
+
+
+class _LockingEditableLandingPagePool(_EditableLandingPagePool):
+    def __init__(self, row=None, *, lock_acquired: bool = True) -> None:
+        super().__init__(row)
+        self.lock_acquired = lock_acquired
+        self.lock_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.acquire_calls = 0
+        self.release_calls = 0
+        self.released_connections = []
+        self.unlocked = False
+
+    async def acquire(self):
+        self.acquire_calls += 1
+        return _RepairLockConnection(self, acquired=self.lock_acquired)
+
+    async def release(self, conn):
+        self.release_calls += 1
+        self.released_connections.append(conn)
+
+
 class _LLM:
     def __init__(self, responses) -> None:
         self.responses = list(responses)
@@ -652,7 +686,7 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
             if key != "description"
         },
     }
-    pool = _EditableLandingPagePool(needs_repair)
+    pool = _LockingEditableLandingPagePool(needs_repair)
     llm = _LLM([_landing_page_generation_response(repaired_row)])
     skills = _Skills()
 
@@ -698,6 +732,63 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
     assert '"repair_mode":"saved_draft"' in system_prompt
     assert '"repair_issues":["seo_aeo_readiness:meta_description"]' in system_prompt
     assert skills.calls == ["digest/landing_page_generation"]
+    assert pool.acquire_calls == 1
+    assert pool.release_calls == 1
+    assert pool.released_connections
+    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
+    assert pool.unlocked is True
+
+
+def test_landing_page_repair_lock_key_is_account_scoped() -> None:
+    landing_page_id = "11111111-1111-1111-1111-111111111111"
+
+    first_key = asset_api._landing_page_repair_lock_key(
+        TenantScope(account_id="acct_1", user_id="user_1"),
+        landing_page_id,
+    )
+    second_key = asset_api._landing_page_repair_lock_key(
+        TenantScope(account_id="acct_1", user_id="user_2"),
+        landing_page_id,
+    )
+
+    assert first_key == second_key
+    assert first_key == (
+        "account=acct_1:landing_page=11111111-1111-1111-1111-111111111111"
+    )
+
+
+def test_generated_asset_router_blocks_concurrent_landing_page_repair_before_llm() -> None:
+    row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    row["meta"] = {
+        key: value
+        for key, value in row["meta"].items()
+        if key != "description"
+    }
+    pool = _LockingEditableLandingPagePool(row, lock_acquired=False)
+    llm = _LLM([])
+    skills = _Skills()
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "landing page draft repair already in progress"
+    assert len(pool.fetch_calls) == 1
+    assert pool.acquire_calls == 1
+    assert pool.release_calls == 1
+    assert pool.released_connections
+    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert pool.unlocked is False
+    assert llm.calls == []
+    assert skills.calls == []
 
 
 def test_generated_asset_router_repair_requires_llm_provider() -> None:
@@ -773,7 +864,7 @@ def test_generated_asset_router_returns_repair_result_when_repair_fails() -> Non
         for key, value in needs_repair["meta"].items()
         if key != "description"
     }
-    pool = _EditableLandingPagePool(needs_repair)
+    pool = _LockingEditableLandingPagePool(needs_repair)
     llm = _LLM([_landing_page_generation_response(needs_repair)])
     skills = _Skills()
 
@@ -797,6 +888,12 @@ def test_generated_asset_router_returns_repair_result_when_repair_fails() -> Non
         "seo_aeo_readiness:meta_description"
     ]
     assert len(pool.fetch_calls) == 1
+    assert pool.acquire_calls == 1
+    assert pool.release_calls == 1
+    assert pool.released_connections
+    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
+    assert pool.unlocked is True
     assert len(llm.calls) == 1
     assert skills.calls == ["digest/landing_page_generation"]
 
