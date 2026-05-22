@@ -160,6 +160,34 @@ _SOURCE_CONTEXT_KEYS = (
     "issue",
     "sub_issue",
 )
+_DOCUMENTATION_SOURCE_TYPES = {
+    "article",
+    "document",
+    "documentation",
+    "docs",
+    "help_article",
+    "kb_article",
+    "knowledge_base",
+}
+_DOCUMENTATION_TERM_KEYS = (
+    "source_title",
+    "title",
+    "name",
+    "heading",
+    "topic",
+    "category",
+    "text",
+    "description",
+)
+_VOCABULARY_GAP_RULES = (
+    ("export", "download", "download report", "report download"),
+    ("dashboard", "analytics", "reporting", "reports"),
+    ("bill", "billing", "invoice", "statement"),
+    ("login", "log in", "sign in", "authentication"),
+    ("password", "credentials", "authentication"),
+    ("connect", "connection", "integration", "sync"),
+    ("cancel", "cancellation", "renewal"),
+)
 _ACTION_RULES = (
     (("credit report", "credit file", "credit bureau", "credit bureaus", "credit reporting", "incorrect information"), (
         "Get your latest credit reports and mark the account, date, balance, or status that looks wrong.",
@@ -235,6 +263,7 @@ class TicketFAQMarkdownConfig:
     as_of_date: str | None = None
     support_contact: str | None = None
     intent_rules: tuple[tuple[str, tuple[str, ...]], ...] = DEFAULT_INTENT_RULES
+    documentation_terms: tuple[str, ...] = ()
 
 
 class TicketFAQMarkdownService:
@@ -264,6 +293,7 @@ class TicketFAQMarkdownService:
         as_of_date: Any = None,
         support_contact: str | None = None,
         intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
+        documentation_terms: Sequence[str] | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
@@ -306,6 +336,11 @@ class TicketFAQMarkdownService:
             if intent_rules is not None
             else self.config.intent_rules
         )
+        resolved_documentation_terms = (
+            tuple(_clean(term) for term in documentation_terms if _clean(term))
+            if documentation_terms is not None
+            else self.config.documentation_terms
+        )
         title_text = title or self.config.title
         result = build_ticket_faq_markdown(
             normalized.opportunities,
@@ -317,6 +352,7 @@ class TicketFAQMarkdownService:
             as_of_date=resolved_as_of_date,
             support_contact=resolved_support_contact,
             intent_rules=resolved_intent_rules,
+            documentation_terms=resolved_documentation_terms,
         )
         result = replace(
             result,
@@ -343,6 +379,7 @@ class TicketFAQMarkdownService:
                             window_days=resolved_window_days,
                             as_of_date=resolved_as_of_date,
                         ),
+                        **_documentation_term_metadata(resolved_documentation_terms),
                     },
                 )
             ],
@@ -362,6 +399,7 @@ def build_ticket_faq_markdown(
     as_of_date: Any = None,
     support_contact: str | None = None,
     intent_rules: Sequence[tuple[str, Sequence[str]]] = DEFAULT_INTENT_RULES,
+    documentation_terms: Sequence[str] = (),
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -372,6 +410,7 @@ def build_ticket_faq_markdown(
 
     allowed = {_source_type_key(item) for item in source_types if _source_type_key(item)}
     date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
+    resolved_documentation_terms = _documentation_terms(opportunities, documentation_terms)
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
     source_keys: set[str] = set()
@@ -436,6 +475,7 @@ def build_ticket_faq_markdown(
             rows,
             max_evidence_per_item=max_evidence_per_item,
             support_contact=support_contact,
+            documentation_terms=resolved_documentation_terms,
         )
         for topic, rows in selected_groups
     )
@@ -547,6 +587,7 @@ def _item(
     *,
     max_evidence_per_item: int,
     support_contact: str | None,
+    documentation_terms: Sequence[str],
 ) -> dict[str, Any]:
     display_rows = rows[:max_evidence_per_item]
     sources = tuple(_source_label(row) for row in display_rows)
@@ -563,6 +604,7 @@ def _item(
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     opportunity = _opportunity_score(topic, rows)
+    term_mappings = _term_mappings(rows, documentation_terms)
     return {
         "topic": topic,
         "question": question,
@@ -577,6 +619,7 @@ def _item(
         "steps": steps,
         "when_to_contact_support": escalation,
         "evidence_quotes": evidence_quotes,
+        "term_mappings": term_mappings,
         "source_ids": source_ids,
         "source_labels": sources,
         "evidence_count": len(display_rows),
@@ -600,6 +643,116 @@ def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[st
 def _distinct_source_keys(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
     values = (row.get("source_key") or row.get("source_id", "") for row in rows)
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _term_mappings(
+    rows: Sequence[Mapping[str, str]],
+    documentation_terms: Sequence[str],
+) -> tuple[dict[str, Any], ...]:
+    doc_terms = _clean_terms(documentation_terms)
+    if not rows or not doc_terms:
+        return ()
+    customer_text = " ".join((
+        " ".join(_clean(row.get("source_title")) for row in rows),
+        " ".join(_clean(row.get("text")) for row in rows),
+    )).lower()
+    if not customer_text:
+        return ()
+    source_ids = _distinct_source_keys(rows)
+    mappings: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for aliases in _VOCABULARY_GAP_RULES:
+        for customer_term in aliases:
+            if not _keyword_matches(customer_text, customer_term):
+                continue
+            if any(_keyword_matches(term.lower(), customer_term) for term in doc_terms):
+                continue
+            documentation_term = _matching_documentation_term(
+                doc_terms,
+                aliases=aliases,
+                customer_term=customer_term,
+            )
+            if not documentation_term:
+                continue
+            key = (customer_term, documentation_term.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            mappings.append({
+                "customer_term": customer_term,
+                "documentation_term": documentation_term,
+                "suggestion": (
+                    f'Add "{customer_term}" as alternate phrasing for '
+                    f'"{documentation_term}" in FAQ headings and answer text.'
+                ),
+                "source_id_count": len(source_ids),
+                "first_source_id": source_ids[0] if source_ids else None,
+            })
+            break
+        if len(mappings) >= 3:
+            break
+    return tuple(mappings)
+
+
+def _matching_documentation_term(
+    documentation_terms: Sequence[str],
+    *,
+    aliases: Sequence[str],
+    customer_term: str,
+) -> str:
+    for term in documentation_terms:
+        lowered = term.lower()
+        if _keyword_matches(lowered, customer_term):
+            continue
+        if any(_keyword_matches(lowered, alias) for alias in aliases if alias != customer_term):
+            return term
+    return ""
+
+
+def _documentation_terms(
+    opportunities: Sequence[Mapping[str, Any]],
+    explicit_terms: Sequence[str],
+) -> tuple[str, ...]:
+    terms: list[str] = []
+    terms.extend(_clean(term) for term in explicit_terms if _clean(term))
+    for opportunity in opportunities:
+        opportunity_type = _source_type_key(opportunity.get("source_type"))
+        if opportunity_type in _DOCUMENTATION_SOURCE_TYPES:
+            terms.extend(_documentation_terms_from_row(opportunity))
+        for evidence in _evidence_rows(opportunity):
+            evidence_type = _source_type_key(evidence.get("source_type") or opportunity_type)
+            if evidence_type in _DOCUMENTATION_SOURCE_TYPES:
+                terms.extend(_documentation_terms_from_row(evidence))
+    return _clean_terms(terms)
+
+
+def _documentation_terms_from_row(row: Mapping[str, Any]) -> tuple[str, ...]:
+    terms: list[str] = []
+    for key in _DOCUMENTATION_TERM_KEYS:
+        text = _compact(_field_value(row, key))
+        if text:
+            terms.append(_term_excerpt(text))
+    return tuple(terms)
+
+
+def _clean_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    out: dict[str, str] = {}
+    for term in terms:
+        text = _compact(term)
+        if not text:
+            continue
+        out.setdefault(text.lower(), text)
+    return tuple(out.values())
+
+
+def _term_excerpt(value: str, *, limit: int = 90) -> str:
+    text = _compact(value)
+    if len(text) <= limit:
+        return text
+    sentence = _first_sentence(text)
+    if sentence and len(sentence) <= limit:
+        return sentence
+    return f"{text[:limit].rstrip()}..."
 
 
 def _failure_risk_signals(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
@@ -873,6 +1026,16 @@ def _render(
             "",
             _md(item.get("summary") or item["answer"]),
             "",
+        ])
+        term_mappings = _list(item.get("term_mappings"))
+        if term_mappings:
+            lines.extend([
+                "**Vocabulary gaps:**",
+                "",
+                *[f"- {_md(_term_mapping_line(mapping))}" for mapping in term_mappings],
+                "",
+            ])
+        lines.extend([
             "**What to do next:**",
             "",
             *[f"{step_index}. {_md(step)}" for step_index, step in enumerate(_list(item.get("steps") or item["action_items"]), start=1)],
@@ -895,6 +1058,20 @@ def _source_label(row: Mapping[str, str]) -> str:
     if source_id and title:
         return f"`{source_id}` - {title}"
     return f"`{source_id or 'unknown'}`"
+
+
+def _term_mapping_line(mapping: Any) -> str:
+    if not isinstance(mapping, Mapping):
+        return ""
+    customer_term = _clean(mapping.get("customer_term"))
+    documentation_term = _clean(mapping.get("documentation_term"))
+    suggestion = _clean(mapping.get("suggestion"))
+    if customer_term and documentation_term and suggestion:
+        return (
+            f'Customers say "{customer_term}"; documentation says '
+            f'"{documentation_term}". {suggestion}'
+        )
+    return suggestion or ""
 
 
 def _summary(*, topic: str, rows: Sequence[Mapping[str, str]], source_count: int) -> str:
@@ -1116,6 +1293,13 @@ def _support_contact_metadata(support_contact: str | None) -> dict[str, str]:
     if not contact:
         return {}
     return {"support_contact": contact}
+
+
+def _documentation_term_metadata(documentation_terms: Sequence[str]) -> dict[str, Any]:
+    terms = _clean_terms(documentation_terms)
+    if not terms:
+        return {}
+    return {"documentation_terms": list(terms)}
 
 
 def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:

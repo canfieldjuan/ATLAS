@@ -396,6 +396,95 @@ def test_build_ticket_faq_markdown_ranks_zero_result_searches_as_failure_risk() 
     assert result.items[1]["opportunity_score"] == 3
 
 
+def test_build_ticket_faq_markdown_adds_vocabulary_gap_from_documentation_terms() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Attribution dashboard",
+            "evidence": [{
+                "text": "How do I export the attribution dashboard?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        }],
+        documentation_terms=("Download report", "Analytics"),
+    )
+
+    assert result.items[0]["term_mappings"] == (
+        {
+            "customer_term": "export",
+            "documentation_term": "Download report",
+            "suggestion": (
+                'Add "export" as alternate phrasing for "Download report" '
+                "in FAQ headings and answer text."
+            ),
+            "source_id_count": 1,
+            "first_source_id": "ticket-1",
+        },
+        {
+            "customer_term": "dashboard",
+            "documentation_term": "Analytics",
+            "suggestion": (
+                'Add "dashboard" as alternate phrasing for "Analytics" '
+                "in FAQ headings and answer text."
+            ),
+            "source_id_count": 1,
+            "first_source_id": "ticket-1",
+        },
+    )
+    assert "**Vocabulary gaps:**" in result.markdown
+    assert 'Customers say "export"; documentation says "Download report".' in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_document_rows_for_vocabulary_gap_only() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "support_ticket",
+            "source_title": "Billing confusion",
+            "evidence": [{
+                "text": "Where can I find my bill?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "document",
+            "source_title": "Invoice settings",
+            "evidence": [{
+                "text": "Open invoice settings to download your statement.",
+                "source_id": "doc-1",
+                "source_type": "document",
+                "source_title": "Invoice settings",
+            }],
+        },
+    ])
+
+    assert result.source_count == 2
+    assert result.ticket_source_count == 1
+    assert result.items[0]["source_ids"] == ("ticket-1",)
+    assert result.items[0]["term_mappings"][0]["customer_term"] == "bill"
+    assert result.items[0]["term_mappings"][0]["documentation_term"] == "Invoice settings"
+    assert "`doc-1`" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_skips_vocabulary_gap_when_docs_match_customer_term() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export report",
+            "evidence": [{
+                "text": "How do I export the attribution dashboard?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        }],
+        documentation_terms=("Export reports", "Dashboard analytics"),
+    )
+
+    assert result.items[0]["term_mappings"] == ()
+    assert "**Vocabulary gaps:**" not in result.markdown
+
+
 def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -> None:
     result = build_ticket_faq_markdown(
         [
@@ -1322,6 +1411,30 @@ async def test_ticket_faq_service_accepts_sales_objection_source_material() -> N
 
 
 @pytest.mark.asyncio
+async def test_ticket_faq_service_accepts_documentation_terms() -> None:
+    service = TicketFAQMarkdownService(
+        TicketFAQMarkdownConfig(documentation_terms=("Download report",))
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "message": "How do I export attribution data?",
+                    "pain_category": "exports",
+                }
+            ]
+        },
+    )
+
+    assert result.items[0]["term_mappings"][0]["customer_term"] == "export"
+    assert result.items[0]["term_mappings"][0]["documentation_term"] == "Download report"
+
+
+@pytest.mark.asyncio
 async def test_ticket_faq_service_saves_generated_markdown_when_repository_configured() -> None:
     repository = _FAQRepository()
     service = TicketFAQMarkdownService(ticket_faqs=repository)
@@ -1865,6 +1978,8 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "customer_wording": 2,
     }
     assert result["diagnostics"]["ticket_counts"] == [2, 2]
+    assert result["diagnostics"]["term_mapping_count"] == 0
+    assert result["diagnostics"]["term_mappings"] == []
     assert result["diagnostics"]["items"][0] == {
         "rank": 1,
         "topic": "reporting friction",
@@ -1879,7 +1994,39 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "source_id_count": 2,
         "first_source_id": "ticket-northstar-1",
         "step_count": 3,
+        "term_mapping_count": 0,
     }
+
+
+def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Download report",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    assert "**Vocabulary gaps:**" in completed.stdout
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == ["Download report"]
+    assert result["diagnostics"]["term_mapping_count"] == 1
+    assert result["diagnostics"]["term_mappings"] == [{
+        "rank": 1,
+        "topic": "reporting friction",
+        "customer_term": "export",
+        "documentation_term": "Download report",
+        "source_id_count": 1,
+        "first_source_id": "ticket-1",
+    }]
+    assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
