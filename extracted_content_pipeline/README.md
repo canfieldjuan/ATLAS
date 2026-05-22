@@ -218,9 +218,11 @@ The rule file accepts two optional arrays:
 Intent rules group customer language under a product-specific FAQ topic.
 Vocabulary-gap rules map customer terms to documentation terms passed with
 `--documentation-term` or `--documentation-term-file`, so the result JSON and
-Markdown can suggest alternate phrasing. Documentation-term files are UTF-8
-plain text with one term per line; blank lines and `#` comment lines are
-ignored. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
+Markdown can suggest alternate phrasing. Documentation-term files can be UTF-8
+plain text, JSON, JSONL, or CSV. Text files use one term per line and ignore
+blank or `#` comment lines. Structured files read common fields such as
+`documentation_term`, `term`, `heading`, `title`, `page_title`, `name`, or
+`label`. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 `--vocabulary-gap-rule` flags are placed before file rules, so command-line
 overrides win when multiple rules match. Rule-file values use the same CLI
 delimiter guardrails: intent topics cannot contain `=` or `,`, and keywords or

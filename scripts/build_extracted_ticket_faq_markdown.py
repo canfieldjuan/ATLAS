@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from datetime import date
+import io
 import json
 from pathlib import Path
 import sys
@@ -14,6 +16,26 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+_DOCUMENTATION_TERM_ROW_KEYS = (
+    "documentation_term",
+    "documentation_terms",
+    "term",
+    "heading",
+    "title",
+    "page_title",
+    "name",
+    "label",
+)
+_DOCUMENTATION_TERM_LIST_KEYS = (
+    "terms",
+    "headings",
+    "documents",
+    "pages",
+    "articles",
+    "rows",
+    "data",
+)
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
@@ -342,17 +364,116 @@ def _cli_documentation_terms(
 
 def _load_cli_documentation_term_file(path: Path) -> tuple[str, ...]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise SystemExit(f"--documentation-term-file not found: {path}") from None
-    terms = [
-        line.strip()
-        for line in lines
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        terms = _load_cli_documentation_term_json(text, path)
+    elif suffix == ".jsonl":
+        terms = _load_cli_documentation_term_jsonl(text, path)
+    elif suffix == ".csv":
+        terms = _load_cli_documentation_term_csv(text, path)
+    else:
+        terms = _load_cli_documentation_term_text(text)
     if not terms:
         raise SystemExit(f"--documentation-term-file contains no terms: {path}")
     return tuple(terms)
+
+
+def _load_cli_documentation_term_text(text: str) -> tuple[str, ...]:
+    return tuple(
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def _load_cli_documentation_term_json(text: str, path: Path) -> tuple[str, ...]:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"--documentation-term-file must be valid JSON: {path}: {exc.msg}"
+        ) from None
+    return tuple(_documentation_terms_from_payload(payload))
+
+
+def _load_cli_documentation_term_jsonl(text: str, path: Path) -> tuple[str, ...]:
+    terms = [
+        term
+        for line_no, line in enumerate(text.splitlines(), start=1)
+        for term in _documentation_terms_from_jsonl_line(line, path, line_no)
+    ]
+    return tuple(terms)
+
+
+def _documentation_terms_from_jsonl_line(
+    line: str,
+    path: Path,
+    line_no: int,
+) -> tuple[str, ...]:
+    text = line.strip()
+    if not text:
+        return ()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            "--documentation-term-file must be valid JSONL: "
+            f"{path}: line {line_no}: {exc.msg}"
+        ) from None
+    return tuple(_documentation_terms_from_payload(payload))
+
+
+def _load_cli_documentation_term_csv(text: str, path: Path) -> tuple[str, ...]:
+    rows = list(csv.DictReader(io.StringIO(text, newline="")))
+    if not rows:
+        return ()
+    return tuple(
+        term
+        for row in rows
+        for term in _documentation_terms_from_mapping(row)
+    )
+
+
+def _documentation_terms_from_payload(payload: Any) -> tuple[str, ...]:
+    if isinstance(payload, str):
+        return (payload,)
+    if isinstance(payload, dict):
+        terms = list(_documentation_terms_from_mapping(payload))
+        for key in _DOCUMENTATION_TERM_LIST_KEYS:
+            value = _case_insensitive_get(payload, key)
+            if value is not None:
+                terms.extend(_documentation_terms_from_payload(value))
+        return tuple(terms)
+    if isinstance(payload, list):
+        return tuple(
+            term
+            for item in payload
+            for term in _documentation_terms_from_payload(item)
+        )
+    return ()
+
+
+def _documentation_terms_from_mapping(
+    row: dict[str, Any],
+) -> tuple[str, ...]:
+    for key in _DOCUMENTATION_TERM_ROW_KEYS:
+        value = _case_insensitive_get(row, key)
+        if value not in (None, ""):
+            if isinstance(value, (dict, list)):
+                return _documentation_terms_from_payload(value)
+            return (str(value),)
+    return ()
+
+
+def _case_insensitive_get(row: dict[str, Any], key: str) -> Any:
+    target = key.lower()
+    for raw_key, value in row.items():
+        if str(raw_key).lstrip("\ufeff").lower() == target:
+            return value
+    return None
 
 
 def _clean_cli_documentation_terms(terms: list[str]) -> tuple[str, ...]:

@@ -2336,6 +2336,191 @@ def test_ticket_faq_cli_accepts_documentation_term_file(tmp_path: Path) -> None:
     )
 
 
+def test_ticket_faq_cli_accepts_json_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.json"
+    term_file.write_text(
+        json.dumps({
+            "documentation_terms": ["Single sign-on setup"],
+            "documents": [
+                {"title": "Download report"},
+                {"heading": "Dashboard analytics"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == [
+        "Single sign-on setup",
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
+def test_ticket_faq_cli_accepts_nested_json_documentation_term_values(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.json"
+    term_file.write_text(
+        json.dumps({
+            "documentation_terms": [
+                {"title": "Download report"},
+                {"heading": "Dashboard analytics"},
+            ]
+        }),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == [
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert not any(
+        term.startswith("{") for term in result["config"]["documentation_terms"]
+    )
+
+
+def test_ticket_faq_cli_accepts_jsonl_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.jsonl"
+    term_file.write_text(
+        "\n".join((
+            json.dumps("Single sign-on setup"),
+            json.dumps({"page_title": "Download report"}),
+            json.dumps({"term": "Dashboard analytics"}),
+            "",
+        )),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == [
+        "Single sign-on setup",
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
+def test_ticket_faq_cli_accepts_csv_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.csv"
+    term_file.write_text(
+        "\n".join((
+            "title,slug",
+            "Single sign-on setup,sso",
+            "Download report,download-report",
+            "Dashboard analytics,dashboard",
+            "",
+        )),
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == [
+        "Single sign-on setup",
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
+def test_ticket_faq_cli_accepts_bom_and_multiline_csv_documentation_term_file(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.csv"
+    term_file.write_text(
+        '\ufefftitle,body\n"Download report","First line\nsecond line"\n',
+        encoding="utf-8",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_terms"] == ["Download report"]
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
 def test_ticket_faq_cli_rejects_missing_documentation_term_file(tmp_path: Path) -> None:
     source = _write_ticket_csv(
         tmp_path,
@@ -2369,6 +2554,49 @@ def test_ticket_faq_cli_rejects_empty_documentation_term_file(tmp_path: Path) ->
 
     assert completed.returncode == 1
     assert "--documentation-term-file contains no terms:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_malformed_json_documentation_term_file(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.json"
+    term_file.write_text("{", encoding="utf-8")
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file must be valid JSON:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_malformed_jsonl_documentation_term_file(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.jsonl"
+    term_file.write_text('{"title": "Download report"}\n{', encoding="utf-8")
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file must be valid JSONL:" in completed.stderr
+    assert "line 2" in completed.stderr
     assert "Traceback" not in completed.stderr
 
 
