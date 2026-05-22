@@ -127,7 +127,8 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["email_campaign"]["estimated_retry_adjusted_unit_cost_usd"] == 0.36
     assert outputs["landing_page"]["default_quality_repair_attempts"] == 1
     assert outputs["landing_page"]["estimated_retry_adjusted_unit_cost_usd"] == 2.6
-    assert payload["input_contracts"]["landing_page_quality_repair_attempts"] == {
+    input_contracts = payload["input_contracts"]
+    assert input_contracts["landing_page_quality_repair_attempts"] == {
         "key": "landing_page_quality_repair_attempts",
         "label": "Landing page quality repair attempts",
         "type": "integer",
@@ -135,6 +136,19 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
         "max": 10,
         "default": 1,
     }
+    assert input_contracts["target_keyword"] == {
+        "key": "target_keyword",
+        "label": "Target keyword",
+        "type": "string",
+        "placeholder": "customer support FAQ",
+        "asset": "landing_page",
+        "group": "seo_geo_aeo",
+    }
+    assert input_contracts["secondary_keywords"]["asset"] == "landing_page"
+    assert input_contracts["secondary_keywords"]["group"] == "seo_geo_aeo"
+    assert input_contracts["secondary_keywords"]["type"] == "string_list"
+    assert input_contracts["cta_url"]["asset"] == "landing_page"
+    assert input_contracts["cta_url"]["placeholder"] == "/systems/ai-content-ops/intake"
     assert outputs["email_campaign"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"

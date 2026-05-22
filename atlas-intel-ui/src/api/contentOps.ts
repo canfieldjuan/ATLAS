@@ -70,6 +70,9 @@ export interface ContentOpsInputContract {
   key: string
   label: string
   type: 'integer' | string
+  asset?: string
+  group?: string
+  placeholder?: string
   min?: number
   max?: number
   default?: string | number | boolean | null

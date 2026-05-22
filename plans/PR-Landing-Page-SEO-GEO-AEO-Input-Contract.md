@@ -21,31 +21,17 @@ editing, or public prerendering.
 - The review UI already renders landing-page readiness panels, repair history,
   structured data, sections, references, public URL state, and raw row.
 - Static sitemap bridging is merged in PR #764.
-- `content_ops_execution._marketing_campaign_from_inputs` still only allows
-  `industry`, `pain_points`, `differentiators`, `customer_segments`,
-  `key_metrics`, `proof_points`, and `competitive_alternatives` into
-  `MarketingCampaign.context`.
-- The new-run UI still primarily relies on free-form JSON inputs for
-  landing-page-specific fields.
+- `content_ops_execution._marketing_campaign_from_inputs` now imports the
+  landing-page context allowlist from the shared input-contract module, so the
+  SEO/GEO/AEO fields survive into `MarketingCampaign.context` without
+  re-opening the older negative-list leak.
+- The new-run UI now renders catalog-driven landing-page SEO/GEO/AEO controls
+  when `landing_page` is selected. Those controls still write normal request
+  `inputs` JSON.
 
 ## Scope (this PR)
 
 Ownership lane: content-ops/landing-page-input-contract
-
-This planning PR locks the next implementation slice after PR #764. It does
-not implement the input contract yet.
-
-1. Document the verified current state after the landing-page public rendering,
-   robots, sitemap feed, and frontend sitemap bridge work.
-2. Define the next implementation scope around first-class SEO/GEO/AEO inputs.
-3. Record the intended input keys, implementation files, verification, and
-   deferred follow-up slices.
-
-### Files touched
-
-- `plans/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md`
-
-## Implementation Scope (Next PR)
 
 1. Define first-class landing-page SEO/GEO/AEO input keys.
 2. Add those keys to the backend landing-page context allowlist.
@@ -53,6 +39,21 @@ not implement the input contract yet.
 4. Add structured `atlas-intel-ui` controls for the landing-page input fields.
 5. Prove those fields survive from UI/request inputs into
    `MarketingCampaign.context`.
+
+### Files touched
+
+- `plans/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md`
+- `extracted_content_pipeline/landing_page_input_contract.py`
+- `extracted_content_pipeline/content_ops_execution.py`
+- `extracted_content_pipeline/api/control_surfaces.py`
+- `tests/test_landing_page_input_contract.py`
+- `tests/test_extracted_content_control_surface_api.py`
+- `tests/test_extracted_content_ops_execution.py`
+- `atlas-intel-ui/src/api/contentOps.ts`
+- `atlas-intel-ui/src/api/__fixtures__/contentOps/catalog.json`
+- `atlas-intel-ui/src/domain/contentOps/fromWire.ts`
+- `atlas-intel-ui/src/domain/contentOps/types.ts`
+- `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx`
 
 ### Candidate Input Keys
 
@@ -79,17 +80,6 @@ Already-supported context keys should remain supported:
 - `proof_points`
 - `competitive_alternatives`
 
-### Files Expected In Implementation
-
-- `plans/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md`
-- `extracted_content_pipeline/content_ops_execution.py`
-- `extracted_content_pipeline/api/control_surfaces.py`
-- `extracted_content_pipeline/control_surfaces.py`
-- `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx`
-- `atlas-intel-ui/src/api/contentOps.ts`
-- `atlas-intel-ui/src/domain/contentOps/*`
-- focused backend/frontend tests
-
 ## Mechanism
 
 Backend control surfaces should publish a landing-page input contract so the UI
@@ -101,6 +91,11 @@ negative-list leak pattern.
 UI controls should write normal request `inputs` values. They should coexist
 with the raw JSON editor and keep JSON as the transport, but operators should
 not need to hand-author these fields for normal landing-page generation.
+
+The UI keys off the backend-provided `asset: landing_page` and
+`group: seo_geo_aeo` fields instead of hard-coding the full contract shape in
+the page component. Field ordering is stable in the UI, while the backend
+remains the source for labels, types, placeholders, and catalog exposure.
 
 ## Intentional
 
@@ -125,23 +120,18 @@ not need to hand-author these fields for normal landing-page generation.
 
 ## Verification
 
-For this planning PR:
-
-- Git whitespace check.
-- Local PR review wrapper.
-
-For the implementation PR:
-
-- Backend tests for context allowlist behavior.
-- Control-surface tests proving the input contract is exposed.
-- UI/domain tests proving typed controls round-trip into request inputs.
-- Existing content-ops execution tests.
-- Existing `atlas-intel-ui` lint/build checks.
-- Local PR review wrapper.
+- Passed: `pytest tests/test_landing_page_input_contract.py tests/test_extracted_content_control_surface_api.py tests/test_extracted_content_ops_execution.py -q`
+- Passed: `npm --prefix atlas-intel-ui run lint`
+- Passed: `npm --prefix atlas-intel-ui run build`
+- Passed: `git diff --check`
+- Passed: local PR review wrapper.
 
 ## Estimated Diff Size
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan | ~145 |
-| **Total** | **~145** |
+| Backend contract + wiring | ~160 |
+| Backend tests | ~75 |
+| Frontend contract + controls | ~190 |
+| Fixture + plan | ~150 |
+| **Total** | **~575** |
