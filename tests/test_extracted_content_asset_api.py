@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 
@@ -738,6 +739,42 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
     assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
     assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
     assert pool.unlocked is True
+
+
+def test_generated_asset_router_warns_when_landing_page_repair_lock_is_skipped(caplog) -> None:
+    repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    needs_repair = {
+        **repaired_row,
+        "meta": {
+            key: value
+            for key, value in repaired_row["meta"].items()
+            if key != "description"
+        },
+    }
+    pool = _EditableLandingPagePool(needs_repair)
+    llm = _LLM([_landing_page_generation_response(repaired_row)])
+    skills = _Skills()
+    caplog.set_level(logging.WARNING, logger=asset_api.__name__)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["repair_result"]["generated"] == 1
+    assert len(llm.calls) == 1
+    assert any(
+        "repair advisory lock skipped" in record.getMessage()
+        and record.landing_page_id == "11111111-1111-1111-1111-111111111111"
+        and record.account_id == "acct_1"
+        for record in caplog.records
+    )
 
 
 def test_landing_page_repair_lock_key_is_account_scoped() -> None:
