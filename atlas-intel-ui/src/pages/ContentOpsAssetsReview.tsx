@@ -1,4 +1,12 @@
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Link } from 'react-router-dom'
 import {
   ArrowRight,
@@ -9,7 +17,9 @@ import {
   Eye,
   ExternalLink,
   Loader2,
+  Pencil,
   RefreshCw,
+  Save,
   X,
   XCircle,
 } from 'lucide-react'
@@ -19,7 +29,9 @@ import {
   fetchGeneratedAssetDrafts,
   reviewGeneratedAssetDraft,
   reviewGeneratedAssetDrafts,
+  updateGeneratedLandingPageDraft,
   type GeneratedAssetDraft,
+  type GeneratedLandingPageDraftUpdate,
   type GeneratedAssetListResponse,
   type GeneratedAssetType,
 } from '../api/contentOps'
@@ -76,6 +88,28 @@ type StructuredDataSummary = {
   hasCanonical: boolean
 }
 
+type LandingPageSectionEdit = {
+  id: string
+  title: string
+  body_markdown: string
+  metadata: Record<string, unknown>
+}
+
+type LandingPageEditState = {
+  title: string
+  slug: string
+  heroHeadline: string
+  heroSubheadline: string
+  heroCtaLabel: string
+  heroCtaUrl: string
+  ctaLabel: string
+  ctaUrl: string
+  metaTitleTag: string
+  metaDescription: string
+  referenceIdsText: string
+  sections: LandingPageSectionEdit[]
+}
+
 const ASSETS: Array<{
   id: GeneratedAssetType
   label: string
@@ -109,6 +143,10 @@ const ASSETS: Array<{
 ]
 
 const STATUSES: StatusFilter[] = ['draft', 'approved', 'rejected', 'all']
+const inputClassName =
+  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
+const textAreaClassName =
+  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
 
 export default function ContentOpsAssetsReview() {
   const [asset, setAsset] = useState<GeneratedAssetType>('report')
@@ -200,6 +238,36 @@ export default function ContentOpsAssetsReview() {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
       setExporting(false)
+    }
+  }
+
+  const handleSaveLandingPageDraft = async (
+    row: GeneratedAssetDraft,
+    update: GeneratedLandingPageDraftUpdate,
+  ) => {
+    const id = assetId(row)
+    if (!id) throw new Error('Draft id missing')
+    setBusyId(id)
+    setActionError(null)
+    try {
+      const updated = await updateGeneratedLandingPageDraft(id, update)
+      setData((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          rows: current.rows.map((item) =>
+            assetId(item) === id ? updated : item,
+          ),
+        }
+      })
+      setDetailRow(updated)
+      return updated
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      throw err
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -403,8 +471,11 @@ export default function ContentOpsAssetsReview() {
       </section>
       {detailRow && (
         <AssetDetailDrawer
+          key={assetId(detailRow) || assetTitle(detailRow, asset)}
           row={detailRow}
           asset={asset}
+          saving={busyId === assetId(detailRow)}
+          onSaveLandingPage={handleSaveLandingPageDraft}
           onClose={() => setDetailRow(null)}
         />
       )}
@@ -568,10 +639,17 @@ function AssetRow({
 function AssetDetailDrawer({
   row,
   asset,
+  saving,
+  onSaveLandingPage,
   onClose,
 }: {
   row: GeneratedAssetDraft
   asset: GeneratedAssetType
+  saving: boolean
+  onSaveLandingPage: (
+    row: GeneratedAssetDraft,
+    update: GeneratedLandingPageDraftUpdate,
+  ) => Promise<GeneratedAssetDraft>
   onClose: () => void
 }) {
   const title = assetTitle(row, asset)
@@ -591,6 +669,13 @@ function AssetDetailDrawer({
     Boolean(assetId(row)) &&
     Boolean(textValue(row.slug)) &&
     status !== 'approved'
+  const canEditLandingPage =
+    asset === 'landing_page' && Boolean(assetId(row)) && status !== 'approved'
+  const [isEditing, setIsEditing] = useState(false)
+  const [editState, setEditState] = useState<LandingPageEditState>(() =>
+    landingPageEditState(row),
+  )
+  const [editError, setEditError] = useState<string | null>(null)
   const [copiedUrl, setCopiedUrl] = useState(false)
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -611,6 +696,17 @@ function AssetDetailDrawer({
       }
     }
   }, [])
+
+  const handleSaveEdit = async () => {
+    setEditError(null)
+    try {
+      const update = landingPageUpdatePayload(row, editState)
+      await onSaveLandingPage(row, update)
+      setIsEditing(false)
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -662,16 +758,52 @@ function AssetDetailDrawer({
               {assetId(row) && <span className="font-mono">id: {assetId(row)}</span>}
             </div>
           </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close details"
-            className="rounded-md border border-slate-700 p-2 text-slate-300 hover:border-cyan-400 hover:text-cyan-200"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {canEditLandingPage && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditError(null)
+                  if (isEditing) {
+                    setIsEditing(false)
+                    return
+                  }
+                  setEditState(landingPageEditState(row))
+                  setIsEditing(true)
+                }}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-60"
+              >
+                <Pencil className="h-4 w-4" />
+                {isEditing ? 'View' : 'Edit'}
+              </button>
+            )}
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onClose}
+              aria-label="Close details"
+              className="rounded-md border border-slate-700 p-2 text-slate-300 hover:border-cyan-400 hover:text-cyan-200"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
+
+        {isEditing && canEditLandingPage && (
+          <LandingPageDraftEditor
+            state={editState}
+            saving={saving}
+            error={editError}
+            onChange={setEditState}
+            onCancel={() => {
+              setEditError(null)
+              setEditState(landingPageEditState(row))
+              setIsEditing(false)
+            }}
+            onSave={() => void handleSaveEdit()}
+          />
+        )}
 
         {(publicUrl || publicUrlPending) && (
           <section className="mt-6">
@@ -873,6 +1005,265 @@ function AssetDetailDrawer({
         </section>
       </aside>
     </div>
+  )
+}
+
+function LandingPageDraftEditor({
+  state,
+  saving,
+  error,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  state: LandingPageEditState
+  saving: boolean
+  error: string | null
+  onChange: (state: LandingPageEditState) => void
+  onCancel: () => void
+  onSave: () => void
+}) {
+  const updateField = <K extends keyof LandingPageEditState>(
+    key: K,
+    value: LandingPageEditState[K],
+  ) => onChange({ ...state, [key]: value })
+  const updateSection = (
+    index: number,
+    update: Partial<LandingPageSectionEdit>,
+  ) => {
+    onChange({
+      ...state,
+      sections: state.sections.map((section, sectionIndex) =>
+        sectionIndex === index ? { ...section, ...update } : section,
+      ),
+    })
+  }
+  const addSection = () => {
+    onChange({
+      ...state,
+      sections: [
+        ...state.sections,
+        {
+          id: `section_${state.sections.length + 1}`,
+          title: '',
+          body_markdown: '',
+          metadata: {},
+        },
+      ],
+    })
+  }
+  const removeSection = (index: number) => {
+    onChange({
+      ...state,
+      sections: state.sections.filter((_, sectionIndex) => sectionIndex !== index),
+    })
+  }
+
+  return (
+    <section className="mt-6 rounded-md border border-cyan-500/30 bg-cyan-500/5 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-cyan-100">Edit landing page</h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Saving resets this asset to draft and reruns readiness checks.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-60"
+          >
+            {saving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Save className="h-4 w-4" />
+            )}
+            Save
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mt-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Field label="Title">
+          <input
+            value={state.title}
+            onChange={(event) => updateField('title', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Slug">
+          <input
+            value={state.slug}
+            onChange={(event) => updateField('slug', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Hero headline">
+          <input
+            value={state.heroHeadline}
+            onChange={(event) => updateField('heroHeadline', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Hero subheadline">
+          <input
+            value={state.heroSubheadline}
+            onChange={(event) => updateField('heroSubheadline', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Hero CTA label">
+          <input
+            value={state.heroCtaLabel}
+            onChange={(event) => updateField('heroCtaLabel', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Hero CTA URL">
+          <input
+            value={state.heroCtaUrl}
+            onChange={(event) => updateField('heroCtaUrl', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="CTA label">
+          <input
+            value={state.ctaLabel}
+            onChange={(event) => updateField('ctaLabel', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="CTA URL">
+          <input
+            value={state.ctaUrl}
+            onChange={(event) => updateField('ctaUrl', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Meta title">
+          <input
+            value={state.metaTitleTag}
+            onChange={(event) => updateField('metaTitleTag', event.target.value)}
+            className={inputClassName}
+          />
+        </Field>
+        <Field label="Meta description">
+          <textarea
+            value={state.metaDescription}
+            onChange={(event) => updateField('metaDescription', event.target.value)}
+            rows={3}
+            className={textAreaClassName}
+          />
+        </Field>
+      </div>
+
+      <Field label="Reference IDs">
+        <textarea
+          value={state.referenceIdsText}
+          onChange={(event) => updateField('referenceIdsText', event.target.value)}
+          rows={2}
+          className={textAreaClassName}
+        />
+      </Field>
+
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold text-slate-200">Sections</h4>
+        <button
+          type="button"
+          onClick={addSection}
+          disabled={saving}
+          className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200 disabled:opacity-60"
+        >
+          Add section
+        </button>
+      </div>
+
+      <div className="mt-3 space-y-3">
+        {state.sections.length === 0 ? (
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-400">
+            No sections yet.
+          </div>
+        ) : (
+          state.sections.map((section, index) => (
+            <div
+              key={`${section.id}-${index}`}
+              className="rounded-md border border-slate-800 bg-slate-950/40 p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm font-medium text-white">
+                  Section {index + 1}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeSection(index)}
+                  disabled={saving}
+                  className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-200 hover:bg-rose-500/10 disabled:opacity-60"
+                >
+                  Remove
+                </button>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <Field label="ID">
+                  <input
+                    value={section.id}
+                    onChange={(event) => updateSection(index, { id: event.target.value })}
+                    className={inputClassName}
+                  />
+                </Field>
+                <Field label="Title">
+                  <input
+                    value={section.title}
+                    onChange={(event) => updateSection(index, { title: event.target.value })}
+                    className={inputClassName}
+                  />
+                </Field>
+              </div>
+              <Field label="Body">
+                <textarea
+                  value={section.body_markdown}
+                  onChange={(event) =>
+                    updateSection(index, { body_markdown: event.target.value })
+                  }
+                  rows={5}
+                  className={textAreaClassName}
+                />
+              </Field>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  )
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <label className="mt-3 block text-xs font-medium text-slate-400">
+      <span>{label}</span>
+      <div className="mt-1">{children}</div>
+    </label>
   )
 }
 
@@ -1080,6 +1471,82 @@ function ReadinessBreakdown({ panels }: { panels: ReadinessPanel[] }) {
       </div>
     </section>
   )
+}
+
+function landingPageEditState(row: GeneratedAssetDraft): LandingPageEditState {
+  const hero = recordValue(row.hero)
+  const cta = recordValue(row.cta)
+  const meta = recordValue(row.meta)
+  return {
+    title: textValue(row.title),
+    slug: textValue(row.slug),
+    heroHeadline: objectText(hero, 'headline'),
+    heroSubheadline: objectText(hero, 'subheadline'),
+    heroCtaLabel: objectText(hero, 'cta_label'),
+    heroCtaUrl: objectText(hero, 'cta_url'),
+    ctaLabel: objectText(cta, 'label'),
+    ctaUrl: objectText(cta, 'url'),
+    metaTitleTag: objectText(meta, 'title_tag'),
+    metaDescription: objectText(meta, 'description'),
+    referenceIdsText: valueList(row.reference_ids).join('\n'),
+    sections: editableLandingPageSections(row.sections),
+  }
+}
+
+function landingPageUpdatePayload(
+  row: GeneratedAssetDraft,
+  state: LandingPageEditState,
+): GeneratedLandingPageDraftUpdate {
+  return {
+    title: state.title,
+    slug: state.slug,
+    hero: {
+      ...(recordValue(row.hero) ?? {}),
+      headline: state.heroHeadline,
+      subheadline: state.heroSubheadline,
+      cta_label: state.heroCtaLabel,
+      cta_url: state.heroCtaUrl,
+    },
+    cta: {
+      ...(recordValue(row.cta) ?? {}),
+      label: state.ctaLabel,
+      url: state.ctaUrl,
+    },
+    meta: {
+      ...(recordValue(row.meta) ?? {}),
+      title_tag: state.metaTitleTag,
+      description: state.metaDescription,
+    },
+    sections: state.sections.map((section, index) => ({
+      id: section.id.trim() || `section_${index + 1}`,
+      title: section.title,
+      body_markdown: section.body_markdown,
+      metadata: { ...section.metadata },
+    })),
+    reference_ids: parseReferenceIds(state.referenceIdsText),
+  }
+}
+
+function editableLandingPageSections(value: unknown): LandingPageSectionEdit[] {
+  return recordList(value).map((section, index) => {
+    const metadata = section.metadata
+    return {
+      id: textValue(section.id) || `section_${index + 1}`,
+      title: textValue(section.title) || textValue(section.heading),
+      body_markdown: textValue(section.body_markdown) || textValue(section.body),
+      metadata:
+        metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+          ? { ...(metadata as Record<string, unknown>) }
+          : {},
+    }
+  })
+}
+
+function parseReferenceIds(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 function focusableElements(root: HTMLElement | null): HTMLElement[] {
