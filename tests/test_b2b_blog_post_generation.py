@@ -1604,6 +1604,57 @@ async def test_fetch_source_distribution_scopes_by_category():
 
 
 @pytest.mark.asyncio
+async def test_gather_data_category_topic_routes_through_category_scope(monkeypatch):
+    """D7c seam test: a category-level topic (no vendor in topic_ctx) must take
+    the `category_scope` path -- the ctx_row aggregate scopes
+    `WHERE product_category = $1` (not `EXISTS vm.vendor_name = ANY`), and
+    _fetch_source_distribution is called with `category=<category>`. The four
+    existing _gather_data tests all pass a vendor (the `elif vendor_names`
+    path), so this is the only test that enters the seam where the D7 bug lived:
+    reverting the category_scope capture, the ctx_row branch, or the `category=`
+    kwarg each silently falls back to mention-scoping and must fail HERE."""
+    ctx_rows: list[tuple[str, tuple]] = []
+
+    class Pool:
+        async def fetch(self, query, *args):
+            # cat_rows: the category->vendor-set query populates vendor_names.
+            if "SELECT DISTINCT vm.vendor_name" in query:
+                return [{"vendor_name": "Salesforce"}, {"vendor_name": "HubSpot"}]
+            return []  # vendor_pains etc.
+
+        async def fetchrow(self, query, *args):
+            ctx_rows.append((query, args))
+            return {
+                "total_reviews": 1133, "enriched": 1133, "churn_intent": 40,
+                "earliest": "2026-02-25", "latest": "2026-04-07",
+            }
+
+    source_dist = AsyncMock(
+        return_value={"sources": [], "verified_count": 170, "community_count": 963},
+    )
+    monkeypatch.setattr(blog_mod, "_fetch_source_distribution", source_dist)
+    monkeypatch.setattr(blog_mod, "_fetch_quotable_reviews", AsyncMock(return_value=[]))
+    monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_fetch_category_overview_entry", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_fetch_affiliate_partner_by_category", AsyncMock(return_value=None))
+    monkeypatch.setattr(blog_mod, "_match_affiliate_partner_for_vendors", AsyncMock(return_value=None))
+
+    await _gather_data(
+        Pool(),
+        "pain_point_roundup",
+        {"category": "CRM", "vendor_count": 8, "total_complaints": 480, "slug": "crm-complaints"},
+    )
+
+    # The corpus aggregate (carries churn_intent) must be the category-scoped form.
+    ctx_sql, ctx_args = next((q, a) for q, a in ctx_rows if "churn_intent" in q)
+    assert "WHERE product_category = $1" in ctx_sql
+    assert "EXISTS" not in ctx_sql
+    assert ctx_args[0] == "CRM"
+    # ...and the source-distribution split is category-scoped, not vendor-mention.
+    assert source_dist.await_args.kwargs.get("category") == "CRM"
+
+
+@pytest.mark.asyncio
 async def test_fetch_vendor_stats_reads_vendor_mentions():
     pool = SimpleNamespace(fetchrow=AsyncMock(return_value=None))
 
