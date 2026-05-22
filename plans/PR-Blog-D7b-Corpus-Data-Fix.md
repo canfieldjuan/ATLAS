@@ -20,7 +20,10 @@ Verified each set is internally consistent (`verified + community == enriched`).
 - **crm-landscape** (window 2026-02-25..2026-04-07, category-scoped): the
   mention-scoped corpus was inflated by off-category community cross-mentions.
   enriched 3,287 -> **1,054**; total collected 4,990 -> **2,022**; verified 172
-  -> **147**; community 3,115 -> **907** (147+907=1,054).
+  -> **147**; community 3,115 -> **907** (147+907=1,054); "total churn signals
+  analyzed" 1,163 -> **1,054** (same windowed analyzed-corpus count, traced to
+  `_fetch_category_topic_stats` enriched_reviews; the "2.1" avg urgency is
+  windowed-correct, unchanged).
 - **zoho-crm-deep-dive** (window 2026-02-28..2026-04-04, vendor-mention): the
   "collected" total used all sources. collected 940 -> **429**; enriched 268 ->
   **261**; verified 28 -> **24**; community 240 -> **237** (24+237=261); churn
@@ -51,17 +54,17 @@ line out atomically.
 - **Window-faithful, not all-time.** Each post claims a window; the corrected
   numbers are computed inside that same window, so "between <dates> we analyzed
   N" stays true rather than silently expanding the corpus claim to today.
-- **Only the overstated numbers.** `1,163 total churn signals` and the `2.1`
-  urgency in crm-landscape come from a separate, already-scoped path; their
-  exact generator field wasn't traced, so they are left untouched rather than
-  replaced with a number I can't source (see Deferred).
+- **Churn-signals line reconciled (review follow-up).** `1,163 total churn
+  signals` was the all-time value of the same analyzed-corpus count
+  (`_fetch_category_topic_stats` enriched_reviews); its windowed value is 1,054,
+  identical to the corrected enriched count -- so it now reads consistently
+  (1,054 enriched = 1,054 churn signals analyzed) instead of 1,163 > 1,054. The
+  `2.1` avg urgency is windowed-correct (windowed == all-time == 2.1), unchanged.
 
 ## Deferred
 
 - **D8** (`crm-landscape` "8 vendors" vs 7 charted / 5 profiled) -- the vendor
   count is a separate defect; left intact here.
-- Reconcile `1,163 total churn signals` / `2.1` urgency once their generator
-  source field is identified.
 - **D2/D3/D4** (pipedrive cluster).
 
 ## Verification
