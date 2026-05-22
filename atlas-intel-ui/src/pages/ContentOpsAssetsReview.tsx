@@ -20,6 +20,7 @@ import {
   Pencil,
   RefreshCw,
   Save,
+  Wrench,
   X,
   XCircle,
 } from 'lucide-react'
@@ -27,6 +28,7 @@ import { clsx } from 'clsx'
 import {
   exportGeneratedAssetDraftsCsv,
   fetchGeneratedAssetDrafts,
+  repairGeneratedLandingPageDraft,
   reviewGeneratedAssetDraft,
   reviewGeneratedAssetDrafts,
   updateGeneratedLandingPageDraft,
@@ -271,6 +273,33 @@ export default function ContentOpsAssetsReview() {
     }
   }
 
+  const handleRepairLandingPageDraft = async (row: GeneratedAssetDraft) => {
+    const id = assetId(row)
+    if (!id) throw new Error('Draft id missing')
+    setBusyId(id)
+    setActionError(null)
+    try {
+      const updated = await repairGeneratedLandingPageDraft(id)
+      setData((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          rows: current.rows.map((item) =>
+            assetId(item) === id ? updated : item,
+          ),
+        }
+      })
+      setDetailRow(updated)
+      return updated
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setActionError(message)
+      throw err
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   if (error && !data) {
     return <PageError error={error} onRetry={() => void load(true)} />
   }
@@ -476,6 +505,7 @@ export default function ContentOpsAssetsReview() {
           asset={asset}
           saving={busyId === assetId(detailRow)}
           onSaveLandingPage={handleSaveLandingPageDraft}
+          onRepairLandingPage={handleRepairLandingPageDraft}
           onClose={() => setDetailRow(null)}
         />
       )}
@@ -641,6 +671,7 @@ function AssetDetailDrawer({
   asset,
   saving,
   onSaveLandingPage,
+  onRepairLandingPage,
   onClose,
 }: {
   row: GeneratedAssetDraft
@@ -650,6 +681,7 @@ function AssetDetailDrawer({
     row: GeneratedAssetDraft,
     update: GeneratedLandingPageDraftUpdate,
   ) => Promise<GeneratedAssetDraft>
+  onRepairLandingPage: (row: GeneratedAssetDraft) => Promise<GeneratedAssetDraft>
   onClose: () => void
 }) {
   const title = assetTitle(row, asset)
@@ -671,11 +703,13 @@ function AssetDetailDrawer({
     status !== 'approved'
   const canEditLandingPage =
     asset === 'landing_page' && Boolean(assetId(row)) && status !== 'approved'
+  const canRepairLandingPage = canEditLandingPage
   const [isEditing, setIsEditing] = useState(false)
   const [editState, setEditState] = useState<LandingPageEditState>(() =>
     landingPageEditState(row),
   )
   const [editError, setEditError] = useState<string | null>(null)
+  const [repairError, setRepairError] = useState<string | null>(null)
   const [copiedUrl, setCopiedUrl] = useState(false)
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -705,6 +739,16 @@ function AssetDetailDrawer({
       setIsEditing(false)
     } catch (err) {
       setEditError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleRepair = async () => {
+    setRepairError(null)
+    try {
+      await onRepairLandingPage(row)
+      setIsEditing(false)
+    } catch (err) {
+      setRepairError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -778,6 +822,21 @@ function AssetDetailDrawer({
                 {isEditing ? 'View' : 'Edit'}
               </button>
             )}
+            {canRepairLandingPage && (
+              <button
+                type="button"
+                onClick={() => void handleRepair()}
+                disabled={saving}
+                className="inline-flex items-center gap-2 rounded-md border border-amber-500/40 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/10 disabled:opacity-60"
+              >
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4" />
+                )}
+                Repair
+              </button>
+            )}
             <button
               ref={closeButtonRef}
               type="button"
@@ -789,6 +848,12 @@ function AssetDetailDrawer({
             </button>
           </div>
         </div>
+
+        {repairError && (
+          <div className="mt-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            {repairError}
+          </div>
+        )}
 
         {isEditing && canEditLandingPage && (
           <LandingPageDraftEditor
