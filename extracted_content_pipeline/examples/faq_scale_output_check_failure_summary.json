@@ -15,6 +15,39 @@
     "warning_sample": [],
     "usable_source_ratio": 1.0
   },
+  "faq_run_summary": {
+    "status": "failed_output_checks",
+    "source_count": 1000,
+    "ticket_source_count": 1000,
+    "generated": 12,
+    "weighted_source_volume": 1000,
+    "source_channel_counts": {
+      "support_tickets": 1000
+    },
+    "zero_result_search_source_count": 0,
+    "output_checks": {
+      "passed": 1,
+      "failed": 2,
+      "total": 3,
+      "failed_checks": [
+        "has_action_items",
+        "uses_user_vocabulary"
+      ]
+    },
+    "item_score_distribution": {
+      "count": 12,
+      "min": 1,
+      "max": 18,
+      "average": 7.5,
+      "bands": {
+        "zero": 0,
+        "low_1_to_4": 4,
+        "medium_5_to_9": 5,
+        "high_10_plus": 3
+      }
+    },
+    "warning_count": 0
+  },
   "failure": {
     "type": "output_checks",
     "exit_code": 1,
