@@ -3,7 +3,7 @@ import type { BlogPost } from './index'
 const post: BlogPost = {
   slug: 'crm-landscape-2026-04',
   title: 'CRM Landscape 2026: 8 Vendors Compared by Real User Data',
-  description: 'A comprehensive market overview of the CRM landscape based on 3,287 enriched reviews across 8 vendors. Covers churn urgency, recurring pain patterns, and vendor-by-vendor strengths and weaknesses.',
+  description: 'A comprehensive market overview of the CRM landscape based on 1,054 enriched reviews across 8 vendors. Covers churn urgency, recurring pain patterns, and vendor-by-vendor strengths and weaknesses.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
   tags: ["crm", "market-landscape", "comparison", "b2b-intelligence"],
@@ -120,13 +120,13 @@ const post: BlogPost = {
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'CRM Software Comparison 2026: 8 Vendors by User Reviews',
-  seo_description: 'Compare 8 CRM vendors using 3,287 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
+  seo_description: 'Compare 8 CRM vendors using 1,054 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
   target_keyword: 'CRM software comparison',
   secondary_keywords: ["best CRM software", "CRM vendor comparison", "CRM churn signals"],
   faq: [
   {
     "question": "Which CRM vendors face the highest churn risk in 2026?",
-    "answer": "Based on 3,287 enriched reviews, Copper and Freshsales show elevated churn urgency scores. The analysis reveals that pricing pressure and overall dissatisfaction are the primary drivers of switching intent across the CRM category."
+    "answer": "Based on 1,054 enriched reviews, Copper and Freshsales show elevated churn urgency scores. The analysis reveals that pricing pressure and overall dissatisfaction are the primary drivers of switching intent across the CRM category."
   },
   {
     "question": "What are the most common pain points across CRM platforms?",
@@ -134,7 +134,7 @@ const post: BlogPost = {
   },
   {
     "question": "How many reviews were analyzed for this CRM comparison?",
-    "answer": "This analysis is based on 3,287 enriched reviews from a total of 4,990 reviews collected. The sample includes 172 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 3,115 community reviews from Reddit and other forums."
+    "answer": "This analysis is based on 1,054 enriched reviews from a total of 2,022 reviews collected. The sample includes 147 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 907 community reviews from Reddit and other forums."
   },
   {
     "question": "What market regime is the CRM category in right now?",
@@ -148,14 +148,14 @@ const post: BlogPost = {
   related_slugs: ["best-hr-hcm-for-51-200-2026-04", "marketing-automation-landscape-2026-04", "best-communication-for-51-200-2026-04", "best-helpdesk-for-51-200-2026-04"],
   cta: {
   "headline": "Want the full picture?",
-  "body": "This article covers the highlights. The full industry report includes vendor-by-vendor churn risk scores, displacement flow analysis, and segment-specific pain patterns across 3,287 enriched reviews.",
+  "body": "This article covers the highlights. The full industry report includes vendor-by-vendor churn risk scores, displacement flow analysis, and segment-specific pain patterns across 1,054 enriched reviews.",
   "button_text": "Get the full industry report",
   "report_type": "category_overview",
   "vendor_filter": null,
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
-<p>The CRM market in 2026 is crowded, competitive, and under pricing pressure. Between February 25 and April 7, 2026, we analyzed 3,287 enriched reviews across 8 major vendors to map the current landscape. The sample includes 172 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 3,115 community reviews from Reddit and similar forums.</p>
+<p>The CRM market in 2026 is crowded, competitive, and under pricing pressure. Between February 25 and April 7, 2026, we analyzed 1,054 enriched reviews across 8 major vendors to map the current landscape. The sample includes 147 verified reviews from platforms like G2, Gartner, and PeerSpot, plus 907 community reviews from Reddit and similar forums.</p>
 <p>This analysis covers 1,163 total churn signals with an average urgency score of 2.1 across the category. The goal is not to crown a winner, but to show which vendors face the highest churn risk, which pain points recur across platforms, and where each product holds strength or shows weakness.</p>
 <p>The CRM category is in a price competition regime. HubSpot is emerging as the dominant consolidator, capturing displacement flows from Pipedrive (19 mentions), Zoho CRM (6 mentions), and Nutshell (4 mentions). The unidirectional flow pattern and absence of counter-displacement signals suggest a durable consolidation trend rather than cyclical competition.</p>
 <p>This is a self-selected sample. Reviewers who take the time to write are not representative of all users. Treat the findings as sentiment and pattern evidence, not universal product truth.</p>

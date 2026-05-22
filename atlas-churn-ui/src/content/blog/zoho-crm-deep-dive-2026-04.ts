@@ -2,8 +2,8 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'zoho-crm-deep-dive-2026-04',
-  title: 'Zoho CRM Deep Dive: Reviewer Sentiment Across 940 Reviews',
-  description: 'Comprehensive analysis of Zoho CRM based on 940 reviews collected between February and April 2026. Where the platform excels, where users report frustration, and who it works best for.',
+  title: 'Zoho CRM Deep Dive: Reviewer Sentiment Across 429 Reviews',
+  description: 'Comprehensive analysis of Zoho CRM based on 429 reviews collected between February and April 2026. Where the platform excels, where users report frustration, and who it works best for.',
   date: '2026-04-05',
   author: 'Churn Signals Team',
   tags: ["CRM", "zoho crm", "deep-dive", "vendor-profile", "b2b-intelligence"],
@@ -119,14 +119,14 @@ const post: BlogPost = {
   },
   "booking_url": "https://churnsignals.co"
 },
-  seo_title: 'Zoho CRM Reviews 2026: 940 User Experiences Analyzed',
-  seo_description: 'Analysis of 940 Zoho CRM reviews: strengths, weaknesses, pain points, and buyer profiles. See what users praise and where complaints cluster.',
+  seo_title: 'Zoho CRM Reviews 2026: 429 User Experiences Analyzed',
+  seo_description: 'Analysis of 429 Zoho CRM reviews: strengths, weaknesses, pain points, and buyer profiles. See what users praise and where complaints cluster.',
   target_keyword: 'zoho crm reviews',
   secondary_keywords: ["zoho crm pricing", "zoho crm vs hubspot", "zoho crm complaints"],
   faq: [
   {
     "question": "What are the main complaints about Zoho CRM?",
-    "answer": "Based on 268 enriched reviews, the most common complaints cluster around overall dissatisfaction, pricing concerns, and support quality. Reviewers frequently cite difficulty with basic filtering operations and post-upgrade support gaps."
+    "answer": "Based on 261 enriched reviews, the most common complaints cluster around overall dissatisfaction, pricing concerns, and support quality. Reviewers frequently cite difficulty with basic filtering operations and post-upgrade support gaps."
   },
   {
     "question": "What do users like about Zoho CRM?",
@@ -155,10 +155,10 @@ const post: BlogPost = {
   "category_filter": "CRM"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-04. It captures reviewer perception, not a census of all users.</em></p>
-<p>Zoho CRM sits in a crowded market where pricing pressure defines competitive dynamics. This analysis draws on 940 reviews collected between February 28, 2026 and April 4, 2026, with 268 enriched for detailed sentiment analysis. The data comes from G2, Gartner, PeerSpot, and Reddit—a mix of verified review platforms (28 reviews) and community sources (240 reviews).</p>
+<p>Zoho CRM sits in a crowded market where pricing pressure defines competitive dynamics. This analysis draws on 429 reviews collected between February 28, 2026 and April 4, 2026, with 261 enriched for detailed sentiment analysis. The data comes from G2, Gartner, PeerSpot, and Reddit—a mix of verified review platforms (24 reviews) and community sources (237 reviews).</p>
 <p><strong>What this analysis can tell you:</strong> Where reviewer sentiment clusters—both positive and negative. What pain categories show the highest urgency scores. Which buyer roles report the most friction. What integrations and use cases reviewers actually describe.</p>
 <p><strong>What it cannot tell you:</strong> Whether Zoho CRM will work for your specific use case. Universal product quality claims. Definitive competitive rankings. The data reflects the experiences of people who chose to write reviews, not all users.</p>
-<p>Of the 268 enriched reviews, 14 show explicit churn intent—a 5.2% churn signal rate. This is a low baseline, but the pattern analysis reveals where frustration concentrates and what drives teams to evaluate alternatives.</p>
+<p>Of the 261 enriched reviews, 14 show explicit churn intent—a 5.4% churn signal rate. This is a low baseline, but the pattern analysis reveals where frustration concentrates and what drives teams to evaluate alternatives.</p>
 <h2 id="what-zoho-crm-does-welland-where-it-falls-short">What Zoho CRM Does Well—and Where It Falls Short</h2>
 <p>Reviewer sentiment splits into clear strength and weakness categories. The platform shows distinct advantages in certain areas while revealing consistent pain points in others.</p>
 <p>{{chart:strengths-weaknesses}}</p>
