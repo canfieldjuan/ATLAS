@@ -4,16 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
+from html import escape as html_escape
 from typing import Any
 from uuid import UUID
 
 try:
-    from fastapi import APIRouter, Body, HTTPException, Query, Response
+    from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
     Body = None
     HTTPException = None
     Query = None
+    Request = Any
     Response = Any
     _FASTAPI_IMPORT_ERROR: ImportError | None = exc
 else:
@@ -25,6 +28,7 @@ from ..blog_post_postgres import PostgresBlogPostRepository
 from ..landing_page_export import (
     export_landing_page_drafts,
     public_landing_page_draft_row,
+    public_landing_page_robots,
 )
 from ..landing_page_postgres import PostgresLandingPageRepository
 from ..report_export import export_report_drafts
@@ -61,6 +65,8 @@ class GeneratedAssetApiConfig:
     max_limit: int = 200
     max_batch_size: int = 200
     export_filename_prefix: str = "content_assets"
+    public_landing_page_base_url: str | None = None
+    public_sitemap_limit: int = 500
 
     def __post_init__(self) -> None:
         if self.default_limit < 0:
@@ -73,6 +79,8 @@ class GeneratedAssetApiConfig:
             raise ValueError("max_batch_size must be positive")
         if not _clean(self.export_filename_prefix):
             raise ValueError("export_filename_prefix is required")
+        if self.public_sitemap_limit <= 0:
+            raise ValueError("public_sitemap_limit must be positive")
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -337,6 +345,25 @@ def create_public_landing_page_router(
         tags=list(resolved_config.tags),
     )
 
+    @router.get("/landing_page/public/sitemap.xml", response_model=None)
+    async def public_landing_page_sitemap(request: Request) -> Response:
+        pool = await _resolve_pool(pool_provider)
+        candidates = await (
+            PostgresLandingPageRepository(pool).list_public_sitemap_candidates()
+        )
+        base_url = _public_landing_page_base_url(resolved_config, request)
+        urls: list[str] = []
+        for candidate in candidates:
+            if public_landing_page_robots(candidate.to_policy_draft()) != "index,follow":
+                continue
+            urls.append(_public_landing_page_url(base_url, candidate))
+            if len(urls) >= resolved_config.public_sitemap_limit:
+                break
+        return Response(
+            content=_sitemap_xml(urls),
+            media_type="application/xml",
+        )
+
     @router.get("/landing_page/public/{landing_page_id}")
     async def public_landing_page(
         landing_page_id: str,
@@ -354,6 +381,39 @@ def create_public_landing_page_router(
         return public_landing_page_draft_row(draft)
 
     return router
+
+
+def _public_landing_page_base_url(
+    config: GeneratedAssetApiConfig,
+    request: Request,
+) -> str:
+    configured = _clean(config.public_landing_page_base_url)
+    if configured:
+        return configured.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _public_landing_page_url(base_url: str, draft: Any) -> str:
+    return f"{base_url}/lp/{draft.id}/{draft.slug}"
+
+
+def _sitemap_xml(urls: Sequence[str]) -> str:
+    today = date.today().isoformat()
+    rows = "\n".join(
+        "  <url>\n"
+        f"    <loc>{html_escape(url, quote=True)}</loc>\n"
+        f"    <lastmod>{today}</lastmod>\n"
+        "    <changefreq>weekly</changefreq>\n"
+        "    <priority>0.7</priority>\n"
+        "  </url>"
+        for url in urls
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{rows}\n"
+        "</urlset>\n"
+    )
 
 
 async def _export_for_asset(

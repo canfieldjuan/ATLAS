@@ -327,6 +327,44 @@ async def test_get_public_approved_draft_hides_non_approved_row() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_public_sitemap_candidates_uses_public_projection() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "approved",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "title",
+            "slug": "slug",
+            "hero": {"headline": "Hero text"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "L"},
+            "meta": {"title_tag": "tt"},
+            "reference_ids": ["r1"],
+            "metadata": {"key": "value"},
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    candidates = await repo.list_public_sitemap_candidates()
+
+    assert len(candidates) == 1
+    assert candidates[0].status == "approved"
+    assert candidates[0].slug == "slug"
+    assert candidates[0].to_policy_draft().metadata == {}
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "FROM landing_pages" in sql
+    assert "status = 'approved'" in sql
+    assert "ORDER BY updated_at DESC, created_at DESC" in sql
+    assert "metadata" not in sql
+    assert "LIMIT" not in sql
+    assert args == ()
+
+
+@pytest.mark.asyncio
 async def test_update_status_returns_true_on_hit_and_runs_scoped_update() -> None:
     pool = _Pool()
     pool.execute_result = "UPDATE 1"

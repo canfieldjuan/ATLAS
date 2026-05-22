@@ -139,6 +139,46 @@ class LandingPageDraft:
         }
 
 
+@dataclass(frozen=True)
+class PublicLandingPageSitemapCandidate:
+    """Approved landing-page projection used for public sitemap policy checks.
+
+    This is intentionally narrower than ``LandingPageDraft`` so sitemap
+    generation does not carry tenant scope, generation metadata, or other
+    review-only fields through a public route.
+    """
+
+    campaign_name: str
+    persona: str
+    value_prop: str
+    title: str
+    slug: str
+    hero: Mapping[str, Any] = field(default_factory=dict)
+    sections: Sequence[LandingPageSection] = field(default_factory=tuple)
+    cta: Mapping[str, Any] = field(default_factory=dict)
+    meta: Mapping[str, Any] = field(default_factory=dict)
+    reference_ids: Sequence[str] = field(default_factory=tuple)
+    id: str = ""
+    status: str = ""
+
+    def to_policy_draft(self) -> LandingPageDraft:
+        return LandingPageDraft(
+            campaign_name=self.campaign_name,
+            persona=self.persona,
+            value_prop=self.value_prop,
+            title=self.title,
+            slug=self.slug,
+            hero=dict(self.hero),
+            sections=tuple(self.sections),
+            cta=dict(self.cta),
+            meta=dict(self.meta),
+            reference_ids=tuple(self.reference_ids),
+            metadata={},
+            id=self.id,
+            status=self.status,
+        )
+
+
 class LandingPageRepository(Protocol):
     """Persistence contract for generated landing-page drafts."""
 
@@ -166,6 +206,11 @@ class LandingPageRepository(Protocol):
         landing_page_id: str,
     ) -> LandingPageDraft | None:
         """Return one approved public draft by id, or None when not publishable."""
+
+    async def list_public_sitemap_candidates(
+        self,
+    ) -> Sequence[PublicLandingPageSitemapCandidate]:
+        """Return approved public sitemap candidates without tenant scoping."""
 
     async def update_status(
         self,
@@ -199,4 +244,5 @@ __all__ = [
     "LandingPageRepository",
     "LandingPageSection",
     "MarketingCampaign",
+    "PublicLandingPageSitemapCandidate",
 ]

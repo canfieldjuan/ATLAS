@@ -34,6 +34,7 @@ def test_api_aggregator_mounts_generated_asset_routes() -> None:
     assert "/content-assets/{asset}/drafts" in paths
     assert "/content-assets/{asset}/drafts/export" in paths
     assert "/content-assets/{asset}/drafts/review" in paths
+    assert "/content-assets/landing_page/public/sitemap.xml" in paths
     assert "/content-assets/landing_page/public/{landing_page_id}" in paths
 
 
