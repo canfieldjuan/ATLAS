@@ -12,6 +12,7 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .landing_page_ports import LandingPageDraft, LandingPageRepository
+from .landing_page_structured_data import build_landing_page_structured_data
 from extracted_quality_gate.landing_page_section_contract import (
     LANDING_PAGE_OBJECTION_SECTION_KINDS,
     LANDING_PAGE_PROBLEM_SECTION_KINDS,
@@ -46,6 +47,7 @@ _EXPORT_COLUMNS = (
     "output_checks",
     "seo_aeo_readiness",
     "geo_readiness",
+    "structured_data",
     "hero",
     "sections",
     "cta",
@@ -129,6 +131,7 @@ def _draft_row(draft: LandingPageDraft) -> JsonDict:
     row["passed_output_checks"] = readiness["passed"]
     row["seo_aeo_readiness"] = readiness
     row["geo_readiness"] = _geo_readiness(draft)
+    row["structured_data"] = build_landing_page_structured_data(draft)
     return row
 
 

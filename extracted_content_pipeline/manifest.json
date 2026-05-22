@@ -217,6 +217,9 @@
       "target": "extracted_content_pipeline/landing_page_export.py"
     },
     {
+      "target": "extracted_content_pipeline/landing_page_structured_data.py"
+    },
+    {
       "target": "extracted_content_pipeline/sales_brief_export.py"
     },
     {
