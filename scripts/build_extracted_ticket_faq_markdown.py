@@ -279,9 +279,24 @@ def _term_mapping_summaries(items: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "customer_term": mapping.get("customer_term"),
                 "documentation_term": mapping.get("documentation_term"),
                 "source_id_count": mapping.get("source_id_count"),
+                "zero_result_source_count": mapping.get("zero_result_source_count"),
+                "failure_risk_score": mapping.get("failure_risk_score"),
+                "failure_risk_signals": list(mapping.get("failure_risk_signals") or ()),
+                "opportunity_score": mapping.get("opportunity_score"),
                 "first_source_id": mapping.get("first_source_id"),
             })
-    return out
+    return sorted(out, key=_term_mapping_sort_key)
+
+
+def _term_mapping_sort_key(mapping: dict[str, Any]) -> tuple[int, int, int, int, str, str]:
+    return (
+        -int(mapping.get("opportunity_score") or 0),
+        -int(mapping.get("source_id_count") or 0),
+        -int(mapping.get("zero_result_source_count") or 0),
+        int(mapping.get("rank") or 0),
+        str(mapping.get("topic") or ""),
+        str(mapping.get("customer_term") or ""),
+    )
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:

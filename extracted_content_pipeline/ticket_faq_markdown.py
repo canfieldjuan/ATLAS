@@ -659,6 +659,8 @@ def _term_mappings(
     if not customer_text:
         return ()
     source_ids = _distinct_source_keys(rows)
+    opportunity = _opportunity_score("", rows)
+    zero_result_source_count = _zero_result_source_count(rows)
     mappings: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for aliases in _VOCABULARY_GAP_RULES:
@@ -686,12 +688,23 @@ def _term_mappings(
                     f'"{documentation_term}" in FAQ headings and answer text.'
                 ),
                 "source_id_count": len(source_ids),
+                "zero_result_source_count": zero_result_source_count,
+                "failure_risk_score": opportunity["failure_risk_score"],
+                "failure_risk_signals": opportunity["failure_risk_signals"],
+                "opportunity_score": opportunity["opportunity_score"],
                 "first_source_id": source_ids[0] if source_ids else None,
             })
             break
         if len(mappings) >= 3:
             break
     return tuple(mappings)
+
+
+def _zero_result_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    source_ids = _distinct_source_keys([
+        row for row in rows if _is_zero_result_search_row(row)
+    ])
+    return len(source_ids)
 
 
 def _matching_documentation_term(
@@ -1067,11 +1080,29 @@ def _term_mapping_line(mapping: Any) -> str:
     documentation_term = _clean(mapping.get("documentation_term"))
     suggestion = _clean(mapping.get("suggestion"))
     if customer_term and documentation_term and suggestion:
-        return (
+        line = (
             f'Customers say "{customer_term}"; documentation says '
             f'"{documentation_term}". {suggestion}'
         )
+        impact = _term_mapping_impact_line(mapping)
+        return f"{line} {impact}" if impact else line
     return suggestion or ""
+
+
+def _term_mapping_impact_line(mapping: Mapping[str, Any]) -> str:
+    source_count = _integer_or_none(mapping.get("source_id_count")) or 0
+    zero_result_count = _integer_or_none(mapping.get("zero_result_source_count")) or 0
+    opportunity_score = _integer_or_none(mapping.get("opportunity_score")) or 0
+    if source_count < 1 and zero_result_count < 1 and opportunity_score < 1:
+        return ""
+    parts = []
+    if source_count:
+        parts.append(f"Seen in {source_count} source(s)")
+    if zero_result_count:
+        parts.append(f"{zero_result_count} zero-result search source(s)")
+    if opportunity_score:
+        parts.append(f"mapping score {opportunity_score}")
+    return f"({'; '.join(parts)}.)"
 
 
 def _summary(*, topic: str, rows: Sequence[Mapping[str, str]], source_count: int) -> str:
