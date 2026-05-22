@@ -160,8 +160,10 @@ bash scripts/local_pr_review.sh
 ```
 
 This is the fast path. It catches plan-shape, diff-size, file-claim,
-MCP-doc, ASCII, plan/code, and whitespace failures before GitHub has to
-run anything.
+MCP-doc, ASCII, plan/code, cross-session drift, and whitespace failures
+before GitHub has to run anything. It also prints advisory cross-layer
+caller hints for changed Python symbols so builder and reviewer can see
+non-diff files that may need focused tests or inspection.
 
 To make that automatic for this checkout, install the optional pre-push
 hook:
@@ -178,6 +180,12 @@ After the mechanical bundle passes, hand the branch to a separate local
 reviewer session for judgment review. The reviewer should read the plan
 doc and diff locally, run any focused tests needed to verify the claims,
 and return a verdict before the builder opens the GitHub PR.
+
+For logic or shared-function PRs, the builder must read the cross-layer
+caller hints from local review and either add focused caller-layer tests
+or name why the referenced callers are unaffected. The hints are
+advisory rather than blocking because outside references can be valid,
+but silently ignoring them recreates the diff-only review gap.
 
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.
@@ -302,6 +310,9 @@ Before LGTM, the reviewer confirms:
 - [ ] Diff size matches the plan's estimate (or the overage is
       justified in **Why**).
 - [ ] No regressions in the named test sweep.
+- [ ] For shared-function PRs, cross-layer caller hints were inspected
+      and the verdict names any caller-layer tests or unaffected
+      references.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.

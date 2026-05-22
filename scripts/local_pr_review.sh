@@ -89,6 +89,14 @@ else
     echo "    SKIP (scripts/audit_pr_session_drift.py not found)"
 fi
 
+if [ -f scripts/audit_cross_layer_callers.py ]; then
+    run_check "Cross-layer caller hints" python scripts/audit_cross_layer_callers.py "$base_ref"
+else
+    echo
+    echo "==> Cross-layer caller hints"
+    echo "    SKIP (scripts/audit_cross_layer_callers.py not found)"
+fi
+
 committed_plan_docs=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null |
         sort -u |
