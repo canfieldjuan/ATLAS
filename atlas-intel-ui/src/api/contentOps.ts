@@ -290,6 +290,12 @@ export interface GeneratedAssetRepairHistoryEntry {
   [key: string]: unknown
 }
 
+export interface GeneratedAssetDraftMetadata {
+  generation_quality_repair_history?: GeneratedAssetRepairHistoryEntry[] | string
+  quality_repair_history?: GeneratedAssetRepairHistoryEntry[] | string
+  [key: string]: unknown
+}
+
 export interface GeneratedAssetDraft {
   id?: string
   title?: string
@@ -311,7 +317,7 @@ export interface GeneratedAssetDraft {
   hero?: Record<string, unknown>
   sections?: Array<Record<string, unknown>> | string
   cta?: Record<string, unknown>
-  metadata?: Record<string, unknown> | string
+  metadata?: GeneratedAssetDraftMetadata | string
   reference_ids?: string[] | string
   generation_total_tokens?: number
   generation_input_tokens?: number
