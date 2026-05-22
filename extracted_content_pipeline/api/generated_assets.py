@@ -22,7 +22,10 @@ else:
 from ..campaign_ports import TenantScope
 from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
-from ..landing_page_export import export_landing_page_drafts
+from ..landing_page_export import (
+    export_landing_page_drafts,
+    public_landing_page_draft_row,
+)
 from ..landing_page_postgres import PostgresLandingPageRepository
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
@@ -321,6 +324,38 @@ def create_generated_asset_router(
     return router
 
 
+def create_public_landing_page_router(
+    *,
+    pool_provider: PoolProvider,
+    config: GeneratedAssetApiConfig | None = None,
+) -> APIRouter:
+    """Create unauthenticated public routes for approved landing pages."""
+    _require_fastapi()
+    resolved_config = config or GeneratedAssetApiConfig()
+    router = APIRouter(
+        prefix=resolved_config.prefix,
+        tags=list(resolved_config.tags),
+    )
+
+    @router.get("/landing_page/public/{landing_page_id}")
+    async def public_landing_page(
+        landing_page_id: str,
+    ) -> dict[str, Any]:
+        try:
+            public_id = str(UUID(landing_page_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Landing page not found") from None
+        pool = await _resolve_pool(pool_provider)
+        draft = await PostgresLandingPageRepository(pool).get_public_approved_draft(
+            public_id
+        )
+        if draft is None:
+            raise HTTPException(status_code=404, detail="Landing page not found")
+        return public_landing_page_draft_row(draft)
+
+    return router
+
+
 async def _export_for_asset(
     asset: str,
     pool: Any,
@@ -437,4 +472,5 @@ def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:
 __all__ = [
     "GeneratedAssetApiConfig",
     "create_generated_asset_router",
+    "create_public_landing_page_router",
 ]

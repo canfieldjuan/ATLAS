@@ -17,6 +17,7 @@ const ReviewDetail = lazy(() => import('./pages/ReviewDetail'))
 const Landing = lazy(() => import('./pages/Landing'))
 const Blog = lazy(() => import('./pages/Blog'))
 const BlogPost = lazy(() => import('./pages/BlogPost'))
+const PublicLandingPage = lazy(() => import('./pages/PublicLandingPage'))
 const Login = lazy(() => import('./pages/Login'))
 const Signup = lazy(() => import('./pages/Signup'))
 const Onboarding = lazy(() => import('./pages/Onboarding'))
@@ -49,6 +50,7 @@ export default function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/landing" element={renderLazyRoute(Landing)} />
+          <Route path="/lp/:id/:slug" element={renderLazyRoute(PublicLandingPage)} />
           <Route path="/blog" element={renderLazyRoute(Blog)} />
           <Route path="/blog/:slug" element={renderLazyRoute(BlogPost)} />
           <Route path="/login" element={renderLazyRoute(Login)} />

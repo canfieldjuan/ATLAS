@@ -161,6 +161,12 @@ class LandingPageRepository(Protocol):
     ) -> Sequence[LandingPageDraft]:
         """Return drafts filtered by tenant scope and optional facets."""
 
+    async def get_public_approved_draft(
+        self,
+        landing_page_id: str,
+    ) -> LandingPageDraft | None:
+        """Return one approved public draft by id, or None when not publishable."""
+
     async def update_status(
         self,
         landing_page_id: str,

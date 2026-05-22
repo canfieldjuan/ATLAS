@@ -10,6 +10,7 @@ from extracted_content_pipeline.campaign_ports import (
 from extracted_content_pipeline.landing_page_export import (
     LandingPageDraftExportResult,
     export_landing_page_drafts,
+    public_landing_page_draft_row,
 )
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationConfig,
@@ -336,6 +337,35 @@ async def test_export_landing_page_drafts_derives_review_summary_fields() -> Non
     assert row["passed_output_checks"] == 3
     assert row["seo_aeo_readiness"]["status"] == "needs_review"
     assert row["geo_readiness"]["status"] == "needs_review"
+
+
+def test_public_landing_page_draft_row_uses_renderer_allowlist() -> None:
+    row = public_landing_page_draft_row(
+        _draft(metadata={
+            "scope": {"account_id": "acct_1", "user_id": "user_1"},
+            "generation_usage": {"input_tokens": 12, "output_tokens": 6},
+            "reasoning_context": {"wedge": "price_squeeze"},
+        })
+    )
+
+    assert set(row) == {
+        "id",
+        "slug",
+        "title",
+        "persona",
+        "value_prop",
+        "hero",
+        "sections",
+        "cta",
+        "meta",
+        "structured_data",
+    }
+    assert row["slug"] == "acme-q3-launch"
+    assert row["structured_data"]["@context"] == "https://schema.org"
+    assert "metadata" not in row
+    assert "reference_ids" not in row
+    assert "generation_input_tokens" not in row
+    assert "reasoning_context_used" not in row
 
 
 @pytest.mark.asyncio

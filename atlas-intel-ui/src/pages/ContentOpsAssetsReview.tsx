@@ -4,8 +4,10 @@ import {
   ArrowRight,
   CheckCircle2,
   Code2,
+  Copy,
   Download,
   Eye,
+  ExternalLink,
   Loader2,
   RefreshCw,
   X,
@@ -583,8 +585,22 @@ function AssetDetailDrawer({
   const repairHistory = assetRepairHistory(row)
   const structuredData =
     asset === 'landing_page' ? structuredDataSummary(row.structured_data) : null
+  const publicUrl = publicLandingPageUrl(row, asset)
+  const publicUrlPending =
+    asset === 'landing_page' &&
+    Boolean(assetId(row)) &&
+    Boolean(textValue(row.slug)) &&
+    status !== 'approved'
+  const [copiedUrl, setCopiedUrl] = useState(false)
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
+
+  const handleCopyPublicUrl = async () => {
+    if (!publicUrl) return
+    await copyText(publicUrl)
+    setCopiedUrl(true)
+    window.setTimeout(() => setCopiedUrl(false), 1800)
+  }
 
   useEffect(() => {
     const previous = document.activeElement
@@ -656,6 +672,47 @@ function AssetDetailDrawer({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {(publicUrl || publicUrlPending) && (
+          <section className="mt-6">
+            <h3 className="text-sm font-semibold text-slate-200">Public URL</h3>
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-4">
+              {publicUrl ? (
+                <>
+                  <p className="break-all font-mono text-xs leading-5 text-slate-300">
+                    {publicUrl}
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <a
+                      href={publicUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-md border border-cyan-500/40 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      Open
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyPublicUrl()}
+                      className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:border-cyan-400 hover:text-cyan-200"
+                    >
+                      <Copy className="h-4 w-4" />
+                      {copiedUrl ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-500">
+                    Public rendering is approved-only. This v1 URL is marked noindex.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-slate-400">
+                  Approve this landing page to make its public URL available.
+                </p>
+              )}
+            </div>
+          </section>
+        )}
 
         {facts.length > 0 && (
           <section className="mt-6">
@@ -1036,6 +1093,18 @@ function focusableElements(root: HTMLElement | null): HTMLElement[] {
 
 function assetId(row: GeneratedAssetDraft): string {
   return textValue(row.id)
+}
+
+function publicLandingPageUrl(
+  row: GeneratedAssetDraft,
+  asset: GeneratedAssetType,
+): string | null {
+  if (asset !== 'landing_page') return null
+  if (textValue(row.status) !== 'approved') return null
+  const id = assetId(row)
+  const slug = textValue(row.slug)
+  if (!id || !slug) return null
+  return `${window.location.origin}/lp/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`
 }
 
 function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
@@ -1455,4 +1524,20 @@ function downloadCsv(csv: string, filename: string): void {
   link.click()
   link.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+async function copyText(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+  const textArea = document.createElement('textarea')
+  textArea.value = value
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.top = '-1000px'
+  document.body.appendChild(textArea)
+  textArea.select()
+  document.execCommand('copy')
+  textArea.remove()
 }

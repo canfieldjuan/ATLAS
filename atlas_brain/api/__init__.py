@@ -158,6 +158,7 @@ try:
     )
     from extracted_content_pipeline.api.generated_assets import (
         create_generated_asset_router,
+        create_public_landing_page_router,
     )
     from .._content_ops_services import build_content_ops_execution_services
     from .._content_ops_scope import (
@@ -205,6 +206,10 @@ try:
         dependencies=[Depends(_capture_content_ops_auth_user)],
     )
     router.include_router(content_assets_router)
+    public_landing_page_router = create_public_landing_page_router(
+        pool_provider=get_db_pool,
+    )
+    router.include_router(public_landing_page_router)
 except Exception as exc:  # pragma: no cover - defensive at import time
     logger.warning(
         "Content Ops router disabled during api package import: %s", exc

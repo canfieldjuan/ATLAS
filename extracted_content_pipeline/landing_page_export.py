@@ -135,6 +135,29 @@ def _draft_row(draft: LandingPageDraft) -> JsonDict:
     return row
 
 
+def landing_page_draft_export_row(draft: LandingPageDraft) -> JsonDict:
+    """Return the host-facing export row for a single landing-page draft."""
+
+    return _draft_row(draft)
+
+
+def public_landing_page_draft_row(draft: LandingPageDraft) -> JsonDict:
+    """Return the unauthenticated public renderer payload for one draft."""
+
+    return {
+        "id": draft.id,
+        "slug": draft.slug,
+        "title": draft.title,
+        "persona": draft.persona,
+        "value_prop": draft.value_prop,
+        "hero": draft.hero,
+        "sections": list(draft.sections),
+        "cta": draft.cta,
+        "meta": draft.meta,
+        "structured_data": build_landing_page_structured_data(draft),
+    }
+
+
 def _metadata_summary(value: Any) -> JsonDict:
     metadata = _metadata_mapping(value)
     usage = _metadata_mapping(metadata.get("generation_usage"))
@@ -551,4 +574,6 @@ def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:
 __all__ = [
     "LandingPageDraftExportResult",
     "export_landing_page_drafts",
+    "landing_page_draft_export_row",
+    "public_landing_page_draft_row",
 ]

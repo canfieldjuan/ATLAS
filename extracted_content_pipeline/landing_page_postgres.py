@@ -194,6 +194,25 @@ class PostgresLandingPageRepository:
         rows = await self.pool.fetch(sql, *params)
         return tuple(_row_to_draft(row_to_dict(row)) for row in rows)
 
+    async def get_public_approved_draft(
+        self,
+        landing_page_id: str,
+    ) -> LandingPageDraft | None:
+        rows = await self.pool.fetch(
+            """
+            SELECT id, campaign_name, persona, value_prop, title, slug,
+                   hero, sections, cta, meta, reference_ids, metadata, status
+              FROM landing_pages
+             WHERE id = $1
+               AND status = 'approved'
+             LIMIT 1
+            """,
+            landing_page_id,
+        )
+        if not rows:
+            return None
+        return _row_to_draft(row_to_dict(rows[0]))
+
     async def update_status(
         self,
         landing_page_id: str,
