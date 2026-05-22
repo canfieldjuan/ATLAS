@@ -18,6 +18,7 @@ from .campaign_ports import JsonDict, TenantScope
 from .landing_page_ports import (
     LandingPageDraft,
     LandingPageSection,
+    PublicLandingPageSitemapCandidate,
 )
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
@@ -100,6 +101,45 @@ def _row_to_draft(row: Mapping[str, Any]) -> LandingPageDraft:
         meta=dict(meta_raw),
         reference_ids=tuple(str(r) for r in reference_ids_raw),
         metadata=dict(metadata_raw),
+        status=str(row.get("status") or ""),
+    )
+
+
+def _row_to_public_sitemap_candidate(
+    row: Mapping[str, Any],
+) -> PublicLandingPageSitemapCandidate:
+    sections_raw = decode_jsonb_field(row.get("sections"), default=[])
+    if not isinstance(sections_raw, Sequence) or isinstance(sections_raw, (str, bytes)):
+        sections_raw = []
+
+    reference_ids_raw = decode_jsonb_field(row.get("reference_ids"), default=[])
+    if not isinstance(reference_ids_raw, Sequence) or isinstance(reference_ids_raw, (str, bytes)):
+        reference_ids_raw = []
+
+    hero_raw = decode_jsonb_field(row.get("hero"), default={})
+    if not isinstance(hero_raw, Mapping):
+        hero_raw = {}
+
+    cta_raw = decode_jsonb_field(row.get("cta"), default={})
+    if not isinstance(cta_raw, Mapping):
+        cta_raw = {}
+
+    meta_raw = decode_jsonb_field(row.get("meta"), default={})
+    if not isinstance(meta_raw, Mapping):
+        meta_raw = {}
+
+    return PublicLandingPageSitemapCandidate(
+        id=str(row.get("id") or ""),
+        campaign_name=str(row.get("campaign_name") or ""),
+        persona=str(row.get("persona") or ""),
+        value_prop=str(row.get("value_prop") or ""),
+        title=str(row.get("title") or ""),
+        slug=str(row.get("slug") or ""),
+        hero=dict(hero_raw),
+        sections=tuple(_coerce_section(s) for s in sections_raw),
+        cta=dict(cta_raw),
+        meta=dict(meta_raw),
+        reference_ids=tuple(str(r) for r in reference_ids_raw),
         status=str(row.get("status") or ""),
     )
 
@@ -212,6 +252,22 @@ class PostgresLandingPageRepository:
         if not rows:
             return None
         return _row_to_draft(row_to_dict(rows[0]))
+
+    async def list_public_sitemap_candidates(
+        self,
+    ) -> Sequence[PublicLandingPageSitemapCandidate]:
+        rows = await self.pool.fetch(
+            """
+            SELECT id, campaign_name, persona, value_prop, title, slug,
+                   hero, sections, cta, meta, reference_ids, status
+              FROM landing_pages
+             WHERE status = 'approved'
+             ORDER BY updated_at DESC, created_at DESC
+            """
+        )
+        return tuple(
+            _row_to_public_sitemap_candidate(row_to_dict(row)) for row in rows
+        )
 
     async def update_status(
         self,

@@ -288,13 +288,22 @@ def _client(
     return TestClient(app)
 
 
-def _public_client(pool) -> TestClient:
+def _public_client(
+    pool,
+    *,
+    config: GeneratedAssetApiConfig | None = None,
+) -> TestClient:
     app = FastAPI()
 
     async def pool_provider():
         return pool
 
-    app.include_router(create_public_landing_page_router(pool_provider=pool_provider))
+    app.include_router(
+        create_public_landing_page_router(
+            pool_provider=pool_provider,
+            config=config,
+        )
+    )
     return TestClient(app)
 
 
@@ -454,6 +463,89 @@ def test_generated_asset_router_indexes_public_ready_landing_page() -> None:
     assert body["robots"] == "index,follow"
     assert "seo_aeo_readiness" not in body
     assert "geo_readiness" not in body
+
+
+def test_generated_asset_router_sitemap_includes_only_indexable_landing_pages() -> None:
+    incomplete = {**_landing_page_row(), "status": "approved"}
+    incomplete["id"] = "22222222-2222-2222-2222-222222222222"
+    incomplete["slug"] = "not-ready"
+    ready = _ready_landing_page_row()
+    ready["metadata"] = {
+        "scope": {"account_id": "acct_1", "user_id": "user_1"},
+        "generation_usage": {"input_tokens": 10, "output_tokens": 5},
+        "reasoning_context": {"wedge": "support_gap", "confidence": 0.8},
+    }
+    rejected = {**_ready_landing_page_row(), "status": "rejected"}
+    rejected["id"] = "33333333-3333-3333-3333-333333333333"
+    rejected["slug"] = "rejected-ready"
+    pool = _Pool(rows=[ready, incomplete, rejected])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/sitemap.xml"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/xml")
+    assert (
+        "<loc>http://testserver/lp/"
+        "11111111-1111-1111-1111-111111111111/"
+        "acme-support-retention</loc>"
+    ) in response.text
+    assert "not-ready" not in response.text
+    assert "rejected-ready" not in response.text
+    assert "acct_1" not in response.text
+    assert "user_1" not in response.text
+    assert "generation_usage" not in response.text
+    assert "seo_aeo_readiness" not in response.text
+    assert "geo_readiness" not in response.text
+    query, args = pool.fetch_calls[0]
+    assert "FROM landing_pages" in query
+    assert "status = 'approved'" in query
+    assert "metadata" not in query
+    assert args == ()
+
+
+def test_generated_asset_router_sitemap_applies_limit_after_readiness_filter() -> None:
+    incomplete = {**_landing_page_row(), "status": "approved"}
+    incomplete["id"] = "22222222-2222-2222-2222-222222222222"
+    incomplete["slug"] = "not-ready"
+    ready = _ready_landing_page_row()
+    later_ready = _ready_landing_page_row()
+    later_ready["id"] = "33333333-3333-3333-3333-333333333333"
+    later_ready["slug"] = "later-ready"
+    pool = _Pool(rows=[incomplete, ready, later_ready])
+
+    response = _public_client(
+        pool,
+        config=GeneratedAssetApiConfig(public_sitemap_limit=1),
+    ).get("/content-assets/landing_page/public/sitemap.xml")
+
+    assert response.status_code == 200
+    assert "not-ready" not in response.text
+    assert "acme-support-retention" in response.text
+    assert "later-ready" not in response.text
+    assert response.text.count("<url>") == 1
+    query, args = pool.fetch_calls[0]
+    assert "LIMIT" not in query
+    assert args == ()
+
+
+def test_generated_asset_router_sitemap_uses_configured_public_base_url() -> None:
+    pool = _Pool(rows=[_ready_landing_page_row()])
+
+    response = _public_client(
+        pool,
+        config=GeneratedAssetApiConfig(
+            public_landing_page_base_url="https://example.com/"
+        ),
+    ).get("/content-assets/landing_page/public/sitemap.xml")
+
+    assert response.status_code == 200
+    assert (
+        "<loc>https://example.com/lp/"
+        "11111111-1111-1111-1111-111111111111/"
+        "acme-support-retention</loc>"
+    ) in response.text
 
 
 def test_generated_asset_router_hides_non_public_landing_page() -> None:
@@ -876,6 +968,9 @@ def test_generated_asset_api_config_rejects_invalid_limits() -> None:
 
     with pytest.raises(ValueError, match="max_batch_size must be positive"):
         GeneratedAssetApiConfig(max_batch_size=0)
+
+    with pytest.raises(ValueError, match="public_sitemap_limit must be positive"):
+        GeneratedAssetApiConfig(public_sitemap_limit=0)
 
 
 def test_generated_asset_router_requires_fastapi(monkeypatch) -> None:
