@@ -13,6 +13,7 @@ from extracted_content_pipeline.campaign_source_adapters import (
     parse_default_fields,
     parse_default_fields_with_booking_url_or_exit,
     parse_default_fields_or_exit,
+    source_material_to_source_rows,
     source_row_to_campaign_opportunity,
     source_rows_to_campaign_opportunities,
 )
@@ -38,6 +39,14 @@ def test_source_type_precedence_table_matches_current_contract() -> None:
     # This intentionally locks a private table: source-type order is product behavior.
     assert adapters._SOURCE_TYPE_PRECEDENCE == (
         (("review_text",), "review"),
+        ((
+            "objection",
+            "objection_text",
+            "buyer_objection",
+            "sales_objection",
+            "sales_objection_id",
+            "objection_id",
+        ), "sales_objection"),
         (("transcript",), "transcript"),
         ((
             "search_query",
@@ -53,6 +62,7 @@ def test_source_type_precedence_table_matches_current_contract() -> None:
             "query_id",
             "zero_result_query_id",
         ), "search_log"),
+        (("chat_id",), "chat"),
         (("call_id", "recording_id"), "sales_call"),
         (("meeting_id",), "meeting"),
         (("deal_id", "opportunity_id"), "crm_deal"),
@@ -81,7 +91,19 @@ def test_source_type_precedence_table_controls_ambiguous_rows() -> None:
 
     assert warnings == ()
     assert opportunity["source_type"] == "review"
-    assert opportunity["target_id"] == "sales_call-value"
+    assert opportunity["target_id"] == "chat-value"
+
+
+def test_message_id_does_not_relabel_support_ticket_as_chat() -> None:
+    opportunity, warnings = source_row_to_campaign_opportunity({
+        "request_id": "ticket-1",
+        "message_id": "message-1",
+        "message": "The attribution export is not working.",
+    })
+
+    assert warnings == ()
+    assert opportunity["source_type"] == "support_ticket"
+    assert opportunity["target_id"] == "ticket-1"
 
 
 def test_source_field_lookup_preserves_exact_key_precedence() -> None:
@@ -127,6 +149,31 @@ def test_source_field_lookup_reuses_cached_alias_results(monkeypatch) -> None:
     assert adapters._field_value(lookup, "missing_key") is None
     assert adapters._field_value(lookup, "missing_key") is None
     assert calls == 5
+
+
+def test_source_material_to_source_rows_expands_bundle_keys() -> None:
+    rows = source_material_to_source_rows({
+        "support_tickets": [],
+        "sales_objections": [{
+            "objection_id": "obj-1",
+            "objection_text": "Exports are blocked.",
+        }],
+        "opportunities": [{
+            "source_id": "opp-1",
+            "text": "Opportunity row stays in the bundle.",
+        }],
+    })
+
+    assert rows == [
+        {
+            "source_id": "opp-1",
+            "text": "Opportunity row stays in the bundle.",
+        },
+        {
+            "objection_id": "obj-1",
+            "objection_text": "Exports are blocked.",
+        },
+    ]
 
 
 def test_source_row_maps_review_text_to_campaign_opportunity() -> None:
@@ -1230,6 +1277,52 @@ def test_load_source_campaign_opportunities_from_meeting_bundle(tmp_path: Path) 
         "source_id": "meeting-1",
         "source_type": "meeting",
         "source_title": "Renewal checkpoint",
+    }
+
+
+def test_load_source_campaign_opportunities_from_chat_and_objection_bundle(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "chat_objection_bundle.json"
+    path.write_text(
+        json.dumps({
+            "company": "Acme Logistics",
+            "vendor": "HubSpot",
+            "chats": [
+                {
+                    "chat_id": "chat-1",
+                    "subject": "Dashboard export",
+                    "messages": [
+                        {
+                            "speaker": "customer",
+                            "message": "How do I export the attribution dashboard?",
+                        },
+                        {"speaker": "agent", "message": "I can send the export steps."},
+                    ],
+                }
+            ],
+            "sales_objections": [
+                {
+                    "objection_id": "obj-1",
+                    "objection_text": "We cannot export attribution reports before renewal.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_source_campaign_opportunities_from_file(path)
+
+    assert [row["target_id"] for row in loaded.opportunities] == ["chat-1", "obj-1"]
+    assert [row["source_type"] for row in loaded.opportunities] == ["chat", "sales_objection"]
+    assert loaded.opportunities[0]["evidence"][0]["text"] == (
+        "customer: How do I export the attribution dashboard?\n"
+        "agent: I can send the export steps."
+    )
+    assert loaded.opportunities[1]["evidence"][0] == {
+        "text": "We cannot export attribution reports before renewal.",
+        "source_id": "obj-1",
+        "source_type": "sales_objection",
     }
 
 
