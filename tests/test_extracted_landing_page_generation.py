@@ -16,6 +16,7 @@ from extracted_content_pipeline.landing_page_generation import (
 )
 from extracted_content_pipeline.landing_page_ports import (
     LandingPageDraft,
+    LandingPageSection,
     MarketingCampaign,
 )
 
@@ -28,10 +29,19 @@ from extracted_content_pipeline.landing_page_ports import (
 class _LandingPages:
     def __init__(self):
         self.saved = []
+        self.updated = []
 
     async def save_drafts(self, drafts, *, scope):
         self.saved.append({"drafts": list(drafts), "scope": scope})
         return [f"lp-{index + 1}" for index, _ in enumerate(drafts)]
+
+    async def update_draft(self, landing_page_id, draft, *, scope):
+        self.updated.append({
+            "id": landing_page_id,
+            "draft": draft,
+            "scope": scope,
+        })
+        return draft
 
     async def list_drafts(self, *, scope, status=None, campaign_name=None, slug=None, limit=None):  # pragma: no cover
         raise AssertionError("not used")
@@ -176,6 +186,40 @@ def _valid_response(*, slug="acme-q3-launch") -> str:
         },
         "reference_ids": ["customer-logo-1"],
     })
+
+
+def _draft_from_response(
+    response: str | dict[str, object],
+    *,
+    landing_page_id: str = "11111111-1111-1111-1111-111111111111",
+    status: str = "quality_blocked",
+    metadata: dict[str, object] | None = None,
+) -> LandingPageDraft:
+    payload = json.loads(response) if isinstance(response, str) else dict(response)
+    return LandingPageDraft(
+        id=landing_page_id,
+        status=status,
+        campaign_name="acme-q3-launch",
+        persona="VP Engineering at mid-market SaaS",
+        value_prop="Cut renewal pricing leakage by 40%",
+        title=str(payload["title"]),
+        slug=str(payload["slug"]),
+        hero=dict(payload.get("hero") or {}),
+        sections=tuple(
+            LandingPageSection(
+                id=str(section.get("id") or ""),
+                title=str(section.get("title") or ""),
+                body_markdown=str(section.get("body_markdown") or ""),
+                metadata=dict(section.get("metadata") or {}),
+            )
+            for section in payload.get("sections") or ()
+            if isinstance(section, dict)
+        ),
+        cta=dict(payload.get("cta") or {}),
+        meta=dict(payload.get("meta") or {}),
+        reference_ids=tuple(str(item) for item in payload.get("reference_ids") or ()),
+        metadata=dict(metadata or {}),
+    )
 
 
 def _service(*, responses=None, prompts=None, reasoning_context=None, config=None):
@@ -606,6 +650,136 @@ async def test_generate_repairs_shared_readiness_blocker_once_and_persists() -> 
     assert result.quality_repair_history[0]["blockers"] == (
         "seo_aeo_readiness:meta_description",
     )
+
+
+@pytest.mark.asyncio
+async def test_repair_draft_sends_current_draft_and_repair_issues_and_updates_same_row() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    draft = _draft_from_response(
+        needs_repair,
+        metadata={"source": "review_drawer"},
+    )
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[
+            {
+                "content": _valid_response(),
+                "model": "repair-model",
+                "usage": {"input_tokens": 9, "output_tokens": 4},
+            },
+        ],
+    )
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    assert result.requested == 1
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert result.saved_ids == (draft.id,)
+    assert landing_pages.saved == []
+    assert len(landing_pages.updated) == 1
+    assert landing_pages.updated[0]["id"] == draft.id
+    repaired = landing_pages.updated[0]["draft"]
+    assert repaired.id == draft.id
+    assert repaired.status == "draft"
+    assert repaired.metadata["source"] == "review_drawer"
+    assert repaired.metadata["generation_model"] == "repair-model"
+    assert repaired.metadata["generation_usage"] == {
+        "input_tokens": 9,
+        "output_tokens": 4,
+    }
+    assert repaired.metadata["generation_parse_attempts"] == 1
+    assert repaired.metadata["generation_quality_repair_attempts"] == 1
+    assert repaired.metadata["saved_draft_repair_source_id"] == draft.id
+    assert result.quality_repair_history[0]["attempt"] == 0
+    assert result.quality_repair_history[0]["passed"] is False
+    assert result.quality_repair_history[0]["blockers"] == (
+        "seo_aeo_readiness:meta_description",
+    )
+    assert result.quality_repair_history[1] == {
+        "attempt": 1,
+        "passed": True,
+        "blockers": (),
+        "repair_issues": (),
+    }
+    system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert '"repair_mode":"saved_draft"' in system_prompt
+    assert '"current_draft"' in system_prompt
+    assert '"repair_issues":["seo_aeo_readiness:meta_description"]' in system_prompt
+    assert "seo_aeo_readiness:meta_description" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_repair_draft_rejects_approved_draft_without_llm_call() -> None:
+    draft = _draft_from_response(_valid_response(), status="approved")
+    service, landing_pages, llm, _skills, _rp = _service()
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors == ({
+        "landing_page_id": draft.id,
+        "reason": "approved_draft_not_repairable",
+    },)
+    assert llm.calls == []
+    assert landing_pages.updated == []
+
+
+@pytest.mark.asyncio
+async def test_repair_draft_returns_quality_blocked_when_no_repair_attempts() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    draft = _draft_from_response(needs_repair)
+    service, landing_pages, llm, _skills, _rp = _service(
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert result.errors[0]["blockers"] == (
+        "seo_aeo_readiness:meta_description",
+    )
+    assert result.quality_repair_history[0]["attempt"] == 0
+    assert result.quality_repair_history[0]["passed"] is False
+    assert llm.calls == []
+    assert landing_pages.updated == []
+
+
+@pytest.mark.asyncio
+async def test_repair_draft_noops_when_existing_draft_already_passes() -> None:
+    draft = _draft_from_response(_valid_response(), status="draft")
+    service, landing_pages, llm, _skills, _rp = _service()
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 0
+    assert result.saved_ids == (draft.id,)
+    assert result.quality_repair_history == ({
+        "attempt": 0,
+        "passed": True,
+        "blockers": (),
+        "repair_issues": (),
+    },)
+    assert llm.calls == []
+    assert landing_pages.updated == []
 
 
 @pytest.mark.asyncio

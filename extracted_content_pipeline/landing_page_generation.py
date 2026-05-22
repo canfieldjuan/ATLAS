@@ -187,7 +187,7 @@ def _landing_page_user_prompt(
         blockers = "\n".join(f"- {str(item)}" for item in quality_blockers)
         prompt = (
             f"{prompt}\n\n"
-            "The previous landing-page JSON parsed, but it failed the "
+            "The current or previous landing-page JSON parsed, but it failed the "
             "deterministic quality gate. Fix these issues and return one "
             "corrected JSON object only:\n"
             f"{blockers}"
@@ -415,6 +415,231 @@ class LandingPageGenerationService:
             quality_repair_history=tuple(quality_repair_history),
         )
 
+    async def repair_draft(
+        self,
+        *,
+        scope: TenantScope,
+        draft: LandingPageDraft,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        parse_retry_attempts: int | None = None,
+        parse_retry_response_excerpt_chars: int | None = None,
+        quality_gates_enabled: bool | None = None,
+        quality_repair_attempts: int | None = None,
+    ) -> LandingPageGenerationResult:
+        """Repair an existing saved landing-page draft and update the same row."""
+
+        if not str(draft.id or "").strip():
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=1,
+                errors=({"reason": "missing_landing_page_id"},),
+            )
+        if str(draft.status or "").strip() == "approved":
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=1,
+                errors=({
+                    "landing_page_id": draft.id,
+                    "reason": "approved_draft_not_repairable",
+                },),
+            )
+
+        campaign = MarketingCampaign(
+            name=draft.campaign_name,
+            persona=draft.persona,
+            value_prop=draft.value_prop,
+            context=_repair_context(draft, repair_issues=()),
+        )
+        parsed_existing = _draft_to_parsed(draft)
+        resolved_quality_gates_enabled = (
+            self._config.quality_gates_enabled
+            if quality_gates_enabled is None
+            else bool(quality_gates_enabled)
+        )
+        initial_quality = self._quality_check(
+            parsed_existing,
+            campaign=campaign,
+            campaign_payload=campaign.as_dict(),
+            quality_gates_enabled=resolved_quality_gates_enabled,
+        )
+        quality_repair_history: list[dict[str, Any]] = [
+            _quality_repair_history_row(0, initial_quality)
+        ]
+        if initial_quality["passed"]:
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=0,
+                saved_ids=(draft.id,),
+                quality_repair_history=tuple(quality_repair_history),
+            )
+
+        resolved_quality_repair_attempts = (
+            self._config.quality_repair_attempts
+            if quality_repair_attempts is None
+            else quality_repair_attempts
+        )
+        repair_limit = normalize_landing_page_quality_repair_attempts(
+            resolved_quality_repair_attempts
+        )
+        if not resolved_quality_gates_enabled:
+            repair_limit = 0
+        if repair_limit <= 0:
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=1,
+                errors=({
+                    "landing_page_id": draft.id,
+                    "reason": "quality_blocked",
+                    "blockers": tuple(str(item) for item in initial_quality["blockers"]),
+                    "quality_repair_attempts": repair_limit,
+                    "quality_repair_history": tuple(quality_repair_history),
+                },),
+                quality_repair_history=tuple(quality_repair_history),
+            )
+
+        prompt_template = self._skills.get_prompt(self._config.skill_name)
+        if not prompt_template:
+            raise ValueError(
+                f"Landing-page generation skill not found: {self._config.skill_name}"
+            )
+        resolved_temperature = (
+            self._config.temperature if temperature is None else float(temperature)
+        )
+        resolved_max_tokens = (
+            self._config.max_tokens if max_tokens is None else int(max_tokens)
+        )
+        resolved_parse_retry_attempts = (
+            self._config.parse_retry_attempts
+            if parse_retry_attempts is None
+            else int(parse_retry_attempts)
+        )
+        resolved_parse_retry_response_excerpt_chars = (
+            self._config.parse_retry_response_excerpt_chars
+            if parse_retry_response_excerpt_chars is None
+            else int(parse_retry_response_excerpt_chars)
+        )
+
+        quality = initial_quality
+        quality_blockers = tuple(str(item) for item in quality["repair_issues"])
+        total_usage: dict[str, Any] = {}
+        total_parse_attempts = 0
+        parsed: dict[str, Any] | None = None
+        campaign_payload: dict[str, Any] = campaign.as_dict()
+        for repair_attempt_no in range(1, repair_limit + 1):
+            campaign_payload = {
+                **campaign_payload,
+                "context": _repair_context(draft, repair_issues=quality_blockers),
+            }
+            try:
+                parsed = await self._generate_one(
+                    prompt_template,
+                    campaign_payload=campaign_payload,
+                    temperature=resolved_temperature,
+                    max_tokens=resolved_max_tokens,
+                    parse_retry_attempts=resolved_parse_retry_attempts,
+                    parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                    quality_blockers=quality_blockers,
+                    quality_repair_attempt_no=repair_attempt_no,
+                )
+            except Exception as exc:
+                return LandingPageGenerationResult(
+                    requested=1,
+                    generated=0,
+                    skipped=1,
+                    errors=({
+                        "landing_page_id": draft.id,
+                        "reason": str(exc),
+                    },),
+                    quality_repair_history=tuple(quality_repair_history),
+                )
+            if not parsed:
+                return LandingPageGenerationResult(
+                    requested=1,
+                    generated=0,
+                    skipped=1,
+                    errors=({
+                        "landing_page_id": draft.id,
+                        "reason": "unparseable_response",
+                        "quality_blockers": quality_blockers,
+                        "quality_repair_history": tuple(quality_repair_history),
+                    },),
+                    quality_repair_history=tuple(quality_repair_history),
+                )
+            total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
+            total_parse_attempts += int(parsed.get("_parse_attempts") or 0)
+            parsed = {
+                **parsed,
+                "_usage": total_usage,
+                "_parse_attempts": total_parse_attempts,
+                "_quality_repair_attempts": repair_attempt_no,
+            }
+            quality = self._quality_check(
+                parsed,
+                campaign=campaign,
+                campaign_payload=campaign_payload,
+                quality_gates_enabled=resolved_quality_gates_enabled,
+            )
+            quality_repair_history.append(
+                _quality_repair_history_row(repair_attempt_no, quality)
+            )
+            parsed = {
+                **parsed,
+                "_quality_repair_history": tuple(quality_repair_history),
+            }
+            if quality["passed"]:
+                break
+            quality_blockers = tuple(str(item) for item in quality["repair_issues"])
+
+        if parsed is None or not quality["passed"]:
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=1,
+                errors=({
+                    "landing_page_id": draft.id,
+                    "reason": "quality_blocked",
+                    "blockers": tuple(str(item) for item in quality["blockers"]),
+                    "quality_repair_attempts": repair_limit,
+                    "quality_repair_history": tuple(quality_repair_history),
+                },),
+                quality_repair_history=tuple(quality_repair_history),
+            )
+
+        repaired = self._build_draft(
+            parsed,
+            campaign=campaign,
+            campaign_payload=campaign_payload,
+        )
+        repaired = _trusted_repaired_draft(repaired, source=draft)
+        updated = await self._landing_pages.update_draft(
+            draft.id,
+            repaired,
+            scope=scope,
+        )
+        if updated is None:
+            return LandingPageGenerationResult(
+                requested=1,
+                generated=0,
+                skipped=1,
+                errors=({
+                    "landing_page_id": draft.id,
+                    "reason": "repair_update_missed",
+                },),
+                quality_repair_history=tuple(quality_repair_history),
+            )
+        return LandingPageGenerationResult(
+            requested=1,
+            generated=1,
+            skipped=0,
+            saved_ids=(draft.id,),
+            quality_repair_history=tuple(quality_repair_history),
+        )
+
     async def _campaign_with_reasoning_context(
         self,
         *,
@@ -623,6 +848,57 @@ def _quality_repair_history_row(
             str(item) for item in quality.get("repair_issues") or ()
         ),
     }
+
+
+def _draft_to_parsed(draft: LandingPageDraft) -> dict[str, Any]:
+    return {
+        "title": draft.title,
+        "slug": draft.slug,
+        "hero": dict(draft.hero or {}),
+        "sections": [section.as_dict() for section in draft.sections],
+        "cta": dict(draft.cta or {}),
+        "meta": dict(draft.meta or {}),
+        "reference_ids": list(draft.reference_ids),
+    }
+
+
+def _repair_context(
+    draft: LandingPageDraft,
+    *,
+    repair_issues: Sequence[str],
+) -> dict[str, Any]:
+    return {
+        "repair_mode": "saved_draft",
+        "repair_issues": [str(item) for item in repair_issues],
+        "current_draft": _draft_to_parsed(draft),
+    }
+
+
+def _trusted_repaired_draft(
+    repaired: LandingPageDraft,
+    *,
+    source: LandingPageDraft,
+) -> LandingPageDraft:
+    metadata = {
+        **dict(source.metadata or {}),
+        **dict(repaired.metadata or {}),
+        "saved_draft_repair_source_id": source.id,
+    }
+    return LandingPageDraft(
+        id=source.id,
+        status="draft",
+        campaign_name=source.campaign_name,
+        persona=source.persona,
+        value_prop=source.value_prop,
+        title=repaired.title,
+        slug=repaired.slug,
+        hero=dict(repaired.hero or {}),
+        sections=tuple(repaired.sections),
+        cta=dict(repaired.cta or {}),
+        meta=dict(repaired.meta or {}),
+        reference_ids=tuple(repaired.reference_ids),
+        metadata=metadata,
+    )
 
 
 __all__ = [

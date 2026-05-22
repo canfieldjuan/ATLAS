@@ -91,6 +91,7 @@ class _EditableLandingPagePool(_Pool):
             "cta": json.loads(args[6]),
             "meta": json.loads(args[7]),
             "reference_ids": json.loads(args[8]),
+            "metadata": json.loads(args[9]),
             "status": "draft",
         })
         return [self.row]
@@ -553,7 +554,10 @@ def test_generated_asset_router_ignores_status_and_metadata_mass_assignment() ->
     assert body["status"] == "draft"
     assert body["metadata"]["scope"] == {"account_id": "acct_1", "user_id": "user_1"}
     update_query, update_args = pool.fetch_calls[1]
-    assert "metadata =" not in update_query
+    assert "metadata = $10::jsonb" in update_query
+    persisted_metadata = json.loads(update_args[9])
+    assert persisted_metadata["scope"] == {"account_id": "acct_1", "user_id": "user_1"}
+    assert "acct_2" not in json.dumps(persisted_metadata)
     assert "approved" not in update_args
 
 

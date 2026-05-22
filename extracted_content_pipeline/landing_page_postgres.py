@@ -275,6 +275,7 @@ class PostgresLandingPageRepository:
                    cta = $7::jsonb,
                    meta = $8::jsonb,
                    reference_ids = $9::jsonb,
+                   metadata = $10::jsonb,
                    status = 'draft',
                    updated_at = NOW()
              WHERE id = $1
@@ -292,6 +293,7 @@ class PostgresLandingPageRepository:
             json_dump_jsonb(dict(draft.cta or {})),
             json_dump_jsonb(dict(draft.meta or {})),
             json_dump_jsonb(reference_ids_payload),
+            json_dump_jsonb(dict(draft.metadata or {})),
         )
         if not rows:
             return None
