@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   CheckCircle2,
+  Code2,
   Download,
   Eye,
   Loader2,
@@ -64,6 +65,13 @@ type FAQItemPreview = {
   answer: string
   actionItems: string[]
   sourceLabels: string[]
+}
+
+type StructuredDataSummary = {
+  raw: Record<string, unknown>
+  nodeTypes: string[]
+  questionCount: number
+  hasCanonical: boolean
 }
 
 const ASSETS: Array<{
@@ -573,6 +581,8 @@ function AssetDetailDrawer({
   const faqItems = asset === 'faq_markdown' ? faqItemList(row.items) : []
   const readinessPanels = assetReadinessPanels(row, asset)
   const repairHistory = assetRepairHistory(row)
+  const structuredData =
+    asset === 'landing_page' ? structuredDataSummary(row.structured_data) : null
   const drawerRef = useRef<HTMLElement | null>(null)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -700,6 +710,10 @@ function AssetDetailDrawer({
           <RepairHistory history={repairHistory} />
         )}
 
+        {structuredData && (
+          <StructuredDataPreview summary={structuredData} />
+        )}
+
         {sections.length > 0 && (
           <section className="mt-6">
             <h3 className="text-sm font-semibold text-slate-200">Sections</h3>
@@ -802,6 +816,41 @@ function AssetDetailDrawer({
         </section>
       </aside>
     </div>
+  )
+}
+
+function StructuredDataPreview({ summary }: { summary: StructuredDataSummary }) {
+  return (
+    <section className="mt-6">
+      <h3 className="text-sm font-semibold text-slate-200">Structured Data</h3>
+      <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/60 p-4">
+        <div className="flex flex-wrap gap-2 text-xs">
+          {summary.nodeTypes.map((type) => (
+            <span
+              key={type}
+              className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-slate-300"
+            >
+              <Code2 className="h-3.5 w-3.5 text-cyan-300" />
+              {type}
+            </span>
+          ))}
+          <span className="rounded bg-slate-800 px-2 py-1 text-slate-300">
+            {summary.questionCount} FAQ question{summary.questionCount === 1 ? '' : 's'}
+          </span>
+          <span className={clsx(
+            'rounded px-2 py-1',
+            summary.hasCanonical
+              ? 'bg-emerald-500/10 text-emerald-200'
+              : 'bg-amber-500/10 text-amber-200',
+          )}>
+            {summary.hasCanonical ? 'canonical linked' : 'no canonical URL'}
+          </span>
+        </div>
+        <pre className="mt-3 max-h-80 overflow-auto rounded border border-slate-800 bg-slate-950/70 p-3 text-xs leading-5 text-slate-300">
+          {JSON.stringify(summary.raw, null, 2)}
+        </pre>
+      </div>
+    </section>
   )
 }
 
@@ -1341,6 +1390,29 @@ function readinessChecks(value: unknown): ReadinessCheck[] {
       label: fmtLabel(key),
       passed: passed === true,
     }))
+}
+
+function structuredDataSummary(value: unknown): StructuredDataSummary | null {
+  const raw = recordValue(value)
+  if (!raw) return null
+  const graph = recordList(raw['@graph'])
+  const nodes = graph.length > 0 ? graph : [raw]
+  const nodeTypes = Array.from(new Set(nodes.flatMap(schemaTypes))).filter(Boolean)
+  const questionCount = nodes
+    .filter((node) => schemaTypes(node).includes('FAQPage'))
+    .reduce((count, node) => count + recordList(node.mainEntity).length, 0)
+  return {
+    raw,
+    nodeTypes: nodeTypes.length > 0 ? nodeTypes : ['Schema.org'],
+    questionCount,
+    hasCanonical: nodes.some((node) => Boolean(textValue(node.url) || textValue(node['@id']))),
+  }
+}
+
+function schemaTypes(node: Record<string, unknown>): string[] {
+  const type = node['@type']
+  if (Array.isArray(type)) return type.map(textValue).filter(Boolean)
+  return textValue(type) ? [textValue(type)] : []
 }
 
 function readinessCountLabel(summary: ReadinessSummary): string {
