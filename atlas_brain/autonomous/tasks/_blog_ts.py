@@ -13,6 +13,30 @@ _md_converter = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
 
 logger = logging.getLogger(__name__)
 
+_BULLET_LINE_RE = re.compile(r"^[ \t]*[-*][ \t]+\S")
+
+
+def _ensure_blank_line_before_lists(md: str) -> str:
+    """Insert a blank line before a bullet list that is tightly coupled to the
+    preceding paragraph.
+
+    python-markdown requires a blank line before a list; a bullet that
+    immediately follows a non-blank, non-list line (e.g.
+    ``**Top pain points:**\\n- Pricing``) is otherwise absorbed into the
+    paragraph and the converter emits ``<p>...\\n- Pricing</p>`` -- which
+    renders as literal "- Pricing" text. Adding the blank line lets the
+    converter produce a real ``<ul>``.
+    """
+    lines = md.split("\n")
+    out: list[str] = []
+    for line in lines:
+        if _BULLET_LINE_RE.match(line):
+            prev = out[-1] if out else ""
+            if prev.strip() and not _BULLET_LINE_RE.match(prev):
+                out.append("")
+        out.append(line)
+    return "\n".join(out)
+
 
 def escape_js_single(text: str) -> str:
     """Escape a string for use inside JS single quotes."""
@@ -139,7 +163,7 @@ def build_post_ts(
     charts_str = json.dumps(charts_json, indent=2, default=str)
     # Render markdown to HTML at deploy time so the frontend never parses markdown
     _md_converter.reset()
-    html_content = _md_converter.convert(content)
+    html_content = _md_converter.convert(_ensure_blank_line_before_lists(content))
     escaped_content = escape_template_literal(html_content)
     escaped_title = escape_js_single(title)
     escaped_desc = escape_js_single(description)

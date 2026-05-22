@@ -29,6 +29,28 @@ def test_build_post_ts_serializes_cta():
     assert "See the full migration brief" in ts_content
 
 
+def test_build_post_ts_converts_tight_bullet_list():
+    # A bullet list tightly coupled to a label (no blank line) must render as
+    # a real <ul>, not literal "- item" text inside a <p> (the D9 bug).
+    _, ts_content = build_post_ts(
+        slug="x-deep-dive-2026-04",
+        title="X Deep Dive",
+        description="d",
+        date_str="2026-04-01",
+        author="Churn Signals Team",
+        tags=["x"],
+        topic_type="vendor_deep_dive",
+        charts_json=[],
+        content="**Top pain points:**\n- Pricing\n- Support",
+        data_context={},
+    )
+    assert "<ul>" in ts_content
+    assert "<li>Pricing</li>" in ts_content
+    assert "<li>Support</li>" in ts_content
+    # The broken markdown-in-<p> shape must not appear.
+    assert "<p><strong>Top pain points:</strong>\n- Pricing" not in ts_content
+
+
 def test_write_blog_ts_file_uses_churn_signals_team_and_persists_cta(tmp_path):
     blog_dir = tmp_path / "blog"
     blog_dir.mkdir()

@@ -60,8 +60,27 @@ def slug_to_var_name(slug: str) -> str:
     return var_name
 
 
+_BULLET_LINE_RE = re.compile(r"^[ \t]*[-*][ \t]+\S")
+
+
+def _ensure_blank_line_before_lists(md: str) -> str:
+    """Insert a blank line before a bullet list tightly coupled to the
+    preceding paragraph, so the converter emits a real <ul> instead of literal
+    "- item" text inside a <p>. Mirrors the atlas_brain _blog_ts fix."""
+    lines = md.split("\n")
+    out: list[str] = []
+    for line in lines:
+        if _BULLET_LINE_RE.match(line):
+            prev = out[-1] if out else ""
+            if prev.strip() and not _BULLET_LINE_RE.match(prev):
+                out.append("")
+        out.append(line)
+    return "\n".join(out)
+
+
 def _render_markdown(content: str) -> str:
     """Render markdown when available, otherwise emit safe minimal HTML."""
+    content = _ensure_blank_line_before_lists(content)
     if _md_converter is not None:
         _md_converter.reset()
         return _md_converter.convert(content)

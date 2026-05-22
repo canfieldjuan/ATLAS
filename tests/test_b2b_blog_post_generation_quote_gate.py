@@ -35,6 +35,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pain_point_roundup,
     _blueprint_pricing_reality_check,
     _blueprint_vendor_showdown,
+    _is_form_prompt,
     _is_placeholder_partner,
     _looks_like_orphan_quote_reference,
     _pick_affiliate_partner_for_vendors,
@@ -1598,3 +1599,25 @@ def test_specificity_anchor_repair_no_op_when_no_anchor_and_no_issues():
     )
     assert did_repair is False
     assert repaired["content"] == content["content"]
+
+
+def test_form_prompt_detection():
+    # G2 review-form prompts are not genuine quotes.
+    assert _is_form_prompt("What do you like best about Pipedrive?")
+    assert _is_form_prompt("What do you dislike about Zoho CRM")
+    assert _is_form_prompt("Recommendations to others considering HubSpot")
+    # Real reviewer phrases survive.
+    assert not _is_form_prompt("Pricing is too high for what you get")
+    assert not _is_form_prompt("Support never responded for weeks")
+
+
+def test_split_and_gate_drops_form_prompt_quotes():
+    rows = [
+        {"quote_origin": "vault", "phrase_verbatim": True,
+         "phrase": "What do you like best about Zoho CRM"},
+        {"quote_origin": "vault", "phrase_verbatim": True,
+         "phrase": "Support never responded for weeks"},
+    ]
+    kept = [q["phrase"] for q in _split_and_gate_blog_quotes(rows, limit=10)]
+    assert "Support never responded for weeks" in kept
+    assert not any(_is_form_prompt(p) for p in kept)

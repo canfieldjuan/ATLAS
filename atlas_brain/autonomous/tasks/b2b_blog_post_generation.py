@@ -1418,6 +1418,25 @@ def _quote_grade_blueprint_phrases(
     return out
 
 
+# G2-style review-FORM PROMPTS ("What do you like best about <X>?") get scraped
+# into review_text as boilerplate and otherwise surface as fake reviewer
+# quotes. Kept in sync with the seo-geo-aeo-blog-post skill's
+# form_prompt_quote detector.
+_FORM_PROMPT_RE = re.compile(
+    r"what do you (?:like best|dislike) about"
+    r"|what problems? (?:is|are) .{0,60}? solving"
+    r"|recommendations to others considering"
+    r"|what benefits have you realized",
+    re.IGNORECASE,
+)
+
+
+def _is_form_prompt(text: str) -> bool:
+    """True if ``text`` is a review-form prompt (boilerplate the form asks),
+    not a genuine reviewer quote."""
+    return bool(_FORM_PROMPT_RE.search(text or ""))
+
+
 def _split_and_gate_blog_quotes(
     rows: list[dict[str, Any]],
     *,
@@ -1483,6 +1502,11 @@ def _split_and_gate_blog_quotes(
             "phrase_verbatim": True,
         })
     combined = review_quotes + vault_quotes
+    # Drop review-form prompts that slipped through as verbatim phrases.
+    combined = [
+        q for q in combined
+        if not _is_form_prompt(str(q.get("phrase") or q.get("text") or ""))
+    ]
     if limit is not None:
         return combined[:limit]
     return combined
