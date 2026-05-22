@@ -160,6 +160,10 @@ try:
         create_generated_asset_router,
         create_public_landing_page_router,
     )
+    from .._content_ops_infrastructure import (
+        build_content_ops_llm_client,
+        build_content_ops_skill_store,
+    )
     from .._content_ops_services import build_content_ops_execution_services
     from .._content_ops_scope import (
         build_content_ops_scope,
@@ -203,6 +207,8 @@ try:
     content_assets_router = create_generated_asset_router(
         pool_provider=get_db_pool,
         scope_provider=build_content_ops_scope,
+        llm_provider=build_content_ops_llm_client,
+        skills_provider=build_content_ops_skill_store,
         dependencies=[Depends(_capture_content_ops_auth_user)],
     )
     router.include_router(content_assets_router)

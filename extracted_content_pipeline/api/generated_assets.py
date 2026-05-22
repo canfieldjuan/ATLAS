@@ -22,7 +22,7 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency-light C
 else:
     _FASTAPI_IMPORT_ERROR = None
 
-from ..campaign_ports import TenantScope
+from ..campaign_ports import LLMClient, SkillStore, TenantScope
 from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
 from ..landing_page_export import (
@@ -31,6 +31,7 @@ from ..landing_page_export import (
     public_landing_page_draft_row,
     public_landing_page_robots,
 )
+from ..landing_page_generation import LandingPageGenerationService
 from ..landing_page_postgres import PostgresLandingPageRepository
 from ..landing_page_ports import LandingPageDraft, LandingPageSection
 from ..report_export import export_report_drafts
@@ -42,7 +43,9 @@ from ..ticket_faq_postgres import PostgresTicketFAQRepository
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
+LLMProvider = Callable[[], LLMClient | Awaitable[LLMClient]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
+SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 
@@ -109,6 +112,19 @@ async def _resolve_scope(
     if scope is None or isinstance(scope, (TenantScope, Mapping)):
         return scope
     raise HTTPException(status_code=500, detail="Invalid tenant scope")
+
+
+async def _resolve_required_provider(
+    provider: Callable[[], Any | Awaitable[Any]] | None,
+    *,
+    detail: str,
+) -> Any:
+    if provider is None:
+        raise HTTPException(status_code=503, detail=detail)
+    value = await _maybe_await(provider())
+    if value is None:
+        raise HTTPException(status_code=503, detail=detail)
+    return value
 
 
 def _api_limit(value: int | None, config: GeneratedAssetApiConfig) -> int:
@@ -179,6 +195,8 @@ def create_generated_asset_router(
     *,
     pool_provider: PoolProvider,
     scope_provider: ScopeProvider | None = None,
+    llm_provider: LLMProvider | None = None,
+    skills_provider: SkillsProvider | None = None,
     config: GeneratedAssetApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -371,6 +389,59 @@ def create_generated_asset_router(
                 detail="landing page draft could not be edited",
             )
         return landing_page_draft_export_row(updated)
+
+    @router.post("/{asset}/drafts/{draft_id}/repair")
+    async def repair_landing_page_draft(
+        asset: str,
+        draft_id: str,
+    ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
+        if asset_name != "landing_page":
+            raise HTTPException(
+                status_code=400,
+                detail="only landing_page drafts can be repaired",
+            )
+        try:
+            landing_page_id = str(UUID(draft_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Landing page draft not found") from None
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = _tenant_scope(scope)
+        repository = PostgresLandingPageRepository(pool)
+        existing = await repository.get_draft(landing_page_id, scope=tenant)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Landing page draft not found")
+        if existing.status == "approved":
+            raise HTTPException(
+                status_code=409,
+                detail="approved landing pages cannot be repaired",
+            )
+        llm = await _resolve_required_provider(llm_provider, detail="LLM unavailable")
+        skills = await _resolve_required_provider(
+            skills_provider,
+            detail="Landing page generation skills unavailable",
+        )
+        result = await LandingPageGenerationService(
+            landing_pages=repository,
+            llm=llm,
+            skills=skills,
+        ).repair_draft(scope=tenant, draft=existing)
+        result_payload = result.as_dict()
+        if result.generated == 0 and result.skipped > 0:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "landing page draft could not be repaired",
+                    "repair_result": result_payload,
+                },
+            )
+        refreshed = await repository.get_draft(landing_page_id, scope=tenant)
+        if refreshed is None:
+            raise HTTPException(status_code=404, detail="Landing page draft not found")
+        row = landing_page_draft_export_row(refreshed)
+        row["repair_result"] = result_payload
+        return row
 
     return router
 

@@ -15,7 +15,7 @@ from extracted_content_pipeline.api.generated_assets import (
     create_public_landing_page_router,
 )
 import extracted_content_pipeline.api.generated_assets as asset_api
-from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
 
 
 BATCH_REPORT_ID_1 = "11111111-1111-1111-1111-111111111111"
@@ -95,6 +95,36 @@ class _EditableLandingPagePool(_Pool):
             "status": "draft",
         })
         return [self.row]
+
+
+class _LLM:
+    def __init__(self, responses) -> None:
+        self.responses = list(responses)
+        self.calls = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append({
+            "messages": list(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "metadata": dict(metadata or {}),
+        })
+        response = self.responses.pop(0)
+        return LLMResponse(
+            content=response,
+            model="test-model",
+            usage={"input_tokens": 9, "output_tokens": 4},
+        )
+
+
+class _Skills:
+    def __init__(self, prompt: str = "TEMPLATE: {campaign_json}") -> None:
+        self.prompt = prompt
+        self.calls = []
+
+    def get_prompt(self, name):
+        self.calls.append(name)
+        return self.prompt
 
 
 def _report_row():
@@ -268,6 +298,18 @@ def _ready_landing_page_row():
     }
 
 
+def _landing_page_generation_response(row: dict[str, object]) -> str:
+    return json.dumps({
+        "title": row["title"],
+        "slug": row["slug"],
+        "hero": row["hero"],
+        "sections": row["sections"],
+        "cta": row["cta"],
+        "meta": row["meta"],
+        "reference_ids": row["reference_ids"],
+    })
+
+
 def _sales_brief_row():
     return {
         "id": "brief-uuid-1",
@@ -307,6 +349,8 @@ def _client(
     pool,
     *,
     scope=None,
+    llm=None,
+    skills=None,
     config: GeneratedAssetApiConfig | None = None,
     dependencies=None,
 ) -> TestClient:
@@ -318,10 +362,18 @@ def _client(
     async def scope_provider():
         return scope
 
+    async def llm_provider():
+        return llm
+
+    async def skills_provider():
+        return skills
+
     app.include_router(
         create_generated_asset_router(
             pool_provider=pool_provider,
             scope_provider=scope_provider if scope is not None else None,
+            llm_provider=llm_provider if llm is not None else None,
+            skills_provider=skills_provider if skills is not None else None,
             config=config,
             dependencies=dependencies,
         )
@@ -588,6 +640,196 @@ def test_generated_asset_router_rejects_empty_landing_page_edit_payload() -> Non
     assert "payload must include at least one editable landing page field" in (
         response.json()["detail"]
     )
+
+
+def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_row() -> None:
+    repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    needs_repair = {
+        **repaired_row,
+        "meta": {
+            key: value
+            for key, value in repaired_row["meta"].items()
+            if key != "description"
+        },
+    }
+    pool = _EditableLandingPagePool(needs_repair)
+    llm = _LLM([_landing_page_generation_response(repaired_row)])
+    skills = _Skills()
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["status"] == "draft"
+    assert body["seo_aeo_readiness"]["status"] == "ready"
+    assert body["geo_readiness"]["status"] == "ready"
+    assert body["repair_result"]["generated"] == 1
+    assert body["repair_result"]["saved_ids"] == [
+        "11111111-1111-1111-1111-111111111111"
+    ]
+    assert len(pool.fetch_calls) == 3
+    select_query, select_args = pool.fetch_calls[0]
+    assert "FROM landing_pages" in select_query
+    assert select_args == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct_1",
+    )
+    update_query, update_args = pool.fetch_calls[1]
+    assert "UPDATE landing_pages" in update_query
+    assert update_args[0:2] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct_1",
+    )
+    persisted_metadata = json.loads(update_args[9])
+    assert persisted_metadata["saved_draft_repair_source_id"] == (
+        "11111111-1111-1111-1111-111111111111"
+    )
+    assert persisted_metadata["generation_quality_repair_attempts"] == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert '"repair_mode":"saved_draft"' in system_prompt
+    assert '"repair_issues":["seo_aeo_readiness:meta_description"]' in system_prompt
+    assert skills.calls == ["digest/landing_page_generation"]
+
+
+def test_generated_asset_router_repair_requires_llm_provider() -> None:
+    row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    row["meta"] = {"title_tag": row["meta"]["title_tag"]}
+    pool = _EditableLandingPagePool(row)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        skills=_Skills(),
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "LLM unavailable"
+
+
+def test_generated_asset_router_repair_requires_skills_provider() -> None:
+    row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    row["meta"] = {"title_tag": row["meta"]["title_tag"]}
+    pool = _EditableLandingPagePool(row)
+    llm = _LLM([])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Landing page generation skills unavailable"
+    assert llm.calls == []
+
+
+def test_generated_asset_router_returns_404_for_cross_tenant_landing_page_repair() -> None:
+    row = {
+        **_ready_landing_page_row(),
+        "status": "quality_blocked",
+        "account_id": "acct_1",
+    }
+    row["meta"] = {"title_tag": row["meta"]["title_tag"]}
+    pool = _EditableLandingPagePool(row)
+    llm = _LLM([])
+    skills = _Skills()
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_2"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page draft not found"
+    assert len(pool.fetch_calls) == 1
+    assert llm.calls == []
+    assert skills.calls == []
+
+
+def test_generated_asset_router_returns_repair_result_when_repair_fails() -> None:
+    needs_repair = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    needs_repair["meta"] = {
+        key: value
+        for key, value in needs_repair["meta"].items()
+        if key != "description"
+    }
+    pool = _EditableLandingPagePool(needs_repair)
+    llm = _LLM([_landing_page_generation_response(needs_repair)])
+    skills = _Skills()
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["message"] == "landing page draft could not be repaired"
+    assert detail["repair_result"]["generated"] == 0
+    assert detail["repair_result"]["skipped"] == 1
+    assert detail["repair_result"]["errors"][0]["reason"] == "quality_blocked"
+    assert detail["repair_result"]["errors"][0]["blockers"] == [
+        "seo_aeo_readiness:meta_description"
+    ]
+    assert len(pool.fetch_calls) == 1
+    assert len(llm.calls) == 1
+    assert skills.calls == ["digest/landing_page_generation"]
+
+
+def test_generated_asset_router_blocks_approved_landing_page_repair() -> None:
+    pool = _EditableLandingPagePool(_ready_landing_page_row())
+    llm = _LLM([])
+
+    response = _client(
+        pool,
+        llm=llm,
+        skills=_Skills(),
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "approved landing pages cannot be repaired"
+    assert llm.calls == []
+
+
+def test_generated_asset_router_rejects_non_landing_page_repair() -> None:
+    pool = _Pool()
+
+    response = _client(pool).post(
+        "/content-assets/blog_post/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only landing_page drafts can be repaired"
+    assert pool.fetch_calls == []
 
 
 def test_generated_asset_router_returns_public_approved_landing_page() -> None:
