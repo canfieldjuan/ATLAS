@@ -106,6 +106,10 @@ def test_faq_scale_smoke_writes_standard_artifacts(
     assert result["failed_output_checks"] == []
     assert saved_summary["exit_code"] == 0
     assert saved_summary["result"]["generated"] == result["generated"]
+    assert saved_summary["faq_run_summary"] == result["diagnostics"]["run_summary"]
+    assert saved_summary["faq_run_summary"]["generated"] == result["generated"]
+    assert saved_summary["faq_run_summary"]["weighted_source_volume"] == 4
+    assert saved_summary["faq_run_summary"]["output_checks"]["failed"] == 0
     assert saved_summary["source_format"] == fmt
     assert saved_summary["input_profile"]["status"] == "ok"
     assert saved_summary["input_profile"]["raw_row_count"] == 4
@@ -149,6 +153,9 @@ def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path
     assert summary["failure"]["type"] == "output_checks"
     assert summary["failure"]["failed_output_checks"] == ["condensed"]
     assert "FAQ output checks failed: condensed" in summary["failure"]["stderr_tail"]
+    assert summary["faq_run_summary"] == result["diagnostics"]["run_summary"]
+    assert summary["faq_run_summary"]["status"] == "failed_output_checks"
+    assert summary["faq_run_summary"]["output_checks"]["failed_checks"] == ["condensed"]
     assert summary["input_profile"]["raw_row_count"] == 3
     assert summary["input_profile"]["usable_source_count"] == 2
     assert summary["input_profile"]["warnings_by_code"]["missing_source_text"] == 1
@@ -181,6 +188,7 @@ def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> Non
     assert code != 0
     assert summary["ok"] is False
     assert summary["result"] is None
+    assert summary["faq_run_summary"] is None
     assert summary["input_profile"]["status"] == "error"
     assert "No such file or directory" in summary["input_profile"]["error"]
     assert summary["failure"]["type"] == "cli_error"
@@ -200,6 +208,11 @@ def test_faq_scale_smoke_main_uses_cli_defaults(tmp_path: Path, capsys) -> None:
     assert code == 0
     assert "Content Ops FAQ scale smoke passed:" in captured.out
     assert "source_rows=4/4" in captured.out
+    assert "faq=available" in captured.out
+    assert "generated=2" in captured.out
+    assert "weighted_volume=4" in captured.out
+    assert "checks_failed=0/3" in captured.out
+    assert "score_max=4" in captured.out
     assert "summary=" in captured.out
     assert captured.err == ""
     assert result["input"]["source_format"] == "auto"
@@ -221,6 +234,9 @@ def test_faq_scale_smoke_main_prints_profile_on_failure(tmp_path: Path, capsys) 
     assert captured.out == ""
     assert "Content Ops FAQ scale smoke failed:" in captured.err
     assert "source_rows=2/3" in captured.err
+    assert "faq=available" in captured.err
+    assert "generated=2" in captured.err
+    assert "checks_failed=1/3" in captured.err
     assert "skipped_rows=1" in captured.err
     assert "missing_source_text=1" in captured.err
     assert "failure=output_checks" in captured.err

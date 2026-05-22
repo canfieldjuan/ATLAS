@@ -97,6 +97,7 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     stdout_path.write_text(completed.stdout, encoding="utf-8")
     stderr_path.write_text(completed.stderr, encoding="utf-8")
     result_payload = _read_json(result_path)
+    faq_run_summary = _faq_run_summary(result_payload)
     artifact_paths = {
         "markdown": markdown_path,
         "result": result_path,
@@ -120,6 +121,7 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "summary": str(summary_path),
         },
         "artifact_details": _artifact_details(artifact_paths),
+        "faq_run_summary": faq_run_summary,
         "failure": _failure_summary(
             returncode=completed.returncode,
             result_payload=result_payload,
@@ -135,6 +137,16 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     ):
         return 0, summary
     return completed.returncode, summary
+
+
+def _faq_run_summary(result_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(result_payload, dict):
+        return None
+    diagnostics = result_payload.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    run_summary = diagnostics.get("run_summary")
+    return dict(run_summary) if isinstance(run_summary, dict) else None
 
 
 def _build_command(
@@ -310,17 +322,18 @@ def _print_scale_summary(summary: Mapping[str, Any]) -> None:
     artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), Mapping) else {}
     summary_path = artifacts.get("summary") if isinstance(artifacts, Mapping) else None
     profile = _console_input_profile(summary.get("input_profile"))
+    faq_profile = _console_faq_run_summary(summary.get("faq_run_summary"))
     if summary.get("ok") is True:
         print(
             "Content Ops FAQ scale smoke passed: "
-            f"{profile} summary={summary_path}"
+            f"{profile} {faq_profile} summary={summary_path}"
         )
         return
     failure = summary.get("failure") if isinstance(summary.get("failure"), Mapping) else {}
     failure_type = failure.get("type") if isinstance(failure, Mapping) else None
     print(
         "Content Ops FAQ scale smoke failed: "
-        f"{profile} failure={failure_type or 'unknown'} summary={summary_path}",
+        f"{profile} {faq_profile} failure={failure_type or 'unknown'} summary={summary_path}",
         file=sys.stderr,
     )
 
@@ -346,6 +359,34 @@ def _console_input_profile(value: Any) -> str:
 
 def _console_value(value: Any) -> str:
     return str(value) if value is not None else "unknown"
+
+
+def _console_faq_run_summary(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "faq=unavailable"
+    parts = ["faq=available"]
+    for key, label in (
+        ("generated", "generated"),
+        ("weighted_source_volume", "weighted_volume"),
+    ):
+        item = value.get(key)
+        if item is not None:
+            parts.append(f"{label}={item}")
+    output_checks = value.get("output_checks")
+    if isinstance(output_checks, Mapping):
+        failed = output_checks.get("failed")
+        total = output_checks.get("total")
+        if failed is not None or total is not None:
+            parts.append(
+                f"checks_failed={_console_value(failed)}/{_console_value(total)}"
+            )
+    score_distribution = value.get("item_score_distribution")
+    if (
+        isinstance(score_distribution, Mapping)
+        and score_distribution.get("max") is not None
+    ):
+        parts.append(f"score_max={score_distribution.get('max')}")
+    return " ".join(parts)
 
 
 def _failure_summary(
