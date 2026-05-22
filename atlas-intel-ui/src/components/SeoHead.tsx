@@ -12,6 +12,7 @@ interface SeoHeadProps {
   keywords?: string[]
   faq?: FaqItem[]
   jsonLd?: object
+  robots?: string
 }
 
 /** Track elements we create so cleanup removes exactly what we added. */
@@ -59,7 +60,7 @@ function cleanup() {
   managed.clear()
 }
 
-export default function SeoHead({ title, description, canonical, ogType = 'article', ogImage, keywords, faq, jsonLd }: SeoHeadProps) {
+export default function SeoHead({ title, description, canonical, ogType = 'article', ogImage, keywords, faq, jsonLd, robots }: SeoHeadProps) {
   useEffect(() => {
     document.title = title
 
@@ -84,6 +85,10 @@ export default function SeoHead({ title, description, canonical, ogType = 'artic
       setMeta('keywords', keywords.join(', '), true)
     }
 
+    if (robots) {
+      setMeta('robots', robots, true)
+    }
+
     if (jsonLd) {
       setJsonLd('seo-jsonld', jsonLd)
     }
@@ -104,7 +109,7 @@ export default function SeoHead({ title, description, canonical, ogType = 'artic
     }
 
     return cleanup
-  }, [title, description, canonical, ogType, ogImage, keywords, faq, jsonLd])
+  }, [title, description, canonical, ogType, ogImage, keywords, faq, jsonLd, robots])
 
   return null
 }

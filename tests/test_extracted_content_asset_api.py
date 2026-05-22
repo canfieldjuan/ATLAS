@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from extracted_content_pipeline.api.generated_assets import (
     GeneratedAssetApiConfig,
     create_generated_asset_router,
+    create_public_landing_page_router,
 )
 import extracted_content_pipeline.api.generated_assets as asset_api
 from extracted_content_pipeline.campaign_ports import TenantScope
@@ -41,6 +42,18 @@ class _Pool:
     async def execute(self, query, *args):
         self.execute_calls.append((str(query), args))
         return self.execute_result
+
+
+class _PublicLandingPagePool(_Pool):
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        landing_page_id = args[0] if args else None
+        if "status = 'approved'" not in str(query):
+            return self.rows
+        return [
+            row for row in self.rows
+            if row.get("id") == landing_page_id and row.get("status") == "approved"
+        ]
 
 
 def _report_row():
@@ -186,6 +199,16 @@ def _client(
     return TestClient(app)
 
 
+def _public_client(pool) -> TestClient:
+    app = FastAPI()
+
+    async def pool_provider():
+        return pool
+
+    app.include_router(create_public_landing_page_router(pool_provider=pool_provider))
+    return TestClient(app)
+
+
 def test_generated_asset_router_lists_report_drafts_with_filters() -> None:
     pool = _Pool(rows=[_report_row()])
 
@@ -276,6 +299,93 @@ def test_generated_asset_router_exports_landing_page_csv() -> None:
     query, args = pool.fetch_calls[0]
     assert "FROM landing_pages" in query
     assert args == ("", "draft", "acme-launch", "acme-launch", 20)
+
+
+def test_generated_asset_router_returns_public_approved_landing_page() -> None:
+    row = {**_landing_page_row(), "status": "approved"}
+    row["id"] = "11111111-1111-1111-1111-111111111111"
+    row["meta"] = {
+        "title_tag": "Acme landing page",
+        "description": "A public approved landing page for Acme.",
+    }
+    row["reference_ids"] = ["internal-ref-1"]
+    row["metadata"] = {
+        "scope": {"account_id": "acct_1", "user_id": "user_1"},
+        "generation_usage": {"input_tokens": 10, "output_tokens": 5},
+        "reasoning_context": {"wedge": "support_gap", "confidence": 0.8},
+    }
+    pool = _Pool(rows=[row])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["slug"] == "acme-launch"
+    assert body["structured_data"]["@context"] == "https://schema.org"
+    assert set(body) == {
+        "id",
+        "slug",
+        "title",
+        "persona",
+        "value_prop",
+        "hero",
+        "sections",
+        "cta",
+        "meta",
+        "structured_data",
+    }
+    assert "status" not in body
+    assert "metadata" not in body
+    assert "reference_ids" not in body
+    assert "generation_input_tokens" not in body
+    assert "reasoning_context_used" not in body
+    assert "seo_aeo_readiness" not in body
+    query, args = pool.fetch_calls[0]
+    assert "FROM landing_pages" in query
+    assert "status = 'approved'" in query
+    assert args == ("11111111-1111-1111-1111-111111111111",)
+
+
+def test_generated_asset_router_hides_non_public_landing_page() -> None:
+    pool = _Pool(rows=[])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page not found"
+    assert len(pool.fetch_calls) == 1
+
+
+def test_generated_asset_router_hides_non_approved_landing_page_row() -> None:
+    row = {**_landing_page_row(), "status": "draft"}
+    row["id"] = "11111111-1111-1111-1111-111111111111"
+    pool = _PublicLandingPagePool(rows=[row])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page not found"
+    assert len(pool.fetch_calls) == 1
+
+
+def test_generated_asset_router_rejects_invalid_public_landing_page_id() -> None:
+    pool = _Pool()
+
+    response = _public_client(pool).get("/content-assets/landing_page/public/not-a-uuid")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Landing page not found"
+    assert pool.fetch_calls == []
 
 
 def test_generated_asset_router_exports_sales_brief_json_without_status_filter() -> None:
@@ -623,6 +733,34 @@ def test_generated_asset_router_honors_host_dependencies() -> None:
     assert pool.fetch_calls == []
 
 
+def test_public_landing_page_router_does_not_use_review_router_dependencies() -> None:
+    pool = _Pool(rows=[])
+
+    def require_auth():
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    app = FastAPI()
+
+    async def pool_provider():
+        return pool
+
+    app.include_router(
+        create_generated_asset_router(
+            pool_provider=pool_provider,
+            dependencies=[Depends(require_auth)],
+        )
+    )
+    app.include_router(create_public_landing_page_router(pool_provider=pool_provider))
+
+    response = TestClient(app).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 404
+    assert len(pool.fetch_calls) == 1
+
+
 def test_generated_asset_api_config_rejects_invalid_limits() -> None:
     with pytest.raises(ValueError, match="max_limit must be positive"):
         GeneratedAssetApiConfig(max_limit=0)
@@ -639,3 +777,6 @@ def test_generated_asset_router_requires_fastapi(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="FastAPI is required"):
         create_generated_asset_router(pool_provider=lambda: None)
+
+    with pytest.raises(RuntimeError, match="FastAPI is required"):
+        create_public_landing_page_router(pool_provider=lambda: None)

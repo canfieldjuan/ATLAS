@@ -527,6 +527,16 @@ async function getAssetText(
   return rawText(res)
 }
 
+async function getPublicAssetJson<T>(path: string): Promise<T> {
+  const url = `${ASSETS_BASE}${path}`
+  const res = await fetchWithApiFallback(url)
+  if (!res.ok) {
+    const body = await rawText(res)
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
 // ---------------------------------------------------------------------------
 // Public fetch wrappers
 // ---------------------------------------------------------------------------
@@ -574,6 +584,15 @@ export function reviewGeneratedAssetDrafts(
     asset,
     '/drafts/review-batch',
     { ids, status },
+  )
+}
+
+/** GET /content-assets/landing_page/public/{id} -- approved public landing page. */
+export function fetchPublicLandingPageDraft(
+  id: string,
+): Promise<GeneratedAssetDraft> {
+  return getPublicAssetJson<GeneratedAssetDraft>(
+    `/landing_page/public/${encodeURIComponent(id)}`,
   )
 }
 

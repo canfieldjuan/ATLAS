@@ -38,6 +38,18 @@ class _Pool:
         return self.execute_result
 
 
+class _PublicLandingPagePool(_Pool):
+    async def fetch(self, query, *args):
+        self.fetch_calls.append({"query": query, "args": args})
+        landing_page_id = args[0] if args else None
+        if "status = 'approved'" not in str(query):
+            return self.fetch_rows
+        return [
+            row for row in self.fetch_rows
+            if row.get("id") == landing_page_id and row.get("status") == "approved"
+        ]
+
+
 def _draft() -> LandingPageDraft:
     return LandingPageDraft(
         campaign_name="acme-q3-launch",
@@ -231,6 +243,87 @@ async def test_list_drafts_handles_pre_decoded_jsonb_columns() -> None:
     assert drafts[0].meta == {"title_tag": "tt"}
     assert drafts[0].reference_ids == ("r1", "r2")
     assert drafts[0].metadata == {"key": "value"}
+
+
+@pytest.mark.asyncio
+async def test_get_public_approved_draft_filters_by_id_and_approved_status() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "approved",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "title",
+            "slug": "slug",
+            "hero": {"headline": "Hero text"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "L"},
+            "meta": {"title_tag": "tt"},
+            "reference_ids": ["r1"],
+            "metadata": {"key": "value"},
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    draft = await repo.get_public_approved_draft(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert draft is not None
+    assert draft.id == "11111111-1111-1111-1111-111111111111"
+    assert draft.status == "approved"
+    assert draft.slug == "slug"
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "FROM landing_pages" in sql
+    assert "id = $1" in sql
+    assert "status = 'approved'" in sql
+    assert args == ("11111111-1111-1111-1111-111111111111",)
+
+
+@pytest.mark.asyncio
+async def test_get_public_approved_draft_returns_none_on_miss() -> None:
+    pool = _Pool()
+    repo = PostgresLandingPageRepository(pool)
+
+    draft = await repo.get_public_approved_draft(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert draft is None
+
+
+@pytest.mark.asyncio
+async def test_get_public_approved_draft_hides_non_approved_row() -> None:
+    pool = _PublicLandingPagePool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "draft",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "title",
+            "slug": "slug",
+            "hero": {"headline": "Hero text"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "L"},
+            "meta": {"title_tag": "tt"},
+            "reference_ids": ["r1"],
+            "metadata": {"key": "value"},
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    draft = await repo.get_public_approved_draft(
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert draft is None
+    sql = pool.fetch_calls[0]["query"]
+    assert "status = 'approved'" in sql
 
 
 @pytest.mark.asyncio
