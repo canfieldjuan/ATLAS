@@ -16,18 +16,18 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 118,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 118
       },
       {
         "name": "pricing",
-        "strengths": 51,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 51
       },
       {
         "name": "ux",
-        "strengths": 26,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 26
       },
       {
         "name": "support",
@@ -36,8 +36,8 @@ const post: BlogPost = {
       },
       {
         "name": "features",
-        "strengths": 19,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 19
       },
       {
         "name": "integration",
@@ -51,8 +51,8 @@ const post: BlogPost = {
       },
       {
         "name": "data_migration",
-        "strengths": 7,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 7
       }
     ],
     "config": {
@@ -160,7 +160,7 @@ const post: BlogPost = {
 <p>The data comes from a mix of 30 verified platform reviews and 113 community posts, providing both structured feedback and unfiltered user sentiment. This is not a representative sample of all Pipedrive customers—it reflects the self-selected population willing to post public feedback during a specific 34-day window.</p>
 <p>What emerges is a platform praised for onboarding and integration capabilities, but facing acute friction around billing predictability and support responsiveness. The contradiction between stable category-level churn metrics and localized evaluation pressure suggests either high switching costs or early-stage displacement not yet reflected in aggregate data.</p>
 <h2 id="what-pipedrive-does-well-and-where-it-falls-short">What Pipedrive Does Well -- and Where It Falls Short</h2>
-<p>Reviewer feedback clusters around eight strength categories and two primary weakness areas.</p>
+<p>Reviewer feedback clusters around two strength categories (onboarding and integration) and six recurring weakness areas, led by overall dissatisfaction and pricing complaints.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <p>On the strength side, onboarding and integration capabilities dominate positive mentions. One verified G2 reviewer in a small business context noted the platform's ability to provide clear pipeline visualization, while a Software Advice user described Pipedrive as "great for keeping sales organized."</p>
 <p>The integration ecosystem receives consistent praise, with reviewers mentioning smooth connections to Gmail, Mailchimp, and Zapier. One operations analyst specifically highlighted how Pipedrive "gives us a bird's eye view to visualize the sales pipeline to effectively convert the sales leads into customers."</p>
