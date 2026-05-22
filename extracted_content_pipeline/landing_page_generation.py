@@ -554,6 +554,8 @@ class LandingPageGenerationService:
                     errors=({
                         "landing_page_id": draft.id,
                         "reason": str(exc),
+                        "blockers": quality_blockers,
+                        "quality_repair_history": tuple(quality_repair_history),
                     },),
                     quality_repair_history=tuple(quality_repair_history),
                 )
@@ -565,6 +567,7 @@ class LandingPageGenerationService:
                     errors=({
                         "landing_page_id": draft.id,
                         "reason": "unparseable_response",
+                        "blockers": quality_blockers,
                         "quality_blockers": quality_blockers,
                         "quality_repair_history": tuple(quality_repair_history),
                     },),

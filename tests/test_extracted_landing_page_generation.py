@@ -783,6 +783,58 @@ async def test_repair_draft_noops_when_existing_draft_already_passes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repair_draft_reports_blockers_when_repair_response_will_not_parse() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    draft = _draft_from_response(needs_repair)
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=["not valid json"],
+        config=LandingPageGenerationConfig(parse_retry_attempts=0),
+    )
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    expected_blockers = ("seo_aeo_readiness:meta_description",)
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert landing_pages.updated == []
+    assert len(llm.calls) == 1
+    assert result.errors[0]["reason"] == "unparseable_response"
+    assert result.errors[0]["blockers"] == expected_blockers
+    assert result.errors[0]["quality_blockers"] == expected_blockers
+    assert result.errors[0]["quality_repair_history"] == result.quality_repair_history
+    assert result.quality_repair_history[0]["blockers"] == expected_blockers
+
+
+@pytest.mark.asyncio
+async def test_repair_draft_reports_blockers_when_repair_provider_fails() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    draft = _draft_from_response(needs_repair)
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[RuntimeError("provider unavailable")],
+    )
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+    )
+
+    expected_blockers = ("seo_aeo_readiness:meta_description",)
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert landing_pages.updated == []
+    assert len(llm.calls) == 1
+    assert result.errors[0]["reason"] == "provider unavailable"
+    assert result.errors[0]["blockers"] == expected_blockers
+    assert result.errors[0]["quality_repair_history"] == result.quality_repair_history
+    assert result.quality_repair_history[0]["blockers"] == expected_blockers
+
+
+@pytest.mark.asyncio
 async def test_generate_reports_quality_blockers_after_repair_attempt_fails() -> None:
     bad_response = json.dumps({
         "title": "ok",
