@@ -216,11 +216,12 @@ class LandingPageRepository(Protocol):
         *,
         scope: TenantScope,
     ) -> LandingPageDraft | None:
-        """Update editable draft fields and return the updated row.
+        """Update trusted draft fields and return the updated row.
 
         Implementations must keep the update tenant-scoped and must not mutate
         approved rows. Editing an approved public landing page would bypass the
-        review flow.
+        review flow. Callers that accept user input must construct metadata
+        from trusted state, not request payloads.
         """
 
     async def get_public_approved_draft(

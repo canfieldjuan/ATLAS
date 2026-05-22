@@ -346,6 +346,7 @@ async def test_update_draft_updates_editable_fields_and_returns_row() -> None:
     args = pool.fetch_calls[0]["args"]
     assert "UPDATE landing_pages" in sql
     assert "status <> 'approved'" in sql
+    assert "metadata = $10::jsonb" in sql
     assert "RETURNING id" in sql
     assert args[0:4] == (
         "11111111-1111-1111-1111-111111111111",
@@ -358,6 +359,7 @@ async def test_update_draft_updates_editable_fields_and_returns_row() -> None:
     assert json.loads(args[6]) == {"label": "Book"}
     assert json.loads(args[7]) == {"title_tag": "Updated"}
     assert json.loads(args[8]) == ["r1"]
+    assert json.loads(args[9]) == {"key": "value"}
 
 
 @pytest.mark.asyncio

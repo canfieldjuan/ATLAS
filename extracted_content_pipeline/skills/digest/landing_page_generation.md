@@ -69,6 +69,13 @@ SEO/GEO/AEO input policy:
 - `internal_links`: include only supplied links and only when they fit the page. Do not create fake URLs.
 - `cta_label` and `cta_url`: use these for `hero.cta_label`, `hero.cta_url`, and the page-level `cta` unless the campaign gives a stronger CTA pattern.
 
+Saved-draft repair policy:
+- If `campaign.context.current_draft` is present, repair that existing landing page instead of starting from a blank page.
+- Use `campaign.context.repair_issues` as the exact list of quality/readiness problems to fix.
+- Preserve the current draft's campaign, audience, CTA intent, useful section structure, and honest claims unless a repair issue requires changing them.
+- Return the full corrected landing-page JSON object, not a patch or commentary.
+- Do not invent new proof, reference IDs, customer names, competitors, or URLs while repairing.
+
 Readiness rules:
 - The first viewport must make it clear what the offer is, who it is for, and why that reader should care.
 - Include a clear problem section and a clear solution or how-it-works section tied to `campaign.value_prop`.
