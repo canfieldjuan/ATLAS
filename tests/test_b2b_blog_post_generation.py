@@ -1585,6 +1585,25 @@ async def test_fetch_source_distribution_reads_vendor_mentions():
 
 
 @pytest.mark.asyncio
+async def test_fetch_source_distribution_scopes_by_category():
+    """D7: a category-level topic must count reviews IN the category, not every
+    review that MENTIONS a category vendor -- free-form community threads name
+    many products across categories, so mention-scoping overstates the corpus
+    (CRM: ~5,931 mention-scoped / community 5,442 vs 1,133 / 963 category).
+    With category=, the query filters r.product_category and drops the
+    vendor_mentions join."""
+    pool = SimpleNamespace(fetch=AsyncMock(return_value=[]))
+
+    await blog_mod._fetch_source_distribution(pool, ["Salesforce", "HubSpot"], category="CRM")
+
+    args = pool.fetch.await_args.args
+    sql = args[0]
+    assert "r.product_category = $1" in sql
+    assert "JOIN b2b_review_vendor_mentions" not in sql
+    assert args[1] == "CRM"  # category bound as $1, not the vendor list
+
+
+@pytest.mark.asyncio
 async def test_fetch_vendor_stats_reads_vendor_mentions():
     pool = SimpleNamespace(fetchrow=AsyncMock(return_value=None))
 
