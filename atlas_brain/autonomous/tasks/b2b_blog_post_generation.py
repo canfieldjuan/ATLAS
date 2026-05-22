@@ -8382,12 +8382,18 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             avg_urg = sum(s.get("avg_urgency", 0) for s in sigs) / len(sigs) if sigs else 0
             urgency_data.append({"name": vendor[:20], "urgency": round(avg_urg, 1)})
     rendered_vendor_count = len(urgency_data) or vendor_count
-    # D8b: the landscape renders strength/weakness profiles for at most the
-    # leading vendors (vendor_profiles[:5]), not every charted vendor. Surface
-    # that count so the description can frame profile coverage honestly
-    # ("profiles for the leading vendors") instead of implying every charted
-    # vendor is profiled.
-    profile_count = min(len(vendor_profiles), 5)
+    # D8b: count the vendors that ACTUALLY render a profile section -- the loop
+    # below caps at vendor_profiles[:5] AND only emits a section when strengths
+    # or weaknesses is non-empty, so count with the same predicate (not bare
+    # len), or the stat would overstate coverage and reintroduce the mismatch
+    # this slice fixes (Codex P2 on #780). Wired into data_summary below so the
+    # honest count is deterministically USED, not just surfaced.
+    profile_count = sum(
+        1
+        for vp in vendor_profiles[:5]
+        if (vp.get("profile") or {}).get("strengths")
+        or (vp.get("profile") or {}).get("weaknesses")
+    )
 
     sections = [
         SectionSpec(
@@ -8404,7 +8410,8 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             },
             data_summary=(
                 f"The {category} landscape has {rendered_vendor_count} major vendors "
-                f"with {ctx['total_reviews']} total churn signals analyzed."
+                f"with {ctx['total_reviews']} total churn signals analyzed. "
+                f"Strength and weakness profiles cover the {profile_count} leading vendors."
             ),
         ),
     ]
