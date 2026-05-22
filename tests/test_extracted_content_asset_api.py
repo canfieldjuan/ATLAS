@@ -779,6 +779,11 @@ def test_generated_asset_router_warns_when_landing_page_repair_lock_is_skipped(c
     assert len(llm.calls) == 1
     assert any(
         "repair advisory lock skipped" in record.getMessage()
+        and "account_id=acct_1" in record.getMessage()
+        and (
+            "landing_page_id=11111111-1111-1111-1111-111111111111"
+            in record.getMessage()
+        )
         and record.landing_page_id == "11111111-1111-1111-1111-111111111111"
         and record.account_id == "acct_1"
         for record in caplog.records
