@@ -74,8 +74,8 @@ contextual phrase replacements, identical "leading vendors" wording in both:
 
 | Area | LOC |
 |---|---:|
-| 2 generator copies (profile_count + key_stat) | ~18 |
-| Test | ~30 |
+| 2 generator copies (profile_count predicate + key_stat + data_summary) | ~32 |
+| Tests (capped + render-predicate) | ~55 |
 | crm-landscape data (2 phrase softenings) | ~4 |
-| Plan doc | ~85 |
-| **Total** | **~135** |
+| Plan doc | ~90 |
+| **Total** | **~180** |
