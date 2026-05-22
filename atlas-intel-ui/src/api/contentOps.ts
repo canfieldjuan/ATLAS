@@ -339,6 +339,7 @@ export interface GeneratedAssetDraft {
   passed_output_checks?: number
   seo_aeo_readiness?: GeneratedAssetReadiness | string
   geo_readiness?: GeneratedAssetReadiness | string
+  structured_data?: Record<string, unknown> | string
   persona?: string
   value_prop?: string
   [key: string]: unknown

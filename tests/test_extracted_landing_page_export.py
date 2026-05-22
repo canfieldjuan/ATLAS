@@ -379,6 +379,12 @@ async def test_export_landing_page_drafts_surfaces_ready_readiness() -> None:
             "claim_safety": True,
         },
     }
+    assert row["structured_data"]["@context"] == "https://schema.org"
+    assert [node["@type"] for node in row["structured_data"]["@graph"]] == [
+        "WebPage",
+        "FAQPage",
+    ]
+    assert len(row["structured_data"]["@graph"][1]["mainEntity"]) == 3
 
 
 @pytest.mark.asyncio
@@ -600,6 +606,10 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
                 "output_checks": {"title_tag": True},
                 "seo_aeo_readiness": {"status": "ready"},
                 "geo_readiness": {"status": "ready"},
+                "structured_data": {
+                    "@context": "https://schema.org",
+                    "@graph": [{"@type": "WebPage", "name": "Acme page"}],
+                },
                 "hero": {"headline": "Stop surprises"},
                 "sections": [{"id": "problem"}],
                 "cta": {"label": "Book a demo"},
@@ -624,6 +634,10 @@ def test_landing_page_draft_export_result_renders_dict_and_csv() -> None:
         in csv_text
     )
     assert "reasoning_context_used,reasoning_wedge,reasoning_confidence" in csv_text
-    assert "passed_output_checks,output_checks,seo_aeo_readiness,geo_readiness" in csv_text
+    assert (
+        "passed_output_checks,output_checks,seo_aeo_readiness,geo_readiness,"
+        "structured_data"
+    ) in csv_text
     assert '"[{""attempt"":1,""passed"":true' in csv_text
+    assert '""@context"":""https://schema.org"",""@graph""' in csv_text
     assert "price_squeeze" in csv_text
