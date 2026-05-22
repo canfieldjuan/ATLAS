@@ -29,7 +29,7 @@ Required sections, in this order:
 | **Scope (this PR)** | The narrow surface this PR touches. Numbered list of intent. List of files in a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
-| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. |
+| **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. Include "Parked hardening: none" or list the `HARDENING.md` entries added by this slice. |
 | **Verification** | The specific commands the builder ran locally + their pass counts. Reviewer reproduces. |
 | **Estimated diff size** | LOC budget; flag if approaching 400 LOC. |
 
@@ -48,6 +48,9 @@ Plan: plans/PR-<Slice-Name>.md
 ## Deferred
 - ...
 
+## Parked hardening
+- None. (or: `HARDENING.md` entry title and why it was parked)
+
 ## Verification
 - ...
 
@@ -57,8 +60,9 @@ N files, +X / -Y
 
 ### 1c. Commit message
 
-Same `Plan: ...` lead line + Intentional / Deferred sections as the
-PR body. Squash-merge collapses to one canonical commit at merge time.
+Same `Plan: ...` lead line + Intentional / Deferred / Parked
+hardening sections as the PR body. Squash-merge collapses to one
+canonical commit at merge time.
 
 ### 1d. Diff budget
 
@@ -104,6 +108,7 @@ The reviewer should produce something like:
 
 **Plan-doc compliance:** Why / Scope / Mechanism / Files touched /
 Intentional / Deferred / Verification -- matches AGENTS.md framework.
+Parked hardening is named in Deferred or explicitly marked none.
 
 **Defensible trade-offs (no action needed):**
 - <decision> -- <why it's the right call>
@@ -190,7 +195,44 @@ but silently ignoring them recreates the diff-only review gap.
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.
 
-### 3d. Tests
+### 3d. Thin-slice and hardening triage
+
+Build the thinnest end-to-end version that exercises the real flow. A
+slice is done only when the builder demonstrates the behavior with a
+concrete test, script, artifact, or command output.
+
+Only fix inline what the slice cannot function without. Required
+inline fixes include:
+
+- Issues that break the slice's stated real flow.
+- Violations of this AGENTS contract, the plan, tests, or CI.
+- Security issues introduced or exposed by the slice.
+- Behavioral test coverage for a security or authorization guard the
+  slice introduces or relies on.
+- Output that would be misleading, false, or data-untruthful.
+- Reviewer BLOCKER findings.
+
+Everything else discovered while working gets appended to root
+`HARDENING.md` and left out of the code diff. This includes
+non-blocking error-handling gaps, missing validation, naming cleanup,
+refactors, and edge cases. Each entry must include file/location,
+one-line description, why it matters, rough effort (`S` / `M` / `L`),
+category (`correctness`, `polish`, `tech-debt`, or `security`), and the
+slice where it was found.
+
+Report parked work in the existing `Deferred` section of the plan doc
+and in the PR body under `Parked hardening`. Final builder reports must
+include what shipped, how it was demonstrated, and what was parked in
+`HARDENING.md` and why.
+
+At the start of each slice, scan `HARDENING.md` for entries touching
+the same ownership lane or files. Fix only entries that are required for
+the slice to function; otherwise leave them parked and mention the
+reason in `Deferred` if they were considered. Periodically drain or
+promote stale entries into the debt register so `HARDENING.md` remains a
+working queue, not an archive.
+
+### 3e. Tests
 
 Each PR ships its own tests. Acceptable test patterns:
 
@@ -204,7 +246,7 @@ Locked-in regression tests for deferred follow-ups should name the
 future slice in their docstring (e.g. *"after PR-Foo-V2 lands this
 test is removed"*) so the test's lifetime is explicit.
 
-### 3e. Working with the manifest
+### 3f. Working with the manifest
 
 Files listed in `<package>/manifest.json` under `owned` are
 package-canonical -- the sync script does not overwrite them. Files
@@ -219,7 +261,7 @@ grep -B2 '"target": "<path>"' <package>/manifest.json
 A `source` line means it's synced; absence (just a `target`) means
 it's owned.
 
-### 3f. Auditors must surface, never silently skip
+### 3g. Auditors must surface, never silently skip
 
 Mechanical audit scripts must report unfamiliar input as drift unless
 the skip is explicitly justified in code. Silent skips make the audit
@@ -255,7 +297,7 @@ if norm is None:
 If the false-positive risk cannot be stated in one sentence, the skip
 is probably wrong.
 
-### 3g. Auditors ship with fixture tests
+### 3h. Auditors ship with fixture tests
 
 Every new `scripts/audit_*.py` should ship with
 `tests/test_audit_<name>.py` in the same slice. The fixture set should
@@ -402,8 +444,8 @@ Things that should **never** appear in a PR or review:
   diffs ship as their own slice if needed.
 - **Plan doc that arrives in a follow-up commit.** Plan and
   implementation ship together.
-- **"While I was here..." cleanups** that aren't in the plan. Add a
-  Deferred item and move on.
+- **"While I was here..." cleanups** that aren't required for the
+  slice to function. Add a `HARDENING.md` entry and move on.
 - **Bypassing CI with `--no-verify`** unless the user explicitly
   authorizes.
 - **Reviewer running the builder's commands without spot-checking
@@ -425,6 +467,8 @@ Things that should **never** appear in a PR or review:
 - `INTEGRATION_MAP.md` -- what's wired to what.
 - `CONTEXT.md` -- session notes, known debt.
 - `CLAUDE.md` -- project-level Claude Code guidance.
+- `HARDENING.md` -- parked non-blocking hardening discoveries from
+  thin slices.
 - `plans/` -- per-slice plan docs (one per PR).
 
 ---
@@ -454,6 +498,8 @@ defines:
   touched / Intentional / Deferred / Verification) at
   plans/PR-<Slice-Name>.md.
 - The PR body / commit message conventions that mirror the plan.
+- The thin-slice rule and `HARDENING.md` parking contract for
+  non-blocking discoveries.
 - The reviewer verification template (sections 2a + 4d).
 - The 400 LOC diff budget and how to handle overage.
 - Anti-patterns that should never appear in a builder PR.
