@@ -706,6 +706,34 @@ async def test_regenerate_existing_posts_applies_scoped_filters_before_limit():
     assert captured["args"][4] == 10
 
 
+@pytest.mark.asyncio
+async def test_fetch_vendor_stats_scopes_total_to_source_allowlist():
+    """D7: the headline 'reviews collected' total must use the SAME source
+    allowlist as the enriched/churn stats, so 'N collected / M enriched' share a
+    denominator. Previously _fetch_vendor_stats.total counted ALL sources
+    (Capterra/Trustpilot/etc.), overstating the corpus vs the allowlist-scoped
+    enriched_count -- e.g. Zoho CRM showed 1043 all-source where the allowlist
+    base is 441 (enriched 263)."""
+    captured: dict[str, object] = {}
+
+    class Pool:
+        async def fetchrow(self, query, *args):
+            captured["query"] = query
+            captured["args"] = args
+            return {
+                "total": 441, "enriched": 263, "negative": 50,
+                "avg_urgency": 7.0, "category": "CRM",
+            }
+
+    out = await blog_mod._fetch_vendor_stats(Pool(), "Zoho CRM")
+    assert out["total"] == 441
+    # The query must scope reviews to the configured source allowlist...
+    assert "r.source = ANY(" in str(captured["query"])
+    # ...and bind that exact allowlist as a parameter (same scope the
+    # enriched/churn ctx queries use).
+    assert list(captured["args"][1]) == blog_mod._blog_source_allowlist()
+
+
 def _blog_anchor_context() -> dict:
     return {
         "reasoning_anchor_examples": {

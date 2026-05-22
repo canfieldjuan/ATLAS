@@ -9699,6 +9699,14 @@ async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
     """Return review counts and urgency for a single vendor."""
     # APPROVED-ENRICHMENT-READ: urgency_score
     # Reason: inline aggregate query, structurally coupled to product output
+    #
+    # D7: scope the headline `total` to the SAME source allowlist as the
+    # enriched/churn stats (the ctx queries in _build_blog_topic_context all use
+    # `source = ANY(_blog_source_allowlist())`). Without it, `total` counted ALL
+    # sources (Capterra/Trustpilot/etc.) while `enriched` is effectively
+    # allowlist-only, so "N reviews collected / M enriched" did not share a
+    # denominator -- e.g. Zoho CRM read 1043 all-source vs 441 allowlist.
+    sources = _blog_source_allowlist()
     row = await pool.fetchrow(
         """
         SELECT
@@ -9714,8 +9722,10 @@ async def _fetch_vendor_stats(pool, vendor_name: str) -> dict[str, Any]:
         JOIN b2b_review_vendor_mentions vm ON vm.review_id = r.id
         WHERE LOWER(vm.vendor_name) = LOWER($1)
           AND r.duplicate_of_review_id IS NULL
+          AND r.source = ANY($2)
         """,
         vendor_name,
+        sources,
     )
     if not row or row["total"] == 0:
         return {}
