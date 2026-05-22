@@ -1621,3 +1621,33 @@ def test_split_and_gate_drops_form_prompt_quotes():
     kept = [q["phrase"] for q in _split_and_gate_blog_quotes(rows, limit=10)]
     assert "Support never responded for weeks" in kept
     assert not any(_is_form_prompt(p) for p in kept)
+
+
+def test_form_prompts_do_not_consume_limit_slots():
+    """Codex P2 on #752: the form-prompt filter must run BEFORE the limit
+    is enforced. If the first `limit` review candidates are form-prompt
+    boilerplate, dropping them must not shrink the result below `limit`
+    when enough genuine quotes exist further down the pool.
+
+    Regression: _split_and_gate_blog_quotes used to pass `limit` into
+    _quote_grade_blueprint_phrases, which early-returns after collecting
+    `limit` candidates -- so leading form prompts ate the slots and the
+    post-collection filter left fewer than `limit` quotes (here: zero).
+    """
+    rows = [
+        _v4_row(text="What do you like best about Pipedrive?", review_id="fp-1"),
+        _v4_row(text="What do you dislike about Pipedrive", review_id="fp-2"),
+        _v4_row(text="Pricing climbs at every renewal", review_id="real-1"),
+        _v4_row(text="Support never responded for weeks", review_id="real-2"),
+        _v4_row(text="Onboarding dragged on for months", review_id="real-3"),
+    ]
+    out = _split_and_gate_blog_quotes(rows, limit=2)
+    phrases = [q["phrase"] for q in out]
+    # Limit constrains ACCEPTED quotes, not pre-filter candidates.
+    assert len(out) == 2
+    assert not any(_is_form_prompt(p) for p in phrases)
+    # The genuine quotes backfill in pool order once the form prompts go.
+    assert phrases == [
+        "Pricing climbs at every renewal",
+        "Support never responded for weeks",
+    ]

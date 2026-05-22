@@ -1476,9 +1476,14 @@ def _split_and_gate_blog_quotes(
         elif origin == "vault":
             vault_rows.append(r)
         # Unmarked / unknown origin: dropped on purpose.
-    review_quotes = _quote_grade_blueprint_phrases(
-        review_rows, field=field, limit=limit,
-    )
+    # Do NOT pass `limit` here. Form-prompt rejection (below) runs after the
+    # pool is built, so capping collection at `limit` would let leading
+    # form-prompt boilerplate consume slots that never backfill -- small pools
+    # (limit=15) could end up with fewer genuine quotes than requested even
+    # when enough valid rows exist (Codex P2 on #752). Collect the full
+    # quote-grade pool; the post-filter `combined[:limit]` enforces the limit
+    # on ACCEPTED quotes.
+    review_quotes = _quote_grade_blueprint_phrases(review_rows, field=field)
     vault_quotes: list[dict[str, Any]] = []
     for r in vault_rows:
         # Phase 2.3 4i: vault rows must also carry phrase_verbatim=True.
