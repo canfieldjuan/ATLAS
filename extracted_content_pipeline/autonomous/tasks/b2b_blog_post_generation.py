@@ -1418,6 +1418,25 @@ def _quote_grade_blueprint_phrases(
     return out
 
 
+# G2-style review-FORM PROMPTS ("What do you like best about <X>?") get scraped
+# into review_text as boilerplate and otherwise surface as fake reviewer
+# quotes. Kept in sync with the seo-geo-aeo-blog-post skill's
+# form_prompt_quote detector.
+_FORM_PROMPT_RE = re.compile(
+    r"what do you (?:like best|dislike) about"
+    r"|what problems? (?:is|are) .{0,60}? solving"
+    r"|recommendations to others considering"
+    r"|what benefits have you realized",
+    re.IGNORECASE,
+)
+
+
+def _is_form_prompt(text: str) -> bool:
+    """True if ``text`` is a review-form prompt (boilerplate the form asks),
+    not a genuine reviewer quote."""
+    return bool(_FORM_PROMPT_RE.search(text or ""))
+
+
 def _split_and_gate_blog_quotes(
     rows: list[dict[str, Any]],
     *,
@@ -1457,9 +1476,14 @@ def _split_and_gate_blog_quotes(
         elif origin == "vault":
             vault_rows.append(r)
         # Unmarked / unknown origin: dropped on purpose.
-    review_quotes = _quote_grade_blueprint_phrases(
-        review_rows, field=field, limit=limit,
-    )
+    # Do NOT pass `limit` here. Form-prompt rejection (below) runs after the
+    # pool is built, so capping collection at `limit` would let leading
+    # form-prompt boilerplate consume slots that never backfill -- small pools
+    # (limit=15) could end up with fewer genuine quotes than requested even
+    # when enough valid rows exist (Codex P2 on #752). Collect the full
+    # quote-grade pool; the post-filter `combined[:limit]` enforces the limit
+    # on ACCEPTED quotes.
+    review_quotes = _quote_grade_blueprint_phrases(review_rows, field=field)
     vault_quotes: list[dict[str, Any]] = []
     for r in vault_rows:
         # Phase 2.3 4i: vault rows must also carry phrase_verbatim=True.
@@ -1483,6 +1507,11 @@ def _split_and_gate_blog_quotes(
             "phrase_verbatim": True,
         })
     combined = review_quotes + vault_quotes
+    # Drop review-form prompts that slipped through as verbatim phrases.
+    combined = [
+        q for q in combined
+        if not _is_form_prompt(str(q.get("phrase") or q.get("text") or ""))
+    ]
     if limit is not None:
         return combined[:limit]
     return combined

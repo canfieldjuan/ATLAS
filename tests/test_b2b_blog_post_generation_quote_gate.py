@@ -35,6 +35,7 @@ from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (  # noqa: E40
     _blueprint_pain_point_roundup,
     _blueprint_pricing_reality_check,
     _blueprint_vendor_showdown,
+    _is_form_prompt,
     _is_placeholder_partner,
     _looks_like_orphan_quote_reference,
     _pick_affiliate_partner_for_vendors,
@@ -1598,3 +1599,55 @@ def test_specificity_anchor_repair_no_op_when_no_anchor_and_no_issues():
     )
     assert did_repair is False
     assert repaired["content"] == content["content"]
+
+
+def test_form_prompt_detection():
+    # G2 review-form prompts are not genuine quotes.
+    assert _is_form_prompt("What do you like best about Pipedrive?")
+    assert _is_form_prompt("What do you dislike about Zoho CRM")
+    assert _is_form_prompt("Recommendations to others considering HubSpot")
+    # Real reviewer phrases survive.
+    assert not _is_form_prompt("Pricing is too high for what you get")
+    assert not _is_form_prompt("Support never responded for weeks")
+
+
+def test_split_and_gate_drops_form_prompt_quotes():
+    rows = [
+        {"quote_origin": "vault", "phrase_verbatim": True,
+         "phrase": "What do you like best about Zoho CRM"},
+        {"quote_origin": "vault", "phrase_verbatim": True,
+         "phrase": "Support never responded for weeks"},
+    ]
+    kept = [q["phrase"] for q in _split_and_gate_blog_quotes(rows, limit=10)]
+    assert "Support never responded for weeks" in kept
+    assert not any(_is_form_prompt(p) for p in kept)
+
+
+def test_form_prompts_do_not_consume_limit_slots():
+    """Codex P2 on #752: the form-prompt filter must run BEFORE the limit
+    is enforced. If the first `limit` review candidates are form-prompt
+    boilerplate, dropping them must not shrink the result below `limit`
+    when enough genuine quotes exist further down the pool.
+
+    Regression: _split_and_gate_blog_quotes used to pass `limit` into
+    _quote_grade_blueprint_phrases, which early-returns after collecting
+    `limit` candidates -- so leading form prompts ate the slots and the
+    post-collection filter left fewer than `limit` quotes (here: zero).
+    """
+    rows = [
+        _v4_row(text="What do you like best about Pipedrive?", review_id="fp-1"),
+        _v4_row(text="What do you dislike about Pipedrive", review_id="fp-2"),
+        _v4_row(text="Pricing climbs at every renewal", review_id="real-1"),
+        _v4_row(text="Support never responded for weeks", review_id="real-2"),
+        _v4_row(text="Onboarding dragged on for months", review_id="real-3"),
+    ]
+    out = _split_and_gate_blog_quotes(rows, limit=2)
+    phrases = [q["phrase"] for q in out]
+    # Limit constrains ACCEPTED quotes, not pre-filter candidates.
+    assert len(out) == 2
+    assert not any(_is_form_prompt(p) for p in phrases)
+    # The genuine quotes backfill in pool order once the form prompts go.
+    assert phrases == [
+        "Pricing climbs at every renewal",
+        "Support never responded for weeks",
+    ]
