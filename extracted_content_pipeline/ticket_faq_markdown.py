@@ -179,6 +179,21 @@ _DOCUMENTATION_TERM_KEYS = (
     "text",
     "description",
 )
+_SOURCE_WEIGHT_KEYS = (
+    "source_weight",
+    "search_count",
+    "query_count",
+    "request_count",
+    "occurrences",
+    "occurrence_count",
+    "volume",
+    "search_volume",
+    "impressions",
+    "weight",
+    # Some exports call source volume "frequency"; keep it after explicit
+    # aggregate fields so round-tripped FAQ output does not mask search_count.
+    "frequency",
+)
 _VOCABULARY_GAP_RULES = (
     ("export", "download", "download report", "report download"),
     ("dashboard", "analytics", "reporting", "reports"),
@@ -453,6 +468,7 @@ def build_ticket_faq_markdown(
                 "result_count": _first_present(evidence, opportunity, key="result_count"),
                 "zero_results": _first_present(evidence, opportunity, key="zero_results"),
                 "zero_result": _first_present(evidence, opportunity, key="zero_result"),
+                "source_weight": _source_weight(evidence, opportunity),
             })
 
     sorted_groups = sorted(groups.items(), key=_group_sort_key)
@@ -610,6 +626,7 @@ def _item(
         "question": question,
         "question_source": question_source,
         "frequency": opportunity["frequency"],
+        "weighted_frequency": opportunity["weighted_frequency"],
         "failure_risk_score": opportunity["failure_risk_score"],
         "failure_risk_signals": opportunity["failure_risk_signals"],
         "opportunity_score": opportunity["opportunity_score"],
@@ -629,11 +646,12 @@ def _item(
 
 
 def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
-    frequency = len(_distinct_source_keys(rows))
+    frequency = _weighted_frequency(rows)
     failure_risk_signals = _failure_risk_signals(topic, rows)
     failure_risk_score = len(failure_risk_signals)
     return {
         "frequency": frequency,
+        "weighted_frequency": frequency,
         "failure_risk_score": failure_risk_score,
         "failure_risk_signals": failure_risk_signals,
         "opportunity_score": frequency * (1 + failure_risk_score),
@@ -643,6 +661,24 @@ def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[st
 def _distinct_source_keys(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
     values = (row.get("source_key") or row.get("source_id", "") for row in rows)
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _weighted_frequency(rows: Sequence[Mapping[str, Any]]) -> int:
+    weights: dict[str, int] = {}
+    for index, row in enumerate(rows, start=1):
+        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        weight = _integer_or_none(row.get("source_weight")) or 1
+        weights[source_key] = max(weights.get(source_key, 0), max(weight, 1))
+    return sum(weights.values())
+
+
+def _source_weight(*rows: Mapping[str, Any]) -> int:
+    for row in rows:
+        for key in _SOURCE_WEIGHT_KEYS:
+            weight = _integer_or_none(_field_value(row, key))
+            if weight is not None and weight > 0:
+                return weight
+    return 1
 
 
 def _term_mappings(
@@ -659,6 +695,7 @@ def _term_mappings(
     if not customer_text:
         return ()
     source_ids = _distinct_source_keys(rows)
+    # Vocabulary-gap impact should reflect the evidence rows, not the FAQ topic label.
     opportunity = _opportunity_score("", rows)
     zero_result_source_count = _zero_result_source_count(rows)
     mappings: list[dict[str, Any]] = []
