@@ -45,6 +45,7 @@ from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     normalize_landing_page_quality_repair_attempts,
 )
+from .landing_page_readiness import landing_page_readiness_repair_issues
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     campaign_reasoning_context_payload,
@@ -362,6 +363,8 @@ class LandingPageGenerationService:
             }
             quality = self._quality_check(
                 parsed,
+                campaign=campaign,
+                campaign_payload=campaign_payload,
                 quality_gates_enabled=resolved_quality_gates_enabled,
             )
             quality_repair_history.append(
@@ -507,6 +510,8 @@ class LandingPageGenerationService:
         self,
         parsed: Mapping[str, Any],
         *,
+        campaign: MarketingCampaign,
+        campaign_payload: Mapping[str, Any] | None = None,
         quality_gates_enabled: bool = True,
     ) -> dict[str, Any]:
         # PR-OptionA-4: opt out of the quality gate per call. The plan
@@ -529,6 +534,19 @@ class LandingPageGenerationService:
         report = evaluate_landing_page(report_input, policy=self._config.quality_policy)
         blockers = tuple(f.message for f in report.blockers)
         warnings = tuple(f.message for f in report.warnings)
+        if report.passed:
+            draft = self._build_draft(
+                parsed,
+                campaign=campaign,
+                campaign_payload=campaign_payload,
+            )
+            readiness_issues = landing_page_readiness_repair_issues(draft)
+            if readiness_issues:
+                return {
+                    "passed": False,
+                    "blockers": readiness_issues,
+                    "repair_issues": readiness_issues,
+                }
         return {
             "passed": report.passed,
             "blockers": blockers,
