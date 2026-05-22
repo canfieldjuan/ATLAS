@@ -1,5 +1,7 @@
 # PR-Blog-Generator-D1-D9
 
+Ownership lane: content-ops/blog-generator-d1-d9
+
 ## Why this slice exists
 
 A per-post correctness audit (catalogued in `reports/blog-audit-findings.md`)
@@ -93,8 +95,9 @@ the single md->html boundary so it covers every generation path. ASCII-only;
   renders `<ul><li>Pricing</li><li>Support</li></ul>`.
 - `extracted_content_pipeline` re-synced; manifest sync + ASCII Python policy
   PASS.
-- `scripts/local_pr_review.sh` -> expected pass (plan shape, plan/code
-  consistency, manifest sync, ASCII, `git diff --check`).
+- `scripts/local_pr_review.sh` -> `local PR review passed` (plan shape,
+  plan/code consistency 13/13 path claims, manifest sync, ASCII Python policy,
+  cross-session ownership lane, diff drift ~6%, `git diff --check`).
 
 ## Estimated diff size
 
