@@ -2244,6 +2244,11 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
     assert result["diagnostics"]["question_source_counts"] == {
         "customer_wording": 2,
     }
+    assert result["diagnostics"]["source_mix"] == {
+        "source_channel_counts": {"support_tickets": 4},
+        "source_type_counts": {"support_ticket": 4},
+        "zero_result_search_source_count": 0,
+    }
     assert result["diagnostics"]["ticket_counts"] == [2, 2]
     assert result["diagnostics"]["term_mapping_count"] == 0
     assert result["diagnostics"]["term_mappings"] == []
@@ -2299,6 +2304,60 @@ def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path)
         "first_source_id": "ticket-1",
     }]
     assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
+
+
+def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "mixed_sources.csv",
+        [
+            {
+                "ticket_id": "ticket-1",
+                "subject": "Export blocked",
+                "description": "I cannot export the report.",
+            },
+            {
+                "query_id": "search-1",
+                "search_query": "download report",
+                "results_count": "0",
+                "search_count": "25",
+            },
+            {
+                "chat_id": "chat-1",
+                "message": "How do I change my login email?",
+            },
+            {
+                "sales_objection_id": "objection-1",
+                "sales_objection": "Prospect asked whether reporting exports are available.",
+            },
+        ],
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["source_count"] == 4
+    assert result["diagnostics"]["source_mix"] == {
+        "source_channel_counts": {
+            "chats": 1,
+            "sales_inputs": 1,
+            "search_logs": 1,
+            "support_tickets": 1,
+        },
+        "source_type_counts": {
+            "chat": 1,
+            "sales_objection": 1,
+            "search_log": 1,
+            "support_ticket": 1,
+        },
+        "zero_result_search_source_count": 1,
+    }
 
 
 def test_ticket_faq_cli_accepts_documentation_term_file(tmp_path: Path) -> None:

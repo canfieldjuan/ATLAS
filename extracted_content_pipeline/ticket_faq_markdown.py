@@ -856,7 +856,9 @@ def _failure_risk_signals(topic: str, rows: Sequence[Mapping[str, str]]) -> tupl
     return tuple(signals)
 
 
-def _is_zero_result_search_row(row: Mapping[str, Any]) -> bool:
+def is_zero_result_search_row(row: Mapping[str, Any]) -> bool:
+    """Return whether a normalized source row represents a zero-result search."""
+
     source_type = _source_type_key(row.get("source_type"))
     if source_type not in {"search_log", "search_query"}:
         return False
@@ -869,6 +871,10 @@ def _is_zero_result_search_row(row: Mapping[str, Any]) -> bool:
         if count == 0:
             return True
     return False
+
+
+def _is_zero_result_search_row(row: Mapping[str, Any]) -> bool:
+    return is_zero_result_search_row(row)
 
 
 def _truthy(value: Any) -> bool:

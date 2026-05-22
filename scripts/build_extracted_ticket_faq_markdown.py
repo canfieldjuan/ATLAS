@@ -47,7 +47,27 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     DEFAULT_INTENT_RULES,
     DEFAULT_TITLE,
     build_ticket_faq_markdown,
+    is_zero_result_search_row,
 )
+
+_SOURCE_CHANNELS = {
+    # Mirrors the generator's accepted FAQ source types at channel granularity;
+    # unknown future types intentionally bucket to "other" until classified.
+    "case": "support_tickets",
+    "support_ticket": "support_tickets",
+    "ticket": "support_tickets",
+    "chat": "chats",
+    "chat_transcript": "chats",
+    "conversation": "chats",
+    "transcript": "chats",
+    "search_log": "search_logs",
+    "search_query": "search_logs",
+    "objection": "sales_inputs",
+    "sales_call": "sales_inputs",
+    "sales_objection": "sales_inputs",
+    "meeting": "sales_inputs",
+    "complaint": "complaints",
+}
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -217,7 +237,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.result_output:
         args.result_output.write_text(
             json.dumps(
-                _result_payload(args, result, loaded.warning_dicts(), failed_checks),
+                _result_payload(
+                    args,
+                    result,
+                    loaded.warning_dicts(),
+                    failed_checks,
+                    loaded.opportunities,
+                ),
                 indent=2,
                 sort_keys=True,
             )
@@ -242,6 +268,7 @@ def _result_payload(
     result: Any,
     load_warnings: list[dict[str, Any]],
     failed_checks: list[str],
+    opportunities: list[dict[str, Any]],
 ) -> dict[str, Any]:
     items = [dict(item) for item in result.items]
     ticket_counts = [int(item.get("ticket_count") or 0) for item in items]
@@ -288,6 +315,7 @@ def _result_payload(
         "diagnostics": {
             "output_check_details": _output_check_details(result, failed_checks, rendered_ticket_source_count),
             "question_source_counts": question_source_counts,
+            "source_mix": _source_mix_diagnostics(opportunities),
             "ticket_counts": ticket_counts,
             "rendered_ticket_source_count": rendered_ticket_source_count,
             "unrepresented_ticket_sources": max(result.ticket_source_count - rendered_ticket_source_count, 0),
@@ -299,6 +327,65 @@ def _result_payload(
             "items": [_item_summary(index, item) for index, item in enumerate(items, start=1)],
         },
     }
+
+
+def _source_mix_diagnostics(opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+    source_type_counts: dict[str, int] = {}
+    source_channel_counts: dict[str, int] = {}
+    zero_result_search_sources: set[str] = set()
+    for index, opportunity in enumerate(opportunities, start=1):
+        source_type = _diagnostic_source_type(opportunity)
+        source_type_counts[source_type] = source_type_counts.get(source_type, 0) + 1
+        channel = _SOURCE_CHANNELS.get(source_type, "other")
+        source_channel_counts[channel] = source_channel_counts.get(channel, 0) + 1
+        if _is_zero_result_search_source(opportunity):
+            zero_result_search_sources.add(_diagnostic_source_key(opportunity, index))
+    return {
+        "source_type_counts": dict(sorted(source_type_counts.items())),
+        "source_channel_counts": dict(sorted(source_channel_counts.items())),
+        "zero_result_search_source_count": len(zero_result_search_sources),
+    }
+
+
+def _diagnostic_source_type(opportunity: dict[str, Any]) -> str:
+    source_type = _clean_diagnostic_text(opportunity.get("source_type")).lower()
+    if source_type:
+        return source_type
+    for evidence in _diagnostic_evidence_rows(opportunity):
+        source_type = _clean_diagnostic_text(evidence.get("source_type")).lower()
+        if source_type:
+            return source_type
+    return "unknown"
+
+
+def _diagnostic_source_key(opportunity: dict[str, Any], index: int) -> str:
+    for key in ("source_id", "target_id", "id"):
+        value = _clean_diagnostic_text(opportunity.get(key))
+        if value:
+            return value
+    for evidence in _diagnostic_evidence_rows(opportunity):
+        value = _clean_diagnostic_text(evidence.get("source_id"))
+        if value:
+            return value
+    return f"row:{index}"
+
+
+def _diagnostic_evidence_rows(opportunity: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    evidence = opportunity.get("evidence")
+    if isinstance(evidence, list):
+        return tuple(row for row in evidence if isinstance(row, dict))
+    return ()
+
+
+def _is_zero_result_search_source(
+    opportunity: dict[str, Any],
+) -> bool:
+    rows = (opportunity, *_diagnostic_evidence_rows(opportunity))
+    return any(is_zero_result_search_row(row) for row in rows)
+
+
+def _clean_diagnostic_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
 
 
 def _parse_vocabulary_gap_rules(values: list[str]) -> tuple[tuple[str, ...], ...]:
