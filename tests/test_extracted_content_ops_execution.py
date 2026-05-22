@@ -1069,6 +1069,16 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
                 # Allowlisted fields DO flow through:
                 "industry": "fintech",
                 "pain_points": ["churn", "renewal"],
+                "target_keyword": "customer support FAQ",
+                "secondary_keywords": [
+                    "support ticket FAQ",
+                    "reduce repeat support tickets",
+                ],
+                "faq_questions": [
+                    "What do you need from us?",
+                    "What happens after upload?",
+                ],
+                "cta_url": "/systems/ai-content-ops/intake",
             },
         },
         services=ContentOpsExecutionServices(landing_page=landing),
@@ -1080,6 +1090,16 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
     # Allowlisted fields land in context.
     assert context.get("industry") == "fintech"
     assert context.get("pain_points") == ["churn", "renewal"]
+    assert context.get("target_keyword") == "customer support FAQ"
+    assert context.get("secondary_keywords") == [
+        "support ticket FAQ",
+        "reduce repeat support tickets",
+    ]
+    assert context.get("faq_questions") == [
+        "What do you need from us?",
+        "What happens after upload?",
+    ]
+    assert context.get("cta_url") == "/systems/ai-content-ops/intake"
 
     # Pre-fix leakers stay out.
     assert "target_account" not in context

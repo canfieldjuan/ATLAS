@@ -47,6 +47,9 @@ export interface ContentOpsInputContractView {
   key: string
   label: string
   type: string
+  asset?: string
+  group?: string
+  placeholder?: string
   min?: number
   max?: number
   default?: string | number | boolean | null

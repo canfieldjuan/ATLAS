@@ -95,6 +95,22 @@ const INGESTION_SAMPLE_LIMIT = 5
 const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
 const LANDING_PAGE_QUALITY_REPAIR_INPUT =
   'landing_page_quality_repair_attempts'
+const LANDING_PAGE_INPUT_ASSET = 'landing_page'
+const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
+const LANDING_PAGE_SEO_GEO_AEO_INPUT_ORDER = [
+  'target_keyword',
+  'secondary_keywords',
+  'search_intent',
+  'primary_entity',
+  'audience_entity',
+  'competitors',
+  'objections',
+  'faq_questions',
+  'source_period',
+  'internal_links',
+  'cta_label',
+  'cta_url',
+]
 const INVALID_LANDING_PAGE_QUALITY_REPAIR_VALUE = '__invalid__'
 const LEGACY_LANDING_PAGE_REPAIR_ATTEMPT_CONTRACT: IntegerInputContract = {
   key: LANDING_PAGE_QUALITY_REPAIR_INPUT,
@@ -196,6 +212,10 @@ export default function ContentOpsNewRun() {
         landingPageRepairAttemptContract,
       )
     : ''
+  const landingPageInputContracts = landingPageOutputSelected
+    ? landingPageSeoGeoAeoInputContracts(catalog)
+    : []
+  const landingPageInputsDisabled = !parsedInputsForControls.ok
   const landingPageRepairAttemptDisabled =
     !parsedInputsForControls.ok || !landingPageRepairAttemptContract
 
@@ -232,6 +252,16 @@ export default function ContentOpsNewRun() {
       value,
       landingPageRepairAttemptContract,
     )
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleLandingPageInputChange = (
+    contract: ContentOpsInputContractView,
+    value: string,
+  ) => {
+    const updated = updateLandingPageInputJson(inputsJson, contract, value)
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -731,8 +761,7 @@ export default function ContentOpsNewRun() {
           </h2>
           <p className="mb-2 text-xs text-slate-500">
             Required keys depend on the selected outputs (see chip list
-            above). Type a JSON object; the dynamic per-output form ships
-            in a follow-up slice.
+            above). Type a JSON object or use the per-output fields below.
           </p>
           <textarea
             value={inputsJson}
@@ -745,6 +774,64 @@ export default function ContentOpsNewRun() {
             className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
             placeholder='{"target_account": "Acme", "offer": "Audit"}'
           />
+          {landingPageOutputSelected && landingPageInputContracts.length > 0 && (
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-slate-200">
+                  Landing page SEO/GEO/AEO inputs
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  These fields write to the inputs JSON and flow into the
+                  landing-page campaign context.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {landingPageInputContracts.map((contract) => {
+                  const value = landingPageInputDraftValue(
+                    parsedInputsForControls,
+                    contract,
+                  )
+                  const controlClass =
+                    'mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60'
+
+                  return (
+                    <label key={contract.key} className="block text-sm">
+                      <span className="text-slate-300">{contract.label}</span>
+                      {contract.type === 'string_list' ? (
+                        <textarea
+                          value={value}
+                          onChange={(e) =>
+                            handleLandingPageInputChange(contract, e.target.value)
+                          }
+                          rows={3}
+                          disabled={landingPageInputsDisabled}
+                          className={controlClass}
+                          placeholder={contract.placeholder}
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={value}
+                          onChange={(e) =>
+                            handleLandingPageInputChange(contract, e.target.value)
+                          }
+                          disabled={landingPageInputsDisabled}
+                          className={controlClass}
+                          placeholder={contract.placeholder}
+                        />
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
+              {!parsedInputsForControls.ok && (
+                <p className="mt-2 text-xs text-amber-200">
+                  Fix inputs JSON before changing landing-page fields:{' '}
+                  {parsedInputsForControls.message}
+                </p>
+              )}
+            </div>
+          )}
           {landingPageOutputSelected && (
             <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
               <label className="block text-sm">
@@ -1429,6 +1516,95 @@ function parseInputsJsonObject(value: string): ParsedInputsJsonObject {
     return { ok: false, message: 'Inputs JSON must be an object.' }
   }
   return { ok: true, value: { ...parsed } }
+}
+
+function landingPageSeoGeoAeoInputContracts(
+  catalog: ContentOpsCatalog,
+): ContentOpsInputContractView[] {
+  return Object.values(catalog.inputContracts)
+    .filter(
+      (contract) =>
+        contract.asset === LANDING_PAGE_INPUT_ASSET &&
+        contract.group === LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP,
+    )
+    .sort(
+      (left, right) =>
+        landingPageInputSortIndex(left.key) -
+        landingPageInputSortIndex(right.key),
+    )
+}
+
+function landingPageInputSortIndex(key: string): number {
+  const index = LANDING_PAGE_SEO_GEO_AEO_INPUT_ORDER.indexOf(key)
+  return index === -1 ? LANDING_PAGE_SEO_GEO_AEO_INPUT_ORDER.length : index
+}
+
+function landingPageInputDraftValue(
+  parsed: ParsedInputsJsonObject,
+  contract: ContentOpsInputContractView,
+): string {
+  if (!parsed.ok) return ''
+
+  const raw = parsed.value[contract.key]
+  if (raw === null || typeof raw === 'undefined') return ''
+  if (contract.type === 'string_list') return stringListDraftValue(raw)
+  return scalarDraftValue(raw)
+}
+
+function updateLandingPageInputJson(
+  current: string,
+  contract: ContentOpsInputContractView,
+  draftValue: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  if (contract.type === 'string_list') {
+    const values = stringListFromDraft(draftValue)
+    if (values.length === 0) {
+      delete next[contract.key]
+    } else {
+      next[contract.key] = values
+    }
+  } else {
+    const value = draftValue.trim()
+    if (value === '') {
+      delete next[contract.key]
+    } else {
+      next[contract.key] = value
+    }
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function stringListDraftValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => typeof item !== 'undefined' && item !== null)
+      .map((item) => String(item))
+      .join('\n')
+  }
+  return scalarDraftValue(value)
+}
+
+function stringListFromDraft(value: string): string[] {
+  const seen = new Set<string>()
+  const items: string[] = []
+  for (const item of value.split(/[\n,]+/)) {
+    const trimmed = item.trim()
+    if (trimmed === '' || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    items.push(trimmed)
+  }
+  return items
+}
+
+function scalarDraftValue(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value, null, 2)
 }
 
 function landingPageRepairAttemptSelectValue(

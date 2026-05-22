@@ -200,6 +200,102 @@
       "min": 0,
       "max": 10,
       "default": 1
+    },
+    "target_keyword": {
+      "key": "target_keyword",
+      "label": "Target keyword",
+      "type": "string",
+      "placeholder": "customer support FAQ",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "secondary_keywords": {
+      "key": "secondary_keywords",
+      "label": "Secondary keywords",
+      "type": "string_list",
+      "placeholder": "support ticket FAQ\nreduce repeat support tickets",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "search_intent": {
+      "key": "search_intent",
+      "label": "Search intent",
+      "type": "string",
+      "placeholder": "Small SaaS teams looking to turn support tickets into help-center answers.",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "primary_entity": {
+      "key": "primary_entity",
+      "label": "Primary entity",
+      "type": "string",
+      "placeholder": "FAQ Report",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "audience_entity": {
+      "key": "audience_entity",
+      "label": "Audience entity",
+      "type": "string",
+      "placeholder": "10-50 person SaaS teams",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "competitors": {
+      "key": "competitors",
+      "label": "Competitors or alternatives",
+      "type": "string_list",
+      "placeholder": "manual help-center cleanup\nchatbot setup",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "objections": {
+      "key": "objections",
+      "label": "Objections to address",
+      "type": "string_list",
+      "placeholder": "Will this publish automatically?\nDo we need a docs person?",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "faq_questions": {
+      "key": "faq_questions",
+      "label": "FAQ questions to include",
+      "type": "string_list",
+      "placeholder": "What do you need from us?\nWhat happens after upload?",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "source_period": {
+      "key": "source_period",
+      "label": "Source period",
+      "type": "string",
+      "placeholder": "Last 90 days of support tickets",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "internal_links": {
+      "key": "internal_links",
+      "label": "Internal links",
+      "type": "string_list",
+      "placeholder": "/systems/ai-content-ops\n/systems/ai-content-ops/intake",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "cta_label": {
+      "key": "cta_label",
+      "label": "CTA label",
+      "type": "string",
+      "placeholder": "Upload Ticket CSV -- Free Analysis",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
+    },
+    "cta_url": {
+      "key": "cta_url",
+      "label": "CTA URL",
+      "type": "string",
+      "placeholder": "/systems/ai-content-ops/intake",
+      "asset": "landing_page",
+      "group": "seo_geo_aeo"
     }
   }
 }

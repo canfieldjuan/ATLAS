@@ -12,6 +12,7 @@ from typing import Any
 from .campaign_ports import TenantScope
 from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_mapping
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
+from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
 from .landing_page_ports import MarketingCampaign
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
 
@@ -719,15 +720,7 @@ def _opportunity_defaults_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str,
 # context fields outside this allowlist will see empty values post-fix.
 # Add the field here to restore visibility -- see
 # ``plans/PR-OptionA-4.md`` Migration section.
-_MARKETING_CAMPAIGN_CONTEXT_FIELDS: frozenset[str] = frozenset({
-    "industry",
-    "pain_points",
-    "differentiators",
-    "customer_segments",
-    "key_metrics",
-    "proof_points",
-    "competitive_alternatives",
-})
+_MARKETING_CAMPAIGN_CONTEXT_FIELDS: frozenset[str] = LANDING_PAGE_CONTEXT_INPUT_KEYS
 
 
 def _marketing_campaign_from_inputs(inputs: Mapping[str, Any]) -> MarketingCampaign:

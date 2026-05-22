@@ -40,6 +40,7 @@ from ..control_surfaces import (
     resolve_outputs,
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
+from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
 from ..ingestion_diagnostics import inspect_ingestion_rows
 from ..landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_INPUT,
@@ -129,6 +130,7 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
         ),
         "input_contracts": {
             LANDING_PAGE_QUALITY_REPAIR_INPUT: landing_page_quality_repair_input_contract(),
+            **landing_page_seo_geo_aeo_input_contracts(),
         },
     }
 
