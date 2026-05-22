@@ -24,6 +24,7 @@ register under `docs/technical-debt/`.
 - Why it matters:
 - Effort: S / M / L
 - Category: correctness / polish / tech-debt / security
+- Owner/session:
 - Found during:
 ```
 
@@ -36,13 +37,14 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-22
 
-### Consider a wider advisory-lock hash key
+### Remove landing-page repair legacy lock after rollout
 - File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
-- Description: `hashtext()` is 32-bit, so unrelated draft lock keys could theoretically collide.
-- Why it matters: A collision would create a false `409` for an unrelated draft repair.
+- Description: The repair lock still acquires the legacy `hashtext()` advisory lock for rolling-deploy compatibility while also acquiring the widened `hashtextextended()` lock.
+- Why it matters: After the widened-lock release is fully deployed, keeping the legacy compatibility lock preserves the old 32-bit collision surface as a transition guard.
 - Effort: S
-- Category: correctness
-- Found during: PR-Landing-Page-Repair-Cost-Guard review
+- Category: tech-debt
+- Owner/session: landing-page repair session
+- Found during: PR-Landing-Page-Repair-Lock-Hash-Key review
 
 ### Revisit repair lock connection hold time
 - File/location: `extracted_content_pipeline/api/generated_assets.py`, `repair_landing_page_draft`
@@ -50,4 +52,5 @@ register under `docs/technical-debt/`.
 - Why it matters: This is acceptable for operator-triggered repair, but higher repair volume could turn LLM latency into pool pressure.
 - Effort: M
 - Category: tech-debt
+- Owner/session: landing-page repair session
 - Found during: PR-Landing-Page-Repair-Cost-Guard review

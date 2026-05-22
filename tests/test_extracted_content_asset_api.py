@@ -737,7 +737,15 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
     assert pool.release_calls == 1
     assert pool.released_connections
     assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert "hashtext($1), hashtext($2)" in pool.lock_calls[0][0]
+    assert "pg_try_advisory_lock" in pool.lock_calls[1][0]
+    assert "hashtextextended($1, $2)" in pool.lock_calls[1][0]
+    assert "pg_advisory_unlock" in pool.lock_calls[-2][0]
+    assert "hashtextextended($1, $2)" in pool.lock_calls[-2][0]
     assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
+    assert "hashtext($1), hashtext($2)" in pool.lock_calls[-1][0]
+    assert pool.lock_calls[-2][1] == pool.lock_calls[1][1]
+    assert pool.lock_calls[-1][1] == pool.lock_calls[0][1]
     assert pool.unlocked is True
 
 
@@ -791,6 +799,7 @@ def test_landing_page_repair_lock_key_is_account_scoped() -> None:
 
     assert first_key == second_key
     assert first_key == (
+        "content-assets:landing-page-repair:"
         "account=acct_1:landing_page=11111111-1111-1111-1111-111111111111"
     )
 
@@ -823,6 +832,11 @@ def test_generated_asset_router_blocks_concurrent_landing_page_repair_before_llm
     assert pool.release_calls == 1
     assert pool.released_connections
     assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert "hashtext($1), hashtext($2)" in pool.lock_calls[0][0]
+    assert pool.lock_calls[0][1] == (
+        "content-assets:landing-page-repair",
+        "account=acct_1:landing_page=11111111-1111-1111-1111-111111111111",
+    )
     assert pool.unlocked is False
     assert llm.calls == []
     assert skills.calls == []
@@ -929,7 +943,11 @@ def test_generated_asset_router_returns_repair_result_when_repair_fails() -> Non
     assert pool.release_calls == 1
     assert pool.released_connections
     assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
+    assert "pg_try_advisory_lock" in pool.lock_calls[1][0]
+    assert "hashtextextended($1, $2)" in pool.lock_calls[1][0]
     assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
+    assert pool.lock_calls[-2][1] == pool.lock_calls[1][1]
+    assert pool.lock_calls[-1][1] == pool.lock_calls[0][1]
     assert pool.unlocked is True
     assert len(llm.calls) == 1
     assert skills.calls == ["digest/landing_page_generation"]

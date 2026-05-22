@@ -51,6 +51,7 @@ SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 _LANDING_PAGE_REPAIR_LOCK_NAMESPACE = "content-assets:landing-page-repair"
+_LANDING_PAGE_REPAIR_LOCK_HASH_SEED = 0
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +134,17 @@ async def _resolve_required_provider(
 
 def _landing_page_repair_lock_key(scope: TenantScope, landing_page_id: str) -> str:
     account_id = _clean(scope.account_id) or "unscoped"
+    return (
+        f"{_LANDING_PAGE_REPAIR_LOCK_NAMESPACE}:"
+        f"account={account_id}:landing_page={landing_page_id}"
+    )
+
+
+def _landing_page_repair_legacy_lock_key(
+    scope: TenantScope,
+    landing_page_id: str,
+) -> str:
+    account_id = _clean(scope.account_id) or "unscoped"
     return f"account={account_id}:landing_page={landing_page_id}"
 
 
@@ -164,29 +176,49 @@ async def _landing_page_repair_lock(
         return
 
     lock_key = _landing_page_repair_lock_key(scope, landing_page_id)
+    legacy_lock_key = _landing_page_repair_legacy_lock_key(scope, landing_page_id)
     conn = await _maybe_await(acquire())
+    acquired_new_lock = False
+    acquired_legacy_lock = False
     try:
-        acquired = bool(await conn.fetchval(
+        acquired_legacy_lock = bool(await conn.fetchval(
             """
             SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))
             """,
             _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
-            lock_key,
+            legacy_lock_key,
         ))
-        if not acquired:
+        if not acquired_legacy_lock:
             yield False
             return
-        try:
-            yield True
-        finally:
+        acquired_new_lock = bool(await conn.fetchval(
+            """
+            SELECT pg_try_advisory_lock(hashtextextended($1, $2))
+            """,
+            lock_key,
+            _LANDING_PAGE_REPAIR_LOCK_HASH_SEED,
+        ))
+        if not acquired_new_lock:
+            yield False
+            return
+        yield True
+    finally:
+        if acquired_new_lock:
+            await conn.fetchval(
+                """
+                SELECT pg_advisory_unlock(hashtextextended($1, $2))
+                """,
+                lock_key,
+                _LANDING_PAGE_REPAIR_LOCK_HASH_SEED,
+            )
+        if acquired_legacy_lock:
             await conn.fetchval(
                 """
                 SELECT pg_advisory_unlock(hashtext($1), hashtext($2))
                 """,
                 _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
-                lock_key,
+                legacy_lock_key,
             )
-    finally:
         release = getattr(pool, "release", None)
         if callable(release):
             await _maybe_await(release(conn))
