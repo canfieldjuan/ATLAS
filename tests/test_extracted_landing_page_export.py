@@ -307,10 +307,10 @@ def _ready_draft(**overrides) -> LandingPageDraft:
                 "support signals into clearer answers before customers drift."
             ),
             "cta_label": "Book a demo",
-            "cta_url": "/demo",
+            "cta_url": "/landing",
         },
         sections=sections,
-        cta={"label": "Book a demo", "url": "/demo"},
+        cta={"label": "Book a demo", "url": "/landing"},
         meta={
             "title_tag": "Acme Support Retention for VP Engineering",
             "description": (
@@ -461,6 +461,12 @@ def test_public_landing_page_robots_keeps_non_approved_pages_noindex() -> None:
 def test_public_landing_page_robots_keeps_incomplete_pages_noindex() -> None:
     assert public_landing_page_robots(
         _draft(status="approved")
+    ) == "noindex,follow"
+
+
+def test_public_landing_page_robots_keeps_placeholder_cta_noindex() -> None:
+    assert public_landing_page_robots(
+        _ready_draft(status="approved", cta={"label": "Book a demo", "url": "/demo"})
     ) == "noindex,follow"
 
 

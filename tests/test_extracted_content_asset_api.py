@@ -260,7 +260,7 @@ def _ready_landing_page_row():
                 "support signals into clearer answers before customers drift."
             ),
             "cta_label": "Book a demo",
-            "cta_url": "/demo",
+            "cta_url": "/landing",
         },
         "sections": [
             {
@@ -319,7 +319,7 @@ def _ready_landing_page_row():
                 },
             },
         ],
-        "cta": {"label": "Book a demo", "url": "/demo"},
+        "cta": {"label": "Book a demo", "url": "/landing"},
         "meta": {
             "title_tag": "Acme Support Retention for VP Engineering",
             "description": (
@@ -1053,6 +1053,20 @@ def test_generated_asset_router_indexes_public_ready_landing_page() -> None:
     assert body["robots"] == "index,follow"
     assert "seo_aeo_readiness" not in body
     assert "geo_readiness" not in body
+
+
+def test_generated_asset_router_keeps_placeholder_cta_landing_page_noindex() -> None:
+    row = _ready_landing_page_row()
+    row["cta"] = {"label": "Book a demo", "url": "/demo"}
+    pool = _Pool(rows=[row])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["robots"] == "noindex,follow"
 
 
 def test_generated_asset_router_sitemap_includes_only_indexable_landing_pages() -> None:
