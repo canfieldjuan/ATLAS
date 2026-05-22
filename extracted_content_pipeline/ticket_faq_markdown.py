@@ -652,6 +652,8 @@ def _item(
         "term_mappings": term_mappings,
         "source_ids": source_ids,
         "source_labels": sources,
+        "source_type_counts": _item_source_type_counts(rows),
+        "weighted_source_volume_by_type": _item_weighted_source_volume_by_type(rows),
         "evidence_count": len(display_rows),
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
@@ -674,6 +676,33 @@ def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[st
 def _distinct_source_keys(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
     values = (row.get("source_key") or row.get("source_id", "") for row in rows)
     return tuple(dict.fromkeys(value for value in values if value))
+
+
+def _item_source_type_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    source_keys_by_type: dict[str, set[str]] = {}
+    for index, row in enumerate(rows, start=1):
+        source_type = _source_type_key(row.get("source_type")) or "unknown"
+        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        source_keys_by_type.setdefault(source_type, set()).add(source_key)
+    return {
+        source_type: len(source_keys)
+        for source_type, source_keys in sorted(source_keys_by_type.items())
+    }
+
+
+def _item_weighted_source_volume_by_type(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    weights: dict[tuple[str, str], int] = {}
+    for index, row in enumerate(rows, start=1):
+        source_type = _source_type_key(row.get("source_type")) or "unknown"
+        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        weight = _integer_or_none(row.get("source_weight")) or 1
+        # Breakdown is by type, so a rare multi-type source key is counted once per type.
+        key = (source_type, source_key)
+        weights[key] = max(weights.get(key, 0), max(weight, 1))
+    counts: dict[str, int] = {}
+    for (source_type, _source_key), weight in weights.items():
+        counts[source_type] = counts.get(source_type, 0) + weight
+    return dict(sorted(counts.items()))
 
 
 def _weighted_frequency(rows: Sequence[Mapping[str, Any]]) -> int:
