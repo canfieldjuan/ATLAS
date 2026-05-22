@@ -31,14 +31,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-22
 
-### Surface skipped landing-page repair locks
-- File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
-- Description: Pools without `acquire()` skip the advisory-lock guard without an operator-visible signal.
-- Why it matters: A host misconfiguration could silently disable duplicate-spend protection.
-- Effort: S
-- Category: polish
-- Found during: PR-Landing-Page-Repair-Cost-Guard review
-
 ### Consider a wider advisory-lock hash key
 - File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
 - Description: `hashtext()` is 32-bit, so unrelated draft lock keys could theoretically collide.

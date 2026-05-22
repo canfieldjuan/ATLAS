@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from html import escape as html_escape
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -50,6 +51,7 @@ SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 _LANDING_PAGE_REPAIR_LOCK_NAMESPACE = "content-assets:landing-page-repair"
+logger = logging.getLogger(__name__)
 
 
 def _require_fastapi() -> None:
@@ -151,6 +153,13 @@ async def _landing_page_repair_lock(
 
     acquire = getattr(pool, "acquire", None)
     if not callable(acquire):
+        logger.warning(
+            "Landing page repair advisory lock skipped because pool has no acquire()",
+            extra={
+                "landing_page_id": landing_page_id,
+                "account_id": _clean(scope.account_id) or None,
+            },
+        )
         yield True
         return
 
