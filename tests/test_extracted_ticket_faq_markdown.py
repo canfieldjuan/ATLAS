@@ -543,6 +543,93 @@ def test_build_ticket_faq_markdown_adds_vocabulary_gap_from_documentation_terms(
     assert "(Seen in 1 source(s); mapping score 1.)" in result.markdown
 
 
+def test_build_ticket_faq_markdown_accepts_custom_vocabulary_gap_rules() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "SSO access",
+            "evidence": [{
+                "text": "How do I configure SSO for my team?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        }],
+        documentation_terms=("Single sign-on setup",),
+        vocabulary_gap_rules=(("SSO", "single sign-on"),),
+    )
+
+    assert result.items[0]["term_mappings"] == (
+        {
+            "customer_term": "SSO",
+            "documentation_term": "Single sign-on setup",
+            "suggestion": (
+                'Add "SSO" as alternate phrasing for "Single sign-on setup" '
+                "in FAQ headings and answer text."
+            ),
+            "source_id_count": 1,
+            "zero_result_source_count": 0,
+            "failure_risk_score": 0,
+            "failure_risk_signals": (),
+            "opportunity_score": 1,
+            "first_source_id": "ticket-1",
+        },
+    )
+    assert 'Customers say "SSO"; documentation says "Single sign-on setup".' in result.markdown
+
+
+def test_build_ticket_faq_markdown_prioritizes_custom_vocabulary_gap_rules() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export dashboard bill SSO",
+            "evidence": [{
+                "text": "How do I export dashboard bill data after SSO setup?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        }],
+        documentation_terms=(
+            "Download report",
+            "Analytics",
+            "Invoice settings",
+            "Single sign-on setup",
+        ),
+        vocabulary_gap_rules=(("SSO", "single sign-on"),),
+    )
+
+    mappings = result.items[0]["term_mappings"]
+    assert len(mappings) == 3
+    assert mappings[0]["customer_term"] == "SSO"
+    assert mappings[0]["documentation_term"] == "Single sign-on setup"
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        ("SSO",),
+        (("SSO",),),
+        (("Export", "export"),),
+    ],
+)
+def test_build_ticket_faq_markdown_rejects_invalid_custom_vocabulary_gap_rules(
+    rules: object,
+) -> None:
+    with pytest.raises(ValueError, match="vocabulary_gap_rules entries"):
+        build_ticket_faq_markdown(
+            [{
+                "source_type": "support_ticket",
+                "source_title": "SSO access",
+                "evidence": [{
+                    "text": "How do I configure SSO for my team?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            }],
+            documentation_terms=("Single sign-on setup",),
+            vocabulary_gap_rules=rules,  # type: ignore[arg-type]
+        )
+
+
 def test_build_ticket_faq_markdown_uses_document_rows_for_vocabulary_gap_only() -> None:
     result = build_ticket_faq_markdown([
         {
@@ -1579,6 +1666,38 @@ async def test_ticket_faq_service_accepts_documentation_terms() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ticket_faq_service_accepts_custom_vocabulary_gap_rules() -> None:
+    repository = _FAQRepository()
+    service = TicketFAQMarkdownService(
+        TicketFAQMarkdownConfig(
+            documentation_terms=("Single sign-on setup",),
+            vocabulary_gap_rules=(("SSO", "single sign-on"),),
+        ),
+        ticket_faqs=repository,
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1",
+                    "message": "How do I enable SSO for my team?",
+                    "pain_category": "authentication",
+                }
+            ]
+        },
+    )
+
+    assert result.items[0]["term_mappings"][0]["customer_term"] == "SSO"
+    assert result.items[0]["term_mappings"][0]["documentation_term"] == "Single sign-on setup"
+    assert repository.saved[0]["drafts"][0].metadata["vocabulary_gap_rules"] == [
+        ["SSO", "single sign-on"]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ticket_faq_service_saves_generated_markdown_when_repository_configured() -> None:
     repository = _FAQRepository()
     service = TicketFAQMarkdownService(ticket_faqs=repository)
@@ -2176,6 +2295,73 @@ def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path)
         "first_source_id": "ticket-1",
     }]
     assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
+
+
+def test_ticket_faq_cli_accepts_custom_vocabulary_gap_rule(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,SSO setup,How do I enable SSO for my team?,authentication",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Single sign-on setup",
+        "--vocabulary-gap-rule",
+        "SSO,single sign-on",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["vocabulary_gap_rules"] == [["SSO", "single sign-on"]]
+    assert result["diagnostics"]["term_mapping_count"] == 1
+    assert result["diagnostics"]["term_mappings"][0]["customer_term"] == "SSO"
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Single sign-on setup"
+    )
+
+
+def test_ticket_faq_cli_rejects_single_term_vocabulary_gap_rule(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,SSO setup,How do I enable SSO for my team?,authentication",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--vocabulary-gap-rule",
+        "SSO",
+    )
+
+    assert completed.returncode == 1
+    assert (
+        "--vocabulary-gap-rule must include at least two comma-separated terms"
+        in completed.stderr
+    )
+
+
+def test_ticket_faq_cli_rejects_case_duplicate_vocabulary_gap_rule(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Export setup,How do I export data?,exports",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--vocabulary-gap-rule",
+        "Export,export",
+    )
+
+    assert completed.returncode == 1
+    assert (
+        "--vocabulary-gap-rule must include at least two comma-separated terms"
+        in completed.stderr
+    )
+    assert "Traceback" not in completed.stderr
 
 
 def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_path: Path) -> None:

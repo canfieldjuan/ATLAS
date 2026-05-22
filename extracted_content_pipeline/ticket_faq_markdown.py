@@ -279,6 +279,7 @@ class TicketFAQMarkdownConfig:
     support_contact: str | None = None
     intent_rules: tuple[tuple[str, tuple[str, ...]], ...] = DEFAULT_INTENT_RULES
     documentation_terms: tuple[str, ...] = ()
+    vocabulary_gap_rules: tuple[tuple[str, ...], ...] = ()
 
 
 class TicketFAQMarkdownService:
@@ -309,6 +310,7 @@ class TicketFAQMarkdownService:
         support_contact: str | None = None,
         intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
         documentation_terms: Sequence[str] | None = None,
+        vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
@@ -356,6 +358,11 @@ class TicketFAQMarkdownService:
             if documentation_terms is not None
             else self.config.documentation_terms
         )
+        resolved_vocabulary_gap_rules = (
+            vocabulary_gap_rules
+            if vocabulary_gap_rules is not None
+            else self.config.vocabulary_gap_rules
+        )
         title_text = title or self.config.title
         result = build_ticket_faq_markdown(
             normalized.opportunities,
@@ -368,6 +375,7 @@ class TicketFAQMarkdownService:
             support_contact=resolved_support_contact,
             intent_rules=resolved_intent_rules,
             documentation_terms=resolved_documentation_terms,
+            vocabulary_gap_rules=resolved_vocabulary_gap_rules,
         )
         result = replace(
             result,
@@ -395,6 +403,7 @@ class TicketFAQMarkdownService:
                             as_of_date=resolved_as_of_date,
                         ),
                         **_documentation_term_metadata(resolved_documentation_terms),
+                        **_vocabulary_gap_rule_metadata(resolved_vocabulary_gap_rules),
                     },
                 )
             ],
@@ -415,6 +424,7 @@ def build_ticket_faq_markdown(
     support_contact: str | None = None,
     intent_rules: Sequence[tuple[str, Sequence[str]]] = DEFAULT_INTENT_RULES,
     documentation_terms: Sequence[str] = (),
+    vocabulary_gap_rules: Sequence[Sequence[str]] = (),
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -426,6 +436,7 @@ def build_ticket_faq_markdown(
     allowed = {_source_type_key(item) for item in source_types if _source_type_key(item)}
     date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
     resolved_documentation_terms = _documentation_terms(opportunities, documentation_terms)
+    resolved_vocabulary_gap_rules = _vocabulary_gap_rules(vocabulary_gap_rules)
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
     source_keys: set[str] = set()
@@ -492,6 +503,7 @@ def build_ticket_faq_markdown(
             max_evidence_per_item=max_evidence_per_item,
             support_contact=support_contact,
             documentation_terms=resolved_documentation_terms,
+            vocabulary_gap_rules=resolved_vocabulary_gap_rules,
         )
         for topic, rows in selected_groups
     )
@@ -604,6 +616,7 @@ def _item(
     max_evidence_per_item: int,
     support_contact: str | None,
     documentation_terms: Sequence[str],
+    vocabulary_gap_rules: Sequence[Sequence[str]],
 ) -> dict[str, Any]:
     display_rows = rows[:max_evidence_per_item]
     sources = tuple(_source_label(row) for row in display_rows)
@@ -620,7 +633,7 @@ def _item(
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     opportunity = _opportunity_score(topic, rows)
-    term_mappings = _term_mappings(rows, documentation_terms)
+    term_mappings = _term_mappings(rows, documentation_terms, vocabulary_gap_rules)
     return {
         "topic": topic,
         "question": question,
@@ -684,6 +697,7 @@ def _source_weight(*rows: Mapping[str, Any]) -> int:
 def _term_mappings(
     rows: Sequence[Mapping[str, str]],
     documentation_terms: Sequence[str],
+    vocabulary_gap_rules: Sequence[Sequence[str]],
 ) -> tuple[dict[str, Any], ...]:
     doc_terms = _clean_terms(documentation_terms)
     if not rows or not doc_terms:
@@ -700,7 +714,7 @@ def _term_mappings(
     zero_result_source_count = _zero_result_source_count(rows)
     mappings: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for aliases in _VOCABULARY_GAP_RULES:
+    for aliases in vocabulary_gap_rules:
         for customer_term in aliases:
             if not _keyword_matches(customer_text, customer_term):
                 continue
@@ -735,6 +749,26 @@ def _term_mappings(
         if len(mappings) >= 3:
             break
     return tuple(mappings)
+
+
+def _vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
+    return (*_custom_vocabulary_gap_rules(custom_rules), *_VOCABULARY_GAP_RULES)
+
+
+def _custom_vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
+    rules: list[tuple[str, ...]] = []
+    for aliases in custom_rules:
+        if isinstance(aliases, (str, bytes, bytearray)):
+            raise ValueError(
+                "vocabulary_gap_rules entries must include at least two terms"
+            )
+        cleaned = _clean_terms(aliases)
+        if len(cleaned) < 2:
+            raise ValueError(
+                "vocabulary_gap_rules entries must include at least two terms"
+            )
+        rules.append(cleaned)
+    return tuple(rules)
 
 
 def _zero_result_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -1368,6 +1402,13 @@ def _documentation_term_metadata(documentation_terms: Sequence[str]) -> dict[str
     if not terms:
         return {}
     return {"documentation_terms": list(terms)}
+
+
+def _vocabulary_gap_rule_metadata(rules: Sequence[Sequence[str]]) -> dict[str, Any]:
+    cleaned = _custom_vocabulary_gap_rules(rules)
+    if not cleaned:
+        return {}
+    return {"vocabulary_gap_rules": [list(rule) for rule in cleaned]}
 
 
 def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:
