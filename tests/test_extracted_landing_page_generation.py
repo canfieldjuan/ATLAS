@@ -149,6 +149,25 @@ def _valid_response(*, slug="acme-q3-launch") -> str:
                     ),
                 },
             },
+            {
+                "id": "implementation_questions",
+                "title": "Implementation questions",
+                "body_markdown": (
+                    "VP Engineering teams can review pricing, rollout, "
+                    "and risk questions before booking time with sales. "
+                    "That keeps the renewal review moving with clearer "
+                    "answers."
+                ),
+                "metadata": {
+                    "order": 3,
+                    "kind": "objection",
+                    "primary_question": "What should teams know before rollout?",
+                    "answer_summary": (
+                        "VP Engineering teams can review pricing, rollout, "
+                        "and risk questions before booking time with sales."
+                    ),
+                },
+            },
         ],
         "cta": {"label": "Book a 15-min demo", "url": "/demo", "variant": "primary"},
         "meta": {
@@ -475,6 +494,24 @@ async def test_generate_skips_when_quality_pack_blocks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_skips_when_shared_readiness_blocks() -> None:
+    response = json.loads(_valid_response())
+    response["meta"].pop("description")
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[json.dumps(response)],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert landing_pages.saved == []
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert "seo_aeo_readiness:meta_description" in result.errors[0]["blockers"]
+
+
+@pytest.mark.asyncio
 async def test_generate_repairs_quality_blocked_response_once_and_persists() -> None:
     """Parsed JSON that fails the quality gate gets one targeted repair pass."""
     bad_response = json.dumps({
@@ -534,6 +571,40 @@ async def test_generate_repairs_quality_blocked_response_once_and_persists() -> 
     assert (
         draft.metadata["generation_quality_repair_history"]
         == result.quality_repair_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_repairs_shared_readiness_blocker_once_and_persists() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[
+            {
+                "content": json.dumps(needs_repair),
+                "model": "first-model",
+                "usage": {"input_tokens": 5, "output_tokens": 2},
+            },
+            {
+                "content": _valid_response(),
+                "model": "final-model",
+                "usage": {"input_tokens": 7, "output_tokens": 3},
+            },
+        ],
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 1
+    assert result.saved_ids == ("lp-1",)
+    assert len(llm.calls) == 2
+    repair_prompt = llm.calls[1]["messages"][1].content
+    assert "seo_aeo_readiness:meta_description" in repair_prompt
+    assert landing_pages.saved[0]["drafts"][0].metadata[
+        "generation_quality_repair_attempts"
+    ] == 1
+    assert result.quality_repair_history[0]["blockers"] == (
+        "seo_aeo_readiness:meta_description",
     )
 
 

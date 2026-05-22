@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from extracted_content_pipeline.campaign_ports import (
@@ -63,15 +65,82 @@ class _SavingRepository(_Repository):
 class _LLM:
     async def complete(self, messages, *, max_tokens, temperature, metadata=None):
         return LLMResponse(
-            content=(
-                '{"title":"Acme launch","slug":"acme-launch",'
-                '"hero":{"headline":"Stop renewal surprises"},'
-                '"sections":[{"id":"problem","title":"Problem",'
-                '"body_markdown":"Pricing pressure is rising"}],'
-                '"cta":{"label":"Book a demo","url":"/demo"},'
-                '"meta":{"title_tag":"Acme launch"},'
-                '"reference_ids":["r1"]}'
-            ),
+            content=json.dumps({
+                "title": "Acme launch for VP Engineering",
+                "slug": "acme-launch",
+                "hero": {
+                    "headline": "Stop renewal surprises",
+                    "subheadline": (
+                        "VP Engineering teams catch pressure early before "
+                        "renewal risk creates more customer churn."
+                    ),
+                    "cta_label": "Book a demo",
+                    "cta_url": "/demo",
+                },
+                "sections": [
+                    {
+                        "id": "problem",
+                        "title": "Renewal pressure creates customer risk",
+                        "body_markdown": (
+                            "VP Engineering teams face renewal pressure when "
+                            "customer problems stay hidden until pricing "
+                            "reviews. Pricing pressure is rising."
+                        ),
+                        "metadata": {
+                            "kind": "problem",
+                            "primary_question": "Why does renewal pressure matter?",
+                            "answer_summary": (
+                                "VP Engineering teams face renewal pressure "
+                                "when customer problems stay hidden until "
+                                "pricing reviews."
+                            ),
+                        },
+                    },
+                    {
+                        "id": "solution",
+                        "title": "Catch pressure before renewal review",
+                        "body_markdown": (
+                            "VP Engineering teams catch pressure early by "
+                            "turning customer signals into answers before "
+                            "renewal review."
+                        ),
+                        "metadata": {
+                            "kind": "solution",
+                            "primary_question": "How does Acme help?",
+                            "answer_summary": (
+                                "VP Engineering teams catch pressure early "
+                                "by turning customer signals into answers."
+                            ),
+                        },
+                    },
+                    {
+                        "id": "objections",
+                        "title": "Questions before rollout",
+                        "body_markdown": (
+                            "VP Engineering teams can review rollout and "
+                            "pricing questions before booking time with the "
+                            "team."
+                        ),
+                        "metadata": {
+                            "kind": "objection",
+                            "primary_question": "What should teams know first?",
+                            "answer_summary": (
+                                "VP Engineering teams can review rollout and "
+                                "pricing questions before booking time."
+                            ),
+                        },
+                    },
+                ],
+                "cta": {"label": "Book a demo", "url": "/demo"},
+                "meta": {
+                    "title_tag": "Acme Launch for VP Engineering",
+                    "description": (
+                        "Acme helps VP Engineering teams catch renewal "
+                        "pressure early so customer risk is easier to see."
+                    ),
+                },
+                "reference_ids": ["r1"],
+            }),
             model="test-model",
             usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         )
