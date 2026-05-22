@@ -329,6 +329,104 @@ def test_build_ticket_faq_markdown_uses_frequency_tiebreak_after_opportunity_sco
     ]
 
 
+def test_build_ticket_faq_markdown_weights_aggregated_search_frequency() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-1",
+            "search_query": "export attribution report",
+            "search_count": "20",
+            "evidence": [{
+                "text": "export attribution report",
+                "source_id": "search-export-1",
+                "source_type": "search_log",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email update",
+            "evidence": [{
+                "text": "How do I change my email?",
+                "source_id": "ticket-email-1",
+                "source_type": "support_ticket",
+            }],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Email settings",
+            "evidence": [{
+                "text": "I need to update the email on my account.",
+                "source_id": "ticket-email-2",
+                "source_type": "support_ticket",
+            }],
+        },
+    ])
+
+    assert [item["topic"] for item in result.items] == [
+        "reporting friction",
+        "email and profile updates",
+    ]
+    assert result.items[0]["frequency"] == 20
+    assert result.items[0]["weighted_frequency"] == 20
+    assert result.items[0]["ticket_count"] == 1
+    assert result.items[0]["source_ids"] == ("search-export-1",)
+    assert result.items[0]["opportunity_score"] == 20
+    assert result.items[1]["frequency"] == 2
+    assert result.items[1]["weighted_frequency"] == 2
+
+
+def test_build_ticket_faq_markdown_prefers_explicit_aggregate_weight_fields() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "search_log",
+        "query_id": "search-export-1",
+        "search_query": "export attribution report",
+        "frequency": "1",
+        "search_count": "25",
+        "evidence": [{
+            "text": "export attribution report",
+            "source_id": "search-export-1",
+            "source_type": "search_log",
+        }],
+    }])
+
+    assert result.items[0]["frequency"] == 25
+    assert result.items[0]["weighted_frequency"] == 25
+    assert result.items[0]["ticket_count"] == 1
+
+
+def test_build_ticket_faq_markdown_uses_max_weight_per_distinct_source() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "search_log",
+        "query_id": "search-export-1",
+        "search_query": "export attribution report",
+        "evidence": [
+            {
+                "text": "export attribution report",
+                "source_id": "search-export-1",
+                "source_type": "search_log",
+                "source_weight": "100",
+            },
+            {
+                "text": "download attribution report",
+                "source_id": "search-export-1",
+                "source_type": "search_log",
+                "source_weight": "200",
+            },
+            {
+                "text": "dashboard attribution report",
+                "source_id": "search-export-2",
+                "source_type": "search_log",
+                "source_weight": "300",
+            },
+        ],
+    }])
+
+    assert result.items[0]["frequency"] == 500
+    assert result.items[0]["weighted_frequency"] == 500
+    assert result.items[0]["ticket_count"] == 2
+    assert result.items[0]["source_ids"] == ("search-export-1", "search-export-2")
+
+
 def test_build_ticket_faq_markdown_ranks_zero_result_searches_as_failure_risk() -> None:
     result = build_ticket_faq_markdown([
         {
@@ -2032,6 +2130,7 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "question": "How do we export campaign attribution data before renewal?",
         "question_source": "customer_wording",
         "frequency": 2,
+        "weighted_frequency": 2,
         "failure_risk_score": 1,
         "failure_risk_signals": ["blocked_access"],
         "opportunity_score": 4,
@@ -2087,6 +2186,7 @@ def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_pa
             {
                 "query_id": "search-1",
                 "search_query": "How do I export attribution report?",
+                "search_count": "25",
                 "results_count": "0",
             },
             {
@@ -2117,7 +2217,7 @@ def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_pa
     result = json.loads(result_output.read_text(encoding="utf-8"))
     mappings = result["diagnostics"]["term_mappings"]
     assert [mapping["customer_term"] for mapping in mappings] == ["export", "bill"]
-    assert mappings[0]["opportunity_score"] == 6
+    assert mappings[0]["opportunity_score"] == 78
     assert mappings[0]["zero_result_source_count"] == 1
     assert mappings[1]["opportunity_score"] == 1
     assert mappings[1]["zero_result_source_count"] == 0

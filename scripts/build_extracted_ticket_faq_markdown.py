@@ -251,6 +251,7 @@ def _item_summary(index: int, item: dict[str, Any]) -> dict[str, Any]:
         "question": item.get("question"),
         "question_source": item.get("question_source"),
         "frequency": item.get("frequency"),
+        "weighted_frequency": item.get("weighted_frequency"),
         "failure_risk_score": item.get("failure_risk_score"),
         "failure_risk_signals": list(item.get("failure_risk_signals") or ()),
         "opportunity_score": item.get("opportunity_score"),
