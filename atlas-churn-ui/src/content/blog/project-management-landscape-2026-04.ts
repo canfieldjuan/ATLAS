@@ -263,7 +263,6 @@ Basecamp's flat-rate pricing appeals to teams frustrated by per-seat charges. Cl
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>The quote illustrates consolidation pressure, a pattern that affects multiple vendors. Enterprise IT departments push teams toward approved tools, creating churn for standalone project management platforms.</p>
-<p>The quote reflects Notion's appeal among technical teams and small businesses. The platform's flexibility attracts teams seeking customization but creates UX friction for non-technical users.</p>
 <p>These quotes represent a small sample of the 1,464 churn signals analyzed. The full dataset includes 345 verified reviews and 2,674 community mentions, spanning 10 vendors and six pain categories.</p>`,
 }
 
