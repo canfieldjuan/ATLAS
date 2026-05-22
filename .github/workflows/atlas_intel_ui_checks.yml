@@ -47,8 +47,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Test landing-page prerender verifier
+        run: npm run test:landing-page-prerender
+
       - name: Build
         run: npm run build
 
       - name: Verify blog GEO prerender
         run: npm run verify:blog-geo
+
+      - name: Verify landing-page GEO prerender
+        run: npm run verify:landing-page-geo
