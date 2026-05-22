@@ -95,6 +95,18 @@ def test_packaged_landing_page_prompt_prevents_fake_proof() -> None:
     assert "fake social proof" in prompt
 
 
+def test_packaged_landing_page_prompt_requests_aeo_geo_section_metadata() -> None:
+    prompt = get_skill_registry().get_prompt("digest/landing_page_generation")
+
+    assert prompt is not None
+    assert "sections.metadata.kind" in prompt
+    assert "sections.metadata.primary_question" in prompt
+    assert "sections.metadata.answer_summary" in prompt
+    assert "same answer at the start of `body_markdown`" in prompt
+    assert "Do not force a FAQ section" in prompt
+    assert "supports answer extraction" in prompt
+
+
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:
     skill_path = tmp_path / "digest" / "b2b_campaign_generation.md"
     skill_path.parent.mkdir()
