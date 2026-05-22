@@ -284,10 +284,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This quote captures the tone of pricing complaints: merchants are not making emotional arguments, they are making mathematical ones. The phrasing suggests a detailed cost breakdown follows, though the excerpt is incomplete.</p>
-<blockquote>
-<p>What do you like best about Shopify</p>
-<p>-- Mechanical Design Engineer, Enterprise (&gt; 1000 emp.), Design industry, verified reviewer on G2</p>
-</blockquote>
 <p>This is a positive framing, though the quote itself is a question rather than a statement. The reviewer role (Mechanical Design Engineer) and company size (Enterprise) are notable. It suggests Shopify has use cases outside traditional retail, possibly in design or manufacturing workflows.</p>
 <blockquote>
 <p>I'm looking for an inventory management system that can handle our brick-and-mortar store, wholesale (Faire), and in-house production all in one place</p>

@@ -230,11 +230,6 @@ const post: BlogPost = {
 </blockquote>
 <p>This excerpt shows active consideration of alternatives in a non-work context. The incomplete sentence suggests the reviewer was discussing voice channel features, likely comparing Slack's voice capabilities to Discord's.</p>
 <blockquote>
-<p>What do you like best about Slack</p>
-<p>-- Registered Nurse at Mid-Market company, verified reviewer on G2</p>
-</blockquote>
-<p>This question-format quote likely comes from a G2 review template. It does not provide sentiment on its own but indicates the reviewer participated in a structured review process.</p>
-<blockquote>
 <p>I just started our free Slack Pro trial, but we won't need it anymore once the month ends (saved it for the end of the project)</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>

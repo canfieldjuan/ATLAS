@@ -165,10 +165,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths">Strengths</h3>
 <p><strong>Features</strong> lead the positive sentiment. Reviewers describe Intercom's feature set as comprehensive, with particular praise for its AI-powered automation capabilities. The Fin AI assistant appears in multiple positive reviews:</p>
-<blockquote>
-<p>"What do you like best about Fin by Intercom" -- CS Team Lead at a mid-market financial services company, reviewer on G2</p>
-</blockquote>
-<p>The quote reflects a broader pattern: reviewers in customer success and support roles report that Intercom's feature depth supports complex workflows.</p>
+<p>Reviewers in customer success and support roles report that Intercom's feature depth supports complex workflows.</p>
 <p><strong>Integrations</strong> rank second in positive mentions. Slack, Google Drive, WhatsApp, and HubSpot appear as the most frequently cited integration points (see Ecosystem section for full breakdown). Reviewers describe integration setup as straightforward and reliable.</p>
 <p><strong>Reliability</strong> shows consistent positive sentiment. Reviewers report stable uptime and predictable performance, with few mentions of outages or data loss.</p>
 <p><strong>UX</strong> receives mixed but generally positive sentiment. When reviewers praise UX, they focus on the modern interface and intuitive chat widget. When they criticize it, they cite complexity in advanced features (see Weaknesses below).</p>

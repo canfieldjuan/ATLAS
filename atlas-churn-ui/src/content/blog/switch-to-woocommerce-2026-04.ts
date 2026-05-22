@@ -172,9 +172,6 @@ const post: BlogPost = {
 </ul>
 <p>Reviewers who switch for cost reasons report savings compared to SaaS platforms with transaction fees, but the savings depend on business model and scale. High-volume stores may find that hosting and plugin costs approach SaaS pricing, especially if they need managed hosting and premium plugins.</p>
 <p><strong>What reviewers say they miss</strong> after switching: operational simplicity, built-in features, and vendor-managed updates. SaaS platforms handle infrastructure, security patches, and feature rollouts automatically. WooCommerce requires you to manage the stack. Reviewers who value control and customization accept this trade-off. Those who prioritize simplicity report regret.</p>
-<blockquote>
-<p>"What do you like best about WooCommerce" — verified reviewer on G2</p>
-</blockquote>
 <p>This open-ended question from a verified review suggests that positive sentiment exists, though the specific answer is not captured in the quotable phrase data. The question itself reflects the evaluation mindset: buyers are weighing what they gain (flexibility, cost control) against what they lose (simplicity, vendor support).</p>
 <p>For teams considering WooCommerce, the data suggests asking:</p>
 <ol>

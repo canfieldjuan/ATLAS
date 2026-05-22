@@ -228,11 +228,6 @@ const post: BlogPost = {
 <li>Attachment migration is incomplete for some platforms</li>
 <li>Historical comments may not transfer cleanly</li>
 </ul>
-<p>One verified reviewer on G2 noted:</p>
-<blockquote>
-<p>"What do you like best about ClickUp"<br />
--- Creative Director, verified reviewer on G2</p>
-</blockquote>
 <p>This open-ended prompt reflects the platform's breadth, but also the challenge of configuring it to match existing workflows. Teams should expect a setup phase of days to weeks, depending on workflow complexity.</p>
 <h3 id="workflow-reconfiguration">Workflow Reconfiguration</h3>
 <p>ClickUp's folder/list/task hierarchy is more flexible than Trello's board/list/card structure or Asana's project/section/task model. This flexibility is a strength for teams with complex workflows, but a learning curve for teams expecting simpler structures.</p>

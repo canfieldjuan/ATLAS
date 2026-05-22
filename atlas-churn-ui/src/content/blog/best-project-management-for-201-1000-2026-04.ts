@@ -260,11 +260,6 @@ const post: BlogPost = {
 <p>That's an explicit switching signal tied to pricing backlash and contract lock-in. Jira Server end-of-life pushed many teams toward Jira Cloud, but the pricing model changed, creating acute dissatisfaction.</p>
 <p>Contract lock-in and data migration are the primary weaknesses. Reviewers report difficulty exporting data in usable formats, and annual contracts with no prorated refunds create friction when teams want to leave.</p>
 <p>Support gaps show up too. Reviewers cite slow response times for non-enterprise customers and limited help for complex configuration issues.</p>
-<p>One G2 reviewer noted:</p>
-<blockquote>
-<p>What do you like best about Jira</p>
-<p>-- Customer Support Specialist, verified reviewer on G2</p>
-</blockquote>
 <p>That's a positive sentiment signal from a mid-market user in computer software. The review suggests Jira still works for technical teams that can absorb the complexity, but the overall dissatisfaction pattern indicates fragile retention.</p>
 <p><strong>Who should use Jira:</strong></p>
 <ul>
@@ -387,11 +382,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>That's a displacement signal tied to feature gaps and UX friction. The migration itself became a pain point.</p>
-<p>A Jira reviewer in a mid-market computer software company noted:</p>
-<blockquote>
-<p>What do you like best about Jira</p>
-<p>-- Customer Support Specialist, verified reviewer on G2</p>
-</blockquote>
 <p>That's positive sentiment from a technical user. Jira still works for engineering teams, but overall dissatisfaction indicates fragile retention.</p>
 <p>One Wrike reviewer captured IT consolidation pressure:</p>
 <blockquote>
@@ -399,11 +389,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>That's not a product problem—it's an operating model shift. But it still drives displacement.</p>
-<p>A Notion reviewer in construction noted:</p>
-<blockquote>
-<p>What do you like best about Notion</p>
-<p>-- Administrative Assistant, verified reviewer on G2</p>
-</blockquote>
 <p>That's positive sentiment from a non-technical user in a mid-market company. Notion isn't in the core comparison set, but the feedback suggests visual, flexible tools appeal to cross-functional teams.</p>
 <p>Per-seat pricing scales unpredictably. The multiplier matters as much as the base rate.</p>
 <p>This analysis is based on 1464 reviews from verified platforms (G2, Gartner Peer Insights, PeerSpot, Software Advice) and community sources (Reddit, forums) covering February 28 to April 7, 2026. Sample size is high. Confidence is high. But remember: these are self-selected reviewers. Results reflect reviewer perception, not universal product truth.</p>`,

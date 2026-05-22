@@ -158,9 +158,6 @@ const post: BlogPost = {
 </blockquote>
 <p>The <strong>pricing advantage</strong> relative to competitors like Palo Alto Networks appears consistently in enterprise reviewer feedback. IT teams managing large firewall deployments cite cost as a primary reason for considering or staying with Fortinet.</p>
 <p><strong>UX familiarity</strong> acts as a retention anchor. Reviewers who have used Fortinet for years report that the learning curve for their teams would be steep with alternatives, reducing switching friction even when frustration runs high.</p>
-<blockquote>
-<p>"What do you like best about Fortinet Firewalls" — Consultant at a mid-market company, reviewer on G2</p>
-</blockquote>
 <p><strong>Feature breadth</strong> across the Fortinet ecosystem (FortiGate, FortiAnalyzer, FortiSwitch, SD-WAN) allows teams to consolidate network security under a single vendor. Reviewers mention this as a deployment simplification factor.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="weaknesses-where-frustration-clusters">Weaknesses: Where Frustration Clusters</h3>

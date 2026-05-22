@@ -262,11 +262,6 @@ const post: BlogPost = {
 </ul>
 <h3 id="the-rippling-story">The Rippling Story</h3>
 <p>Rippling is the modern, feature-rich alternative. Reviewers praise the integration capabilities and breadth of features—you can manage HR, IT, payroll, and benefits in one platform. The 4.6 rating matches Gusto's, but for different reasons.</p>
-<p>Where Rippling stumbles is <strong>UX and support.</strong> Reviewers report that the interface is powerful but overwhelming, and support doesn't always keep up:</p>
-<blockquote>
-<p>"What do you like best about Rippling?"
--- Director of People &amp; Business Operations, verified on G2</p>
-</blockquote>
 <p>This positive note is tempered by the reality that many reviewers struggle with onboarding and ongoing support. The platform does a lot, but learning curve is steep.</p>
 <h3 id="should-you-choose-rippling">Should You Choose Rippling?</h3>
 <p>Yes, if:</p>
@@ -392,16 +387,6 @@ const post: BlogPost = {
 <blockquote>
 <p>"Sorted through various companies for payroll, landed on Gusto."
 -- software reviewer on Reddit</p>
-</blockquote>
-<p><strong>On Gusto's value for small business:</strong></p>
-<blockquote>
-<p>"What do you like best about Gusto?"
--- Business Owner, verified on G2</p>
-</blockquote>
-<p><strong>On Rippling's feature depth:</strong></p>
-<blockquote>
-<p>"What do you like best about Rippling?"
--- Director of People &amp; Business Operations, verified on G2</p>
 </blockquote>
 <p><strong>On Workday's complexity:</strong></p>
 <blockquote>

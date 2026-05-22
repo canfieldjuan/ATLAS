@@ -153,11 +153,6 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths">Strengths</h3>
 <p>Reviewers consistently praise three areas:</p>
-<p><strong>Ease of use for basic video calls</strong> — The core meeting experience receives positive mentions across buyer roles. One system admin notes:</p>
-<blockquote>
-<p>"What do you like best about Zoom Workplace" -- System Admin at a small business in Information Technology and Services, verified reviewer on G2</p>
-</blockquote>
-<p>The question itself reflects the product's reputation for intuitive design. Reviewers report that non-technical users can join meetings without friction, a critical advantage for external-facing use cases like client meetings and webinars.</p>
 <p><strong>Reliable core performance</strong> — When Zoom works, it works well. Reviewers describe stable connections, good audio/video quality, and predictable behavior across devices. One system engineer describes the platform's utility:</p>
 <blockquote>
 <p>"Zoom has been of great help since it helps me to engage and interact with my colleagues, clients, employers and people from all over the world" -- System Engineer at a company with 100-499 employees, reviewer on Slashdot</p>

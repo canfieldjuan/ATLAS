@@ -191,11 +191,6 @@ const post: BlogPost = {
 <p>The verdict: Jira suits teams willing to invest in onboarding for centralized project visibility. Monday.com suits teams prioritizing visual workflows and customization, provided they navigate billing communication proactively. Urgency scores and complaint volume do not determine product fit—your workflow requirements and tolerance for specific friction types do.</p>
 <h2 id="what-reviewers-say-about-jira-and-mondaycom">What Reviewers Say About Jira and Monday.com</h2>
 <p>Direct reviewer language grounds complaint patterns in concrete experience. Jira reviewers emphasize interface complexity and feature overload. Monday.com reviewers emphasize pricing frustration and support friction.</p>
-<p>One Jira reviewer managing multiple projects described navigation challenges:</p>
-<blockquote>
-<p>What do you like best about Jira? The single-pane view consolidates all updates in one place.</p>
-<p>-- Customer Support Specialist, verified reviewer on G2</p>
-</blockquote>
 <p>This same reviewer acknowledged learning curve friction but valued centralized visibility. The contradiction—simultaneous complaint and praise—appears frequently in Jira reviews. Users tolerate interface complexity when centralized project tracking justifies the investment.</p>
 <p>This signal illustrates workflow fragmentation frustration. The reviewer uses Notion for documentation and Jira for issue tracking, but context loss between tools creates friction. The complaint is not about Jira's capability—it is about multi-tool workflow overhead.</p>
 <p>This pattern recurs: small teams cite feature overload, while larger teams cite navigation complexity. The complaint content differs by team size and workflow scope.</p>

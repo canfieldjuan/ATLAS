@@ -156,12 +156,6 @@ const post: BlogPost = {
 <p>Freshdesk fits teams that prioritize functional adequacy and can tolerate vendor-side friction. If contract flexibility and vendor responsiveness are critical, explore alternatives before committing.</p>
 <h2 id="intercom-the-1-complaint-is-support">Intercom: The #1 Complaint Is Support</h2>
 <p>Intercom's top complaint is support quality, appearing in 23 reviews with an urgency score of 3.3. Reviewers report slow response times, inconsistent help, and frustration with vendor customer service.</p>
-<p>One verified reviewer on G2 highlighted a product strength:</p>
-<blockquote>
-<p>What do you like best about Fin by Intercom</p>
-<p>-- Team Lead, Consumer Services, verified reviewer on G2</p>
-</blockquote>
-<p>The question itself suggests satisfaction with Fin, Intercom's AI-powered support feature. But the broader review pattern shows that vendor support—how Intercom supports its customers—lags behind product features.</p>
 <p>The irony: Intercom sells customer communication tools but struggles with its own customer communication. Reviewers note that when issues arise, getting help from Intercom's support team is harder than expected.</p>
 <p>Strengths: Intercom excels at in-app messaging and proactive customer engagement. The platform is designed for product-led growth companies that want to support users inside the product rather than through external channels. Fin, the AI-powered bot, handles common queries effectively.</p>
 <p>Weaknesses: Vendor support quality is inconsistent. When reviewers need help from Intercom itself, response times and resolution quality fall short of expectations. Pricing also appears as a secondary complaint, though support is the dominant pain point.</p>

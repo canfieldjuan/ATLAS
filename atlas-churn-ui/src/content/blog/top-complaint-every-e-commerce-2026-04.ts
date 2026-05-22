@@ -114,10 +114,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>The complaint suggests performance issues compound during high-traffic moments. Another reviewer, a Mechanical Design Engineer at an enterprise company in the design industry, took a different tone:</p>
-<blockquote>
-<p>What do you like best about Shopify</p>
-<p>-- Mechanical Design Engineer, verified reviewer on G2</p>
-</blockquote>
 <p>That quote reflects positive sentiment, but it's isolated. The dominant pattern in Shopify reviews is frustration with uptime and performance consistency. Reviewers describe losing sales during outages, watching conversion rates drop during slow load times, and scrambling to explain platform failures to customers.</p>
 <p>Shopify's strengths are real. The platform offers fast setup, a large app ecosystem, and strong brand recognition. Many reviewers praise its ease of use for non-technical teams. But when reliability falters, those strengths don't compensate for lost revenue.</p>
 <p>The urgency score of 2.8 is the highest in the category. That suggests reliability complaints trigger active evaluation of alternatives more often than pricing or usability complaints do in other platforms.</p>
@@ -142,11 +138,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>The tone is cautionary. Magento's pricing structure is transparent, but the total cost of ownership is not. Reviewers report underestimating the expense of hosting, developer time, third-party extensions, and platform upgrades.</p>
-<p>A Web and Business Leader at a small business on G2 offered a different perspective:</p>
-<blockquote>
-<p>What do you like best about Magento Open Source</p>
-<p>-- Web and Business Leader, verified reviewer on G2</p>
-</blockquote>
 <p>That suggests some users find value in Magento's feature set despite the cost. The platform offers enterprise-grade functionality, deep customization, and strong multi-store capabilities. Reviewers at larger organizations with complex catalog needs praise its power.</p>
 <p>But power comes with price. Implementation timelines stretch longer than expected. Developer rates are high. Upgrades require significant resources. Smaller teams report feeling trapped between Magento's capabilities and its cost structure.</p>
 <p>The urgency score of 1.6 sits between WooCommerce and Shopify. Pricing complaints are persistent, but they don't trigger immediate churn as often as reliability failures do.</p>

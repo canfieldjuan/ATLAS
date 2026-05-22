@@ -258,9 +258,6 @@ const post: BlogPost = {
 <p>"I have been a big fan of MailChimp over the years."</p>
 </blockquote>
 <p>Historical satisfaction is real, but it does not prevent switching when renewal costs spike or features lag.</p>
-<blockquote>
-<p>"What do you like best about HubSpot Marketing Hub?"</p>
-</blockquote>
 <p>Decision-makers and technical leads are actively evaluating HubSpot, signaling competitive pressure on all five vendors analyzed here.</p>
 <blockquote>
 <p>"Hello, we are a startup and for at least the time being we are walking away from HubSpot to reduce our operating costs."</p>

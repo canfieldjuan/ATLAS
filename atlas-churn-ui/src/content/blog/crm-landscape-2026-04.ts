@@ -301,20 +301,10 @@ const post: BlogPost = {
 </blockquote>
 <p>This Copper reviewer captures the evaluation fatigue that many CRM buyers report.</p>
 <blockquote>
-<p>What do you like best about Agentforce Sales (formerly Salesforce Sales Cloud)</p>
-<p>-- Software Engineer at Enterprise (&gt; 1000 emp.), verified reviewer on G2</p>
-</blockquote>
-<p>This Salesforce reviewer's question highlights the importance of feature-specific feedback during the evaluation process.</p>
-<blockquote>
 <p>Tried each for at least 2 months with real sales activity</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This Pipedrive reviewer describes a rigorous evaluation process, testing multiple vendors with real workflows before making a decision.</p>
-<blockquote>
-<p>What do you like best about Zoho CRM</p>
-<p>-- Business Growth Partner at Small-Business (50 or fewer emp.) in Computer Software, verified reviewer on G2</p>
-</blockquote>
-<p>This Zoho CRM reviewer's question underscores the need for role-specific and company-size-specific feedback when evaluating CRM platforms.</p>
 <p>These snippets reflect the diversity of reviewer experiences and the importance of matching vendor capabilities to specific use cases.</p>`,
 }
 
