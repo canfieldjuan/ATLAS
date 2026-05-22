@@ -219,8 +219,10 @@ Intent rules group customer language under a product-specific FAQ topic.
 Vocabulary-gap rules map customer terms to documentation terms passed with
 `--documentation-term` or `--documentation-term-file`, so the result JSON and
 Markdown can suggest alternate phrasing. Documentation-term files can be UTF-8
-plain text, JSON, JSONL, or CSV. Text files use one term per line and ignore
-blank or `#` comment lines. Structured files read common fields such as
+plain text, JSON, JSONL, or CSV. Use `--documentation-term-format csv` (or
+`json`, `jsonl`, or `text`) when a suffixless export needs an explicit parser.
+Text files use one term per line and ignore blank or `#` comment lines.
+Structured files read common fields such as
 `documentation_term`, `term`, `heading`, `title`, `page_title`, `name`, or
 `label`. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 `--vocabulary-gap-rule` flags are placed before file rules, so command-line
