@@ -2267,6 +2267,34 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "weighted_source_volume_by_type": {"support_ticket": 4},
         "zero_result_search_source_count": 0,
     }
+    assert result["diagnostics"]["run_summary"] == {
+        "status": "ok",
+        "source_count": 4,
+        "ticket_source_count": 4,
+        "generated": 2,
+        "weighted_source_volume": 4,
+        "source_channel_counts": {"support_tickets": 4},
+        "zero_result_search_source_count": 0,
+        "output_checks": {
+            "passed": 3,
+            "failed": 0,
+            "total": 3,
+            "failed_checks": [],
+        },
+        "item_score_distribution": {
+            "count": 2,
+            "min": 2,
+            "max": 4,
+            "average": 3.0,
+            "bands": {
+                "zero": 0,
+                "low_1_to_4": 2,
+                "medium_5_to_9": 0,
+                "high_10_plus": 0,
+            },
+        },
+        "warning_count": 0,
+    }
     assert result["diagnostics"]["ticket_counts"] == [2, 2]
     assert result["diagnostics"]["term_mapping_count"] == 0
     assert result["diagnostics"]["term_mappings"] == []
@@ -2398,6 +2426,19 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
         },
         "zero_result_search_source_count": 1,
     }
+    assert result["diagnostics"]["run_summary"]["weighted_source_volume"] == 28
+    assert result["diagnostics"]["run_summary"]["source_channel_counts"] == {
+        "chats": 1,
+        "sales_inputs": 1,
+        "search_logs": 2,
+        "support_tickets": 1,
+    }
+    assert result["diagnostics"]["run_summary"]["zero_result_search_source_count"] == 1
+    assert result["diagnostics"]["run_summary"]["output_checks"]["failed"] == 0
+    assert (
+        result["diagnostics"]["run_summary"]["item_score_distribution"]["count"]
+        == result["generated"]
+    )
     reporting_item = result["diagnostics"]["items"][0]
     assert reporting_item["topic"] == "reporting friction"
     assert reporting_item["source_type_counts"] == {
@@ -3413,6 +3454,15 @@ def test_ticket_faq_cli_fails_required_output_checks_for_weak_rows(tmp_path: Pat
         {"check": "has_action_items", "passed": True},
         {"check": "uses_user_vocabulary", "passed": True},
     ]
+    assert result["diagnostics"]["run_summary"]["status"] == "failed_output_checks"
+    assert result["diagnostics"]["run_summary"]["output_checks"] == {
+        "passed": 2,
+        "failed": 1,
+        "total": 3,
+        "failed_checks": ["condensed"],
+    }
+    assert result["diagnostics"]["run_summary"]["generated"] == 2
+    assert result["diagnostics"]["run_summary"]["item_score_distribution"]["count"] == 2
 
 
 def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> None:
