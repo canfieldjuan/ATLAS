@@ -12,6 +12,14 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .landing_page_ports import LandingPageDraft, LandingPageRepository
+from .landing_page_section_contract import (
+    LANDING_PAGE_OBJECTION_SECTION_KINDS,
+    LANDING_PAGE_PROBLEM_SECTION_KINDS,
+    LANDING_PAGE_QUESTION_SECTION_KINDS,
+    LANDING_PAGE_SECTION_KINDS,
+    LANDING_PAGE_SOLUTION_SECTION_KINDS,
+    normalize_landing_page_section_kind,
+)
 
 
 JsonDict = dict[str, Any]
@@ -196,32 +204,6 @@ _GENERIC_SECTION_TITLES = frozenset({
     "overview",
     "summary",
 })
-_SECTION_KINDS = frozenset({
-    "problem",
-    "solution",
-    "how_it_works",
-    "proof",
-    "pricing",
-    "faq",
-    "objection",
-    "conversion",
-})
-_QUESTION_SECTION_KINDS = frozenset({
-    "problem",
-    "solution",
-    "how_it_works",
-    "faq",
-    "objection",
-})
-_PROBLEM_SECTION_KINDS = frozenset({"problem"})
-_SOLUTION_SECTION_KINDS = frozenset({"solution", "how_it_works"})
-_OBJECTION_SECTION_KINDS = frozenset({
-    "faq",
-    "objection",
-    "pricing",
-    "proof",
-    "how_it_works",
-})
 _STOPWORDS = frozenset({
     "about",
     "after",
@@ -345,10 +327,10 @@ def _problem_solution_clarity(draft: LandingPageDraft) -> bool:
     )
     section_kinds = {_section_kind(section) for section in draft.sections}
     has_problem = bool(_PROBLEM_RE.search(section_text)) or bool(
-        section_kinds.intersection(_PROBLEM_SECTION_KINDS)
+        section_kinds.intersection(LANDING_PAGE_PROBLEM_SECTION_KINDS)
     )
     has_solution = bool(_SOLUTION_RE.search(section_text)) or bool(
-        section_kinds.intersection(_SOLUTION_SECTION_KINDS)
+        section_kinds.intersection(LANDING_PAGE_SOLUTION_SECTION_KINDS)
     )
     value_terms = _key_terms(draft.value_prop)
     return (
@@ -367,7 +349,7 @@ def _audience_specificity(draft: LandingPageDraft, text: str) -> bool:
 
 def _objection_coverage(draft: LandingPageDraft) -> bool:
     for section in draft.sections:
-        if _section_kind(section) in _OBJECTION_SECTION_KINDS:
+        if _section_kind(section) in LANDING_PAGE_OBJECTION_SECTION_KINDS:
             return True
         if _OBJECTION_SECTION_RE.search(f"{section.id} {section.title}"):
             return True
@@ -408,7 +390,7 @@ def _section_semantics(draft: LandingPageDraft) -> bool:
         if len(title) < 4 or title.lower() in _GENERIC_SECTION_TITLES:
             return False
         kind = _section_kind(section)
-        if kind not in _SECTION_KINDS:
+        if kind not in LANDING_PAGE_SECTION_KINDS:
             return False
         if _section_requires_visible_answer(section) and not _section_answer_summary_visible(section):
             return False
@@ -416,11 +398,9 @@ def _section_semantics(draft: LandingPageDraft) -> bool:
 
 
 def _section_kind(section: LandingPageSection) -> str:
-    return _normalize_kind(_metadata_mapping(section.metadata).get("kind"))
-
-
-def _normalize_kind(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", _clean_text(value).lower()).strip("_")
+    return normalize_landing_page_section_kind(
+        _metadata_mapping(section.metadata).get("kind")
+    )
 
 
 def _section_primary_question(section: LandingPageSection) -> str:
@@ -433,7 +413,7 @@ def _section_answer_summary(section: LandingPageSection) -> str:
 
 def _section_requires_visible_answer(section: LandingPageSection) -> bool:
     return bool(_section_primary_question(section)) or (
-        _section_kind(section) in _QUESTION_SECTION_KINDS
+        _section_kind(section) in LANDING_PAGE_QUESTION_SECTION_KINDS
     )
 
 
