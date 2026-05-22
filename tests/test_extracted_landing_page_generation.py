@@ -339,6 +339,43 @@ async def test_generate_substitutes_campaign_json_into_system_prompt_only() -> N
 
 
 @pytest.mark.asyncio
+async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload() -> None:
+    service, _lp, llm, _skills, _rp = _service(
+        prompts={"digest/landing_page_generation": "C={campaign_json}"},
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=MarketingCampaign(
+            name="support-faq-report",
+            persona="10-50 person SaaS team",
+            value_prop="Turn repeat support tickets into customer-ready FAQs",
+            context={
+                "target_keyword": "support ticket FAQ",
+                "secondary_keywords": ["reduce repeat support tickets"],
+                "search_intent": "Find a low-friction way to turn old tickets into help-center answers.",
+                "primary_entity": "FAQ Report",
+                "audience_entity": "small SaaS team",
+                "objections": ["Will this publish automatically?"],
+                "faq_questions": ["What happens after upload?"],
+                "source_period": "Last 90 days of support tickets",
+                "internal_links": ["/systems/ai-content-ops/intake"],
+                "cta_label": "Upload Ticket CSV -- Free Analysis",
+                "cta_url": "/systems/ai-content-ops/intake",
+            },
+        ),
+    )
+
+    system_msg = llm.calls[0]["messages"][0].content
+    user_msg = llm.calls[0]["messages"][1].content
+    assert '"target_keyword":"support ticket FAQ"' in system_msg
+    assert '"secondary_keywords":["reduce repeat support tickets"]' in system_msg
+    assert '"primary_entity":"FAQ Report"' in system_msg
+    assert '"cta_url":"/systems/ai-content-ops/intake"' in system_msg
+    assert "support ticket FAQ" not in user_msg
+
+
+@pytest.mark.asyncio
 async def test_generate_skips_unparseable_response() -> None:
     service, landing_pages, _llm, _skills, _rp = _service(
         responses=["not json garbage", "still not json"]
