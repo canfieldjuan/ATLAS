@@ -1,0 +1,4 @@
+# Existing help-center headings or glossary terms, one per line.
+Single sign-on setup
+Download report
+Dashboard analytics

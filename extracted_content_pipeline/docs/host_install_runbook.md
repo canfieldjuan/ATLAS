@@ -246,7 +246,7 @@ rule file:
 python scripts/build_extracted_ticket_faq_markdown.py \
   extracted_content_pipeline/examples/support_ticket_sources.csv \
   --source-format csv \
-  --documentation-term "Single sign-on setup" \
+  --documentation-term-file extracted_content_pipeline/examples/faq_documentation_terms.txt \
   --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
   --result-output support_ticket_faq_result.json \
   --output support_ticket_faq.md
@@ -255,6 +255,8 @@ python scripts/build_extracted_ticket_faq_markdown.py \
 The JSON object accepts optional `intent_rules` entries shaped as
 `{"topic": "...", "keywords": ["...", "..."]}` and optional
 `vocabulary_gap_rules` entries shaped as `["customer term", "documentation term"]`.
+Documentation-term files are UTF-8 plain text with one term per line; blank
+lines and `#` comment lines are ignored.
 Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 `--vocabulary-gap-rule` flags take precedence over file rules. Rule-file values
 use the same CLI delimiter guardrails: intent topics cannot contain `=` or `,`,

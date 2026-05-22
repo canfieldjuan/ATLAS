@@ -26,6 +26,9 @@ CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
 SUPPORT_TICKET_CSV = ROOT / "extracted_content_pipeline/examples/support_ticket_sources.csv"
 SUPPORT_TICKET_BUNDLE = ROOT / "extracted_content_pipeline/examples/support_ticket_bundle.json"
 FAQ_CUSTOM_RULES = ROOT / "extracted_content_pipeline/examples/faq_custom_rules.json"
+FAQ_DOCUMENTATION_TERMS = (
+    ROOT / "extracted_content_pipeline/examples/faq_documentation_terms.txt"
+)
 
 
 class _RenderedFAQHTML(HTMLParser):
@@ -2296,6 +2299,77 @@ def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path)
         "first_source_id": "ticket-1",
     }]
     assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
+
+
+def test_ticket_faq_cli_accepts_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Billing center",
+        "--documentation-term-file",
+        str(FAQ_DOCUMENTATION_TERMS),
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_term_files"] == [
+        str(FAQ_DOCUMENTATION_TERMS)
+    ]
+    assert result["config"]["documentation_terms"] == [
+        "Billing center",
+        "Single sign-on setup",
+        "Download report",
+        "Dashboard analytics",
+    ]
+    assert result["diagnostics"]["term_mappings"][0]["customer_term"] == "export"
+    assert (
+        result["diagnostics"]["term_mappings"][0]["documentation_term"]
+        == "Download report"
+    )
+
+
+def test_ticket_faq_cli_rejects_missing_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(tmp_path / "missing_terms.txt"),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file not found:" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_empty_documentation_term_file(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.txt"
+    term_file.write_text("\n# headings export placeholder\n  \n", encoding="utf-8")
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file contains no terms:" in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def test_ticket_faq_cli_accepts_custom_vocabulary_gap_rule(tmp_path: Path) -> None:

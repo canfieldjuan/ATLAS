@@ -91,6 +91,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--documentation-term-file",
+        action="append",
+        default=[],
+        type=Path,
+        help=(
+            "UTF-8 text file with one documentation term or heading per line. "
+            "Repeat to load multiple files."
+        ),
+    )
+    parser.add_argument(
         "--vocabulary-gap-rule",
         action="append",
         default=[],
@@ -143,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
             date.fromisoformat(args.as_of_date)
         except ValueError:
             raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
+    documentation_terms = _cli_documentation_terms(
+        args.documentation_term,
+        args.documentation_term_file,
+    )
+    args.documentation_terms = documentation_terms
     file_rules = _load_rule_files(args.rule_file)
     vocabulary_gap_rules = (
         *_parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
@@ -171,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
         intent_rules=intent_rules,
-        documentation_terms=args.documentation_term,
+        documentation_terms=documentation_terms,
         vocabulary_gap_rules=vocabulary_gap_rules,
     )
     failed_checks = _failed_output_checks(result.output_checks)
@@ -229,7 +244,10 @@ def _result_payload(
             "require_output_checks": bool(args.require_output_checks),
             "support_contact": args.support_contact,
             "rule_files": [str(path) for path in args.rule_file],
-            "documentation_terms": list(args.documentation_term),
+            "documentation_term_files": [
+                str(path) for path in args.documentation_term_file
+            ],
+            "documentation_terms": list(args.documentation_terms),
             "vocabulary_gap_rules": [
                 list(rule) for rule in args.vocabulary_gap_rules
             ],
@@ -309,6 +327,41 @@ def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
         seen.add(key)
         keywords.append(keyword)
     return tuple(keywords)
+
+
+def _cli_documentation_terms(
+    inline_terms: list[str],
+    files: list[Path],
+) -> tuple[str, ...]:
+    terms: list[str] = []
+    terms.extend(inline_terms)
+    for path in files:
+        terms.extend(_load_cli_documentation_term_file(path))
+    return _clean_cli_documentation_terms(terms)
+
+
+def _load_cli_documentation_term_file(path: Path) -> tuple[str, ...]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        raise SystemExit(f"--documentation-term-file not found: {path}") from None
+    terms = [
+        line.strip()
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not terms:
+        raise SystemExit(f"--documentation-term-file contains no terms: {path}")
+    return tuple(terms)
+
+
+def _clean_cli_documentation_terms(terms: list[str]) -> tuple[str, ...]:
+    out: dict[str, str] = {}
+    for term in terms:
+        text = " ".join(str(term).split())
+        if text:
+            out.setdefault(text.lower(), text)
+    return tuple(out.values())
 
 
 def _load_rule_files(paths: list[Path]) -> dict[str, tuple[Any, ...]]:
