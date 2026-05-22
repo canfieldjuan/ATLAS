@@ -703,7 +703,8 @@ function AssetDetailDrawer({
     status !== 'approved'
   const canEditLandingPage =
     asset === 'landing_page' && Boolean(assetId(row)) && status !== 'approved'
-  const canRepairLandingPage = canEditLandingPage
+  const canRepairLandingPage =
+    canEditLandingPage && landingPageNeedsRepair(readinessPanels)
   const [isEditing, setIsEditing] = useState(false)
   const [editState, setEditState] = useState<LandingPageEditState>(() =>
     landingPageEditState(row),
@@ -1975,6 +1976,11 @@ function assetReadinessPanels(
     readinessPanel('SEO/AEO', row.seo_aeo_readiness),
     readinessPanel('GEO', row.geo_readiness),
   ].filter((panel): panel is ReadinessPanel => Boolean(panel))
+}
+
+function landingPageNeedsRepair(panels: ReadinessPanel[]): boolean {
+  if (panels.length === 0) return true
+  return panels.some((panel) => panel.status !== 'ready')
 }
 
 function readinessPanel(label: string, value: unknown): ReadinessPanel | null {
