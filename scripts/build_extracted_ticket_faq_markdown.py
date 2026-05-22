@@ -20,6 +20,7 @@ from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     parse_default_fields_or_exit,
 )
 from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
+    DEFAULT_INTENT_RULES,
     DEFAULT_TITLE,
     build_ticket_faq_markdown,
 )
@@ -99,6 +100,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--intent-rule",
+        action="append",
+        default=[],
+        help=(
+            "Custom FAQ intent rule as topic=keyword,keyword. Repeat to "
+            "provide multiple rules."
+        ),
+    )
+    parser.add_argument(
         "--require-output-checks",
         action="store_true",
         help="Fail when generated FAQ output checks are not all true.",
@@ -125,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
     vocabulary_gap_rules = _parse_vocabulary_gap_rules(args.vocabulary_gap_rule)
     args.vocabulary_gap_rules = vocabulary_gap_rules
+    custom_intent_rules = _parse_intent_rules(args.intent_rule)
+    args.custom_intent_rules = custom_intent_rules
+    intent_rules = (*custom_intent_rules, *DEFAULT_INTENT_RULES)
 
     loaded = load_source_campaign_opportunities_from_file(
         args.path,
@@ -140,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         window_days=args.window_days,
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
+        intent_rules=intent_rules,
         documentation_terms=args.documentation_term,
         vocabulary_gap_rules=vocabulary_gap_rules,
     )
@@ -201,6 +215,10 @@ def _result_payload(
             "vocabulary_gap_rules": [
                 list(rule) for rule in args.vocabulary_gap_rules
             ],
+            "custom_intent_rules": [
+                {"topic": topic, "keywords": list(keywords)}
+                for topic, keywords in args.custom_intent_rules
+            ],
         },
         "source_count": result.source_count,
         "ticket_source_count": result.ticket_source_count,
@@ -246,6 +264,33 @@ def _parse_vocabulary_gap_rule_terms(value: str) -> tuple[str, ...]:
         seen.add(key)
         terms.append(term)
     return tuple(terms)
+
+
+def _parse_intent_rules(values: list[str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    rules: list[tuple[str, tuple[str, ...]]] = []
+    for value in values:
+        topic, separator, raw_keywords = value.partition("=")
+        topic = topic.strip()
+        keywords = _parse_intent_rule_keywords(raw_keywords)
+        if not separator or not topic or not keywords:
+            raise SystemExit(
+                "--intent-rule must use topic=keyword,keyword with at least one keyword"
+            )
+        rules.append((topic, keywords))
+    return tuple(rules)
+
+
+def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for part in value.split(","):
+        keyword = part.strip()
+        key = keyword.lower()
+        if not keyword or key in seen:
+            continue
+        seen.add(key)
+        keywords.append(keyword)
+    return tuple(keywords)
 
 
 def _output_check_details(

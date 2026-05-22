@@ -2364,6 +2364,129 @@ def test_ticket_faq_cli_rejects_case_duplicate_vocabulary_gap_rule(tmp_path: Pat
     assert "Traceback" not in completed.stderr
 
 
+def test_ticket_faq_cli_accepts_custom_intent_rule(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Warehouse sync lag,The warehouse sync is delayed.,sync",
+        "ticket-2,2026-05-01,Connector lag,CRM connector lag repeats every morning.,sync",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--intent-rule",
+        "data freshness=warehouse sync,connector lag",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "data freshness", "keywords": ["warehouse sync", "connector lag"]}
+    ]
+    assert result["diagnostics"]["items"][0]["topic"] == "data freshness"
+    assert result["diagnostics"]["items"][0]["ticket_count"] == 2
+
+
+def test_ticket_faq_cli_prioritizes_custom_intent_rule_over_defaults(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Export delay,The attribution export is late.,exports",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--intent-rule",
+        "custom reporting=attribution export",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["diagnostics"]["items"][0]["topic"] == "custom reporting"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "data freshness",
+        "=warehouse sync",
+        "data freshness=",
+        "data freshness=,",
+    ],
+)
+def test_ticket_faq_cli_rejects_invalid_intent_rule(tmp_path: Path, rule: str) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--intent-rule",
+        rule,
+    )
+
+    assert completed.returncode == 1
+    assert (
+        "--intent-rule must use topic=keyword,keyword with at least one keyword"
+        in completed.stderr
+    )
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_dedupes_custom_intent_keywords_by_case(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--intent-rule",
+        "data freshness=Warehouse Sync,warehouse sync",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "data freshness", "keywords": ["Warehouse Sync"]}
+    ]
+    assert result["diagnostics"]["items"][0]["topic"] == "data freshness"
+
+
+def test_ticket_faq_cli_uses_first_matching_custom_intent_rule(tmp_path: Path) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Sync lag,The warehouse sync is delayed.,sync",
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--intent-rule",
+        "first topic=warehouse sync",
+        "--intent-rule",
+        "second topic=warehouse sync",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "first topic", "keywords": ["warehouse sync"]},
+        {"topic": "second topic", "keywords": ["warehouse sync"]},
+    ]
+    assert result["diagnostics"]["items"][0]["topic"] == "first topic"
+
+
 def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_path: Path) -> None:
     source = _write_source_csv(
         tmp_path,
