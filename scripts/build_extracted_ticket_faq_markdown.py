@@ -28,8 +28,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Convert support-ticket, case, conversation, or complaint source "
-            "rows into a grounded Markdown FAQ."
+            "Convert ticket-like source rows into a grounded Markdown FAQ."
         )
     )
     parser.add_argument("path", type=Path, help="Source JSON, JSONL, or CSV file.")
@@ -82,6 +81,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Phone, email, or URL shown when the FAQ tells users to contact support.",
     )
     parser.add_argument(
+        "--documentation-term",
+        action="append",
+        default=[],
+        help=(
+            "Existing documentation term or heading used for vocabulary-gap "
+            "suggestions. Repeat to provide multiple terms."
+        ),
+    )
+    parser.add_argument(
         "--require-output-checks",
         action="store_true",
         help="Fail when generated FAQ output checks are not all true.",
@@ -121,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         window_days=args.window_days,
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
+        documentation_terms=args.documentation_term,
     )
     failed_checks = _failed_output_checks(result.output_checks)
     if args.result_output:
@@ -176,6 +185,7 @@ def _result_payload(
             "as_of_date": args.as_of_date,
             "require_output_checks": bool(args.require_output_checks),
             "support_contact": args.support_contact,
+            "documentation_terms": list(args.documentation_term),
         },
         "source_count": result.source_count,
         "ticket_source_count": result.ticket_source_count,
@@ -188,6 +198,8 @@ def _result_payload(
             "ticket_counts": ticket_counts,
             "rendered_ticket_source_count": rendered_ticket_source_count,
             "unrepresented_ticket_sources": max(result.ticket_source_count - rendered_ticket_source_count, 0),
+            "term_mapping_count": _term_mapping_count(items),
+            "term_mappings": _term_mapping_summaries(items),
             "warning_count": len(warnings),
             "warnings": warnings[:50],
             "warnings_truncated": len(warnings) > 50,
@@ -232,6 +244,7 @@ def _output_check_hint(name: str, result: Any, rendered_ticket_source_count: int
 def _item_summary(index: int, item: dict[str, Any]) -> dict[str, Any]:
     source_ids = item.get("source_ids") or ()
     steps = item.get("steps") or ()
+    term_mappings = item.get("term_mappings") or ()
     return {
         "rank": index,
         "topic": item.get("topic"),
@@ -246,7 +259,29 @@ def _item_summary(index: int, item: dict[str, Any]) -> dict[str, Any]:
         "source_id_count": len(source_ids),
         "first_source_id": source_ids[0] if source_ids else None,
         "step_count": len(steps),
+        "term_mapping_count": len(term_mappings),
     }
+
+
+def _term_mapping_count(items: list[dict[str, Any]]) -> int:
+    return sum(len(item.get("term_mappings") or ()) for item in items)
+
+
+def _term_mapping_summaries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        for mapping in item.get("term_mappings") or ():
+            if not isinstance(mapping, dict):
+                continue
+            out.append({
+                "rank": index,
+                "topic": item.get("topic"),
+                "customer_term": mapping.get("customer_term"),
+                "documentation_term": mapping.get("documentation_term"),
+                "source_id_count": mapping.get("source_id_count"),
+                "first_source_id": mapping.get("first_source_id"),
+            })
+    return out
 
 
 def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
