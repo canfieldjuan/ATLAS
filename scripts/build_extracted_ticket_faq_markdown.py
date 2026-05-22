@@ -281,6 +281,7 @@ def _result_payload(
     item_summaries = [
         _item_summary(index, item) for index, item in enumerate(items, start=1)
     ]
+    term_mappings = _term_mapping_summaries(items)
     return {
         "status": "failed_output_checks" if failed_checks else "ok",
         "input": {
@@ -326,14 +327,15 @@ def _result_payload(
                 failed_checks=failed_checks,
                 source_mix=source_mix,
                 item_summaries=item_summaries,
+                term_mappings=term_mappings,
                 warnings=warnings,
             ),
             "source_mix": source_mix,
             "ticket_counts": ticket_counts,
             "rendered_ticket_source_count": rendered_ticket_source_count,
             "unrepresented_ticket_sources": max(result.ticket_source_count - rendered_ticket_source_count, 0),
-            "term_mapping_count": _term_mapping_count(items),
-            "term_mappings": _term_mapping_summaries(items),
+            "term_mapping_count": len(term_mappings),
+            "term_mappings": term_mappings,
             "warning_count": len(warnings),
             "warnings": warnings[:50],
             "warnings_truncated": len(warnings) > 50,
@@ -348,6 +350,7 @@ def _run_summary(
     failed_checks: list[str],
     source_mix: dict[str, Any],
     item_summaries: list[dict[str, Any]],
+    term_mappings: list[dict[str, Any]],
     warnings: list[dict[str, Any]],
 ) -> dict[str, Any]:
     output_checks = dict(result.output_checks)
@@ -369,8 +372,42 @@ def _run_summary(
             "total": len(output_checks),
             "failed_checks": list(failed_checks),
         },
+        "vocabulary_gaps": _vocabulary_gap_summary(term_mappings),
         "item_score_distribution": _item_score_distribution(item_summaries),
         "warning_count": len(warnings),
+    }
+
+
+def _vocabulary_gap_summary(
+    term_mappings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    topics = {
+        str(mapping.get("topic"))
+        for mapping in term_mappings
+        if mapping.get("topic")
+    }
+    top_customer_terms: list[str] = []
+    seen_terms: set[str] = set()
+    zero_result_mapping_count = 0
+    max_opportunity_score = 0
+    for mapping in term_mappings:
+        if _integer_or_zero(mapping.get("zero_result_source_count")) > 0:
+            zero_result_mapping_count += 1
+        max_opportunity_score = max(
+            max_opportunity_score,
+            _integer_or_zero(mapping.get("opportunity_score")),
+        )
+        term = str(mapping.get("customer_term") or "").strip()
+        key = term.lower()
+        if term and key not in seen_terms and len(top_customer_terms) < 3:
+            seen_terms.add(key)
+            top_customer_terms.append(term)
+    return {
+        "term_mapping_count": len(term_mappings),
+        "mapped_topic_count": len(topics),
+        "zero_result_mapping_count": zero_result_mapping_count,
+        "max_opportunity_score": max_opportunity_score,
+        "top_customer_terms": top_customer_terms,
     }
 
 

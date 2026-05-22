@@ -2281,6 +2281,13 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
             "total": 3,
             "failed_checks": [],
         },
+        "vocabulary_gaps": {
+            "term_mapping_count": 0,
+            "mapped_topic_count": 0,
+            "zero_result_mapping_count": 0,
+            "max_opportunity_score": 0,
+            "top_customer_terms": [],
+        },
         "item_score_distribution": {
             "count": 2,
             "min": 2,
@@ -2353,6 +2360,13 @@ def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path)
         "opportunity_score": 1,
         "first_source_id": "ticket-1",
     }]
+    assert result["diagnostics"]["run_summary"]["vocabulary_gaps"] == {
+        "term_mapping_count": 1,
+        "mapped_topic_count": 1,
+        "zero_result_mapping_count": 0,
+        "max_opportunity_score": 1,
+        "top_customer_terms": ["export"],
+    }
     assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
 
 
@@ -3333,6 +3347,13 @@ def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_pa
     assert mappings[0]["zero_result_source_count"] == 1
     assert mappings[1]["opportunity_score"] == 1
     assert mappings[1]["zero_result_source_count"] == 0
+    assert result["diagnostics"]["run_summary"]["vocabulary_gaps"] == {
+        "term_mapping_count": 2,
+        "mapped_topic_count": 2,
+        "zero_result_mapping_count": 1,
+        "max_opportunity_score": 78,
+        "top_customer_terms": ["export", "bill"],
+    }
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:

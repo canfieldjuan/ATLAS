@@ -243,7 +243,7 @@ The first pass is `input_profile.usable_source_count` divided by
 prep problem. If the ratio is healthy and `failure.type` is `output_checks`,
 debug the FAQ generator path. Use top-level `faq_run_summary` for the FAQ health
 rollup: generated item count, weighted represented source volume, failed output
-checks, warning count, and item score distribution.
+checks, warning count, vocabulary-gap counts, and item score distribution.
 
 The same artifact can run through the Content Ops execution seam by selecting
 `faq_markdown` and passing inline `source_material`. It remains zero-provider.

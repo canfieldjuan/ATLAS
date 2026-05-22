@@ -296,6 +296,13 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert density["faq_run_summary"]["warning_count"] == 954
     assert density["faq_run_summary"]["generated"] == 8
     assert density["faq_run_summary"]["output_checks"]["failed_checks"] == ["condensed"]
+    assert density["faq_run_summary"]["vocabulary_gaps"] == {
+        "term_mapping_count": 0,
+        "mapped_topic_count": 0,
+        "zero_result_mapping_count": 0,
+        "max_opportunity_score": 0,
+        "top_customer_terms": [],
+    }
 
     assert output_checks["ok"] is False
     assert _mapping_shape(output_checks["faq_run_summary"]) == expected_summary_shape
@@ -308,6 +315,13 @@ def test_faq_scale_failure_examples_separate_density_from_output_checks() -> Non
     assert output_checks["faq_run_summary"]["weighted_source_volume"] == 1000
     assert output_checks["faq_run_summary"]["warning_count"] == 0
     assert output_checks["faq_run_summary"]["output_checks"]["failed"] == 2
+    assert output_checks["faq_run_summary"]["vocabulary_gaps"] == {
+        "term_mapping_count": 0,
+        "mapped_topic_count": 0,
+        "zero_result_mapping_count": 0,
+        "max_opportunity_score": 0,
+        "top_customer_terms": [],
+    }
 
 
 def _runtime_faq_run_summary() -> dict[str, object]:
@@ -328,6 +342,7 @@ def _runtime_faq_run_summary() -> dict[str, object]:
             "zero_result_search_source_count": 0,
         },
         item_summaries=[{"opportunity_score": 1}],
+        term_mappings=[],
         warnings=[],
     )
 
