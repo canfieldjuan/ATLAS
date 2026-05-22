@@ -154,8 +154,21 @@ def public_landing_page_draft_row(draft: LandingPageDraft) -> JsonDict:
         "sections": list(draft.sections),
         "cta": draft.cta,
         "meta": draft.meta,
+        "robots": public_landing_page_robots(draft),
         "structured_data": build_landing_page_structured_data(draft),
     }
+
+
+def public_landing_page_robots(draft: LandingPageDraft) -> str:
+    """Return the public robots policy for a generated landing-page draft."""
+
+    if draft.status != "approved":
+        return "noindex,follow"
+    if _seo_aeo_readiness(draft).get("status") != "ready":
+        return "noindex,follow"
+    if _geo_readiness(draft).get("status") != "ready":
+        return "noindex,follow"
+    return "index,follow"
 
 
 def _metadata_summary(value: Any) -> JsonDict:
@@ -576,4 +589,5 @@ __all__ = [
     "export_landing_page_drafts",
     "landing_page_draft_export_row",
     "public_landing_page_draft_row",
+    "public_landing_page_robots",
 ]
