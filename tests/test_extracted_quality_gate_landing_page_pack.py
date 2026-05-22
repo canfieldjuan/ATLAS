@@ -8,12 +8,26 @@ from extracted_quality_gate.types import (
 )
 
 
-def _section(*, title: str = "Problem", body: str = "Renewal pricing is the #1 churn driver."):
+def _section(
+    *,
+    title: str = "Problem",
+    body: str = "Renewal pricing is the #1 churn driver.",
+    metadata=None,
+):
     return {
         "id": "problem",
         "title": title,
         "body_markdown": body,
-        "metadata": {"order": 1},
+        "metadata": (
+            {
+                "order": 1,
+                "kind": "problem",
+                "primary_question": "Why does renewal pricing matter?",
+                "answer_summary": body,
+            }
+            if metadata is None
+            else metadata
+        ),
     }
 
 
@@ -138,6 +152,57 @@ def test_evaluate_landing_page_generic_section_title_warns() -> None:
     report = evaluate_landing_page(_input(sections=sections))
     warning_msgs = {f.message for f in report.warnings}
     assert "generic_section_title:0:Overview" in warning_msgs
+
+
+def test_evaluate_landing_page_missing_section_kind_warns_only() -> None:
+    sections = (_section(metadata={"order": 1}),)
+
+    report = evaluate_landing_page(_input(sections=sections))
+
+    warning_msgs = {f.message for f in report.warnings}
+    assert report.passed is True
+    assert "section_missing_kind:0" in warning_msgs
+    assert "section_missing_kind" not in {f.code for f in report.blockers}
+
+
+def test_evaluate_landing_page_invalid_section_kind_warns_only() -> None:
+    sections = (_section(metadata={"order": 1, "kind": "sales_pitch"}),)
+
+    report = evaluate_landing_page(_input(sections=sections))
+
+    warning_msgs = {f.message for f in report.warnings}
+    assert report.passed is True
+    assert "section_invalid_kind:0:sales_pitch" in warning_msgs
+
+
+def test_evaluate_landing_page_missing_question_answer_summary_warns_only() -> None:
+    sections = (_section(metadata={"order": 1, "kind": "problem"}),)
+
+    report = evaluate_landing_page(_input(sections=sections))
+
+    warning_msgs = {f.message for f in report.warnings}
+    assert report.passed is True
+    assert "section_missing_answer_summary:0" in warning_msgs
+
+
+def test_evaluate_landing_page_hidden_answer_summary_warns_only() -> None:
+    sections = (
+        _section(
+            body="Renewal pricing is the #1 churn driver.",
+            metadata={
+                "order": 1,
+                "kind": "problem",
+                "primary_question": "Why does renewal pricing matter?",
+                "answer_summary": "Customers need a clear answer before renewal.",
+            },
+        ),
+    )
+
+    report = evaluate_landing_page(_input(sections=sections))
+
+    warning_msgs = {f.message for f in report.warnings}
+    assert report.passed is True
+    assert "section_answer_summary_not_visible:0" in warning_msgs
 
 
 def test_evaluate_landing_page_missing_meta_title_tag_warns() -> None:

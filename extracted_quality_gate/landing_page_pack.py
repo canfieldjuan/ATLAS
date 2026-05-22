@@ -22,7 +22,9 @@ The ``input`` carries the structured landing-page payload through
   - ``hero`` (Mapping): expected keys ``headline``, ``subheadline``,
     ``cta_label``, ``cta_url``
   - ``sections`` (Sequence[Mapping]): each ``{"id", "title",
-    "body_markdown", ...}``
+    "body_markdown", ...}``; optional ``metadata.kind``,
+    ``metadata.primary_question``, and ``metadata.answer_summary`` are
+    scored as warnings when malformed.
   - ``cta`` (Mapping): expected keys ``label``, ``url``
   - ``meta`` (Mapping): expected keys ``title_tag``, ``description``
 
@@ -51,6 +53,11 @@ from .types import (
     QualityInput,
     QualityPolicy,
     QualityReport,
+)
+from .landing_page_section_contract import (
+    LANDING_PAGE_QUESTION_SECTION_KINDS,
+    LANDING_PAGE_SECTION_KINDS,
+    normalize_landing_page_section_kind,
 )
 
 
@@ -254,6 +261,7 @@ def evaluate_landing_page(
                     metadata={"section_index": index},
                 )
             )
+        findings.extend(_section_metadata_warnings(index, section))
 
     # ---- SEO metadata ----
     title_tag = str(meta.get("title_tag") or "").strip()
@@ -379,6 +387,61 @@ def _slug_quality(value: str) -> bool:
 def _placeholder_url(value: str) -> bool:
     url = str(value or "").strip().lower()
     return url in _PLACEHOLDER_URLS or url.startswith("javascript:")
+
+
+def _section_metadata_warnings(
+    index: int,
+    section: Mapping[str, Any],
+) -> tuple[GateFinding, ...]:
+    metadata = section.get("metadata") if isinstance(section.get("metadata"), Mapping) else {}
+    kind = normalize_landing_page_section_kind(metadata.get("kind"))
+    findings: list[GateFinding] = []
+    if not kind:
+        findings.append(
+            GateFinding(
+                code="section_missing_kind",
+                message=f"section_missing_kind:{index}",
+                severity=GateSeverity.WARNING,
+                metadata={"section_index": index},
+            )
+        )
+    elif kind not in LANDING_PAGE_SECTION_KINDS:
+        findings.append(
+            GateFinding(
+                code="section_invalid_kind",
+                message=f"section_invalid_kind:{index}:{kind}",
+                severity=GateSeverity.WARNING,
+                metadata={"section_index": index, "kind": kind},
+            )
+        )
+    primary_question = str(metadata.get("primary_question") or "").strip()
+    if kind in LANDING_PAGE_QUESTION_SECTION_KINDS or primary_question:
+        summary = str(metadata.get("answer_summary") or "").strip()
+        if not summary:
+            findings.append(
+                GateFinding(
+                    code="section_missing_answer_summary",
+                    message=f"section_missing_answer_summary:{index}",
+                    severity=GateSeverity.WARNING,
+                    metadata={"section_index": index, "kind": kind},
+                )
+            )
+        elif not _answer_summary_visible(summary, section.get("body_markdown")):
+            findings.append(
+                GateFinding(
+                    code="section_answer_summary_not_visible",
+                    message=f"section_answer_summary_not_visible:{index}",
+                    severity=GateSeverity.WARNING,
+                    metadata={"section_index": index, "kind": kind},
+                )
+            )
+    return tuple(findings)
+
+
+def _answer_summary_visible(summary: str, body_markdown: Any) -> bool:
+    normalized_summary = _normalize_text(summary)
+    normalized_body = _normalize_text(body_markdown)
+    return bool(normalized_summary and normalized_body.startswith(normalized_summary))
 
 
 def _metadata_consistent(
