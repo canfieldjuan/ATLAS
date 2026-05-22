@@ -8144,9 +8144,18 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
 
     # Pain signals chart
     if signals:
+        # D3: sort by urgency so the radar's visual peak, the deterministic
+        # data_summary ranking, and the description's "most acute pain" framing
+        # all agree on the SAME metric (urgency, the chart's dataKey). Before,
+        # pain_data took signals in frequency order while the chart plotted
+        # urgency, so the description leaned on frequency ("Pricing dominant")
+        # while the radar's urgency peak was a different category.
+        sorted_signals = sorted(
+            signals, key=lambda s: s.get("avg_urgency", 0) or 0, reverse=True
+        )
         pain_data = [
             {"name": s["pain_category"] or "Other", "urgency": s["avg_urgency"]}
-            for s in signals[:6]
+            for s in sorted_signals[:6]
         ]
         pain_chart = ChartSpec(
             chart_id="pain-radar",
@@ -8159,11 +8168,17 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
             },
         )
         charts.append(pain_chart)
+        top = pain_data[0]
         sections.append(SectionSpec(
             id="pain_analysis",
             heading=f"Where {vendor} Users Feel the Most Pain",
-            goal="Break down the top pain categories from review analysis",
+            goal="Break down the top pain categories from review analysis by reviewer urgency",
             chart_ids=["pain-radar"],
+            data_summary=(
+                f"Pain categories ranked by reviewer urgency (0-10). "
+                f"{top['name']} shows the most acute friction (urgency {top['urgency']}), "
+                f"followed by: {', '.join(p['name'] for p in pain_data[1:4])}."
+            ),
         ))
 
     # Integrations and use cases -- prefer mention-counted extended context over flat profile arrays
