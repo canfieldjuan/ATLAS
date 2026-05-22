@@ -1563,6 +1563,65 @@ def test_market_landscape_headline_vendor_count_reflects_rendered_chart():
     assert "8 major vendors" not in hook.data_summary
 
 
+def test_market_landscape_exposes_capped_profile_count():
+    """D8b: the landscape profiles at most the leading vendors
+    (vendor_profiles[:5]), not every charted vendor, so the hook surfaces a
+    profile_count capped at 5. With 7 profiles available (all populated),
+    profile_count is 5 (the cap). Reverting (drop the key, or use the uncapped
+    len) fails this. (The empty-profile predicate is pinned separately by
+    test_profile_count_counts_only_rendered_sections.)"""
+    data = {
+        "data_context": {"category": "CRM"},
+        "quotes": [],
+        "vendor_signals": [],
+        "vendor_profiles": [
+            {"vendor": f"V{i}", "profile": {"strengths": ["s"], "weaknesses": ["w"]}}
+            for i in range(7)
+        ],
+    }
+    ctx = {
+        "slug": "crm-landscape-2026",
+        "category": "CRM",
+        "vendor_count": 7,
+        "total_reviews": 1000,
+        "avg_urgency": 5.0,
+    }
+    blueprint = _blueprint_market_landscape(ctx, data)
+    hook = next(s for s in blueprint.sections if s.id == "hook")
+    assert hook.key_stats["profile_count"] == 5   # capped, not the 7 available
+
+
+def test_profile_count_counts_only_rendered_sections():
+    """D8b / Codex P2 on #780: profile_count must count vendors that ACTUALLY
+    emit a profile section (strengths OR weaknesses non-empty, the render-loop
+    predicate), not bare len(vendor_profiles[:5]) -- otherwise an empty profile
+    in the top 5 overstates coverage. Here B has an empty profile, so 5 entries
+    -> 4 rendered. The count is also wired deterministically into data_summary."""
+    data = {
+        "data_context": {"category": "CRM"},
+        "quotes": [],
+        "vendor_signals": [],
+        "vendor_profiles": [
+            {"vendor": "A", "profile": {"strengths": ["s"], "weaknesses": ["w"]}},
+            {"vendor": "B", "profile": {"strengths": [], "weaknesses": []}},  # emits no section
+            {"vendor": "C", "profile": {"strengths": ["s"]}},
+            {"vendor": "D", "profile": {"weaknesses": ["w"]}},
+            {"vendor": "E", "profile": {"strengths": ["s"], "weaknesses": ["w"]}},
+        ],
+    }
+    ctx = {
+        "slug": "crm-landscape-2026",
+        "category": "CRM",
+        "vendor_count": 5,
+        "total_reviews": 500,
+        "avg_urgency": 5.0,
+    }
+    blueprint = _blueprint_market_landscape(ctx, data)
+    hook = next(s for s in blueprint.sections if s.id == "hook")
+    assert hook.key_stats["profile_count"] == 4   # B's empty profile is not counted
+    assert "4 leading vendors" in hook.data_summary   # deterministically used, not just surfaced
+
+
 def test_pain_point_roundup_blueprint_routes_quotes_through_contract_gate():
     row = _v4_row(
         text="Salesforce reporting takes forever to load and constantly times out",
