@@ -262,7 +262,6 @@ const post: BlogPost = {
 -- reviewer at GCP, 1200 employees, building materials industry, United States, reviewer on Reddit</p>
 </blockquote>
 <p>This quote is the clearest switching signal in the dataset. The reviewer describes a Fabric-to-Looker migration driven by GCP architectural guidance, indicating cloud-native consolidation is a real competitive threat. The quote's tone—"took it way too seriously"—suggests the reviewer is skeptical of the migration decision, which aligns with the counterevidence thesis that some teams stay on Power BI despite frustration.</p>
-<p>This quote is a question rather than a statement, but its presence in the dataset suggests even experienced BI analysts are actively evaluating what Power BI does well. That evaluative stance indicates the product is under ongoing assessment rather than taken for granted.</p>
 <blockquote>
 <p>"Company is undergoing a lot of changes and going to try and leverage AWS full sail" 
 -- reviewer on Reddit</p>

@@ -113,8 +113,8 @@ const post: BlogPost = {
 <p>ok so this might sound like an exaggeration but hear me out with the actual math</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
-<p>The complaint suggests performance issues compound during high-traffic moments. Another reviewer, a Mechanical Design Engineer at an enterprise company in the design industry, took a different tone:</p>
-<p>That quote reflects positive sentiment, but it's isolated. The dominant pattern in Shopify reviews is frustration with uptime and performance consistency. Reviewers describe losing sales during outages, watching conversion rates drop during slow load times, and scrambling to explain platform failures to customers.</p>
+<p>The complaint suggests performance issues compound during high-traffic moments.</p>
+<p>The dominant pattern in Shopify reviews is frustration with uptime and performance consistency. Reviewers describe losing sales during outages, watching conversion rates drop during slow load times, and scrambling to explain platform failures to customers.</p>
 <p>Shopify's strengths are real. The platform offers fast setup, a large app ecosystem, and strong brand recognition. Many reviewers praise its ease of use for non-technical teams. But when reliability falters, those strengths don't compensate for lost revenue.</p>
 <p>The urgency score of 2.8 is the highest in the category. That suggests reliability complaints trigger active evaluation of alternatives more often than pricing or usability complaints do in other platforms.</p>
 <p>If your business depends on consistent uptime during flash sales, product launches, or seasonal peaks, Shopify's reliability complaints deserve serious weight. If your traffic is steady and predictable, the risk may be lower.</p>
