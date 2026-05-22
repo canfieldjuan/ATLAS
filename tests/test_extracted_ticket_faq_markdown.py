@@ -419,6 +419,10 @@ def test_build_ticket_faq_markdown_adds_vocabulary_gap_from_documentation_terms(
                 "in FAQ headings and answer text."
             ),
             "source_id_count": 1,
+            "zero_result_source_count": 0,
+            "failure_risk_score": 0,
+            "failure_risk_signals": (),
+            "opportunity_score": 1,
             "first_source_id": "ticket-1",
         },
         {
@@ -429,11 +433,16 @@ def test_build_ticket_faq_markdown_adds_vocabulary_gap_from_documentation_terms(
                 "in FAQ headings and answer text."
             ),
             "source_id_count": 1,
+            "zero_result_source_count": 0,
+            "failure_risk_score": 0,
+            "failure_risk_signals": (),
+            "opportunity_score": 1,
             "first_source_id": "ticket-1",
         },
     )
     assert "**Vocabulary gaps:**" in result.markdown
     assert 'Customers say "export"; documentation says "Download report".' in result.markdown
+    assert "(Seen in 1 source(s); mapping score 1.)" in result.markdown
 
 
 def test_build_ticket_faq_markdown_uses_document_rows_for_vocabulary_gap_only() -> None:
@@ -483,6 +492,43 @@ def test_build_ticket_faq_markdown_skips_vocabulary_gap_when_docs_match_customer
 
     assert result.items[0]["term_mappings"] == ()
     assert "**Vocabulary gaps:**" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_scores_vocabulary_gap_zero_result_searches() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "search_log",
+                "query_id": "search-1",
+                "search_query": "How do I export attribution report?",
+                "results_count": 0,
+                "evidence": [{
+                    "text": "How do I export attribution report?",
+                    "source_id": "search-1",
+                    "source_type": "search_log",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Export attribution",
+                "evidence": [{
+                    "text": "I cannot export attribution data.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ],
+        documentation_terms=("Download report",),
+    )
+
+    mapping = result.items[0]["term_mappings"][0]
+    assert mapping["customer_term"] == "export"
+    assert mapping["source_id_count"] == 2
+    assert mapping["zero_result_source_count"] == 1
+    assert mapping["failure_risk_score"] == 2
+    assert mapping["failure_risk_signals"] == ("blocked_access", "zero_result_search")
+    assert mapping["opportunity_score"] == 6
+    assert "(Seen in 2 source(s); 1 zero-result search source(s); mapping score 6.)" in result.markdown
 
 
 def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -> None:
@@ -2024,9 +2070,57 @@ def test_ticket_faq_cli_writes_vocabulary_gap_result_diagnostics(tmp_path: Path)
         "customer_term": "export",
         "documentation_term": "Download report",
         "source_id_count": 1,
+        "zero_result_source_count": 0,
+        "failure_risk_score": 0,
+        "failure_risk_signals": [],
+        "opportunity_score": 1,
         "first_source_id": "ticket-1",
     }]
     assert result["diagnostics"]["items"][0]["term_mapping_count"] == 1
+
+
+def test_ticket_faq_cli_sorts_vocabulary_gap_result_diagnostics_by_impact(tmp_path: Path) -> None:
+    source = _write_source_csv(
+        tmp_path,
+        "searches.csv",
+        [
+            {
+                "query_id": "search-1",
+                "search_query": "How do I export attribution report?",
+                "results_count": "0",
+            },
+            {
+                "ticket_id": "ticket-1",
+                "description": "I cannot export attribution data.",
+                "pain_category": "exports",
+            },
+            {
+                "ticket_id": "ticket-2",
+                "description": "Where can I find my bill?",
+                "pain_category": "billing",
+            },
+        ],
+    )
+    result_output = tmp_path / "ticket_faq_result.json"
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term",
+        "Download report",
+        "--documentation-term",
+        "Invoice settings",
+        "--result-output",
+        str(result_output),
+    )
+
+    assert completed.returncode == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    mappings = result["diagnostics"]["term_mappings"]
+    assert [mapping["customer_term"] for mapping in mappings] == ["export", "bill"]
+    assert mappings[0]["opportunity_score"] == 6
+    assert mappings[0]["zero_result_source_count"] == 1
+    assert mappings[1]["opportunity_score"] == 1
+    assert mappings[1]["zero_result_source_count"] == 0
 
 
 def test_ticket_faq_cli_filters_csv_to_date_window(tmp_path: Path) -> None:
