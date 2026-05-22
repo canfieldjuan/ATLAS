@@ -18,6 +18,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
     build_ticket_faq_markdown,
+    weighted_source_volume_by_group,
 )
 
 
@@ -396,6 +397,20 @@ def test_build_ticket_faq_markdown_prefers_explicit_aggregate_weight_fields() ->
     assert result.items[0]["frequency"] == 25
     assert result.items[0]["weighted_frequency"] == 25
     assert result.items[0]["ticket_count"] == 1
+
+
+def test_weighted_source_volume_by_group_accepts_unnormalized_weight_fields() -> None:
+    result = weighted_source_volume_by_group(
+        [{
+            "source_type": "search_log",
+            "query_id": "search-export-1",
+            "search_count": "25",
+        }],
+        group_key=lambda row: str(row.get("source_type") or "unknown"),
+        source_key=lambda row, _index: str(row.get("query_id") or "unknown"),
+    )
+
+    assert result == {"search_log": 25}
 
 
 def test_build_ticket_faq_markdown_uses_max_weight_per_distinct_source() -> None:

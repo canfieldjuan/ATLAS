@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 import re
@@ -691,27 +691,44 @@ def _item_source_type_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int
 
 
 def _item_weighted_source_volume_by_type(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    weights: dict[tuple[str, str], int] = {}
-    for index, row in enumerate(rows, start=1):
-        source_type = _source_type_key(row.get("source_type")) or "unknown"
-        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
-        weight = _integer_or_none(row.get("source_weight")) or 1
-        # Breakdown is by type, so a rare multi-type source key is counted once per type.
-        key = (source_type, source_key)
-        weights[key] = max(weights.get(key, 0), max(weight, 1))
-    counts: dict[str, int] = {}
-    for (source_type, _source_key), weight in weights.items():
-        counts[source_type] = counts.get(source_type, 0) + weight
-    return dict(sorted(counts.items()))
+    # Breakdown is by type, so a rare multi-type source key is counted once per type.
+    return weighted_source_volume_by_group(
+        rows,
+        group_key=lambda row: _source_type_key(row.get("source_type")) or "unknown",
+    )
 
 
 def _weighted_frequency(rows: Sequence[Mapping[str, Any]]) -> int:
-    weights: dict[str, int] = {}
+    return weighted_source_volume_by_group(rows, group_key=lambda _row: "all").get("all", 0)
+
+
+def weighted_source_volume_by_group(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    group_key: Callable[[Mapping[str, Any]], str],
+    source_key: Callable[[Mapping[str, Any], int], str] | None = None,
+    row_weight: Callable[[Mapping[str, Any]], int] | None = None,
+) -> dict[str, int]:
+    """Sum max represented source weight by group.
+
+    Default weighting honors all source-weight aliases. In the ranking path,
+    rows are already normalized with source_weight before this helper runs.
+    """
+
+    weights: dict[tuple[str, str], int] = {}
     for index, row in enumerate(rows, start=1):
-        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
-        weight = _integer_or_none(row.get("source_weight")) or 1
-        weights[source_key] = max(weights.get(source_key, 0), max(weight, 1))
-    return sum(weights.values())
+        group = group_key(row) or "unknown"
+        key = (
+            source_key(row, index)
+            if source_key is not None
+            else _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        )
+        weight = row_weight(row) if row_weight is not None else source_row_weight(row)
+        weights[(group, key)] = max(weights.get((group, key), 0), max(weight, 1))
+    counts: dict[str, int] = {}
+    for (group, _source_key), weight in weights.items():
+        counts[group] = counts.get(group, 0) + weight
+    return dict(sorted(counts.items()))
 
 
 def source_row_weight(*rows: Mapping[str, Any]) -> int:
