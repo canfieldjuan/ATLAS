@@ -111,6 +111,6 @@ removed (rephrased to lead with the analysis), and 1 inline form-prompt in
 
 | Area | Estimated LOC |
 |---|---:|
-| 31 blog `.ts` posts (45 form-prompt blockquotes + 11 follow-ons + 4 residuals removed) | ~470 |
-| Plan doc | ~120 |
-| **Total** | **~590** |
+| 31 blog `.ts` posts (45 blockquotes + 11 follow-ons + 4 residuals removed; net-negative) | ~250 |
+| Plan doc | ~90 |
+| **Total** | **~340** |
