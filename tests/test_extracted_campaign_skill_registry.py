@@ -4,6 +4,9 @@ from extracted_content_pipeline.skills.registry import (
     LocalSkillRegistry,
     get_skill_registry,
 )
+from extracted_content_pipeline.landing_page_input_contract import (
+    LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS,
+)
 from extracted_quality_gate.landing_page_section_contract import (
     LANDING_PAGE_SECTION_KINDS,
 )
@@ -110,6 +113,24 @@ def test_packaged_landing_page_prompt_requests_aeo_geo_section_metadata() -> Non
     assert "supports answer extraction" in prompt
     for kind in LANDING_PAGE_SECTION_KINDS:
         assert kind in prompt
+
+
+def test_packaged_landing_page_prompt_consumes_seo_geo_aeo_context_inputs() -> None:
+    prompt = get_skill_registry().get_prompt("digest/landing_page_generation")
+
+    assert prompt is not None
+    assert "Optional operator-supplied inputs live in `campaign.context`" in prompt
+    for key in LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS:
+        assert f"`{key}`" in prompt
+    assert "`target_keyword`: make this the primary SEO phrase" in prompt
+    assert "`secondary_keywords`: weave these into visible copy only where natural" in prompt
+    assert "`search_intent`: align the hero promise" in prompt
+    assert "`primary_entity` and `audience_entity`" in prompt
+    assert "`objections`: address supplied objections directly" in prompt
+    assert "`faq_questions`: answer supplied questions" in prompt
+    assert "`source_period`: use as freshness context" in prompt
+    assert "`internal_links`: include only supplied links" in prompt
+    assert "`cta_label` and `cta_url`" in prompt
 
 
 def test_local_skill_registry_accepts_host_root_override(tmp_path) -> None:

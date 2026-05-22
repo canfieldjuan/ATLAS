@@ -56,6 +56,19 @@ Field rules:
 - `meta.description`: SEO meta description, 120-160 characters. Keep the title tag and description aligned with visible page copy.
 - `reference_ids`: customer logos, case studies, testimonials, or other social-proof source ids the page cites. Empty when none. Do not invent reference ids.
 
+SEO/GEO/AEO input policy:
+- Optional operator-supplied inputs live in `campaign.context`. Use them when present, but do not invent missing fields.
+- `target_keyword`: make this the primary SEO phrase for `meta.title_tag`, `meta.description`, the hero/subheadline, and at least one visible section when it fits naturally.
+- `secondary_keywords`: weave these into visible copy only where natural. Do not keyword-stuff or repeat awkward phrases.
+- `search_intent`: align the hero promise, first problem/solution answer, and FAQ or objection coverage with what the searcher is trying to understand or buy.
+- `primary_entity` and `audience_entity`: make the offer and audience unmistakable in the first viewport and metadata. Use the exact entity language when it is clear and not awkward.
+- `competitors`: use as comparison or alternative context only when supplied. Do not make unsupported superiority claims.
+- `objections`: address supplied objections directly in objection, FAQ, pricing, implementation, risk-reversal, or proof sections.
+- `faq_questions`: answer supplied questions with plain-language section titles or FAQ entries. Each answer must start with the direct answer before expanding.
+- `source_period`: use as freshness context when relevant, such as "based on the last 90 days of tickets"; do not imply live or ongoing analysis unless the campaign says so.
+- `internal_links`: include only supplied links and only when they fit the page. Do not create fake URLs.
+- `cta_label` and `cta_url`: use these for `hero.cta_label`, `hero.cta_url`, and the page-level `cta` unless the campaign gives a stronger CTA pattern.
+
 Readiness rules:
 - The first viewport must make it clear what the offer is, who it is for, and why that reader should care.
 - Include a clear problem section and a clear solution or how-it-works section tied to `campaign.value_prop`.
