@@ -8368,6 +8368,21 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     }
 
     charts = []
+    # D8: derive the headline vendor count from the vendors actually rendered in
+    # the urgency comparison below (one bar per vendor with signals), so the
+    # headline can't overclaim vs the chart (e.g. "8 vendors" while the chart
+    # shows 7). Computed here as the single source of truth for both the chart
+    # and the headline; falls back to the category count only if no vendor has
+    # signals (degenerate landscape).
+    urgency_data = []
+    for vs in vendor_signals:
+        vendor = vs["vendor"]
+        sigs = vs.get("signals", [])
+        if sigs:
+            avg_urg = sum(s.get("avg_urgency", 0) for s in sigs) / len(sigs) if sigs else 0
+            urgency_data.append({"name": vendor[:20], "urgency": round(avg_urg, 1)})
+    rendered_vendor_count = len(urgency_data) or vendor_count
+
     sections = [
         SectionSpec(
             id="hook",
@@ -8375,13 +8390,13 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             goal=f"Frame this as a comprehensive market overview of the {category} space",
             key_stats={
                 "category": category,
-                "vendor_count": vendor_count,
+                "vendor_count": rendered_vendor_count,
                 "total_reviews": ctx["total_reviews"],
                 "avg_urgency": ctx["avg_urgency"],
                 "market_regime": market_regime,
             },
             data_summary=(
-                f"The {category} landscape has {vendor_count} major vendors "
+                f"The {category} landscape has {rendered_vendor_count} major vendors "
                 f"with {ctx['total_reviews']} total churn signals analyzed."
             ),
         ),
@@ -8395,14 +8410,8 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             data_summary=f"Current market regime: {market_regime}.",
         ))
 
-    # Urgency comparison chart across vendors
-    urgency_data = []
-    for vs in vendor_signals:
-        vendor = vs["vendor"]
-        sigs = vs.get("signals", [])
-        if sigs:
-            avg_urg = sum(s.get("avg_urgency", 0) for s in sigs) / len(sigs) if sigs else 0
-            urgency_data.append({"name": vendor[:20], "urgency": round(avg_urg, 1)})
+    # Urgency comparison chart across vendors (urgency_data computed above, where
+    # it also drives the headline vendor count).
     if urgency_data:
         urgency_chart = ChartSpec(
             chart_id="vendor-urgency",
@@ -8487,7 +8496,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
                 ),
             ))
 
-    takeaway_stats: dict[str, Any] = {"category": category, "vendor_count": vendor_count}
+    takeaway_stats: dict[str, Any] = {"category": category, "vendor_count": rendered_vendor_count}
     cat_dyn = data.get("pool_category") or {}
     regime = cat_dyn.get("market_regime") or {}
     xv_lookup_ml = data.get("xv_synthesis_lookup") or {}
@@ -8539,7 +8548,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
     return PostBlueprint(
         topic_type="market_landscape",
         slug=ctx["slug"],
-        suggested_title=f"{category} Landscape {date.today().year}: {vendor_count} Vendors Compared by Real User Data",
+        suggested_title=f"{category} Landscape {date.today().year}: {rendered_vendor_count} Vendors Compared by Real User Data",
         tags=[category.lower(), "market-landscape", "comparison", "b2b-intelligence"],
         data_context={**data["data_context"], "category": category},
         sections=sections,
