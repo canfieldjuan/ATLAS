@@ -12,7 +12,7 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .landing_page_ports import LandingPageDraft, LandingPageRepository
-from .landing_page_section_contract import (
+from extracted_quality_gate.landing_page_section_contract import (
     LANDING_PAGE_OBJECTION_SECTION_KINDS,
     LANDING_PAGE_PROBLEM_SECTION_KINDS,
     LANDING_PAGE_QUESTION_SECTION_KINDS,

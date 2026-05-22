@@ -116,7 +116,11 @@ def _valid_response(*, slug="acme-q3-launch") -> str:
             {
                 "id": "problem",
                 "title": "The Problem",
-                "body_markdown": "Renewal pricing is the #1 churn driver.",
+                "body_markdown": (
+                    "Renewal surprises create preventable churn because "
+                    "teams see pricing pressure too late. Renewal pricing is "
+                    "the #1 churn driver."
+                ),
                 "metadata": {
                     "order": 1,
                     "kind": "problem",
@@ -130,7 +134,11 @@ def _valid_response(*, slug="acme-q3-launch") -> str:
             {
                 "id": "solution",
                 "title": "The Solution",
-                "body_markdown": "Acme surfaces pressure signals in the first 30 days.",
+                "body_markdown": (
+                    "Acme catches renewal pressure early by surfacing "
+                    "risk signals during the first 30 days. Acme surfaces "
+                    "pressure signals in the first 30 days."
+                ),
                 "metadata": {
                     "order": 2,
                     "kind": "solution",

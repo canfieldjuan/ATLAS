@@ -4,7 +4,7 @@ from extracted_content_pipeline.skills.registry import (
     LocalSkillRegistry,
     get_skill_registry,
 )
-from extracted_content_pipeline.landing_page_section_contract import (
+from extracted_quality_gate.landing_page_section_contract import (
     LANDING_PAGE_SECTION_KINDS,
 )
 
