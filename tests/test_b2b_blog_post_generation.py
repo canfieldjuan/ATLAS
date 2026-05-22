@@ -1163,6 +1163,48 @@ def test_build_blog_generation_payload_includes_section_budget_and_manifest():
     ]
 
 
+def test_deep_dive_competitor_list_excludes_self_and_case_dedups():
+    """D2: the competitive-landscape section must exclude the vendor itself
+    (vendors appear in their own commonly_compared_to by mention count --
+    systemic across profiles) and case-dedup BEFORE capping, so the count and
+    list reflect distinct external alternatives. The data_summary states the
+    count deterministically. (Zoho vs Zoho CRM stays distinct -- the
+    suite/product alias merge is deferred.) Reverting the self-filter, the
+    case-dedup, or the count fails this."""
+    blueprint = blog_mod._blueprint_vendor_deep_dive(
+        {
+            "vendor": "Pipedrive",
+            "category": "CRM",
+            "review_count": 42,
+            "profile_richness": 4,
+            "slug": "pipedrive-deep-dive-2026-04",
+        },
+        {
+            "profile": {
+                "commonly_compared_to": [
+                    {"vendor": "Pipedrive"},   # self -> excluded
+                    {"vendor": "HubSpot"},
+                    {"vendor": "Hubspot"},     # case dup of HubSpot -> excluded
+                    {"vendor": "Salesforce"},
+                    {"vendor": "Zoho"},
+                    {"vendor": "ZOHO"},        # case dup of Zoho -> excluded
+                    {"vendor": "Monday"},
+                    {"vendor": "Zoho CRM"},    # distinct (suite/product merge deferred)
+                ],
+            },
+            "signals": [],
+            "quotes": [],
+            "data_context": {"vendor": "Pipedrive", "category": "CRM",
+                             "review_period": "2026-02 to 2026-04"},
+        },
+    )
+    comp = next(s for s in blueprint.sections if s.id == "competitive_landscape")
+    assert comp.key_stats["competitors"] == [
+        "HubSpot", "Salesforce", "Zoho", "Monday", "Zoho CRM",
+    ]
+    assert "5 alternatives" in comp.data_summary
+
+
 def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
     blueprint = blog_mod._blueprint_vendor_deep_dive(
         {

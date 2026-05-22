@@ -290,7 +290,7 @@ const post: BlogPost = {
 </ol>
 <p>These signals offer directional guidance but lack the precision required for account-based outreach.</p>
 <h2 id="how-pipedrive-stacks-up-against-competitors">How Pipedrive Stacks Up Against Competitors</h2>
-<p>Reviewers frequently compare Pipedrive to six primary alternatives: HubSpot, Salesforce, Zoho, Monday, and Zoho CRM.</p>
+<p>Reviewers frequently compare Pipedrive to five primary alternatives: HubSpot, Salesforce, Zoho, Monday, and Zoho CRM.</p>
 <p>The competitive context reveals different friction points across vendors:</p>
 <table>
 <thead>

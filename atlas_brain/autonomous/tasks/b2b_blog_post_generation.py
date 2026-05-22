@@ -8254,17 +8254,34 @@ def _blueprint_vendor_deep_dive(ctx: dict, data: dict) -> PostBlueprint:
     # Competitive landscape
     compared = profile.get("commonly_compared_to", [])
     if compared:
-        comp_names = [
-            (c.get("vendor", c) if isinstance(c, dict) else str(c))[:25]
-            for c in compared[:6]
-        ]
-        sections.append(SectionSpec(
-            id="competitive_landscape",
-            heading=f"How {vendor} Stacks Up Against Competitors",
-            goal="Position the vendor relative to frequently compared alternatives",
-            key_stats={"competitors": comp_names},
-            data_summary=f"Commonly compared to: {', '.join(comp_names)}.",
-        ))
+        # D2: exclude the vendor itself (it appears in its own
+        # commonly_compared_to by mention count -- systemic across profiles) and
+        # case-dedup BEFORE capping, so the count and list reflect distinct
+        # external alternatives, not self + casing variants ("HubSpot"/"Hubspot",
+        # "Zoho"/"ZOHO"). The data_summary states the count so the description
+        # uses a deterministic number rather than miscounting the rendered list.
+        seen: set[str] = set()
+        comp_names: list[str] = []
+        for c in compared:
+            name = (c.get("vendor", c) if isinstance(c, dict) else str(c)).strip()
+            key = name.lower()
+            if not name or key == vendor.strip().lower() or key in seen:
+                continue
+            seen.add(key)
+            comp_names.append(name[:25])
+            if len(comp_names) >= 6:
+                break
+        if comp_names:
+            sections.append(SectionSpec(
+                id="competitive_landscape",
+                heading=f"How {vendor} Stacks Up Against Competitors",
+                goal="Position the vendor relative to frequently compared alternatives",
+                key_stats={"competitors": comp_names},
+                data_summary=(
+                    f"Commonly compared to {len(comp_names)} alternatives: "
+                    f"{', '.join(comp_names)}."
+                ),
+            ))
 
     market_position_stats: dict[str, Any] = {}
     if contract_category:
