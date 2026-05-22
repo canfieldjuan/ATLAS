@@ -80,6 +80,23 @@ def test_local_pr_review_rejects_multiple_base_refs(tmp_path: Path) -> None:
     assert "multiple base refs supplied" in result.stderr
 
 
+def test_local_pr_review_runs_cross_session_drift_audit_when_present(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    _write_executable(
+        repo / "scripts" / "audit_pr_session_drift.py",
+        "#!/usr/bin/env python3\nprint('drift guard ran')\n",
+    )
+    _git(repo, "add", "scripts/audit_pr_session_drift.py")
+    _git(repo, "commit", "-m", "add drift guard")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Cross-session PR drift" in result.stdout
+    assert "drift guard ran" in result.stdout
+
+
 def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     _write_executable(
