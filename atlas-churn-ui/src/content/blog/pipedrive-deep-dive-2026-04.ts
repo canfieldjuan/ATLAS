@@ -172,16 +172,16 @@ const post: BlogPost = {
 <p>One Trustpilot reviewer captured the support frustration directly: "to sign up and promise the world, Then no service. No support and they don't care."</p>
 <p>The data does not support claims that these weaknesses affect all users or that they represent product capability gaps. What it does show is a pattern of reviewer-reported friction concentrated in specific operational areas.</p>
 <h2 id="where-pipedrive-users-feel-the-most-pain">Where Pipedrive Users Feel the Most Pain</h2>
-<p>Breaking down pain categories by mention frequency reveals where friction surfaces most often in reviewer experience.</p>
+<p>Breaking down pain categories by reviewer urgency reveals where the most acute friction concentrates.</p>
 <p>{{chart:pain-radar}}</p>
-<p>Pricing emerges as the dominant pain category, followed by UX friction and support quality concerns. Contract lock-in and data migration appear as secondary pain points.</p>
+<p>UX friction emerges as the most acute pain category (urgency 10.0), followed by pricing (7.2) and contract lock-in (6.8). Data migration, API limitations, and support concerns appear at lower intensity.</p>
 <p>The pricing complaints show specific patterns. One Reddit reviewer mentioned Pipedrive at "$15/user/mo" while evaluating alternatives, noting "basic" reporting capabilities. Another reviewer signaled pricing backlash within a 2-month window, indicating recent friction rather than historical grievance.</p>
 <blockquote>
 <p>I recently had the challenge to find the right CRM for our company.</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>Support complaints cluster around billing disputes and escalation failures. The Trustpilot reviewer who mentioned "no service. No support and they don't care" represents a broader pattern of support responsiveness concerns when billing issues arise.</p>
-<p>UX pain points appear less acute than pricing or support friction, but reviewers mention interface limitations and workflow constraints. One Software Advice reviewer noted "limited built-in marketing tools mean you'll need integrations for a complete solution," pointing to feature gaps rather than fundamental usability problems.</p>
+<p>UX pain points carry the highest urgency in the radar, with reviewers citing interface limitations and workflow constraints. One Software Advice reviewer noted "limited built-in marketing tools mean you'll need integrations for a complete solution," pointing to feature gaps rather than fundamental usability problems.</p>
 <p>The radar chart distribution suggests Pipedrive faces multiple friction points rather than a single catastrophic weakness. No single pain category dominates to the exclusion of others, indicating varied user contexts and deployment scenarios.</p>
 <h2 id="the-pipedrive-ecosystem-integrations-use-cases">The Pipedrive Ecosystem: Integrations &amp; Use Cases</h2>
 <p>Pipedrive's integration landscape and typical deployment patterns reveal how teams actually use the platform beyond vendor marketing.</p>

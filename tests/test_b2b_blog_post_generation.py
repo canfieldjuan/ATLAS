@@ -1205,6 +1205,42 @@ def test_deep_dive_competitor_list_excludes_self_and_case_dedups():
     assert "5 alternatives" in comp.data_summary
 
 
+def test_deep_dive_pain_section_ranks_by_urgency_not_frequency():
+    """D3: the pain-radar section must rank by reviewer URGENCY (the chart's
+    dataKey), not signals' frequency order. Otherwise the description called a
+    high-frequency/low-urgency category "dominant" while the radar's urgency
+    peak was a different category (pipedrive: prose said "Pricing dominant" but
+    the radar peak was UX at 10.0). Feed signals where pricing is most FREQUENT
+    but ux is most URGENT; the radar's first entry and the section's
+    data_summary "most acute" must both be ux, and the metric must be labeled.
+    Reverting the sort fails this."""
+    blueprint = blog_mod._blueprint_vendor_deep_dive(
+        {
+            "vendor": "Pipedrive",
+            "category": "CRM",
+            "review_count": 42,
+            "profile_richness": 4,
+            "slug": "pipedrive-deep-dive-2026-04",
+        },
+        {
+            "profile": {},
+            "quotes": [],
+            "data_context": {"vendor": "Pipedrive", "category": "CRM",
+                             "review_period": "2026-02 to 2026-04"},
+            "signals": [
+                {"pain_category": "pricing", "avg_urgency": 5.0, "signal_count": 100, "feature_gaps": []},
+                {"pain_category": "ux", "avg_urgency": 9.0, "signal_count": 10, "feature_gaps": []},
+                {"pain_category": "support", "avg_urgency": 3.0, "signal_count": 50, "feature_gaps": []},
+            ],
+        },
+    )
+    radar = next(c for c in blueprint.charts if c.chart_id == "pain-radar")
+    assert radar.data[0]["name"] == "ux"   # urgency-sorted (9.0), not frequency (pricing 100)
+    pain = next(s for s in blueprint.sections if s.id == "pain_analysis")
+    assert "reviewer urgency" in pain.data_summary
+    assert "ux shows the most acute friction" in pain.data_summary
+
+
 def test_blueprint_vendor_deep_dive_promotes_reasoning_sections():
     blueprint = blog_mod._blueprint_vendor_deep_dive(
         {
