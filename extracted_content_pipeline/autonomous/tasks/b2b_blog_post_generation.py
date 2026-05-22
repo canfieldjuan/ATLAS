@@ -8382,6 +8382,12 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             avg_urg = sum(s.get("avg_urgency", 0) for s in sigs) / len(sigs) if sigs else 0
             urgency_data.append({"name": vendor[:20], "urgency": round(avg_urg, 1)})
     rendered_vendor_count = len(urgency_data) or vendor_count
+    # D8b: the landscape renders strength/weakness profiles for at most the
+    # leading vendors (vendor_profiles[:5]), not every charted vendor. Surface
+    # that count so the description can frame profile coverage honestly
+    # ("profiles for the leading vendors") instead of implying every charted
+    # vendor is profiled.
+    profile_count = min(len(vendor_profiles), 5)
 
     sections = [
         SectionSpec(
@@ -8391,6 +8397,7 @@ def _blueprint_market_landscape(ctx: dict, data: dict) -> PostBlueprint:
             key_stats={
                 "category": category,
                 "vendor_count": rendered_vendor_count,
+                "profile_count": profile_count,
                 "total_reviews": ctx["total_reviews"],
                 "avg_urgency": ctx["avg_urgency"],
                 "market_regime": market_regime,

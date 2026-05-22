@@ -1563,6 +1563,34 @@ def test_market_landscape_headline_vendor_count_reflects_rendered_chart():
     assert "8 major vendors" not in hook.data_summary
 
 
+def test_market_landscape_exposes_capped_profile_count():
+    """D8b: the landscape profiles at most the leading vendors
+    (vendor_profiles[:5]), not every charted vendor, so the hook must surface
+    profile_count = min(len(vendor_profiles), 5). This lets the description say
+    "profiles for the leading vendors" honestly. With 7 profiles available,
+    profile_count is 5 (the cap). Reverting (drop the key, or use the uncapped
+    len) fails this."""
+    data = {
+        "data_context": {"category": "CRM"},
+        "quotes": [],
+        "vendor_signals": [],
+        "vendor_profiles": [
+            {"vendor": f"V{i}", "profile": {"strengths": ["s"], "weaknesses": ["w"]}}
+            for i in range(7)
+        ],
+    }
+    ctx = {
+        "slug": "crm-landscape-2026",
+        "category": "CRM",
+        "vendor_count": 7,
+        "total_reviews": 1000,
+        "avg_urgency": 5.0,
+    }
+    blueprint = _blueprint_market_landscape(ctx, data)
+    hook = next(s for s in blueprint.sections if s.id == "hook")
+    assert hook.key_stats["profile_count"] == 5   # capped, not the 7 available
+
+
 def test_pain_point_roundup_blueprint_routes_quotes_through_contract_gate():
     row = _v4_row(
         text="Salesforce reporting takes forever to load and constantly times out",
