@@ -356,11 +356,6 @@ const post: BlogPost = {
 </blockquote>
 <p>This opening signals active evaluation, the moment when dissatisfaction converts to search behavior. The reviewer does not specify what prompted the search, but the phrasing suggests Pipedrive either failed to meet needs or created enough friction to justify exploration.</p>
 <blockquote>
-<p>What do you like best about Pipedrive?</p>
-<p>-- Senior Værdifastsætter at a small business on G2</p>
-</blockquote>
-<p>The question format reflects verified platform review structures, where users answer prompted questions. The lack of negative framing in this snippet suggests the reviewer found aspects worth praising, though the full review context is not included here.</p>
-<blockquote>
 <p>Looking to streamline your sales process.</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>

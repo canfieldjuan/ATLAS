@@ -157,9 +157,6 @@ const post: BlogPost = {
 <p>Reviewer sentiment on Salesforce shows a clear pattern: deep respect for the platform's capabilities paired with frustration over cost and complexity. The strengths and weaknesses chart below illustrates where praise and pain concentrate.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <p>The two most cited strengths among reviewers are ecosystem depth and customization flexibility. Reviewers describe Salesforce as uniquely capable of adapting to complex business processes, with an AppExchange marketplace that provides pre-built solutions for niche requirements. One verified reviewer on G2 notes the platform's ability to handle intricate workflows:</p>
-<blockquote>
-<p>"What do you like best about Salesforce Sales Cloud" -- Matrix Sales Advisor at a mid-market company, verified reviewer on G2</p>
-</blockquote>
 <p>That customization power comes with trade-offs. The weakness data shows pricing concerns dominate reviewer complaints, followed by support quality issues and integration complexity. Reviewers frequently describe a platform that requires significant investment -- not just in licensing, but in implementation, training, and ongoing administration.</p>
 <p>The pricing pain is particularly acute. Multiple reviewers mention sticker shock during implementation, with costs extending well beyond the advertised per-seat fees. Setup expenses, consultant requirements, and add-on feature costs appear repeatedly in negative sentiment patterns.</p>
 <p>Support quality emerges as the second most common weakness. Reviewers describe inconsistent responses, long resolution times, and difficulty reaching knowledgeable support staff without premium support tiers. This pattern appears across company sizes, though enterprise reviewers report better experiences with dedicated account teams.</p>

@@ -139,11 +139,6 @@ const post: BlogPost = {
 <h2 id="what-microsoft-defender-for-endpoint-does-well-and-where-it-falls-short">What Microsoft Defender for Endpoint Does Well -- and Where It Falls Short</h2>
 <p>{{chart:strengths-weaknesses}}</p>
 <p>Microsoft Defender for Endpoint's core strength is its seamless integration with the Microsoft ecosystem. Reviewers consistently highlight the native coupling with Windows endpoints, Azure, Intune, and Microsoft 365 as a competitive advantage. For organizations already invested in Microsoft infrastructure, the product delivers unified visibility without the overhead of third-party connectors or separate licensing models.</p>
-<p>A Sr. System Administrator at a mid-market non-profit organization noted:</p>
-<blockquote>
-<p>"What do you like best about Microsoft Defender for Endpoint"
--- Sr. System Administrator, verified reviewer on G2</p>
-</blockquote>
 <p>User experience and familiarity also register as strengths. Teams already accustomed to Microsoft security tooling report lower onboarding friction and faster time-to-value. The product's integration with Microsoft Defender for Cloud, Sentinel, and other Microsoft security services creates a cohesive workflow for SOC teams operating within the Microsoft stack.</p>
 <p>However, reviewers identify significant gaps in developer environment visibility and integration depth with modern AI and coding tools. This limitation becomes operational pain as organizations modernize their development workflows. The absence of native visibility into Windows Services for Linux v2 environments and AI-assisted IDEs represents a material gap for teams adopting containerized or hybrid development practices.</p>
 <p>Performance concerns also surface in specific deployment scenarios. One IT administrator reported persistent performance issues across Dell fleets, suggesting environment-specific compatibility challenges that are difficult to diagnose without direct vendor support.</p>

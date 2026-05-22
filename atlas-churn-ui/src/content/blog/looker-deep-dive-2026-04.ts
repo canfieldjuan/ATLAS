@@ -260,11 +260,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This context-setting mention suggests Looker appears in discussions about agency-client reporting workflows, likely due to its integration with marketing data sources like Google Analytics, DV360, and Facebook Insights.</p>
-<p>A G2 reviewer opened with a positive framing:</p>
-<blockquote>
-<p>What do you like best about Looker</p>
-<p>-- Mechanical Design Engineer, Mid-Market (51-1000 emp.), Design industry, verified reviewer on G2</p>
-</blockquote>
 <p>This same reviewer went on to describe the learning curve friction documented earlier, illustrating how positive overall sentiment can coexist with specific pain points.</p>
 <p>Another Reddit reviewer described an active platform redesign decision:</p>
 <blockquote>

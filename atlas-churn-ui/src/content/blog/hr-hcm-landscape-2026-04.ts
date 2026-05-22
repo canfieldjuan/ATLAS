@@ -190,22 +190,12 @@ const post: BlogPost = {
 <p>In the past year or so we have encountered tons of problems with Gusto</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
-<p>Another G2 reviewer offered a more positive take:</p>
-<blockquote>
-<p>What do you like best about Gusto</p>
-<p>-- Business Owner, Small-Business (50 or fewer emp.) on G2</p>
-</blockquote>
 <p>These conflicting signals suggest that Gusto's experience varies by company size, use case, or support tier. Small businesses with straightforward payroll needs may find Gusto excellent, while larger teams or those with complex benefits setups encounter friction.</p>
 <p>Data migration challenges also appear in the complaint set. Reviewers switching from another payroll provider report manual data entry, incomplete imports, and reconciliation errors during onboarding.</p>
 <h2 id="rippling-strengths-weaknesses">Rippling: Strengths &amp; Weaknesses</h2>
 <p>Rippling holds a 4.6 average rating across 44 reviews in scope. Pain pressure concentrates in UX, support, and onboarding. Strengths cluster around integration, features, and overall satisfaction. Weaknesses include performance, technical debt, and support.</p>
 <p>Reviewers praise Rippling's breadth of integrations—payroll, benefits, IT management, device provisioning, and app access control all live in one platform. This consolidation appeals to buyers tired of tool sprawl. Feature depth is strong, and the platform supports complex workflows like automated onboarding, offboarding, and compliance tracking.</p>
 <p>However, UX complaints appear frequently. Reviewers describe a steep learning curve, non-intuitive navigation, and workflows that require multiple clicks to complete simple tasks. Support quality varies—some reviewers receive fast responses, while others report long ticket resolution times and unhelpful documentation.</p>
-<p>One G2 reviewer wrote:</p>
-<blockquote>
-<p>What do you like best about Rippling</p>
-<p>-- Director of People &amp; Business Operations, Mid-Market (51-1000 emp.) on G2</p>
-</blockquote>
 <p>Onboarding friction also appears in the complaint set. Reviewers report that setting up Rippling requires significant configuration, and the platform's flexibility creates complexity for teams without dedicated HR or IT resources.</p>
 <p>Performance issues and technical debt round out the weakness list. Some reviewers report slow page loads, occasional downtime, and bugs that persist across multiple releases.</p>
 <p>Despite these pain points, Rippling retains customers through its integration breadth and feature depth. Buyers seeking a consolidated HRIS that spans HR, IT, and finance workflows find Rippling's value proposition compelling, even when UX and support friction create day-to-day frustration.</p>
@@ -230,17 +220,6 @@ const post: BlogPost = {
 <p>The category exhibits moderate displacement intensity (6.0) with a stable market structure, indicating active vendor competition without catastrophic disruption. BambooHR faces the highest displacement pressure, with customers evaluating Gusto, HiBob, and new HRIS alternatives driven by overall dissatisfaction. Rippling shows concentrated UX pain across all buyer personas while actively targeting Deel and Gusto, suggesting feature-driven competitive dynamics rather than price wars.</p>
 <p>Consolidation pressure drives buyers toward bundled HRIS suites, exposing BambooHR's payroll limitations against specialized tools. If you need international payroll or province-specific tax handling, specialized tools may still outperform bundled platforms in those narrow use cases.</p>
 <h2 id="what-reviewers-say-across-the-hr-hcm-market">What Reviewers Say Across the HR / HCM Market</h2>
-<p>Public reviews offer a window into how buyers experience these platforms in practice. Below are four quote-backed examples spanning the HR / HCM market:</p>
-<blockquote>
-<p>I have been an independent contractor for a number of years but managed to maintain my Services Certificates with some partner work</p>
-<p>-- reviewer on Reddit (Workday, negative sentiment)</p>
-<p>What do you like best about Rippling</p>
-<p>-- Director of People &amp; Business Operations, Mid-Market (51-1000 emp.) on G2 (Rippling, positive sentiment)</p>
-<p>Sorted through various companies for payroll, landed on Gusto</p>
-<p>-- reviewer on Reddit (Gusto, negative sentiment)</p>
-<p>What do you like best about Gusto</p>
-<p>-- Business Owner, Small-Business (50 or fewer emp.) on G2 (Gusto, positive sentiment)</p>
-</blockquote>
 <p>These snippets illustrate the range of experiences across the category. Positive reviews cluster around ease of use, integration breadth, and feature depth. Negative reviews cluster around support quality, contract lock-in, and UX friction.</p>
 <p>The claim plan for this analysis identifies a key causal trigger: buyers discover BambooHR's payroll and international capabilities lag dedicated solutions when scaling or expanding geographically. Consolidation pressure drives buyers toward bundled HRIS suites, exposing BambooHR's payroll limitations against specialized tools.</p>
 <p>Despite UX, integration, onboarding, and overall satisfaction complaints, BambooHR retains customers through perceived strengths in these same areas, plus features and performance. Contradictory evidence suggests segmented experiences or tolerance thresholds. Small businesses with simple payroll needs may find BambooHR sufficient, while mid-market buyers scaling internationally or managing complex benefits hit capability ceilings.</p>

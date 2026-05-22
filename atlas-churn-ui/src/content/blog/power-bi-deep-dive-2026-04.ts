@@ -180,7 +180,7 @@ const post: BlogPost = {
 <p>Power BI's ecosystem reflects its Microsoft-first design. The top integrations are Teams (7 mentions), BigQuery (6 mentions), Google Sheets (6 mentions), Excel (5 mentions), and Power Query (4 mentions). That mix—Microsoft tools plus Google Cloud connectors—suggests Power BI is used in hybrid environments where Microsoft 365 is the collaboration layer but data lives elsewhere.</p>
 <h3 id="integration-patterns-microsoft-first-cloud-second">Integration patterns: Microsoft-first, cloud-second</h3>
 <p>The integration list shows Power BI's strength and limitation. Teams (7 mentions) and Excel (5 mentions) indicate tight Microsoft 365 embedding, which creates workflow continuity for users who already live in Outlook, Teams, and SharePoint. But BigQuery (6 mentions) and Google Sheets (6 mentions) suggest many teams are pulling data from non-Microsoft sources, which introduces integration complexity and performance friction.</p>
-<p>Power Query (4 mentions) appears as both a strength and a pain point. It enables custom data transformations but requires DAX knowledge, which creates a skill gap for teams without dedicated BI developers. One Business Intelligence Analyst asked "What do you like best about Microsoft Power BI," suggesting even experienced users find the product's advanced features require ongoing learning investment.</p>
+<p>Power Query (4 mentions) appears as both a strength and a pain point. It enables custom data transformations but requires DAX knowledge, which creates a skill gap for teams without dedicated BI developers.</p>
 <h3 id="use-case-distribution-dashboards-reporting-and-migration-pressure">Use case distribution: Dashboards, reporting, and migration pressure</h3>
 <p>The top use cases are Power BI itself (17 mentions, 1.9 urgency), Power Query (12 mentions, 2.2 urgency), Tableau (10 mentions, 3.5 urgency), Power BI Report Server (8 mentions, 4.8 urgency), Microsoft Fabric (5 mentions, 2.1 urgency), and Power Pivot (5 mentions, 2.9 urgency). Tableau's 3.5 urgency score is the highest among named competitors, indicating active evaluation pressure.</p>
 <p>Power BI Report Server's 4.8 urgency suggests on-premises teams are under pressure to migrate to cloud-hosted Power BI or switch entirely. One reviewer mentioned "Evaluating Qlik Sense → Power BI migration," indicating some teams are moving <em>toward</em> Power BI from legacy on-premises tools, but the Tableau urgency signal suggests that inbound migration is competing with outbound evaluation.</p>
@@ -262,11 +262,6 @@ const post: BlogPost = {
 -- reviewer at GCP, 1200 employees, building materials industry, United States, reviewer on Reddit</p>
 </blockquote>
 <p>This quote is the clearest switching signal in the dataset. The reviewer describes a Fabric-to-Looker migration driven by GCP architectural guidance, indicating cloud-native consolidation is a real competitive threat. The quote's tone—"took it way too seriously"—suggests the reviewer is skeptical of the migration decision, which aligns with the counterevidence thesis that some teams stay on Power BI despite frustration.</p>
-<blockquote>
-<p>"What do you like best about Microsoft Power BI" 
--- Business Intelligence Analyst, Small-Business (50 or fewer emp.), verified reviewer on G2</p>
-</blockquote>
-<p>This quote is a question rather than a statement, but its presence in the dataset suggests even experienced BI analysts are actively evaluating what Power BI does well. That evaluative stance indicates the product is under ongoing assessment rather than taken for granted.</p>
 <blockquote>
 <p>"Company is undergoing a lot of changes and going to try and leverage AWS full sail" 
 -- reviewer on Reddit</p>

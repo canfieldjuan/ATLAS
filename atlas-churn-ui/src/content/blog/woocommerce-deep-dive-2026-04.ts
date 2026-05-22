@@ -286,11 +286,6 @@ const post: BlogPost = {
 </blockquote>
 <p>This performance comparison captures a perception gap that drives Shopify evaluation, even if not universally true.</p>
 <blockquote>
-<p>"What do you like best about WooCommerce"
--- verified reviewer on G2</p>
-</blockquote>
-<p>This question frame, appearing in verified reviews, indicates active satisfaction assessment and feature evaluation.</p>
-<blockquote>
 <p>"Migrating over to Shopify from WooCommerce doesn't have to be tough"
 -- reviewer on Reddit</p>
 </blockquote>

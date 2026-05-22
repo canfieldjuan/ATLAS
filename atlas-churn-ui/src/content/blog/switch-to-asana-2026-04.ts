@@ -157,9 +157,6 @@ const post: BlogPost = {
 </ul>
 <p>The integration dependency is a double-edged pattern. On one hand, it enables flexible workflow design. On the other hand, it means that Asana's out-of-the-box functionality may not cover all use cases. Teams switching from more integrated platforms (like Jira, which includes native time tracking, reporting, and roadmapping) report needing to add third-party tools to replicate previous capabilities.</p>
 <p><strong>Learning curve</strong>: Reviewers describe Asana's learning curve as manageable but not trivial. The platform's flexibility — multiple views (list, board, timeline, calendar), custom fields, project templates — requires upfront configuration. An Assistant Consultant on G2 noted:</p>
-<blockquote>
-<p>"What do you like best about Asana? The ability to customize workflows and see tasks in multiple formats." — Assistant Consultant, verified reviewer on G2</p>
-</blockquote>
 <p>This positive sentiment is common, but it implies a setup phase. Teams migrating from simpler tools like Trello may underestimate the time required to configure Asana to match their workflows. Conversely, teams migrating from Jira may find Asana's configuration options limited compared to Jira's extensive customization.</p>
 <p><strong>Workflow adaptation</strong>: The recurring task limitation mentioned earlier is a specific example of a broader pattern: Asana optimizes for project-based work, not operational workflows. Marketing teams, customer success teams, and operations teams with predictable, repeating tasks report frustration with Asana's handling of recurring work.</p>
 <p>One reviewer on Reddit described their company's transition:</p>

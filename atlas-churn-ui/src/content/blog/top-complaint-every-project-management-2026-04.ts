@@ -133,12 +133,6 @@ const post: BlogPost = {
 <h2 id="jira-the-1-complaint-is-support">Jira: The #1 Complaint Is Support</h2>
 <p>Jira dominates enterprise project management, but 263 reviews in our sample contained complaints. The most frequent issue: support quality.</p>
 <p>Reviewers describe slow response times, generic troubleshooting steps, and escalation friction. For teams managing complex workflows with custom fields, automation rules, and third-party integrations, support delays compound.</p>
-<p>One verified reviewer on G2 opened their feedback with a question that doubles as a complaint:</p>
-<blockquote>
-<p>What do you like best about Jira?</p>
-<p>-- Customer Support Specialist, Mid-Market (51-1000 emp.), Computer Software, verified reviewer on G2</p>
-</blockquote>
-<p>The phrasing suggests the reviewer struggled to articulate strengths before diving into frustrations. This is common in reviews where support issues overshadow product capability.</p>
 <p>Another Reddit user described organizational pressure to reduce SaaS sprawl:</p>
 <blockquote>
 <p>I manage a small team (5 people) within a large organization (~30,000 employees), and our IT department is pushing to reduce third-party SaaS usage.</p>
@@ -155,11 +149,6 @@ const post: BlogPost = {
 <h2 id="notion-the-1-complaint-is-features">Notion: The #1 Complaint Is Features</h2>
 <p>Notion has 218 reviews with complaints. The most common issue: feature gaps.</p>
 <p>Reviewers describe Notion as excellent for documentation and lightweight task tracking but inadequate for complex project management. Missing capabilities include advanced filtering, dependency tracking, and granular permissions.</p>
-<p>One verified G2 reviewer opened positively:</p>
-<blockquote>
-<p>What do you like best about Notion?</p>
-<p>-- Machine Learning Engineer, Small-Business (50 or fewer emp.), Computer Software, verified reviewer on G2</p>
-</blockquote>
 <p>The positive framing suggests the reviewer values Notion's strengths but later describes feature limitations that constrain team workflows.</p>
 <p>Notion's urgency score is 2.8 out of 10—higher than Jira but still moderate. Feature gaps are known trade-offs. Teams adopt Notion for its flexibility and aesthetic, then hit scaling limits as projects grow.</p>
 <p>This suggests some reviewers see Notion's product velocity as a strength. However, the feature complaint volume indicates velocity hasn't closed critical gaps for project-heavy teams.</p>

@@ -274,12 +274,6 @@ const post: BlogPost = {
 -- reviewer on reddit</p>
 </blockquote>
 <p>This suggests that even highly-rated tools can feel like a poor fit when team needs evolve.</p>
-<p><strong>Salesforce reviewers highlight feature satisfaction:</strong></p>
-<blockquote>
-<p>What do you like best about Agentforce Sales (formerly Salesforce Sales Cloud)<br />
--- verified reviewer on g2, Software Engineer, Enterprise (&gt; 1000 emp.)</p>
-</blockquote>
-<p>This phrasing suggests a structured review prompt, but the positive sentiment is clear.</p>
 <p><strong>Pipedrive reviewers emphasize real-world testing:</strong></p>
 <blockquote>
 <p>Tried each for at least 2 months with real sales activity<br />

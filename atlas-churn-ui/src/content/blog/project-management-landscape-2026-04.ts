@@ -201,12 +201,7 @@ Support quality emerges as the primary pain point. Nineteen reviews mention supp
 <h2 id="jira-strengths-weaknesses">Jira: Strengths &amp; Weaknesses</h2>
 <p>Jira holds a 4.3 average rating across 60 reviews in scope. The platform dominates among software development teams but faces churn pressure from UX friction and pricing complexity.</p>
 <p><strong>Strengths:</strong><br />
-Performance and UX receive positive mentions, particularly in reviews from technical users. One verified Customer Support Specialist on G2 wrote:</p>
-<blockquote>
-<p>What do you like best about Jira</p>
-<p>-- Customer Support Specialist on G2</p>
-</blockquote>
-<p>The quote reflects a pattern: Jira's strengths align with technical workflows, but non-technical users struggle with the learning curve.</p>
+<p>Jira's strengths align with technical workflows, but non-technical users struggle with the learning curve.</p>
 <p><strong>Weaknesses:</strong><br />
 Overall dissatisfaction leads the weakness list, followed by UX friction and pricing complaints. Contract lock-in, data migration difficulty, and support quality also appear frequently.</p>
 <p>Jira's UX complaints center on complexity and feature overload. Twelve reviews cite UX pain, often from non-developer roles forced to use the platform for cross-functional collaboration.</p>
@@ -262,23 +257,12 @@ Basecamp's flat-rate pricing appeals to teams frustrated by per-seat charges. Cl
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>The quote highlights migration friction, a pain point that appears across multiple vendors. Teams switching from Asana to ClickUp report data loss, broken workflows, and extended onboarding timelines.</p>
-<p><strong>Jira:</strong></p>
-<blockquote>
-<p>What do you like best about Jira</p>
-<p>-- Customer Support Specialist, Mid-Market (51-1000 emp.), Computer Software on G2</p>
-</blockquote>
-<p>The question format reflects a common pattern in verified reviews: prompts that elicit both strengths and weaknesses. Jira's strengths align with technical workflows, but non-technical users struggle with the learning curve.</p>
 <p><strong>Wrike:</strong></p>
 <blockquote>
 <p>I manage a small team (5 people) within a large organization (~30,000 employees), and our IT department is pushing to reduce third-party SaaS usage</p>
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>The quote illustrates consolidation pressure, a pattern that affects multiple vendors. Enterprise IT departments push teams toward approved tools, creating churn for standalone project management platforms.</p>
-<p><strong>Notion:</strong></p>
-<blockquote>
-<p>What do you like best about Notion</p>
-<p>-- Machine Learning Engineer, Small-Business (50 or fewer emp.), Computer Software on G2</p>
-</blockquote>
 <p>The quote reflects Notion's appeal among technical teams and small businesses. The platform's flexibility attracts teams seeking customization but creates UX friction for non-technical users.</p>
 <p>These quotes represent a small sample of the 1,464 churn signals analyzed. The full dataset includes 345 verified reviews and 2,674 community mentions, spanning 10 vendors and six pain categories.</p>`,
 }

@@ -154,11 +154,6 @@ const post: BlogPost = {
 <p>Complaint categories reveal where each platform loses reviewer confidence. The patterns differ more than the totals suggest.</p>
 <p>{{chart:pain-comparison-bar}}</p>
 <h3 id="insightly-pain-categories">Insightly Pain Categories</h3>
-<p>Insightly reviewers report support friction most frequently. The help function fails to deliver specific answers. One reviewer on G2 noted after one year:</p>
-<blockquote>
-<p>What do you dislike about Insightly CRM? The Help function. We would ask a specific question, the a...</p>
-<p>-- verified reviewer on G2</p>
-</blockquote>
 <p>Overall dissatisfaction appears as the second most common category. Storage limits and feature gaps trigger discontinuation. A Capterra reviewer described running out of free space and discontinuing contact management as a result.</p>
 <p>Onboarding complaints surface less frequently but carry weight. Training resources exist, but implementation challenges emerge after the initial setup period when teams attempt deeper customization.</p>
 <p>Pricing and UX complaints appear in the dataset but do not dominate. Insightly's visual contact management and dashboard functionality offset some usability concerns. Contract lock-in, integration, and performance complaints register minimal mentions.</p>
@@ -204,11 +199,6 @@ const post: BlogPost = {
 <p>Direct reviewer language grounds the comparison in specific friction points and retention factors.</p>
 <h3 id="insightly-reviewer-voice">Insightly Reviewer Voice</h3>
 <p>Insightly reviewers cite dashboard functionality and contact management as primary strengths.</p>
-<p>The visual elements and training resources create initial satisfaction. After one year, however, support friction surfaces. A G2 reviewer noted:</p>
-<blockquote>
-<p>What do you dislike about Insightly CRM? The Help function. We would ask a specific question, the a...</p>
-<p>-- verified reviewer on G2</p>
-</blockquote>
 <p>The help function fails to deliver specific answers when implementation challenges emerge. Storage limits compound frustration. A Capterra reviewer discontinued after running out of free space while managing contacts.</p>
 <p>Despite support complaints, some reviewers remain. One G2 reviewer mentioned liking the dashboard after one year, suggesting visual functionality offsets help inadequacy for certain use cases.</p>
 <h3 id="zoho-crm-reviewer-voice">Zoho CRM Reviewer Voice</h3>

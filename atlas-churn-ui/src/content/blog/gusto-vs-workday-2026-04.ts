@@ -167,11 +167,6 @@ const post: BlogPost = {
 <p><strong>The synthesis wedge for Workday is execution failure during critical cycles.</strong> Customers do not leave because the platform lacks features. They leave when support quality fails during onboarding or renewal windows, creating operational risk that outweighs feature value.</p>
 <h2 id="what-reviewers-say-about-gusto-and-workday">What Reviewers Say About Gusto and Workday</h2>
 <p>Direct reviewer language grounds the comparison in real experience. The quotes below reflect both complaint patterns and retention factors across both platforms.</p>
-<p><strong>Gusto reviewers cite pricing enforcement and workflow value.</strong> One business owner acknowledged pricing concerns but stayed satisfied overall:</p>
-<blockquote>
-<p>"What do you like best about Gusto."
--- Business Owner, Small-Business (50 or fewer emp.), verified reviewer on G2</p>
-</blockquote>
 <p>Another reviewer described the decision process that led to Gusto:</p>
 <blockquote>
 <p>"Sorted through various companies for payroll, landed on Gusto."

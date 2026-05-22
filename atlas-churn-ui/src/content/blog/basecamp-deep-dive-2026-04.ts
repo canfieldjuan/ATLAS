@@ -158,9 +158,6 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths-what-reviewers-praise">Strengths: What Reviewers Praise</h3>
 <p><strong>Simplicity and focus.</strong> The most consistent praise centers on Basecamp's uncluttered interface and resistance to feature bloat. Reviewers describe a platform that does a few things well rather than attempting to be everything to everyone.</p>
-<blockquote>
-<p>"What do you like best about Basecamp" -- Webmaster at a small business, verified reviewer on G2</p>
-</blockquote>
 <p>This strength appears most valuable to teams overwhelmed by complex project management platforms. The absence of endless configuration options is framed as a feature, not a limitation, by satisfied reviewers.</p>
 <p><strong>Flat-rate pricing.</strong> Basecamp's unlimited-user pricing model receives consistent positive mention. Teams scaling from 10 to 100+ users report predictable costs, contrasting favorably with per-seat pricing from competitors.</p>
 <p><strong>All-in-one consolidation.</strong> Reviewers value the integration of messaging, file sharing, to-dos, and scheduling in a single platform. This reduces tool sprawl for teams seeking simplicity over specialization.</p>

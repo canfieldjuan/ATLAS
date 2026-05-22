@@ -178,11 +178,6 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This migration signal suggests active evaluation of alternatives, though the supplied evidence does not include switching volume or primary drivers.</p>
-<p>One Tableau reviewer on G2 noted:</p>
-<blockquote>
-<p>What do you like best about Tableau</p>
-<p>-- Analytical Consultant, verified reviewer on G2</p>
-</blockquote>
 <p>The positive framing suggests satisfaction exists alongside documented complaints, aligning with the high overall satisfaction mention volume (265).</p>
 <p>The reviewer language reinforces the buyer-fit distinction: Metabase serves corporate and financial institution workflows with SQL accessibility as a primary strength. Tableau serves mature organizations with deep feature requirements and budget capacity to absorb licensing costs. The urgency gap reflects this difference, with Tableau's pricing and complexity creating acute pressure for small teams while Metabase's UX and dissatisfaction signals are stabilizing.</p>`,
 }
