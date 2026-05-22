@@ -650,11 +650,70 @@ export function updateGeneratedLandingPageDraft(
 export function repairGeneratedLandingPageDraft(
   id: string,
 ): Promise<GeneratedAssetDraft> {
-  return postAssetJson<GeneratedAssetDraft>(
-    'landing_page',
-    `/drafts/${encodeURIComponent(id)}/repair`,
-    {},
-  )
+  const url = `${ASSETS_BASE}/landing_page/drafts/${encodeURIComponent(id)}/repair`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: '{}',
+    })
+  return withRefreshOn401(doFetch).then(async (res) => {
+    if (!res.ok) {
+      throw new Error(await repairErrorMessage(res))
+    }
+    return rawJson<GeneratedAssetDraft>(res)
+  })
+}
+
+async function repairErrorMessage(res: Response): Promise<string> {
+  const text = await rawText(res)
+  const body = jsonFromText(text)
+  if (body !== null) {
+    const detail = recordValue(body)?.detail
+    if (typeof detail === 'string' && detail.trim()) {
+      return `API ${res.status}: ${detail.trim()}`
+    }
+    const detailRecord = recordValue(detail)
+    if (detailRecord) {
+      const message = textValue(detailRecord.message)
+      const blockers = repairResultBlockers(detailRecord.repair_result)
+      const suffix = blockers.length > 0 ? `: ${blockers.join(', ')}` : ''
+      return `API ${res.status}: ${message || 'Landing page repair failed'}${suffix}`
+    }
+  }
+  return `API ${res.status}: ${text || res.statusText}`
+}
+
+function jsonFromText(text: string): unknown {
+  if (!text.trim()) return null
+  try {
+    return JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+function repairResultBlockers(value: unknown): string[] {
+  const result = recordValue(value)
+  const errors = Array.isArray(result?.errors) ? result.errors : []
+  const firstError = recordValue(errors[0])
+  return valueList(firstError?.blockers).slice(0, 4)
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function valueList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(textValue).filter(Boolean)
+  const text = textValue(value)
+  return text ? text.split(',').map((item) => item.trim()).filter(Boolean) : []
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 /** GET /content-assets/landing_page/public/{id} -- approved public landing page. */
