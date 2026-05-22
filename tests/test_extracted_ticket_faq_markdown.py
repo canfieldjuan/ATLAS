@@ -2269,6 +2269,10 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "evidence_count": 2,
         "source_id_count": 2,
         "first_source_id": "ticket-northstar-1",
+        "source_type_counts": {"support_ticket": 2},
+        "source_channel_counts": {"support_tickets": 2},
+        "weighted_source_volume_by_type": {"support_ticket": 2},
+        "weighted_source_volume_by_channel": {"support_tickets": 2},
         "step_count": 3,
         "term_mapping_count": 0,
     }
@@ -2321,13 +2325,13 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
             },
             {
                 "query_id": "search-1",
-                "search_query": "download report",
+                "search_query": "export report",
                 "results_count": "0",
                 "search_count": "25",
             },
             {
                 "query_id": "search-1",
-                "search_query": "export report",
+                "search_query": "export attribution report",
                 "search_count": "10",
             },
             {
@@ -2336,7 +2340,7 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
             },
             {
                 "sales_objection_id": "objection-1",
-                "sales_objection": "Prospect asked whether reporting exports are available.",
+                "sales_objection": "Prospect asked whether reporting export is available.",
             },
         ],
     )
@@ -2378,6 +2382,28 @@ def test_ticket_faq_cli_writes_source_mix_result_diagnostics(tmp_path: Path) -> 
             "support_ticket": 1,
         },
         "zero_result_search_source_count": 1,
+    }
+    reporting_item = result["diagnostics"]["items"][0]
+    assert reporting_item["topic"] == "reporting friction"
+    assert reporting_item["source_type_counts"] == {
+        "sales_objection": 1,
+        "search_log": 1,
+        "support_ticket": 1,
+    }
+    assert reporting_item["source_channel_counts"] == {
+        "sales_inputs": 1,
+        "search_logs": 1,
+        "support_tickets": 1,
+    }
+    assert reporting_item["weighted_source_volume_by_type"] == {
+        "sales_objection": 1,
+        "search_log": 25,
+        "support_ticket": 1,
+    }
+    assert reporting_item["weighted_source_volume_by_channel"] == {
+        "sales_inputs": 1,
+        "search_logs": 25,
+        "support_tickets": 1,
     }
 
 

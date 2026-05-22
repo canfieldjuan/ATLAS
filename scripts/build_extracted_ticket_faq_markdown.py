@@ -811,6 +811,10 @@ def _item_summary(index: int, item: dict[str, Any]) -> dict[str, Any]:
     source_ids = item.get("source_ids") or ()
     steps = item.get("steps") or ()
     term_mappings = item.get("term_mappings") or ()
+    source_type_counts = _clean_count_mapping(item.get("source_type_counts"))
+    weighted_source_volume_by_type = _clean_count_mapping(
+        item.get("weighted_source_volume_by_type")
+    )
     return {
         "rank": index,
         "topic": item.get("topic"),
@@ -825,9 +829,36 @@ def _item_summary(index: int, item: dict[str, Any]) -> dict[str, Any]:
         "evidence_count": item.get("evidence_count"),
         "source_id_count": len(source_ids),
         "first_source_id": source_ids[0] if source_ids else None,
+        "source_type_counts": source_type_counts,
+        "source_channel_counts": _source_channel_counts_from_types(source_type_counts),
+        "weighted_source_volume_by_type": weighted_source_volume_by_type,
+        "weighted_source_volume_by_channel": _source_channel_counts_from_types(
+            weighted_source_volume_by_type
+        ),
         "step_count": len(steps),
         "term_mapping_count": len(term_mappings),
     }
+
+
+def _clean_count_mapping(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, count in value.items():
+        try:
+            amount = int(count)
+        except (TypeError, ValueError):
+            continue
+        out[str(key)] = amount
+    return dict(sorted(out.items()))
+
+
+def _source_channel_counts_from_types(source_type_counts: dict[str, int]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for source_type, count in source_type_counts.items():
+        channel = _SOURCE_CHANNELS.get(source_type, "other")
+        counts[channel] = counts.get(channel, 0) + count
+    return dict(sorted(counts.items()))
 
 
 def _term_mapping_count(items: list[dict[str, Any]]) -> int:
