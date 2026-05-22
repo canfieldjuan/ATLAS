@@ -81,6 +81,15 @@ type FAQItemPreview = {
   answer: string
   actionItems: string[]
   sourceLabels: string[]
+  termMappings: FAQTermMappingPreview[]
+}
+
+type FAQTermMappingPreview = {
+  customerTerm: string
+  documentationTerm: string
+  sourceIdCount: string
+  zeroResultSourceCount: string
+  opportunityScore: string
 }
 
 type StructuredDataSummary = {
@@ -1038,6 +1047,42 @@ function AssetDetailDrawer({
                       </div>
                     </div>
                   )}
+                  {item.termMappings.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Vocabulary gaps
+                      </div>
+                      <ul className="mt-2 space-y-2 text-sm text-slate-300">
+                        {item.termMappings.map((mapping, mappingIndex) => (
+                          <li
+                            key={`${mapping.customerTerm}-${mapping.documentationTerm}-${mappingIndex}`}
+                            className="border-l border-cyan-500/40 pl-3"
+                          >
+                            <div>
+                              <span className="text-cyan-200">
+                                {mapping.customerTerm}
+                              </span>
+                              <span className="text-slate-500">{' -> '}</span>
+                              <span>{mapping.documentationTerm}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                              {mapping.sourceIdCount && (
+                                <span>{mapping.sourceIdCount} source(s)</span>
+                              )}
+                              {mapping.zeroResultSourceCount && (
+                                <span>
+                                  {mapping.zeroResultSourceCount} zero-result source(s)
+                                </span>
+                              )}
+                              {mapping.opportunityScore && (
+                                <span>score {mapping.opportunityScore}</span>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1728,6 +1773,7 @@ function addAssetSpecificFacts(
     addFact(facts, 'ticket sources', row.ticket_source_count)
     addFact(facts, 'source rows', row.source_count)
     addFact(facts, 'checks passed', row.passed_output_checks)
+    addFact(facts, 'vocab gaps', faqVocabularyGapCount(row.items))
     return
   }
   addFact(facts, 'brief', row.brief_type)
@@ -1786,6 +1832,7 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
     const items = faqItemList(row.items)
     const first = items[0]
     const checks = outputCheckLabels(row.output_checks)
+    const vocabularyGapCount = faqVocabularyGapCount(row.items)
     const sourceMeta =
       first?.sourceLabels.slice(0, 2).map((source) => `source: ${source}`) ?? []
     return previewOrNull({
@@ -1793,8 +1840,9 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
       body: excerpt(first?.answer || textValue(row.markdown)),
       meta: [
         ...sourceMeta,
+        vocabularyGapCount ? `vocab gaps: ${vocabularyGapCount}` : '',
         ...checks.slice(0, 3).map((check) => `check: ${check}`),
-      ],
+      ].filter(Boolean),
     })
   }
   const section = firstSection(row.sections)
@@ -1838,7 +1886,27 @@ function faqItemList(value: unknown): FAQItemPreview[] {
     answer: textValue(item.answer),
     actionItems: valueList(item.action_items),
     sourceLabels: valueList(item.source_labels),
+    termMappings: faqTermMappingList(item.term_mappings),
   })).filter((item) => item.question || item.answer)
+}
+
+function faqTermMappingList(value: unknown): FAQTermMappingPreview[] {
+  return recordList(value)
+    .map((mapping) => ({
+      customerTerm: textValue(mapping.customer_term),
+      documentationTerm: textValue(mapping.documentation_term),
+      sourceIdCount: numberText(mapping.source_id_count),
+      zeroResultSourceCount: numberText(mapping.zero_result_source_count),
+      opportunityScore: numberText(mapping.opportunity_score),
+    }))
+    .filter((mapping) => mapping.customerTerm || mapping.documentationTerm)
+}
+
+function faqVocabularyGapCount(value: unknown): number {
+  return faqItemList(value).reduce(
+    (total, item) => total + item.termMappings.length,
+    0,
+  )
 }
 
 function recordList(value: unknown): Record<string, unknown>[] {
