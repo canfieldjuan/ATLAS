@@ -2557,6 +2557,85 @@ def test_ticket_faq_cli_rejects_empty_documentation_term_file(tmp_path: Path) ->
     assert "Traceback" not in completed.stderr
 
 
+def test_ticket_faq_cli_rejects_unrecognized_csv_documentation_term_fields(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.csv"
+    term_file.write_text(
+        "\n".join((
+            "url,slug",
+            "https://help.example/export,export",
+            "",
+        )),
+        encoding="utf-8",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file has no recognized term fields:" in completed.stderr
+    assert "expected one of: documentation_term" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_unrecognized_json_documentation_term_fields(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.json"
+    term_file.write_text(
+        json.dumps({"documents": [{"url": "https://help.example/export"}]}),
+        encoding="utf-8",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file has no recognized term fields:" in completed.stderr
+    assert "expected one of: documentation_term" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_ticket_faq_cli_rejects_unrecognized_jsonl_documentation_term_fields(
+    tmp_path: Path,
+) -> None:
+    source = _write_ticket_csv(
+        tmp_path,
+        "ticket-1,2026-05-01,Attribution export,How do I export attribution data?,exports",
+    )
+    term_file = tmp_path / "terms.jsonl"
+    term_file.write_text(
+        json.dumps({"url": "https://help.example/export"}) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_ticket_faq_cli(
+        source,
+        "--documentation-term-file",
+        str(term_file),
+    )
+
+    assert completed.returncode == 1
+    assert "--documentation-term-file has no recognized term fields:" in completed.stderr
+    assert "expected one of: documentation_term" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
 def test_ticket_faq_cli_rejects_malformed_json_documentation_term_file(
     tmp_path: Path,
 ) -> None:
