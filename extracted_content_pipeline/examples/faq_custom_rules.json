@@ -1,0 +1,17 @@
+{
+  "intent_rules": [
+    {
+      "topic": "data freshness",
+      "keywords": [
+        "warehouse sync",
+        "connector lag"
+      ]
+    }
+  ],
+  "vocabulary_gap_rules": [
+    [
+      "SSO",
+      "single sign-on"
+    ]
+  ]
+}

@@ -239,6 +239,27 @@ inspect grounding before choosing whether to generate campaigns or longer
 assets. Add `--as-of-date YYYY-MM-DD` with `--window-days` for reproducible
 canary runs.
 
+Reusable customer glossary and intent mappings can be loaded from a checked JSON
+rule file:
+
+```bash
+python scripts/build_extracted_ticket_faq_markdown.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --documentation-term "Single sign-on setup" \
+  --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
+  --result-output support_ticket_faq_result.json \
+  --output support_ticket_faq.md
+```
+
+The JSON object accepts optional `intent_rules` entries shaped as
+`{"topic": "...", "keywords": ["...", "..."]}` and optional
+`vocabulary_gap_rules` entries shaped as `["customer term", "documentation term"]`.
+Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
+`--vocabulary-gap-rule` flags take precedence over file rules. Rule-file values
+use the same CLI delimiter guardrails: intent topics cannot contain `=` or `,`,
+and keywords or vocabulary aliases cannot contain `,`.
+
 When `ticket_faq_markdown` migrations are installed, prove the persisted review
 loop with the FAQ lifecycle smoke:
 

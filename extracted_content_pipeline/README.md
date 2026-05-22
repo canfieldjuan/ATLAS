@@ -190,6 +190,40 @@ show a support phone number, email, or help URL; the builder never invents one.
 Pass `--require-output-checks` in host smoke runs when weak FAQ output should
 fail the command instead of producing a reviewable draft.
 
+Reusable customer glossary and intent mappings can live in a JSON rule file:
+
+```bash
+python scripts/build_extracted_ticket_faq_markdown.py \
+  extracted_content_pipeline/examples/support_ticket_sources.csv \
+  --source-format csv \
+  --documentation-term "Single sign-on setup" \
+  --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
+  --result-output support_ticket_faq_result.json \
+  --output support_ticket_faq.md
+```
+
+The rule file accepts two optional arrays:
+
+```json
+{
+  "intent_rules": [
+    {"topic": "data freshness", "keywords": ["warehouse sync", "connector lag"]}
+  ],
+  "vocabulary_gap_rules": [
+    ["SSO", "single sign-on"]
+  ]
+}
+```
+
+Intent rules group customer language under a product-specific FAQ topic.
+Vocabulary-gap rules map customer terms to documentation terms passed with
+`--documentation-term`, so the result JSON and Markdown can suggest alternate
+phrasing. Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
+`--vocabulary-gap-rule` flags are placed before file rules, so command-line
+overrides win when multiple rules match. Rule-file values use the same CLI
+delimiter guardrails: intent topics cannot contain `=` or `,`, and keywords or
+vocabulary aliases cannot contain `,`.
+
 For large-upload validation, compare the scale smoke `run_summary.json` against
 the checked-in failure profiles:
 
