@@ -16,6 +16,9 @@ from typing import Any, Mapping
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
@@ -28,6 +31,12 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
 )
 from extracted_content_pipeline.ticket_faq_postgres import (  # noqa: E402
     PostgresTicketFAQRepository,
+)
+from content_ops_faq_smoke_profile import (  # noqa: E402
+    empty_input_profile,
+    input_profile_error,
+    input_profile_from_loaded,
+    raw_row_profile_or_error,
 )
 
 try:
@@ -127,6 +136,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
     reviewed_export: dict[str, Any] | None = None
     generation: dict[str, Any] | None = None
     normalization_warnings = _normalization_warning_summary([])
+    input_profile = empty_input_profile(status="not_started")
     try:
         try:
             if not await _relation_exists(pool, "ticket_faq_markdown"):
@@ -135,16 +145,30 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
                     "Run python scripts/run_extracted_content_pipeline_migrations.py "
                     "--database-url \"$EXTRACTED_DATABASE_URL\" before this smoke."
                 )
-            loaded = load_source_campaign_opportunities_from_file(
+            raw_profile = raw_row_profile_or_error(
                 source_path,
-                file_format=str(args.source_format),
-                target_mode=str(args.target_mode),
-                max_text_chars=int(args.max_text_chars),
-                default_fields=default_fields,
+                str(args.source_format),
             )
+            input_profile = empty_input_profile()
+            input_profile.update(raw_profile)
+            try:
+                loaded = load_source_campaign_opportunities_from_file(
+                    source_path,
+                    file_format=str(args.source_format),
+                    target_mode=str(args.target_mode),
+                    max_text_chars=int(args.max_text_chars),
+                    default_fields=default_fields,
+                )
+            except Exception as exc:
+                input_profile = input_profile_error(exc, raw_profile=raw_profile)
+                raise
             source_rows = len(loaded.opportunities)
             loaded_warnings = loaded.warning_dicts()
             normalization_warnings = _normalization_warning_summary(loaded_warnings)
+            input_profile = input_profile_from_loaded(
+                loaded,
+                raw_profile=raw_profile,
+            )
             if source_rows < int(args.min_source_rows):
                 errors.append(
                     f"expected at least {int(args.min_source_rows)} source row(s), got {source_rows}"
@@ -221,6 +245,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
         "source": str(source_path),
         "source_format": str(args.source_format),
         "source_rows": source_rows,
+        "input_profile": input_profile,
         "saved_ids": saved_ids,
         "generation": generation,
         "draft_export": draft_export,
