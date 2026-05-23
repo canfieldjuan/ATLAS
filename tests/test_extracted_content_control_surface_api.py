@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import extracted_content_pipeline.api.control_surfaces as api_module
@@ -20,6 +22,34 @@ def _route(router, path: str, method: str):
         if getattr(route, "path", None) == path and method.upper() in getattr(route, "methods", set()):
             return route
     raise AssertionError(f"route not found: {method} {path}")
+
+
+class _UploadFile:
+    def __init__(self, filename: str, content: bytes):
+        self.filename = filename
+        self._content = content
+
+    async def read(self, size=-1):
+        if size is None or size < 0:
+            return self._content
+        return self._content[:size]
+
+
+def _ticket_bundle_upload(row_count: int) -> _UploadFile:
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "source_type": "support_ticket",
+            "subject": "Billing renewal question",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "billing",
+        }
+        for index in range(row_count)
+    ]
+    return _UploadFile(
+        "support-ticket-export.json",
+        (json.dumps({"support_tickets": rows}) + "\n").encode("utf-8"),
+    )
 
 
 class _CampaignService:
@@ -646,6 +676,261 @@ async def test_ingestion_inspect_route_rejects_oversized_rows():
         })
 
     assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_inline_ingestion_routes_are_deprecated():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    inspect_route = _route(router, "/ops/ingestion/inspect", "POST")
+    import_route = _route(router, "/ops/ingestion/import", "POST")
+
+    assert inspect_route.deprecated is True
+    assert import_route.deprecated is True
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_accepts_more_than_inline_row_cap():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "source_type": "support_ticket",
+            "subject": "Billing renewal question",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "billing",
+        }
+        for index in range(1001)
+    ]
+    upload = _UploadFile(
+        "support-ticket-export.json",
+        (json.dumps({"support_tickets": rows}) + "\n").encode("utf-8"),
+    )
+
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+    payload = await route.endpoint(
+        file=upload,
+        source_rows=True,
+        source="ticket-csv-upload",
+        target_mode="vendor_retention",
+        file_format="json",
+        max_source_text_chars=1200,
+        sample_limit=3,
+        default_fields=json.dumps({
+            "company_name": "Acme",
+            "vendor_name": "Atlas",
+            "contact_email": "support@example.com",
+        }),
+    )
+
+    assert payload["ingestion_path"] == "file_upload"
+    assert payload["limits"]["inline_rows_deprecated"] is True
+    assert payload["source"] == "ticket-csv-upload"
+    assert payload["mode"] == "source_rows"
+    assert payload["ok"] is True
+    assert payload["opportunity_count"] == 1001
+    assert payload["source_type_counts"] == {"support_ticket": 1001}
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_import_route_dry_run_uses_file_parser():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "source_type": "support_ticket",
+            "subject": "Setup question",
+            "message": "Where do I find the setup checklist?",
+            "pain_category": "setup",
+        }
+        for index in range(1001)
+    ]
+    upload = _UploadFile(
+        "support-ticket-export.json",
+        (json.dumps({"support_tickets": rows}) + "\n").encode("utf-8"),
+    )
+
+    route = _route(router, "/ops/ingestion/files/import", "POST")
+    payload = await route.endpoint(
+        file=upload,
+        source_rows=True,
+        source="ticket-csv-upload",
+        target_mode="vendor_retention",
+        file_format="json",
+        max_source_text_chars=1200,
+        sample_limit=3,
+        default_fields=json.dumps({
+            "company_name": "Acme",
+            "vendor_name": "Atlas",
+            "contact_email": "support@example.com",
+        }),
+        dry_run=True,
+    )
+
+    assert payload["diagnostics"]["ingestion_path"] == "file_upload"
+    assert payload["diagnostics"]["opportunity_count"] == 1001
+    assert payload["import"]["dry_run"] is True
+    assert payload["import"]["inserted"] == 1001
+    assert payload["import"]["source"] == "ticket-csv-upload"
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_rejects_oversized_upload_bytes():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_UploadFile("support-ticket-export.json", b"x" * (25 * 1024 * 1024 + 2)),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+        )
+
+    assert exc.value.status_code == 413
+    assert "Uploaded ingestion file is too large" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_rejects_more_than_file_row_cap():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(10001),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+        )
+
+    assert exc.value.status_code == 413
+    assert "max 10000 rows" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_rejects_empty_file():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_UploadFile("empty.json", b""),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=None,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Uploaded ingestion file is empty."
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_rejects_invalid_file_format():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="xlsx",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=None,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "file_format must be one of: auto, json, jsonl, csv."
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_rejects_malformed_default_fields():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields="{not-json",
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "default_fields must be a JSON object."
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_import_route_rejects_not_ready_diagnostics():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    upload = _UploadFile(
+        "support-ticket-export.json",
+        (json.dumps([{"message": "Missing target defaults."}]) + "\n").encode("utf-8"),
+    )
+    route = _route(router, "/ops/ingestion/files/import", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=upload,
+            source_rows=False,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=None,
+            dry_run=True,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "ingestion_not_ready"
+    assert exc.value.detail["diagnostics"]["ingestion_path"] == "file_upload"
 
 
 @pytest.mark.asyncio
