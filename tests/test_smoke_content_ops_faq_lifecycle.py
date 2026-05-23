@@ -141,6 +141,12 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
         "warning_sample": [],
         "warnings_truncated": False,
     }
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 4
+    assert payload["input_profile"]["raw_row_count_source"] == "csv_rows"
+    assert payload["input_profile"]["usable_source_count"] == 4
+    assert payload["input_profile"]["warning_count"] == 0
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
     assert payload["draft_export"]["rows"][0]["id"] == "faq-uuid-1"
     assert payload["draft_export"]["rows"][0]["status"] == "draft"
     assert payload["reviewed_export"]["rows"][0]["id"] == "faq-uuid-1"
@@ -190,6 +196,14 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
     assert code == 0
     assert payload["ok"] is True
     assert payload["source_rows"] == 1000
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 1000
+    assert payload["input_profile"]["raw_row_count_source"] == (
+        "json_bundle.support_tickets"
+    )
+    assert payload["input_profile"]["usable_source_count"] == 1000
+    assert payload["input_profile"]["warning_count"] == 0
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
     assert payload["saved_ids"] == ["faq-uuid-1"]
     assert payload["generation"]["source_count"] == 1000
     assert payload["generation"]["ticket_source_count"] == 1000
@@ -242,6 +256,17 @@ async def test_faq_lifecycle_smoke_reports_normalization_warning_codes(monkeypat
 
     assert code == 1
     assert payload["generation"] is None
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 3
+    assert payload["input_profile"]["raw_row_count_source"] == (
+        "json_bundle.support_tickets"
+    )
+    assert payload["input_profile"]["usable_source_count"] == 3
+    assert payload["input_profile"]["warning_count"] == 3
+    assert payload["input_profile"]["warnings_by_code"] == {
+        "missing_vendor_name": 3
+    }
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
     assert payload["normalization_warnings"]["warning_count"] == 3
     assert payload["normalization_warnings"]["warnings_by_code"] == {
         "missing_vendor_name": 3
@@ -281,6 +306,25 @@ async def test_faq_lifecycle_smoke_reports_review_status_miss(monkeypatch):
     assert payload["saved_ids"] == ["faq-uuid-1"]
     assert any("review status update missed saved FAQ id" in error for error in payload["errors"])
     assert payload["reviewed_export"] is None
+    assert pool.closed is True
+
+
+@pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_marks_input_profile_error_on_load_failure(monkeypatch, tmp_path):
+    pool = _Pool()
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(path=tmp_path / "missing.json", source_format="json")
+    )
+
+    assert code == 1
+    assert payload["generation"] is None
+    assert payload["input_profile"]["status"] == "error"
+    assert "No such file or directory" in payload["input_profile"]["error"]
+    assert "No such file or directory" in payload["input_profile"]["raw_row_count_error"]
+    assert any("No such file or directory" in error for error in payload["errors"])
+    assert pool.execute_calls == []
     assert pool.closed is True
 
 
