@@ -255,6 +255,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
         "review_status": str(args.review_status),
         "errors": errors,
     }
+    payload["lifecycle_summary"] = _lifecycle_summary(payload)
     if args.output_result:
         args.output_result.parent.mkdir(parents=True, exist_ok=True)
         args.output_result.write_text(
@@ -316,6 +317,41 @@ def _export_errors(
         if not str(row.get("markdown") or "").strip():
             errors.append(f"exported FAQ {saved_id} missing markdown")
     return errors
+
+
+def _lifecycle_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    generation = payload.get("generation")
+    generation_payload = generation if isinstance(generation, Mapping) else {}
+    items = generation_payload.get("items")
+    output_checks = generation_payload.get("output_checks")
+    return {
+        "status": "ok" if payload.get("ok") else "failed",
+        "source": payload.get("source"),
+        "source_format": payload.get("source_format"),
+        "source_rows": payload.get("source_rows"),
+        "input_profile": _mapping_or_none(payload.get("input_profile")),
+        "source_count": generation_payload.get("source_count"),
+        "ticket_source_count": generation_payload.get("ticket_source_count"),
+        "generated_item_count": len(items) if isinstance(items, list) else None,
+        "output_checks": _mapping_or_none(output_checks),
+        "saved_faq_count": len(payload.get("saved_ids") or []),
+        "draft_export_count": _export_row_count(payload.get("draft_export")),
+        "reviewed_export_count": _export_row_count(payload.get("reviewed_export")),
+        "review_status": payload.get("review_status"),
+        "error_count": len(payload.get("errors") or []),
+        "errors": list(payload.get("errors") or []),
+    }
+
+
+def _export_row_count(value: Any) -> int | None:
+    if not isinstance(value, Mapping):
+        return None
+    rows = value.get("rows")
+    return len(rows) if isinstance(rows, list) else None
+
+
+def _mapping_or_none(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, Mapping) else None
 
 
 def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:
