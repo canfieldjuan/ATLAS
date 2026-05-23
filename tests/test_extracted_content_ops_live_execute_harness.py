@@ -263,3 +263,57 @@ async def test_live_execute_route_handles_bulk_faq_source_material() -> None:
     assert len(item["source_ids"]) == 1000
     assert item["source_ids"][0] == "ticket-bulk-0"
     assert item["source_ids"][-1] == "ticket-bulk-999"
+
+
+async def test_live_execute_route_handles_bulk_faq_source_material_bundle() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+    support_tickets = [
+        {
+            "ticket_id": f"ticket-bundle-{index}",
+            "source_type": "support_ticket",
+            "subject": "Billing renewal question",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "billing",
+        }
+        for index in range(1000)
+    ]
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_markdown"],
+        "limit": 5,
+        "require_quality_gates": False,
+        "inputs": {
+            "faq_title": "Hosted FAQ Bundle Bulk Smoke",
+            "source_material": {"support_tickets": support_tickets},
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["max_items"] == 5
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+
+    result = step["result"]
+    assert result["generated"] == 1
+    assert result["source_count"] == 1000
+    assert result["ticket_source_count"] == 1000
+    assert all(result["output_checks"].values())
+    assert "Hosted FAQ Bundle Bulk Smoke" in result["markdown"]
+    assert "`ticket-bundle-0` - Billing renewal question" in result["markdown"]
+
+    item = result["items"][0]
+    assert item["frequency"] == 1000
+    assert item["evidence_count"] == 3
+    assert len(item["source_ids"]) == 1000
+    assert item["source_ids"][0] == "ticket-bundle-0"
+    assert item["source_ids"][-1] == "ticket-bundle-999"
