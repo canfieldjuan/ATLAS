@@ -171,6 +171,10 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
             "max_source_text_chars": _MAX_INPUT_STRING_CHARS,
             "max_sample_limit": _MAX_INGESTION_SAMPLE_LIMIT,
         },
+        "execute_limits": {
+            "max_source_material_rows": _MAX_INGESTION_ROWS,
+            "large_upload_strategy": "background_or_offline",
+        },
         "input_contracts": {
             LANDING_PAGE_QUALITY_REPAIR_INPUT: landing_page_quality_repair_input_contract(),
             **landing_page_seo_geo_aeo_input_contracts(),
@@ -187,6 +191,7 @@ def _compose_describe_response(
     static: Mapping[str, Any],
     configured_outputs: frozenset[str],
     execution_configured: bool,
+    execute_max_concurrency: int,
     reasoning_status: Mapping[str, Any],
 ) -> dict[str, Any]:
     # Re-project the cached static template into a fresh dict tree so
@@ -211,6 +216,15 @@ def _compose_describe_response(
         "execution": {
             "configured": execution_configured,
             "configured_outputs": sorted(configured_outputs),
+            "limits": {
+                "max_concurrency": execute_max_concurrency,
+                "max_source_material_rows": static["execute_limits"][
+                    "max_source_material_rows"
+                ],
+                "large_upload_strategy": static["execute_limits"][
+                    "large_upload_strategy"
+                ],
+            },
         },
         "reasoning": dict(reasoning_status),
         "ingestion_profiles": list(static["ingestion_profiles"]),
@@ -554,6 +568,7 @@ def create_content_ops_control_surface_router(
             static=_STATIC_CATALOG_PAYLOAD,
             configured_outputs=configured_outputs,
             execution_configured=execution_services is not None,
+            execute_max_concurrency=execute_gate.max_concurrency,
             reasoning_status=reasoning_status,
         )
 

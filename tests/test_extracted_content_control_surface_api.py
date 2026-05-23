@@ -18,6 +18,12 @@ pytestmark = pytest.mark.skipif(
     reason="fastapi is not installed in this test environment",
 )
 
+_DEFAULT_EXECUTION_LIMITS = {
+    "max_concurrency": 8,
+    "max_source_material_rows": 1000,
+    "large_upload_strategy": "background_or_offline",
+}
+
 
 def _route(router, path: str, method: str):
     for route in router.routes:
@@ -276,7 +282,11 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
     assert outputs["faq_markdown"]["reasoning_requirement"] == "absent"
-    assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["execution"] == {
+        "configured": False,
+        "configured_outputs": [],
+        "limits": dict(_DEFAULT_EXECUTION_LIMITS),
+    }
     assert payload["reasoning"] == {"configured": False}
     assert "email_only" in preset_ids
     assert "lead_gen_campaign" in preset_ids
@@ -323,6 +333,7 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
             "report",
             "signal_extraction",
         ],
+        "limits": dict(_DEFAULT_EXECUTION_LIMITS),
     }
     assert outputs["email_campaign"]["execution_configured"] is True
     assert outputs["email_campaign"]["can_execute"] is True
@@ -338,6 +349,21 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
 
 
 @pytest.mark.asyncio
+async def test_describe_control_surfaces_reports_configured_execute_concurrency():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(execute_max_concurrency=3)
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["execution"]["limits"] == {
+        **_DEFAULT_EXECUTION_LIMITS,
+        "max_concurrency": 3,
+    }
+
+
+@pytest.mark.asyncio
 async def test_describe_control_surfaces_reports_reasoning_provider_status():
     router = create_content_ops_control_surface_router(
         reasoning_context_provider=lambda: object()
@@ -346,7 +372,11 @@ async def test_describe_control_surfaces_reports_reasoning_provider_status():
     route = _route(router, "/content-ops/control-surfaces", "GET")
     payload = await route.endpoint()
 
-    assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["execution"] == {
+        "configured": False,
+        "configured_outputs": [],
+        "limits": dict(_DEFAULT_EXECUTION_LIMITS),
+    }
     assert payload["reasoning"] == {"configured": True}
 
 
@@ -509,6 +539,7 @@ async def test_describe_control_surfaces_requires_generate_method_for_readiness(
     assert payload["execution"] == {
         "configured": True,
         "configured_outputs": ["report"],
+        "limits": dict(_DEFAULT_EXECUTION_LIMITS),
     }
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
@@ -526,7 +557,11 @@ async def test_describe_control_surfaces_ignores_invalid_execution_provider_resu
     payload = await route.endpoint()
 
     outputs = {item["id"]: item for item in payload["outputs"]}
-    assert payload["execution"] == {"configured": False, "configured_outputs": []}
+    assert payload["execution"] == {
+        "configured": False,
+        "configured_outputs": [],
+        "limits": dict(_DEFAULT_EXECUTION_LIMITS),
+    }
     assert payload["reasoning"] == {"configured": False}
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
@@ -553,6 +588,7 @@ async def test_describe_control_surfaces_returns_independent_dict_per_call():
     first["ingestion_profiles"].append("injected_profile")
     first["ingestion_limits"]["inline_rows"]["max_rows"] = 999999
     first["ingestion_limits"]["file_upload"]["supported_formats"].append("yaml")
+    first["execution"]["limits"]["max_source_material_rows"] = 999999
 
     second = await route.endpoint()
     assert second["outputs"][0]["label"] != "MUTATED"
@@ -561,6 +597,7 @@ async def test_describe_control_surfaces_returns_independent_dict_per_call():
     assert "injected_profile" not in second["ingestion_profiles"]
     assert second["ingestion_limits"]["inline_rows"]["max_rows"] == 1000
     assert "yaml" not in second["ingestion_limits"]["file_upload"]["supported_formats"]
+    assert second["execution"]["limits"]["max_source_material_rows"] == 1000
 
 
 @pytest.mark.asyncio
