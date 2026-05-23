@@ -140,7 +140,7 @@ const post: BlogPost = {
   }
 ],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-03-03 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<p>HubSpot positions itself as an all-in-one inbound marketing and sales platform. But what do actual users think? This analysis draws on <strong>1648 reviews</strong> collected between March 3 and March 29, 2026, from G2, Capterra, Reddit, Trustpilot, and other public review platforms. Of these, <strong>1104 were enriched</strong> with detailed sentiment analysis, and <strong>103 showed explicit switching intent</strong>.</p>
+<p>HubSpot positions itself as an all-in-one inbound marketing and sales platform. But what do actual users think? This analysis draws on <strong>1648 reviews</strong> collected between March 3 and March 29, 2026, from G2, Capterra, PeerSpot, Reddit, Trustpilot, and other public review platforms. Of these, <strong>1104 were enriched</strong> with detailed sentiment analysis, and <strong>103 showed explicit switching intent</strong>.</p>
 <p>This is not a product capabilities list. It's a data-driven look at where reviewer sentiment clusters—both positive and negative. The sample skews toward people with strong opinions (those who choose to write reviews), so treat this as perception data, not universal truth. <strong>285 reviews come from verified platforms</strong> like G2 and Capterra; <strong>819 come from community sources</strong> like Reddit and Trustpilot.</p>
 <p>HubSpot's profile richness score is <strong>5 out of 5</strong>, indicating deep cross-platform review coverage and extensive integration data. This is one of the most-reviewed marketing automation platforms in our dataset, giving us high confidence in the patterns that emerge.</p>
 <h2 id="what-hubspot-does-well-and-where-it-falls-short">What HubSpot Does Well -- and Where It Falls Short</h2>
@@ -153,15 +153,11 @@ const post: BlogPost = {
 </blockquote>
 <p><strong>Free CRM Tier</strong>: Small teams and startups consistently cite the free tier as a low-risk entry point. The ability to manage contacts, track deals, and integrate with Gmail/Outlook at no cost lowers the barrier to adoption.</p>
 <p><strong>Unified Platform</strong>: Reviewers who use multiple HubSpot hubs (Marketing, Sales, Service) praise the seamless data flow between tools. This integration advantage becomes more valuable as teams grow and need cross-functional visibility.</p>
-<blockquote>
-<p>"Generation of leads. Tracking the data. Running the campaign. I feel HubSpot Marketing Hub has had a positive impact on my business objectives." -- Senior Lead Account Manager at a 501-1000 employee education company, reviewer on TrustRadius</p>
-</blockquote>
+<p>One senior lead account manager at a mid-sized education organization reported that HubSpot Marketing Hub had a positive impact on their business objectives, citing lead generation, data tracking, and campaign management.</p>
 <h3 id="weaknesses">Weaknesses</h3>
 <p>The weakness list is longer and more urgent. <strong>10 distinct pain categories</strong> emerged from the review analysis, with pricing dominating.</p>
 <p><strong>Pricing Structure</strong>: The most common complaint by a significant margin. Reviewers describe tier jumps as steep, with essential features locked behind expensive upgrades. Multiple reviewers use the phrase "pricing shock" when describing the transition from free to paid tiers or from Starter to Professional.</p>
-<blockquote>
-<p>"Unless you want to spend a fortune don't bother" -- reviewer on Trustpilot</p>
-</blockquote>
+<p>One reviewer bluntly concluded that the platform isn't worth adopting unless you're prepared to spend a fortune.</p>
 <p>The pricing pain isn't just about absolute cost—it's about <strong>value perception at each tier</strong>. Reviewers report feeling nickel-and-dimed as they scale. Features that seem foundational (custom reporting, workflow automation, A/B testing) require Professional or Enterprise tiers, which can run $800-$3,200/month depending on contact volume.</p>
 <p><strong>Feature Limitations on Lower Tiers</strong>: Closely related to pricing, but distinct. Reviewers describe discovering mid-implementation that the features they need aren't available on their current tier. This creates a sense of bait-and-switch, especially for teams who invested time in setup before hitting the paywall.</p>
 <p><strong>Support Responsiveness</strong>: Multiple reviewers describe slow or unhelpful support experiences, particularly on Starter and Professional tiers. Enterprise customers report better experiences, suggesting tiered support quality.</p>

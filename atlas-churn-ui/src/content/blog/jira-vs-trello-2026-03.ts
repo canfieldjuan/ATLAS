@@ -289,8 +289,8 @@ const post: BlogPost = {
 <p>Notion appears in several reviews, though with mixed sentiment:</p>
 <blockquote>
 <p>"This got longer than expected: It's probably more of a ramble and a string of thought than a coherent write-up" -- reviewer on Reddit</p>
-<p>"It's excellent for organization, I work in a company with information products so it's essential when it's time to launch something, or even when it's not, to help with the organization of what I need" -- Closer at a professional training company, reviewer on TrustRadius</p>
 </blockquote>
+<p>Another reviewer — a closer at a professional training company — called it excellent for organization, describing it as essential when launching information products and for keeping work organized day to day.</p>
 <p>The Notion mentions reflect its hybrid positioning—it's not purely a project management tool, but teams use it that way. Reviewers describe Notion as more flexible than Trello but with a steeper learning curve.</p>
 <p>Jira itself appears as an evaluation target for some Trello users, particularly those in software development or technical operations. These reviewers describe needing capabilities Trello lacks (sprint planning, dependency tracking, advanced reporting) and accepting Jira's complexity as the price for those features.</p>
 <p><strong>Cross-category alternatives:</strong></p>

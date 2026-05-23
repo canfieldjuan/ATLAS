@@ -105,6 +105,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--output-result", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--summary-json",
+        action="store_true",
+        help="Print only lifecycle_summary as JSON; --output-result still writes the full payload.",
+    )
     parser.add_argument("--database-url", default=_default_database_url())
     return parser.parse_args(argv)
 
@@ -354,9 +359,25 @@ def _mapping_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
-def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:
+def _print_payload(
+    payload: Mapping[str, Any],
+    *,
+    as_json: bool,
+    summary_json: bool = False,
+) -> None:
     if as_json:
         print(json.dumps(dict(payload), indent=2, sort_keys=True, default=str))
+        return
+    if summary_json:
+        summary = payload.get("lifecycle_summary")
+        print(
+            json.dumps(
+                summary if isinstance(summary, Mapping) else {},
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+        )
         return
     profile = console_input_profile(payload.get("input_profile"))
     if payload.get("ok"):
@@ -377,7 +398,11 @@ async def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _validate_args(args)
     code, payload = await run_faq_lifecycle_smoke(args)
-    _print_payload(payload, as_json=bool(args.json))
+    _print_payload(
+        payload,
+        as_json=bool(args.json),
+        summary_json=bool(args.summary_json),
+    )
     return code
 
 
