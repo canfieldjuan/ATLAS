@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 534,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 534
       },
       {
         "name": "ux",
@@ -136,7 +136,7 @@ const post: BlogPost = {
   },
   {
     "question": "Is Power BI worth it for Microsoft 365 shops?",
-    "answer": "Review evidence suggests Power BI retention is driven more by Microsoft ecosystem lock-in than product enthusiasm. One reviewer noted they \"had checked Tableau before choosing Microsoft Power BI\" and saw ROI, indicating Excel and Teams integration creates workflow stickiness. However, 534 mentions of overall satisfaction coexist with dissatisfaction signals, suggesting teams stay for integration value despite pricing and performance friction."
+    "answer": "Review evidence suggests Power BI retention is driven more by Microsoft ecosystem lock-in than product enthusiasm. One reviewer noted they \"had checked Tableau before choosing Microsoft Power BI\" and saw ROI, indicating Excel and Teams integration creates workflow stickiness. However, with 534 overall-dissatisfaction mentions as the largest pain signal, the evidence suggests teams stay for integration value despite that friction rather than out of enthusiasm."
   }
 ],
   related_slugs: ["microsoft-teams-vs-notion-2026-04", "azure-deep-dive-2026-04", "shopify-deep-dive-2026-04", "microsoft-teams-vs-salesforce-2026-04"],
@@ -155,14 +155,14 @@ const post: BlogPost = {
 <h2 id="what-power-bi-does-well-and-where-it-falls-short">What Power BI Does Well -- and Where It Falls Short</h2>
 <p>Power BI's strength profile reflects its Microsoft ecosystem advantage and its weakness profile reflects the cost of that integration lock-in. The product earns praise for accessibility, clean design, and usability while drawing criticism for overall dissatisfaction, UX friction, pricing complexity, and performance under load.</p>
 <p>{{chart:strengths-weaknesses}}</p>
-<p>The chart shows 10 identified strengths and 4 weaknesses across the review corpus. Overall dissatisfaction appears in both strength and weakness columns because some reviewers report satisfaction with core dashboard functionality while others report frustration with licensing complexity and ecosystem dependencies. That split is the defining characteristic of Power BI's 2026 review profile.</p>
+<p>Overall dissatisfaction is the largest weakness signal in the chart, driven by frustration with licensing complexity and ecosystem dependencies. That friction—the cost of Power BI's Microsoft-ecosystem lock-in—is the defining characteristic of its 2026 review profile.</p>
 <h3 id="strengths-microsoft-integration-and-accessibility">Strengths: Microsoft integration and accessibility</h3>
 <p>Power BI's accessibility mentions cluster around Excel continuity and Teams embedding. One Director at a &lt;$50M company described it as a "great platform to help us clearly dashboard vital data and insights in a method that all stakeholders can understand." That phrasing—"all stakeholders can understand"—recurs across verified reviews and suggests Power BI's Microsoft 365 UI familiarity lowers adoption friction for non-technical users.</p>
 <p>Integration strength shows up in the ecosystem data: Excel (5 mentions), Teams (7 mentions), Power Query (4 mentions), and Google Sheets (6 mentions) dominate the integration list. Clean and adaptable design mentions suggest the product's visual layer works well for standard dashboard use cases, though performance and UX weaknesses emerge when teams scale beyond basic reporting.</p>
 <h3 id="weaknesses-pricing-performance-and-sharepoint-complexity">Weaknesses: Pricing, performance, and SharePoint complexity</h3>
 <p>Pricing complaints are the most visible weakness signal. One reviewer noted evaluating "Power BI Pro (€400/mo)" as part of a consolidation decision, and another described their organization "moving from power bi f8 fabric to looker" after a GCP solution architect recommended single-source data architecture. The Fabric tier bundling is creating immediate pricing pressure that was not present in earlier Power BI review cycles.</p>
 <p>Performance and reliability issues appear in both recent and total mention counts, suggesting these are persistent rather than resolved friction points. SharePoint integration complexity shows up in both "best practices for structuring SharePoint + Power" and "systematic way to update SharePoint sources across" weakness categories, indicating teams struggle with multi-source refresh workflows when Power BI is embedded in Microsoft 365 collaboration environments.</p>
-<p>UX and overall dissatisfaction mentions are elevated, but counterevidence exists: 534 mentions of overall satisfaction coexist with dissatisfaction signals. That suggests retention is driven by workflow lock-in rather than product enthusiasm. Teams stay because switching costs are high, not because Power BI is beloved.</p>
+<p>UX and overall dissatisfaction mentions are elevated—534 overall-dissatisfaction mentions make it the largest pain signal. Retention appears driven by workflow lock-in rather than product enthusiasm: teams stay because switching costs are high, not because Power BI is beloved.</p>
 <h2 id="where-power-bi-users-feel-the-most-pain">Where Power BI Users Feel the Most Pain</h2>
 <p>Pain distribution across the review corpus shows where friction concentrates and where it stays manageable. Performance, UX, pricing, overall dissatisfaction, integration, and reliability form the six primary pain clusters.</p>
 <p>{{chart:pain-radar}}</p>
