@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,7 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "target_mode": "vendor_retention",
         "env_file": [],
         "input_json": None,
+        "blog_blueprint_json": None,
         "input": [],
         "quality_repair_attempts": 1,
         "no_quality_gates": False,
@@ -178,9 +180,76 @@ async def test_live_generation_smoke_seeds_and_executes_blog_post_through_real_e
     assert call["scope"].account_id == "acct-live-smoke"
     assert call["target_mode"] == "vendor_retention"
     assert call["limit"] == 1
-    assert call["filters"] == {"topic_type": "content_ops_live_smoke"}
+    assert call["filters"] == {
+        "topic_type": "complaint_roundup",
+        "slug": "content-ops-blog-live-smoke-acct-live-smoke",
+    }
     assert call["topic"] == "Support ticket FAQ gaps"
     assert call["quality_gates_enabled"] is True
+
+
+def test_blog_blueprint_json_loader_accepts_one_custom_blueprint(tmp_path: Path) -> None:
+    path = tmp_path / "blueprint.json"
+    path.write_text(
+        json.dumps({
+            "title": "FAQ gaps for onboarding tickets",
+            "sections": [{"id": "onboarding", "heading": "Onboarding gaps"}],
+            "data_context": {"audience": "small support team"},
+        }),
+        encoding="utf-8",
+    )
+
+    blueprint, warnings = smoke._load_single_blog_blueprint_from_file(
+        path,
+        target_mode="vendor_retention",
+    )
+
+    assert warnings == []
+    assert blueprint.target_mode == "vendor_retention"
+    assert blueprint.topic_type == "content_ops_live_smoke"
+    assert blueprint.slug == "faq-gaps-for-onboarding-tickets"
+    assert blueprint.suggested_title == "FAQ gaps for onboarding tickets"
+    assert blueprint.payload["sections"] == [
+        {"id": "onboarding", "heading": "Onboarding gaps"}
+    ]
+
+
+def test_blog_blueprint_json_loader_rejects_multiple_blueprints(tmp_path: Path) -> None:
+    path = tmp_path / "blueprints.json"
+    path.write_text(
+        json.dumps({
+            "blueprints": [
+                {"title": "First blueprint"},
+                {"title": "Second blueprint"},
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must load exactly one blueprint"):
+        smoke._load_single_blog_blueprint_from_file(
+            path,
+            target_mode="vendor_retention",
+        )
+
+
+def test_blog_payload_alignment_uses_seeded_topic_type_and_title() -> None:
+    payload = smoke._payload_from_args(_args(output="blog_post"))
+
+    smoke._align_blog_payload_to_seed(
+        payload,
+        {
+            "topic_type": "custom_smoke_topic",
+            "slug": "faq-gaps-for-onboarding-tickets",
+            "topic": "FAQ gaps for onboarding tickets",
+        },
+    )
+
+    assert payload["inputs"]["filters"] == {
+        "topic_type": "custom_smoke_topic",
+        "slug": "faq-gaps-for-onboarding-tickets",
+    }
+    assert payload["inputs"]["topic"] == "FAQ gaps for onboarding tickets"
 
 
 @pytest.mark.asyncio
