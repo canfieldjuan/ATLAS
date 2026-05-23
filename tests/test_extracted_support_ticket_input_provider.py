@@ -11,12 +11,14 @@ from extracted_content_pipeline.control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 from extracted_content_pipeline.content_ops_input_provider import (
     content_ops_payload_from_input_package,
 )
 from extracted_content_pipeline.support_ticket_input_provider import (
     SupportTicketInputProvider,
 )
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
 
 def _ticket_rows() -> list[dict[str, str]]:
@@ -186,3 +188,53 @@ async def test_support_ticket_input_provider_wires_into_preview_route() -> None:
     assert payload["can_run"] is True
     assert payload["outputs"] == ["landing_page"]
     assert payload["missing_inputs"] == []
+
+
+@pytest.mark.asyncio
+async def test_support_ticket_input_provider_wires_into_plan_route() -> None:
+    calls: list[dict[str, object]] = []
+
+    def loader(scope: TenantScope, request):
+        calls.append({"scope": scope, "request": request})
+        return _ticket_rows()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=SupportTicketInputProvider(source_material_loader=loader),
+        scope_provider=lambda: {"account_id": "acct-plan"},
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    payload = await route.endpoint({"outputs": ["faq_markdown"]})
+
+    assert payload["can_execute"] is True
+    assert payload["steps"][0]["output"] == "faq_markdown"
+    assert payload["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+    assert payload["preview"]["can_run"] is True
+    assert calls[0]["scope"] == TenantScope(account_id="acct-plan")
+
+
+@pytest.mark.asyncio
+async def test_support_ticket_input_provider_wires_into_execute_route() -> None:
+    def loader(scope: TenantScope, request):
+        assert scope.account_id == "acct-execute"
+        assert request == {"outputs": ("faq_markdown",)}
+        return _ticket_rows()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService(),
+        ),
+        input_provider=SupportTicketInputProvider(source_material_loader=loader),
+        scope_provider=lambda: {"account_id": "acct-execute"},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint({"outputs": ["faq_markdown"]})
+
+    assert payload["status"] == "completed"
+    assert payload["steps"][0]["output"] == "faq_markdown"
+    assert payload["steps"][0]["status"] == "completed"
+    assert payload["steps"][0]["result"]["generated"] == 1
+    assert "How do I change my login email?" in payload["steps"][0]["result"]["markdown"]
