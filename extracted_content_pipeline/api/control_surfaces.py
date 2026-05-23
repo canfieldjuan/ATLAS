@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 try:
-    from fastapi import APIRouter, Body, HTTPException
+    from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
     from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
     Body = None
     HTTPException = None
+    File = None
+    Form = None
+    UploadFile = None
     BaseModel = None
     ConfigDict = None
     Field = None
@@ -41,7 +47,7 @@ from ..control_surfaces import (
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
-from ..ingestion_diagnostics import inspect_ingestion_rows
+from ..ingestion_diagnostics import inspect_ingestion_file, inspect_ingestion_rows
 from ..landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_INPUT,
     landing_page_quality_repair_input_contract,
@@ -83,6 +89,8 @@ _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
 _MAX_INGESTION_ROWS = 1000
+_MAX_FILE_INGESTION_ROWS = 10000
+_MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
@@ -501,7 +509,7 @@ def create_content_ops_control_surface_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @router.post("/ingestion/inspect")
+    @router.post("/ingestion/inspect", deprecated=True)
     async def inspect_ingestion(
         payload: ContentOpsIngestionInspectModel = Body(...),
     ) -> dict[str, Any]:
@@ -520,7 +528,7 @@ def create_content_ops_control_surface_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return report.as_dict()
 
-    @router.post("/ingestion/import")
+    @router.post("/ingestion/import", deprecated=True)
     async def import_ingestion(
         payload: ContentOpsIngestionImportModel = Body(...),
     ) -> dict[str, Any]:
@@ -562,6 +570,82 @@ def create_content_ops_control_surface_router(
             replace_existing=bool(data.get("replace_existing")),
             dry_run=dry_run,
             source=report.source,
+        )
+        return {
+            "diagnostics": diagnostics,
+            "import": result.as_dict(),
+        }
+
+    @router.post("/ingestion/files/inspect")
+    async def inspect_ingestion_file_upload(
+        file: UploadFile = File(...),
+        source_rows: bool = Form(False),
+        source: str | None = Form(None),
+        target_mode: str | None = Form("vendor_retention"),
+        file_format: str = Form("auto"),
+        max_source_text_chars: int = Form(1200),
+        sample_limit: int = Form(3),
+        default_fields: str | None = Form(None),
+    ) -> dict[str, Any]:
+        report = await _inspect_uploaded_ingestion_file(
+            file,
+            source_rows=source_rows,
+            source=source,
+            target_mode=target_mode,
+            file_format=file_format,
+            max_source_text_chars=max_source_text_chars,
+            sample_limit=sample_limit,
+            default_fields=default_fields,
+        )
+        return _file_ingestion_response(report, source=source)
+
+    @router.post("/ingestion/files/import")
+    async def import_ingestion_file_upload(
+        file: UploadFile = File(...),
+        source_rows: bool = Form(False),
+        source: str | None = Form(None),
+        target_mode: str | None = Form("vendor_retention"),
+        file_format: str = Form("auto"),
+        max_source_text_chars: int = Form(1200),
+        sample_limit: int = Form(3),
+        default_fields: str | None = Form(None),
+        replace_existing: bool = Form(False),
+        dry_run: bool = Form(False),
+    ) -> dict[str, Any]:
+        target_mode_value = _clean(target_mode) or "vendor_retention"
+        report = await _inspect_uploaded_ingestion_file(
+            file,
+            source_rows=source_rows,
+            source=source,
+            target_mode=target_mode_value,
+            file_format=file_format,
+            max_source_text_chars=max_source_text_chars,
+            sample_limit=sample_limit,
+            default_fields=default_fields,
+        )
+        diagnostics = _file_ingestion_response(report, source=source)
+        if not report.ok:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "ingestion_not_ready",
+                    "diagnostics": diagnostics,
+                },
+            )
+        if dry_run:
+            pool = object()
+        else:
+            pool = await _resolve_import_pool(opportunity_import_pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        result = await _import_campaign_opportunities_for_route(
+            pool,
+            report.opportunities,
+            scope=scope,
+            target_mode=target_mode_value,
+            opportunity_table=resolved_config.ingestion_opportunity_table,
+            replace_existing=bool(replace_existing),
+            dry_run=bool(dry_run),
+            source=_clean(source) or report.source,
         )
         return {
             "diagnostics": diagnostics,
@@ -636,6 +720,146 @@ def create_content_ops_control_surface_router(
         return result
 
     return router
+
+
+async def _inspect_uploaded_ingestion_file(
+    file: UploadFile,
+    *,
+    source_rows: bool,
+    source: str | None,
+    target_mode: str | None,
+    file_format: str,
+    max_source_text_chars: int,
+    sample_limit: int,
+    default_fields: str | None,
+):
+    upload_bytes = await _read_bounded_upload(file)
+    if not upload_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded ingestion file is empty.")
+    resolved_format = _validate_upload_file_format(file_format)
+    parsed_default_fields = _parse_default_fields_form(default_fields)
+    suffix = _upload_suffix(file, resolved_format)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-ingestion-",
+            suffix=suffix,
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(upload_bytes)
+        try:
+            report = inspect_ingestion_file(
+                temp_path,
+                source_rows=bool(source_rows),
+                file_format=resolved_format,
+                source_format=resolved_format,
+                target_mode=_clean(target_mode) or "vendor_retention",
+                max_source_text_chars=int(max_source_text_chars),
+                sample_limit=int(sample_limit),
+                default_fields=parsed_default_fields,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        row_count = len(report.opportunities)
+        if row_count > _MAX_FILE_INGESTION_ROWS:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "Uploaded ingestion file is too large after normalization; "
+                    f"max {_MAX_FILE_INGESTION_ROWS} rows, got {row_count}."
+                ),
+            )
+        return report
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Content Ops temporary ingestion upload cleanup failed",
+                    extra={"source": _clean(source) or _clean(getattr(file, "filename", None))},
+                )
+
+
+async def _read_bounded_upload(file: UploadFile) -> bytes:
+    try:
+        data = await file.read(_MAX_INGESTION_FILE_BYTES + 1)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded ingestion file could not be read.",
+        ) from exc
+    if len(data) > _MAX_INGESTION_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Uploaded ingestion file is too large; "
+                f"max {_MAX_INGESTION_FILE_BYTES} bytes."
+            ),
+        )
+    return data
+
+
+def _validate_upload_file_format(value: str) -> str:
+    text = _clean(value) or "auto"
+    if text not in {"auto", "json", "jsonl", "csv"}:
+        raise HTTPException(
+            status_code=400,
+            detail="file_format must be one of: auto, json, jsonl, csv.",
+        )
+    return text
+
+
+def _parse_default_fields_form(value: str | None) -> dict[str, Any]:
+    text = _clean(value)
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="default_fields must be a JSON object.",
+        ) from exc
+    if not isinstance(parsed, Mapping):
+        raise HTTPException(
+            status_code=400,
+            detail="default_fields must be a JSON object.",
+        )
+    parsed_dict = dict(parsed)
+    if len(parsed_dict) > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="default_fields cannot contain more than 50 entries.",
+        )
+    try:
+        _validate_input_shape(parsed_dict, depth=0)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return parsed_dict
+
+
+def _upload_suffix(file: UploadFile, file_format: str) -> str:
+    filename = _clean(getattr(file, "filename", None))
+    suffix = Path(filename).suffix.lower() if filename else ""
+    if suffix in {".json", ".jsonl", ".ndjson", ".csv"}:
+        return ".jsonl" if suffix == ".ndjson" else suffix
+    if file_format in {"json", "jsonl", "csv"}:
+        return f".{file_format}"
+    return ".json"
+
+
+def _file_ingestion_response(report: Any, *, source: str | None = None) -> dict[str, Any]:
+    payload = report.as_dict()
+    payload["source"] = _clean(source) or payload.get("source") or ""
+    payload["ingestion_path"] = "file_upload"
+    payload["limits"] = {
+        "max_file_bytes": _MAX_INGESTION_FILE_BYTES,
+        "max_rows": _MAX_FILE_INGESTION_ROWS,
+        "inline_rows_deprecated": True,
+    }
+    return payload
 
 
 async def _resolve_execution_services(
