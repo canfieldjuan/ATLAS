@@ -48,3 +48,6 @@ export {
   toWireIngestionInspectRequest,
   toWireRequest,
 } from './fromWire'
+
+export { inputContractDisplay } from './inputDisplay'
+export type { ContentOpsInputDisplayFallback } from './inputDisplay'
