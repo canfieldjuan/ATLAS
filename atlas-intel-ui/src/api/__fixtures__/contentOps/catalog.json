@@ -296,6 +296,22 @@
       "placeholder": "/systems/ai-content-ops/intake",
       "asset": "landing_page",
       "group": "seo_geo_aeo"
+    },
+    "faq_documentation_terms": {
+      "key": "faq_documentation_terms",
+      "label": "Documentation terms",
+      "type": "string_list",
+      "placeholder": "Single sign-on setup\nData export guide",
+      "asset": "faq_markdown",
+      "group": "vocabulary_gap"
+    },
+    "faq_vocabulary_gap_rules": {
+      "key": "faq_vocabulary_gap_rules",
+      "label": "Vocabulary-gap rules",
+      "type": "nested_string_list",
+      "placeholder": "SSO, single sign-on\nexport, data export",
+      "asset": "faq_markdown",
+      "group": "vocabulary_gap"
     }
   }
 }
