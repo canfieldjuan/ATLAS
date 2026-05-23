@@ -49,6 +49,7 @@ pytest \
   tests/test_extracted_campaign_reasoning_postgres_check.py \
   tests/test_extracted_content_control_surfaces.py \
   tests/test_extracted_content_generation_plan.py \
+  tests/test_extracted_content_ops_input_provider.py \
   tests/test_extracted_content_control_surface_api.py \
   tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_content_ops_execution_smoke.py \
