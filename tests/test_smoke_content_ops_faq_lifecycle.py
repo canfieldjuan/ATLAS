@@ -211,6 +211,27 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
     assert len(payload["generation"]["items"][0]["source_ids"]) == 1000
     assert payload["generation"]["items"][0]["source_ids"][0] == "ticket-lifecycle-0"
     assert payload["generation"]["items"][0]["source_ids"][-1] == "ticket-lifecycle-999"
+    assert payload["lifecycle_summary"] == {
+        "status": "ok",
+        "source": str(source),
+        "source_format": "json",
+        "source_rows": 1000,
+        "input_profile": payload["input_profile"],
+        "source_count": 1000,
+        "ticket_source_count": 1000,
+        "generated_item_count": 1,
+        "output_checks": {
+            "uses_user_vocabulary": True,
+            "condensed": True,
+            "has_action_items": True,
+        },
+        "saved_faq_count": 1,
+        "draft_export_count": 1,
+        "reviewed_export_count": 1,
+        "review_status": "published",
+        "error_count": 0,
+        "errors": [],
+    }
 
     draft = payload["draft_export"]["rows"][0]
     reviewed = payload["reviewed_export"]["rows"][0]
@@ -290,6 +311,19 @@ async def test_faq_lifecycle_smoke_fails_closed_when_table_missing(monkeypatch):
     assert code == 1
     assert any("ticket_faq_markdown" in error for error in payload["errors"])
     assert payload["generation"] is None
+    assert payload["lifecycle_summary"]["status"] == "failed"
+    assert payload["lifecycle_summary"]["source_rows"] == 4
+    assert payload["lifecycle_summary"]["input_profile"] == payload["input_profile"]
+    assert payload["lifecycle_summary"]["source_count"] is None
+    assert payload["lifecycle_summary"]["ticket_source_count"] is None
+    assert payload["lifecycle_summary"]["generated_item_count"] is None
+    assert payload["lifecycle_summary"]["output_checks"] is None
+    assert payload["lifecycle_summary"]["saved_faq_count"] == 0
+    assert payload["lifecycle_summary"]["draft_export_count"] is None
+    assert payload["lifecycle_summary"]["reviewed_export_count"] is None
+    assert payload["lifecycle_summary"]["review_status"] == "published"
+    assert payload["lifecycle_summary"]["error_count"] == 1
+    assert payload["lifecycle_summary"]["errors"] == payload["errors"]
     assert len(pool.fetchval_calls) == 1
     assert pool.execute_calls == []
     assert pool.closed is True
