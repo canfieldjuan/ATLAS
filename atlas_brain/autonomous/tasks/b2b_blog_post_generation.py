@@ -2485,7 +2485,7 @@ def _build_coverage_snapshot_note(blueprint: PostBlueprint) -> str:
     enriched_count = int(data_context.get("enriched_count") or 0)
     churn_intent_count = int(data_context.get("churn_intent_count") or 0)
     review_period = str(data_context.get("review_period") or "").strip()
-    source_summary = _top_source_summary(data_context.get("source_distribution"))
+    source_description = str(data_context.get("source_description") or "").strip()
     data_quality = data_context.get("data_quality")
     confidence = ""
     if isinstance(data_quality, dict):
@@ -2507,8 +2507,8 @@ def _build_coverage_snapshot_note(blueprint: PostBlueprint) -> str:
         details.append(f"with {witnesses_in_scope} witness-backed examples in scope")
     if review_period:
         details.append(f"collected between {review_period}")
-    if source_summary:
-        details.append(f"with the visible source mix led by {source_summary}")
+    if source_description:
+        details.append(f"with sources {source_description}")
     if confidence:
         details.append(f"and a current data-quality posture of {confidence} confidence")
 
@@ -6236,6 +6236,17 @@ async def _gather_data(
     source_dist = await _fetch_source_distribution(pool, vendor_names, category=category_scope)
     data["data_context"]["source_distribution"] = source_dist
     data["data_context"]["data_source_label"] = "Public B2B software review platforms"
+    # D5: a GENERALIZED source description for narrative prose, so the model
+    # describes coverage as verified-platform vs community-forum buckets instead
+    # of enumerating a partial subset of platform names (which omits sources the
+    # post actually quotes). The per-platform source_distribution.sources stays
+    # for the source-mix chart; only the narrative input is generalized.
+    _v = int(source_dist.get("verified_count") or 0)
+    _c = int(source_dist.get("community_count") or 0)
+    data["data_context"]["source_description"] = (
+        f"{_v} reviews from verified review platforms and "
+        f"{_c} reviews from community forums"
+    )
     data["data_context"]["data_disclaimer"] = (
         "Analysis based on self-selected reviewer feedback. "
         "Results reflect reviewer perception, not product capability."
@@ -9171,10 +9182,27 @@ def _build_blog_generation_payload(
     _attach_blog_blueprint_runtime_metadata(blueprint)
     length_policy = _blog_length_policy(blueprint.topic_type)
     section_word_budget = _blog_section_word_budget(blueprint)
+    # D5: hand the LLM a GENERALIZED source_distribution (counts only) so
+    # narrative prose can't enumerate a partial platform list (which omits
+    # sources the post actually quotes). The stored blueprint.data_context keeps
+    # the per-platform sources for the source-mix chart; this shapes only the
+    # LLM-facing copy. source_description carries the generalized phrasing.
+    payload_data_context = blueprint.data_context
+    if isinstance(payload_data_context, dict) and isinstance(
+        payload_data_context.get("source_distribution"), dict
+    ):
+        _sd = payload_data_context["source_distribution"]
+        payload_data_context = {
+            **payload_data_context,
+            "source_distribution": {
+                "verified_count": _sd.get("verified_count", 0),
+                "community_count": _sd.get("community_count", 0),
+            },
+        }
     payload: dict[str, Any] = {
         "topic_type": blueprint.topic_type,
         "suggested_title": blueprint.suggested_title,
-        "data_context": blueprint.data_context,
+        "data_context": payload_data_context,
         "length_policy": length_policy,
         "section_word_budget": section_word_budget,
         "sections": [
