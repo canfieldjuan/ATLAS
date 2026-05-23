@@ -22,9 +22,12 @@ LLM side:
 
 Factories:
 7. `build_content_ops_llm_client()` returns `None` when no
-   host LLM is active.
-8. `build_content_ops_llm_client()` wraps an active service.
-9. `build_content_ops_skill_store(registry=stub)` delegates
+   host LLM is routable.
+8. `build_content_ops_llm_client()` wraps a pipeline-routed
+   OpenRouter service.
+9. `build_content_ops_llm_client()` falls back to an active
+   registry service.
+10. `build_content_ops_skill_store(registry=stub)` delegates
    through the injected stub.
 
 Tests use the dependency-injection kwargs on both factories so
@@ -201,24 +204,60 @@ async def test_host_llm_client_handles_content_field_alias() -> None:
     assert response.model is None
 
 
-def test_build_content_ops_llm_client_returns_none_when_no_active() -> None:
-    """Factory short-circuits when `llm_registry.get_active()`
-    returns None -- the bundle factory's signal to leave LLM-
-    needing slots `None`."""
+def test_build_content_ops_llm_client_returns_none_when_no_llm_routable() -> None:
+    """Factory short-circuits when neither pipeline routing nor
+    `llm_registry.get_active()` returns a provider -- the bundle
+    factory's signal to leave LLM-needing slots `None`."""
 
     stub_registry = SimpleNamespace(get_active=lambda: None)
-    assert build_content_ops_llm_client(llm_registry=stub_registry) is None
+    assert (
+        build_content_ops_llm_client(
+            llm_registry=stub_registry,
+            pipeline_llm_resolver=lambda **_kwargs: None,
+        )
+        is None
+    )
 
 
-def test_build_content_ops_llm_client_wraps_active_service() -> None:
-    """Factory returns a `_HostLLMClient` adapter wrapping the
-    currently active host service."""
+def test_build_content_ops_llm_client_wraps_pipeline_routed_service() -> None:
+    """Factory resolves through Atlas pipeline routing before
+    looking at the active registry slot. This is the production
+    path for configured OpenRouter Claude models that are not
+    pre-activated globally."""
+
+    calls: list[dict[str, Any]] = []
+    fake_service = SimpleNamespace(model_info=None, chat=lambda *a, **k: {})
+
+    def _resolver(**kwargs: Any) -> Any:
+        calls.append(dict(kwargs))
+        return fake_service
+
+    client = build_content_ops_llm_client(
+        llm_registry=SimpleNamespace(get_active=lambda: None),
+        pipeline_llm_resolver=_resolver,
+    )
+
+    assert isinstance(client, _HostLLMClient)
+    # The wrapped service is the one we patched.
+    assert client._host is fake_service  # type: ignore[attr-defined]
+    assert calls == [{
+        "workload": "openrouter",
+        "try_openrouter": True,
+        "auto_activate_ollama": False,
+    }]
+
+
+def test_build_content_ops_llm_client_falls_back_to_active_registry_service() -> None:
+    """If pipeline routing is unavailable, preserve the previous
+    active-registry behavior."""
 
     fake_service = SimpleNamespace(model_info=None, chat=lambda *a, **k: {})
     stub_registry = SimpleNamespace(get_active=lambda: fake_service)
-    client = build_content_ops_llm_client(llm_registry=stub_registry)
+    client = build_content_ops_llm_client(
+        llm_registry=stub_registry,
+        pipeline_llm_resolver=lambda **_kwargs: None,
+    )
     assert isinstance(client, _HostLLMClient)
-    # The wrapped service is the one we patched.
     assert client._host is fake_service  # type: ignore[attr-defined]
 
 
