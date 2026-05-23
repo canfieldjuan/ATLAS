@@ -13,7 +13,9 @@ import {
   executeContentOpsRun,
   fetchContentOpsControlSurfaces,
   importContentOpsIngestion,
+  importContentOpsIngestionFile,
   inspectContentOpsIngestion,
+  inspectContentOpsIngestionFile,
   planContentOpsRun,
   previewContentOpsRun,
 } from '../api/contentOps'
@@ -86,7 +88,7 @@ type IngestionFileLoadState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'success'; filename: string; count: number }
+  | { kind: 'success'; filename: string; size: number }
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
@@ -166,6 +168,9 @@ export default function ContentOpsNewRun() {
   const [ingestionReplaceExisting, setIngestionReplaceExisting] = useState(false)
   const [ingestionFileLoadState, setIngestionFileLoadState] =
     useState<IngestionFileLoadState>({ kind: 'idle' })
+  const [selectedIngestionFile, setSelectedIngestionFile] = useState<File | null>(
+    null,
+  )
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' })
   const [planState, setPlanState] = useState<PlanState>({ kind: 'idle' })
   const [executionState, setExecutionState] = useState<ExecutionState>({
@@ -263,9 +268,6 @@ export default function ContentOpsNewRun() {
     ingestionInspectRequestIdRef.current += 1
     ingestionImportRequestIdRef.current += 1
     ingestionFileLoadRequestIdRef.current += 1
-    setIngestionFileLoadState((prev) =>
-      prev.kind === 'loading' ? prev : { kind: 'idle' },
-    )
     setIngestionInspectState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
@@ -503,11 +505,13 @@ export default function ContentOpsNewRun() {
 
   const handleInspectIngestion = async () => {
     const requestId = ++ingestionInspectRequestIdRef.current
-    const parsed = parseIngestionRowsJson(ingestionRowsJson)
-    if (!parsed.ok) {
+    const parsedRows = selectedIngestionFile
+      ? null
+      : parseIngestionRowsJson(ingestionRowsJson)
+    if (parsedRows && !parsedRows.ok) {
       setIngestionInspectState({
         kind: 'invalid_input',
-        message: parsed.message,
+        message: parsedRows.message,
       })
       return
     }
@@ -521,20 +525,32 @@ export default function ContentOpsNewRun() {
       })
       return
     }
+    const inlineRows = parsedRows?.ok ? parsedRows.rows : []
 
     setIngestionInspectState({ kind: 'submitting' })
     try {
-      const wire = await inspectContentOpsIngestion(
-        toWireIngestionInspectRequest({
-          rows: parsed.rows,
-          sourceRows: ingestionSourceRows,
-          source: ingestionSource.trim() || null,
-          targetMode: request.targetMode,
-          maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-          sampleLimit: INGESTION_SAMPLE_LIMIT,
-          defaultFields: parsedDefaultFields.fields,
-        }),
-      )
+      const wire = selectedIngestionFile
+        ? await inspectContentOpsIngestionFile({
+            file: selectedIngestionFile,
+            source_rows: ingestionSourceRows,
+            source: ingestionSource.trim() || null,
+            target_mode: request.targetMode,
+            file_format: 'auto',
+            max_source_text_chars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+            sample_limit: INGESTION_SAMPLE_LIMIT,
+            default_fields: parsedDefaultFields.fields,
+          })
+        : await inspectContentOpsIngestion(
+            toWireIngestionInspectRequest({
+              rows: inlineRows,
+              sourceRows: ingestionSourceRows,
+              source: ingestionSource.trim() || null,
+              targetMode: request.targetMode,
+              maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+              sampleLimit: INGESTION_SAMPLE_LIMIT,
+              defaultFields: parsedDefaultFields.fields,
+            }),
+          )
       if (requestId !== ingestionInspectRequestIdRef.current) return
       setIngestionInspectState({
         kind: 'success',
@@ -552,11 +568,13 @@ export default function ContentOpsNewRun() {
   const handleImportIngestion = async () => {
     const requestId = ++ingestionImportRequestIdRef.current
     const inspectRequestId = ++ingestionInspectRequestIdRef.current
-    const parsed = parseIngestionRowsJson(ingestionRowsJson)
-    if (!parsed.ok) {
+    const parsedRows = selectedIngestionFile
+      ? null
+      : parseIngestionRowsJson(ingestionRowsJson)
+    if (parsedRows && !parsedRows.ok) {
       setIngestionImportState({
         kind: 'invalid_input',
-        message: parsed.message,
+        message: parsedRows.message,
       })
       return
     }
@@ -570,22 +588,36 @@ export default function ContentOpsNewRun() {
       })
       return
     }
+    const inlineRows = parsedRows?.ok ? parsedRows.rows : []
 
     setIngestionImportState({ kind: 'submitting' })
     try {
-      const outcome = await importContentOpsIngestion(
-        toWireIngestionImportRequest({
-          rows: parsed.rows,
-          sourceRows: ingestionSourceRows,
-          source: ingestionSource.trim() || null,
-          targetMode: request.targetMode,
-          maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-          sampleLimit: INGESTION_SAMPLE_LIMIT,
-          defaultFields: parsedDefaultFields.fields,
-          replaceExisting: ingestionReplaceExisting,
-          dryRun: ingestionDryRun,
-        }),
-      )
+      const outcome = selectedIngestionFile
+        ? await importContentOpsIngestionFile({
+            file: selectedIngestionFile,
+            source_rows: ingestionSourceRows,
+            source: ingestionSource.trim() || null,
+            target_mode: request.targetMode,
+            file_format: 'auto',
+            max_source_text_chars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+            sample_limit: INGESTION_SAMPLE_LIMIT,
+            default_fields: parsedDefaultFields.fields,
+            replace_existing: ingestionReplaceExisting,
+            dry_run: ingestionDryRun,
+          })
+        : await importContentOpsIngestion(
+            toWireIngestionImportRequest({
+              rows: inlineRows,
+              sourceRows: ingestionSourceRows,
+              source: ingestionSource.trim() || null,
+              targetMode: request.targetMode,
+              maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
+              sampleLimit: INGESTION_SAMPLE_LIMIT,
+              defaultFields: parsedDefaultFields.fields,
+              replaceExisting: ingestionReplaceExisting,
+              dryRun: ingestionDryRun,
+            }),
+          )
       if (requestId !== ingestionImportRequestIdRef.current) return
       if (outcome.kind === 'success') {
         setIngestionImportState({
@@ -631,31 +663,16 @@ export default function ContentOpsNewRun() {
     event.currentTarget.value = ''
     if (!file) return
 
-    const requestId = ++ingestionFileLoadRequestIdRef.current
+    ingestionFileLoadRequestIdRef.current += 1
     setIngestionFileLoadState({ kind: 'loading' })
-    try {
-      const text = await file.text()
-      if (requestId !== ingestionFileLoadRequestIdRef.current) return
-      const parsed = parseIngestionFileRows(file.name, text)
-      if (!parsed.ok) {
-        setIngestionFileLoadState({ kind: 'error', message: parsed.message })
-        return
-      }
-      setIngestionRowsJson(JSON.stringify(parsed.rows, null, 2))
-      setIngestionSource(file.name)
-      markIngestionStale()
-      setIngestionFileLoadState({
-        kind: 'success',
-        filename: file.name,
-        count: parsed.rows.length,
-      })
-    } catch (err) {
-      if (requestId !== ingestionFileLoadRequestIdRef.current) return
-      setIngestionFileLoadState({
-        kind: 'error',
-        message: err instanceof Error ? err.message : String(err),
-      })
-    }
+    setSelectedIngestionFile(file)
+    setIngestionSource(file.name)
+    markIngestionStale()
+    setIngestionFileLoadState({
+      kind: 'success',
+      filename: file.name,
+      size: file.size,
+    })
   }
 
   return (
@@ -1103,6 +1120,8 @@ export default function ContentOpsNewRun() {
           <textarea
             value={ingestionRowsJson}
             onChange={(e) => {
+              setSelectedIngestionFile(null)
+              setIngestionFileLoadState({ kind: 'idle' })
               setIngestionRowsJson(e.target.value)
               markIngestionStale()
             }}
@@ -1477,10 +1496,19 @@ function IngestionFileLoadResult({ state }: { state: IngestionFileLoadState }) {
   }
   return (
     <div className="mt-3 rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
-      Loaded {state.count} row{state.count === 1 ? '' : 's'} from{' '}
-      <span className="font-mono text-slate-100">{state.filename}</span>.
+      Selected{' '}
+      <span className="font-mono text-slate-100">{state.filename}</span>{' '}
+      ({formatBytes(state.size)}) for server-side inspection.
     </div>
   )
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return 'unknown size'
+  if (value < 1024) return `${value} B`
+  const kib = value / 1024
+  if (kib < 1024) return `${kib.toFixed(1)} KB`
+  return `${(kib / 1024).toFixed(1)} MB`
 }
 
 function IngestionImportResult({ state }: { state: IngestionImportState }) {
@@ -1963,129 +1991,6 @@ function parseIngestionDefaultFieldsJson(
     return { ok: false, message: 'Fallback fields must be a JSON object.' }
   }
   return { ok: true, fields: { ...parsed } }
-}
-
-function parseIngestionFileRows(
-  filename: string,
-  text: string,
-): ParsedIngestionRows {
-  if (!text.trim()) {
-    return { ok: false, message: 'File is empty.' }
-  }
-  const lowerFilename = filename.toLowerCase()
-  if (lowerFilename.endsWith('.jsonl') || lowerFilename.endsWith('.ndjson')) {
-    const rows: unknown[] = []
-    for (const [index, line] of text.split(/\r?\n/).entries()) {
-      if (!line.trim()) continue
-      try {
-        rows.push(JSON.parse(line))
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        return { ok: false, message: `Line ${index + 1}: ${message}` }
-      }
-    }
-    return normalizeIngestionRows(rows)
-  }
-  if (lowerFilename.endsWith('.csv')) {
-    return parseIngestionCsvRows(text)
-  }
-  return parseIngestionRowsJson(text)
-}
-
-function parseIngestionCsvRows(text: string): ParsedIngestionRows {
-  const parsed = parseCsv(text)
-  if (!parsed.ok) return parsed
-  const [header, ...bodyRows] = parsed.rows
-  if (!header || header.length === 0) {
-    return { ok: false, message: 'CSV must include a header row.' }
-  }
-  const columns = header.map((value) => value.trim())
-  const seenColumns = new Set<string>()
-  for (const [index, column] of columns.entries()) {
-    if (!column) {
-      return { ok: false, message: `CSV header ${index + 1} is empty.` }
-    }
-    if (seenColumns.has(column)) {
-      return { ok: false, message: `CSV header "${column}" is duplicated.` }
-    }
-    seenColumns.add(column)
-  }
-
-  const normalizedRows: Array<Record<string, unknown>> = []
-  for (const [index, row] of bodyRows.entries()) {
-    if (!row.some((value) => value.trim())) continue
-    if (row.length > columns.length) {
-      return {
-        ok: false,
-        message: `CSV row ${index + 2} has ${row.length} fields but only ${columns.length} headers.`,
-      }
-    }
-    const out: Record<string, unknown> = {}
-    for (const [index, column] of columns.entries()) {
-      out[column] = row[index] ?? ''
-    }
-    normalizedRows.push(out)
-  }
-  if (normalizedRows.length === 0) {
-    return { ok: false, message: 'Provide at least one row to inspect.' }
-  }
-  return normalizeIngestionRows(normalizedRows)
-}
-
-function parseCsv(text: string): { ok: true; rows: string[][] } | { ok: false; message: string } {
-  const rows: string[][] = []
-  let row: string[] = []
-  let field = ''
-  let inQuotes = false
-  let justClosedQuote = false
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]
-    const nextChar = text[index + 1]
-    if (char === '"') {
-      if (inQuotes && nextChar === '"') {
-        field += '"'
-        index += 1
-      } else if (inQuotes) {
-        inQuotes = false
-        justClosedQuote = true
-      } else if (!field) {
-        inQuotes = true
-      } else {
-        return { ok: false, message: `Unexpected quote at character ${index + 1}.` }
-      }
-      continue
-    }
-    if (char === ',' && !inQuotes) {
-      row.push(field)
-      field = ''
-      justClosedQuote = false
-      continue
-    }
-    if ((char === '\n' || char === '\r') && !inQuotes) {
-      row.push(field)
-      rows.push(row)
-      row = []
-      field = ''
-      justClosedQuote = false
-      if (char === '\r' && nextChar === '\n') {
-        index += 1
-      }
-      continue
-    }
-    if (justClosedQuote) {
-      return { ok: false, message: `Unexpected character after closing quote at character ${index + 1}.` }
-    }
-    field += char
-  }
-  if (inQuotes) {
-    return { ok: false, message: 'CSV contains an unterminated quoted field.' }
-  }
-  if (field || row.length > 0 || justClosedQuote) {
-    row.push(field)
-    rows.push(row)
-  }
-  return { ok: true, rows }
 }
 
 function extractIngestionRows(value: unknown): ParsedIngestionRows {
