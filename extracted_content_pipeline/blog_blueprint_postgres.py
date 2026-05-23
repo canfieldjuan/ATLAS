@@ -72,16 +72,21 @@ class PostgresBlogBlueprintRepository:
     ) -> Sequence[Mapping[str, Any]]:
         """Return unconsumed blueprints for the tenant + target_mode.
 
-        ``filters`` is accepted for protocol parity but currently
-        only honored for ``topic_type`` -- additional facets can
-        be added without a breaking change.
+        ``filters`` is accepted for protocol parity and currently honors
+        ``topic_type`` and ``slug``. The smoke path uses both so a freshly
+        seeded custom blueprint is selected uniquely instead of relying on
+        recency within a broad topic type.
         """
 
         topic_type = None
+        slug = None
         if filters:
             raw = filters.get("topic_type")
             if isinstance(raw, str) and raw.strip():
                 topic_type = raw.strip()
+            raw_slug = filters.get("slug")
+            if isinstance(raw_slug, str) and raw_slug.strip():
+                slug = raw_slug.strip()
 
         query = f"""
             SELECT id, target_mode, topic_type, slug, suggested_title, payload
@@ -92,8 +97,11 @@ class PostgresBlogBlueprintRepository:
         """
         args: list[Any] = [scope.account_id or "", target_mode]
         if topic_type is not None:
-            query += " AND topic_type = $3"
             args.append(topic_type)
+            query += f" AND topic_type = ${len(args)}"
+        if slug is not None:
+            args.append(slug)
+            query += f" AND slug = ${len(args)}"
         query += f" ORDER BY created_at DESC LIMIT ${len(args) + 1}"
         args.append(int(limit))
 

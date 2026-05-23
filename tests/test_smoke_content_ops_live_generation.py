@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 from typing import Any
 
@@ -62,12 +63,30 @@ class _LandingPageService:
         }
 
 
+class _BlogPostService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        return {
+            "requested": 1,
+            "generated": 1,
+            "skipped": 0,
+            "saved_ids": ["blog-live-smoke-1"],
+            "errors": [],
+        }
+
+
 def _args(**overrides: Any) -> argparse.Namespace:
     values = {
+        "output": "landing_page",
         "account_id": "acct-live-smoke",
         "user_id": "user-live-smoke",
+        "target_mode": "vendor_retention",
         "env_file": [],
         "input_json": None,
+        "blog_blueprint_json": None,
         "input": [],
         "quality_repair_attempts": 1,
         "no_quality_gates": False,
@@ -112,6 +131,125 @@ async def test_live_generation_smoke_executes_landing_page_through_real_executor
     assert call["campaign"].context["faq_questions"] == ["How long does it take?"]
     assert call["quality_repair_attempts"] == 1
     assert call["quality_gates_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_seeds_and_executes_blog_post_through_real_executor() -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+    seeded: list[dict[str, Any]] = []
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        seeded.append({"args": args, "scope": scope})
+        return {
+            "saved_ids": ["bp-live-smoke-1"],
+            "slug": "content-ops-blog-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "complaint_roundup",
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            input=["topic=Support ticket FAQ gaps"],
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["configured_outputs"] == ["blog_post"]
+    assert result["seeded_blog_blueprint"]["saved_ids"] == ["bp-live-smoke-1"]
+    assert result["execution"]["status"] == "completed"
+    assert result["execution"]["steps"][0]["result"]["saved_ids"] == [
+        "blog-live-smoke-1"
+    ]
+    assert lifecycle.initialized is True
+    assert lifecycle.closed is True
+    assert len(seeded) == 1
+    assert seeded[0]["scope"].account_id == "acct-live-smoke"
+    assert len(service.calls) == 1
+
+    call = service.calls[0]
+    assert call["scope"].account_id == "acct-live-smoke"
+    assert call["target_mode"] == "vendor_retention"
+    assert call["limit"] == 1
+    assert call["filters"] == {
+        "topic_type": "complaint_roundup",
+        "slug": "content-ops-blog-live-smoke-acct-live-smoke",
+    }
+    assert call["topic"] == "Support ticket FAQ gaps"
+    assert call["quality_gates_enabled"] is True
+
+
+def test_blog_blueprint_json_loader_accepts_one_custom_blueprint(tmp_path: Path) -> None:
+    path = tmp_path / "blueprint.json"
+    path.write_text(
+        json.dumps({
+            "title": "FAQ gaps for onboarding tickets",
+            "sections": [{"id": "onboarding", "heading": "Onboarding gaps"}],
+            "data_context": {"audience": "small support team"},
+        }),
+        encoding="utf-8",
+    )
+
+    blueprint, warnings = smoke._load_single_blog_blueprint_from_file(
+        path,
+        target_mode="vendor_retention",
+    )
+
+    assert warnings == []
+    assert blueprint.target_mode == "vendor_retention"
+    assert blueprint.topic_type == "content_ops_live_smoke"
+    assert blueprint.slug == "faq-gaps-for-onboarding-tickets"
+    assert blueprint.suggested_title == "FAQ gaps for onboarding tickets"
+    assert blueprint.payload["sections"] == [
+        {"id": "onboarding", "heading": "Onboarding gaps"}
+    ]
+
+
+def test_blog_blueprint_json_loader_rejects_multiple_blueprints(tmp_path: Path) -> None:
+    path = tmp_path / "blueprints.json"
+    path.write_text(
+        json.dumps({
+            "blueprints": [
+                {"title": "First blueprint"},
+                {"title": "Second blueprint"},
+            ]
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must load exactly one blueprint"):
+        smoke._load_single_blog_blueprint_from_file(
+            path,
+            target_mode="vendor_retention",
+        )
+
+
+def test_blog_payload_alignment_uses_seeded_topic_type_and_title() -> None:
+    payload = smoke._payload_from_args(_args(output="blog_post"))
+
+    smoke._align_blog_payload_to_seed(
+        payload,
+        {
+            "topic_type": "custom_smoke_topic",
+            "slug": "faq-gaps-for-onboarding-tickets",
+            "topic": "FAQ gaps for onboarding tickets",
+        },
+    )
+
+    assert payload["inputs"]["filters"] == {
+        "topic_type": "custom_smoke_topic",
+        "slug": "faq-gaps-for-onboarding-tickets",
+    }
+    assert payload["inputs"]["topic"] == "FAQ gaps for onboarding tickets"
 
 
 @pytest.mark.asyncio

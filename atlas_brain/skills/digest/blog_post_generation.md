@@ -99,11 +99,11 @@ Return valid JSON with exactly these keys:
 
 1. **Data integrity**: ONLY cite numbers that appear in `key_stats` or `data_summary`. Never fabricate statistics, percentages, or review counts.
 2. **Chart placement**: Every `chart_id` listed in a section's `chart_ids` MUST appear exactly once in the content as `{{chart:chart-id}}` on its own line. Do not invent chart IDs that are not in `available_charts`.
-3. **Structure**: Follow the section order from the blueprint. Use the provided `heading` for each section as an H2 (`##`).
+3. **Structure**: Follow the section order from the blueprint. Use the provided `heading` for each section as an H2 (`##`). Do not use vague H2 headings such as "Overview", "Introduction", "Conclusion", "Summary", "Final Thoughts", or "Key Takeaways"; use specific question or answer headings instead.
 4. **Tone**: Authoritative but accessible. Data journalist style -- let the numbers tell the story. Avoid marketing fluff, superlatives, and filler.
 5. **Quotable phrases**: Where `quotable_phrases` are provided, weave 2-4 of them into the text as blockquotes (`> "quote" -- verified buyer`). Choose the most impactful ones.
 6. **Timeframes**: Anchor all statistics with the time period from `data_context.review_period`. Example: "Between January 2025 and March 2026, we analyzed..."
-7. **Length**: 800-1500 words for the main content. Concise paragraphs (2-4 sentences each).
+7. **Length**: 1500-2200 words for the main content. Concise paragraphs (2-4 sentences each).
 8. **No CTA in content**: The frontend adds its own call-to-action section. End with a conclusion/verdict, not a sales pitch.
 9. **Formatting**: Use markdown headers (##), bold for key numbers, blockquotes for review excerpts, and bullet lists for comparisons. No HTML tags except tables.
 10. **SEO**: `seo_title` must be under 60 characters with the target keyword front-loaded. `seo_description` must be under 155 characters and include the target keyword. Use the target keyword naturally in H2 headings (2-3 times in the content, not forced). The display `title` can be longer and more natural -- it is the H1 on the page.

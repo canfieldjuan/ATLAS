@@ -41,8 +41,9 @@ class _Transaction:
 
 
 class _Conn:
-    def __init__(self, *, applied_versions=None) -> None:
+    def __init__(self, *, applied_versions=None, fetch_error: Exception | None = None) -> None:
         self.applied_versions = set(applied_versions or ())
+        self.fetch_error = fetch_error
         self.executed: list[tuple[str, tuple[object, ...]]] = []
         self.transactions = 0
 
@@ -54,6 +55,8 @@ class _Conn:
 
     async def fetch(self, query):
         self.executed.append((str(query), ()))
+        if self.fetch_error is not None:
+            raise self.fetch_error
         return [{"version": version} for version in sorted(self.applied_versions)]
 
     def transaction(self):
@@ -77,6 +80,10 @@ class _Pool:
 
     def acquire(self):
         return _Acquire(self.conn)
+
+
+class _UndefinedTableError(Exception):
+    sqlstate = "42P01"
 
 
 def _write_migration(root: Path, name: str, sql: str) -> None:
@@ -164,7 +171,52 @@ async def test_apply_content_pipeline_migrations_dry_run_does_not_execute_sql(tm
 
     assert result.dry_run is True
     assert [entry.status for entry in result.applied] == ["dry_run"]
-    assert conn.executed == []
+    assert len(conn.executed) == 1
+    assert "SELECT version FROM content_pipeline_schema_migrations" in conn.executed[0][0]
+    assert "CREATE TABLE example_one" not in "\n".join(query for query, _ in conn.executed)
+    assert conn.transactions == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_content_pipeline_migrations_dry_run_reports_applied_versions_as_skipped(tmp_path) -> None:
+    _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
+    _write_migration(tmp_path, "002_second.sql", "SELECT 2;")
+    conn = _Conn(applied_versions={"001_first.sql"})
+
+    result = await apply_content_pipeline_migrations(
+        conn,
+        migrations_dir=tmp_path,
+        dry_run=True,
+    )
+
+    assert result.dry_run is True
+    assert [entry.version for entry in result.skipped] == ["001_first.sql"]
+    assert [entry.status for entry in result.skipped] == ["skipped"]
+    assert [entry.version for entry in result.applied] == ["002_second.sql"]
+    assert [entry.status for entry in result.applied] == ["dry_run"]
+    executed_sql = "\n".join(query for query, _ in conn.executed)
+    assert "SELECT 1;" not in executed_sql
+    assert "SELECT 2;" not in executed_sql
+    assert "INSERT INTO content_pipeline_schema_migrations" not in executed_sql
+    assert conn.transactions == 0
+
+
+@pytest.mark.asyncio
+async def test_apply_content_pipeline_migrations_dry_run_treats_missing_table_as_no_applied_versions(tmp_path) -> None:
+    _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
+    conn = _Conn(fetch_error=_UndefinedTableError("missing migration table"))
+
+    result = await apply_content_pipeline_migrations(
+        conn,
+        migrations_dir=tmp_path,
+        dry_run=True,
+    )
+
+    assert result.dry_run is True
+    assert result.skipped == ()
+    assert [entry.version for entry in result.applied] == ["001_first.sql"]
+    assert [entry.status for entry in result.applied] == ["dry_run"]
+    assert conn.transactions == 0
 
 
 @pytest.mark.asyncio

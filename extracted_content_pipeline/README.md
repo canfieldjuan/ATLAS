@@ -337,6 +337,51 @@ available. Set `OPENROUTER_API_KEY` or
 `ATLAS_B2B_CHURN_OPENROUTER_API_KEY` for the pipeline-routed Claude provider.
 On success it prints the saved `landing_pages` draft id.
 
+To prove the live blog-post path too, run the same smoke with
+`--output blog_post`. The command upserts one account-scoped
+`blog_blueprints` row, then generates and persists one `blog_posts` draft with
+quality gates enabled:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --output blog_post \
+  --account-id acct_123 \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+On success it prints the saved `blog_posts` draft id and the seeded blueprint
+id. Re-running the command refreshes the same smoke blueprint for that account.
+To seed a specific operator blueprint instead of the default smoke row, pass a
+JSON file that normalizes to one blog blueprint:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --output blog_post \
+  --account-id acct_123 \
+  --blog-blueprint-json ./blog-blueprint.json \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+Minimal `blog-blueprint.json`:
+
+```json
+{
+  "title": "FAQ gaps for onboarding tickets",
+  "sections": [
+    {
+      "id": "onboarding-gaps",
+      "heading": "Where onboarding tickets repeat",
+      "data_summary": "Setup questions repeat across recent support tickets."
+    }
+  ],
+  "data_context": {
+    "audience": "small support team"
+  }
+}
+```
+
 For hosted Content Ops execution, pass the same selling asset through request
 inputs so every generated campaign opportunity sees it in `opportunity_json`:
 

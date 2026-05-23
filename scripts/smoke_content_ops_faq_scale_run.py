@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
-from collections.abc import Mapping, Sequence
-import csv
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import subprocess
@@ -18,27 +16,16 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 FAQ_CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
 
-from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
-    load_source_campaign_opportunities_from_file,
-    parse_default_fields_or_exit,
+from content_ops_faq_smoke_profile import (  # noqa: E402
+    console_input_profile,
+    load_source_input_profile,
+    raw_row_profile,
 )
-
-
-_JSON_ROW_KEYS = (
-    "support_tickets",
-    "tickets",
-    "cases",
-    "conversations",
-    "complaints",
-    "reviews",
-    "feedback",
-    "sources",
-    "rows",
-    "data",
-)
-_SKIP_WARNING_CODES = {"empty_row", "missing_source_text", "row_not_object"}
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -197,93 +184,16 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _input_profile(args: argparse.Namespace) -> dict[str, Any]:
-    profile = {
-        "status": "ok",
-        "raw_row_count": None,
-        "raw_row_count_source": None,
-        "usable_source_count": None,
-        "warning_count": None,
-        "warnings_by_code": {},
-        "skipped_row_count": None,
-        "missing_source_text_count": None,
-        "warning_sample": [],
-    }
-    try:
-        profile.update(_raw_row_profile(Path(args.path), str(args.source_format)))
-    except Exception as exc:  # pragma: no cover - exact host filesystem errors vary.
-        profile["raw_row_count_error"] = f"{type(exc).__name__}: {exc}"
-    try:
-        loaded = load_source_campaign_opportunities_from_file(
-            args.path,
-            file_format=args.source_format,
-            max_text_chars=args.max_text_chars,
-            default_fields=parse_default_fields_or_exit(args.default_field),
-        )
-    except (Exception, SystemExit) as exc:
-        profile["status"] = "error"
-        profile["error"] = f"{type(exc).__name__}: {exc}"
-        return profile
-    warnings = loaded.warning_dicts()
-    warnings_by_code = Counter(str(warning.get("code") or "unknown") for warning in warnings)
-    skipped_rows = {
-        int(warning["row_index"])
-        for warning in warnings
-        if warning.get("code") in _SKIP_WARNING_CODES and isinstance(warning.get("row_index"), int)
-    }
-    raw_count = profile.get("raw_row_count")
-    usable_count = len(loaded.opportunities)
-    profile.update({
-        "usable_source_count": usable_count,
-        "warning_count": len(warnings),
-        "warnings_by_code": dict(sorted(warnings_by_code.items())),
-        "skipped_row_count": len(skipped_rows),
-        "missing_source_text_count": warnings_by_code.get("missing_source_text", 0),
-        "warning_sample": warnings[:10],
-    })
-    if isinstance(raw_count, int) and raw_count > 0:
-        profile["usable_source_ratio"] = round(usable_count / raw_count, 6)
-    return profile
+    return load_source_input_profile(
+        args.path,
+        source_format=args.source_format,
+        max_text_chars=args.max_text_chars,
+        default_field=args.default_field,
+    )
 
 
 def _raw_row_profile(path: Path, source_format: str) -> dict[str, Any]:
-    resolved = _resolve_source_format(path, source_format)
-    if resolved == "csv":
-        with path.open(newline="", encoding="utf-8") as handle:
-            return {
-                "raw_row_count": sum(1 for _row in csv.DictReader(handle)),
-                "raw_row_count_source": "csv_rows",
-            }
-    if resolved == "jsonl":
-        return {
-            "raw_row_count": sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()),
-            "raw_row_count_source": "jsonl_lines",
-        }
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(data, list):
-        return {"raw_row_count": len(data), "raw_row_count_source": "json_array"}
-    if isinstance(data, Mapping):
-        bundle_counts = []
-        for key in _JSON_ROW_KEYS:
-            value = data.get(key)
-            if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-                bundle_counts.append((key, len(value)))
-        if bundle_counts:
-            keys = ",".join(key for key, _count in bundle_counts)
-            return {
-                "raw_row_count": sum(count for _key, count in bundle_counts),
-                "raw_row_count_source": f"json_bundle.{keys}",
-            }
-    return {"raw_row_count": None, "raw_row_count_source": None}
-
-
-def _resolve_source_format(path: Path, source_format: str) -> str:
-    if source_format != "auto":
-        return source_format
-    if path.suffix.lower() == ".csv":
-        return "csv"
-    if path.suffix.lower() == ".jsonl":
-        return "jsonl"
-    return "json"
+    return raw_row_profile(path, source_format)
 
 
 def _artifact_path(path: Path) -> str | None:
@@ -339,22 +249,7 @@ def _print_scale_summary(summary: Mapping[str, Any]) -> None:
 
 
 def _console_input_profile(value: Any) -> str:
-    if not isinstance(value, Mapping):
-        return "source_rows=unknown"
-    parts = [f"input_status={value.get('status') or 'unknown'}"]
-    usable = value.get("usable_source_count")
-    raw = value.get("raw_row_count")
-    if usable is not None or raw is not None:
-        parts.append(f"source_rows={_console_value(usable)}/{_console_value(raw)}")
-    for key, label in (
-        ("skipped_row_count", "skipped_rows"),
-        ("missing_source_text_count", "missing_source_text"),
-        ("warning_count", "warnings"),
-    ):
-        item = value.get(key)
-        if item not in (None, 0):
-            parts.append(f"{label}={item}")
-    return " ".join(parts)
+    return console_input_profile(value)
 
 
 def _console_value(value: Any) -> str:

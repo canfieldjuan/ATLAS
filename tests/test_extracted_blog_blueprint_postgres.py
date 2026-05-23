@@ -13,7 +13,7 @@ Test inventory (8 tests):
    is eligible for re-generation.
 3. `read_blog_blueprints` filters by account_id + target_mode
    + `consumed_at IS NULL` and applies the LIMIT.
-4. `read_blog_blueprints` honors the `topic_type` filter.
+4. `read_blog_blueprints` honors the `topic_type` and `slug` filters.
 5. `read_blog_blueprints` returns merged payload + row metadata
    so the generator sees a self-contained dict.
 6. `read_blog_blueprints` with no rows returns `()`
@@ -169,6 +169,35 @@ async def test_read_blog_blueprints_honors_topic_type_filter() -> None:
     # account_id, target_mode, topic_type, limit
     assert args == ("acct-1", "vendor_alternative", "pricing_pressure", 10)
     assert "topic_type = $3" in pool.fetch_calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_read_blog_blueprints_honors_slug_filter_with_topic_type() -> None:
+    pool = _Pool()
+    pool.fetch_rows = []
+    repo = PostgresBlogBlueprintRepository(pool=pool)
+
+    await repo.read_blog_blueprints(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_alternative",
+        limit=1,
+        filters={
+            "topic_type": "pricing_pressure",
+            "slug": "acme-pricing-pressure",
+        },
+    )
+
+    args = pool.fetch_calls[0]["args"]
+    assert args == (
+        "acct-1",
+        "vendor_alternative",
+        "pricing_pressure",
+        "acme-pricing-pressure",
+        1,
+    )
+    query = pool.fetch_calls[0]["query"]
+    assert "topic_type = $3" in query
+    assert "slug = $4" in query
 
 
 @pytest.mark.asyncio

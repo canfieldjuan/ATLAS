@@ -37,6 +37,22 @@ parked and note in the plan's Deferred.
 - Category: correctness
 - Found during: excluded-source-quote slice (Phase-2)
 
+### pain-radar chart urgency values don't reproduce from a naive all-time aggregate
+- File/location: deep-dive `pain-radar` chart data (e.g. `workday-deep-dive-2026-04.ts` L73-111, `microsoft-defender-...-2026-04.ts` L57-96); generator-side `_fetch_blog_signal_rows` / scorecard `avg_urgency_when_mentioned`.
+- Description: surfaced while fixing prose_vs_chart. The chart plots `avg_urgency_when_mentioned`, but those per-category values do NOT match a naive all-time aggregate over `b2b_reviews.enrichment` (e.g. Workday chart shows technical_debt 3.2 / data_migration 3.0 as top urgency, but an all-time aggregate has technical_debt freq=1 and pricing/integration higher; MSFT chart Security 3.5 vs all-time security urgency ~1.8). Likely a windowed and/or scorecard-derived computation, not necessarily wrong -- but its provenance isn't reproducible from the obvious query, so "is the chart itself right?" is unverified.
+- Why it matters: the deep pass needs a single source of truth for pain ranking; today the prose was made to match the chart (chart treated as authoritative reader-facing artifact), but if the chart's urgency window is itself off, the whole pain section inherits it. Pairs with the D3-followup frequency-view chart item.
+- Effort: M
+- Category: correctness
+- Found during: prose-vs-chart slice (Phase-2)
+
+### teamwork-deep-dive competitive list: "Slack" ungrounded + FAQ(5)/body(6) count mismatch
+- File/location: `atlas-churn-ui/src/content/blog/teamwork-deep-dive-2026-04.ts` L145 (FAQ) and L230 (competitive landscape); generator-side `_blueprint_vendor_deep_dive` competitive section sourced from `b2b_product_profiles.commonly_compared_to`.
+- Description: surfaced while clearing the `count_vs_list` class (teamwork was a detector FP -- the body lists 6 and says "six", the dotted "Monday.com" had broken the auditor regex). Two real-but-separate issues remain: (1) **grounding** -- L230 names "Slack" as a primary alternative, but DB-verified, Slack does NOT appear in Teamwork's `commonly_compared_to` (Trello 4, Basecamp 3, Asana 2, Monday.com 2, Chaser 1, Coda 1, ...); the top-6 by mentions would not include Slack. (2) **prose-vs-prose** -- L145 (FAQ) enumerates 5 alternatives (Trello, Asana, Basecamp, Monday.com, Slack; no Chaser) while L230 enumerates 6 (adds Chaser, mentions=1). Both numbers can't be the canonical count.
+- Why it matters: live content names a comparison vendor the source data doesn't support, and two sections disagree on how many alternatives there are. Not a `count_vs_list` defect (each sentence is internally count-consistent); belongs to the grounding/prose-consistency class for the Phase-2 deep pass (alongside the D5 source-list pattern and a candidate prose-vs-data detector).
+- Effort: S (data: align the two lists to the DB top-N, drop ungrounded "Slack") / M (generator: derive the FAQ count from the same capped `comp_names` the body uses)
+- Category: correctness
+- Found during: count-vs-list slice (Phase-2)
+
 ### zoho-crm-deep-dive L158 source list omits Slashdot (a quoted source) -- quote-pool vs corpus-count scope mismatch
 - File/location: `atlas-churn-ui/src/content/blog/zoho-crm-deep-dive-2026-04.ts` L158; generator-side, the quote pool (`_fetch_quotable_reviews`) vs the corpus counts (`_fetch_source_distribution`).
 - Description: L158 reads "The data comes from G2, Gartner, PeerSpot, and Reddit -- ... (24 reviews) ... (237 reviews)", but the post quotes a Slashdot reviewer (L166/L168, the D6 fix). The naive fix ("add Slashdot to the community bucket and the 237 reconciles", per the #802 review) does NOT work: DB-verified, the windowed-ENRICHED zoho corpus is reddit(237)/g2(11)/peerspot(8)/gartner(5) -- no Slashdot. The Slashdot quote's review is `enrichment_status=not_applicable` (in-window, Zoho-mention, but NOT enriched), so it's excluded from the 261/237 counts. So the quote pool includes non-enriched reviews the corpus counts exclude.

@@ -135,6 +135,18 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
         "condensed": True,
         "has_action_items": True,
     }
+    assert payload["normalization_warnings"] == {
+        "warning_count": 0,
+        "warnings_by_code": {},
+        "warning_sample": [],
+        "warnings_truncated": False,
+    }
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 4
+    assert payload["input_profile"]["raw_row_count_source"] == "csv_rows"
+    assert payload["input_profile"]["usable_source_count"] == 4
+    assert payload["input_profile"]["warning_count"] == 0
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
     assert payload["draft_export"]["rows"][0]["id"] == "faq-uuid-1"
     assert payload["draft_export"]["rows"][0]["status"] == "draft"
     assert payload["reviewed_export"]["rows"][0]["id"] == "faq-uuid-1"
@@ -184,6 +196,14 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
     assert code == 0
     assert payload["ok"] is True
     assert payload["source_rows"] == 1000
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 1000
+    assert payload["input_profile"]["raw_row_count_source"] == (
+        "json_bundle.support_tickets"
+    )
+    assert payload["input_profile"]["usable_source_count"] == 1000
+    assert payload["input_profile"]["warning_count"] == 0
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
     assert payload["saved_ids"] == ["faq-uuid-1"]
     assert payload["generation"]["source_count"] == 1000
     assert payload["generation"]["ticket_source_count"] == 1000
@@ -191,6 +211,27 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
     assert len(payload["generation"]["items"][0]["source_ids"]) == 1000
     assert payload["generation"]["items"][0]["source_ids"][0] == "ticket-lifecycle-0"
     assert payload["generation"]["items"][0]["source_ids"][-1] == "ticket-lifecycle-999"
+    assert payload["lifecycle_summary"] == {
+        "status": "ok",
+        "source": str(source),
+        "source_format": "json",
+        "source_rows": 1000,
+        "input_profile": payload["input_profile"],
+        "source_count": 1000,
+        "ticket_source_count": 1000,
+        "generated_item_count": 1,
+        "output_checks": {
+            "uses_user_vocabulary": True,
+            "condensed": True,
+            "has_action_items": True,
+        },
+        "saved_faq_count": 1,
+        "draft_export_count": 1,
+        "reviewed_export_count": 1,
+        "review_status": "published",
+        "error_count": 0,
+        "errors": [],
+    }
 
     draft = payload["draft_export"]["rows"][0]
     reviewed = payload["reviewed_export"]["rows"][0]
@@ -207,6 +248,60 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_reports_normalization_warning_codes(monkeypatch, tmp_path):
+    pool = _Pool()
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+    source = tmp_path / "support_ticket_bundle.json"
+    source.write_text(
+        json.dumps({
+            "support_tickets": [
+                {
+                    "ticket_id": f"ticket-warning-{index}",
+                    "source_type": "support_ticket",
+                    "subject": "Billing renewal question",
+                    "message": "How do I confirm my renewal invoice before payment?",
+                    "pain_category": "billing",
+                    "company_name": "Acme Billing",
+                    "contact_email": "billing@example.com",
+                }
+                for index in range(3)
+            ],
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(path=source, source_format="json", min_source_rows=3)
+    )
+
+    assert code == 1
+    assert payload["generation"] is None
+    assert payload["input_profile"]["status"] == "ok"
+    assert payload["input_profile"]["raw_row_count"] == 3
+    assert payload["input_profile"]["raw_row_count_source"] == (
+        "json_bundle.support_tickets"
+    )
+    assert payload["input_profile"]["usable_source_count"] == 3
+    assert payload["input_profile"]["warning_count"] == 3
+    assert payload["input_profile"]["warnings_by_code"] == {
+        "missing_vendor_name": 3
+    }
+    assert payload["input_profile"]["usable_source_ratio"] == 1.0
+    assert payload["normalization_warnings"]["warning_count"] == 3
+    assert payload["normalization_warnings"]["warnings_by_code"] == {
+        "missing_vendor_name": 3
+    }
+    assert payload["normalization_warnings"]["warning_sample"][0]["code"] == (
+        "missing_vendor_name"
+    )
+    assert payload["normalization_warnings"]["warnings_truncated"] is False
+    assert any("missing_vendor_name=3" in error for error in payload["errors"])
+    assert pool.execute_calls == []
+    assert pool.closed is True
+
+
+@pytest.mark.asyncio
 async def test_faq_lifecycle_smoke_fails_closed_when_table_missing(monkeypatch):
     pool = _Pool(existing_relations=())
     monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
@@ -216,6 +311,19 @@ async def test_faq_lifecycle_smoke_fails_closed_when_table_missing(monkeypatch):
     assert code == 1
     assert any("ticket_faq_markdown" in error for error in payload["errors"])
     assert payload["generation"] is None
+    assert payload["lifecycle_summary"]["status"] == "failed"
+    assert payload["lifecycle_summary"]["source_rows"] == 4
+    assert payload["lifecycle_summary"]["input_profile"] == payload["input_profile"]
+    assert payload["lifecycle_summary"]["source_count"] is None
+    assert payload["lifecycle_summary"]["ticket_source_count"] is None
+    assert payload["lifecycle_summary"]["generated_item_count"] is None
+    assert payload["lifecycle_summary"]["output_checks"] is None
+    assert payload["lifecycle_summary"]["saved_faq_count"] == 0
+    assert payload["lifecycle_summary"]["draft_export_count"] is None
+    assert payload["lifecycle_summary"]["reviewed_export_count"] is None
+    assert payload["lifecycle_summary"]["review_status"] == "published"
+    assert payload["lifecycle_summary"]["error_count"] == 1
+    assert payload["lifecycle_summary"]["errors"] == payload["errors"]
     assert len(pool.fetchval_calls) == 1
     assert pool.execute_calls == []
     assert pool.closed is True
@@ -233,6 +341,157 @@ async def test_faq_lifecycle_smoke_reports_review_status_miss(monkeypatch):
     assert any("review status update missed saved FAQ id" in error for error in payload["errors"])
     assert payload["reviewed_export"] is None
     assert pool.closed is True
+
+
+@pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_marks_input_profile_error_on_load_failure(monkeypatch, tmp_path):
+    pool = _Pool()
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(path=tmp_path / "missing.json", source_format="json")
+    )
+
+    assert code == 1
+    assert payload["generation"] is None
+    assert payload["input_profile"]["status"] == "error"
+    assert "No such file or directory" in payload["input_profile"]["error"]
+    assert "No such file or directory" in payload["input_profile"]["raw_row_count_error"]
+    assert any("No such file or directory" in error for error in payload["errors"])
+    assert pool.execute_calls == []
+    assert pool.closed is True
+
+
+def test_faq_lifecycle_print_payload_includes_input_profile(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "input_profile": {
+                "status": "ok",
+                "usable_source_count": 1000,
+                "raw_row_count": 1000,
+                "warning_count": 0,
+            },
+            "saved_ids": ["faq-uuid-1"],
+            "review_status": "published",
+        },
+        as_json=False,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "Content Ops FAQ lifecycle smoke passed:" in captured.out
+    assert "input_status=ok" in captured.out
+    assert "source_rows=1000/1000" in captured.out
+    assert "saved_faqs=1" in captured.out
+    assert "review_status=published" in captured.out
+
+
+def test_faq_lifecycle_print_payload_includes_input_profile_on_failure(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": False,
+            "input_profile": {
+                "status": "ok",
+                "usable_source_count": 46,
+                "raw_row_count": 1000,
+                "skipped_row_count": 954,
+                "missing_source_text_count": 954,
+                "warning_count": 954,
+            },
+            "errors": ["expected at least 500 source row(s), got 46"],
+        },
+        as_json=False,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Content Ops FAQ lifecycle smoke failed:" in captured.err
+    assert "input_status=ok" in captured.err
+    assert "source_rows=46/1000" in captured.err
+    assert "skipped_rows=954" in captured.err
+    assert "missing_source_text=954" in captured.err
+    assert "warnings=954" in captured.err
+    assert "- expected at least 500 source row(s), got 46" in captured.err
+
+
+def test_faq_lifecycle_print_payload_summary_json(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "lifecycle_summary": {
+                "status": "ok",
+                "source_rows": 1000,
+                "saved_faq_count": 1,
+                "draft_export_count": 1,
+                "reviewed_export_count": 1,
+            },
+            "reviewed_export": {
+                "rows": [
+                    {
+                        "markdown": "# full markdown body should not print",
+                    }
+                ]
+            },
+        },
+        as_json=False,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output == {
+        "status": "ok",
+        "source_rows": 1000,
+        "saved_faq_count": 1,
+        "draft_export_count": 1,
+        "reviewed_export_count": 1,
+    }
+    assert "full markdown body" not in captured.out
+
+
+def test_faq_lifecycle_print_payload_summary_json_on_failure(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": False,
+            "lifecycle_summary": {
+                "status": "failed",
+                "source_rows": 46,
+                "error_count": 1,
+                "errors": ["expected at least 500 source row(s), got 46"],
+            },
+            "errors": ["expected at least 500 source row(s), got 46"],
+        },
+        as_json=False,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output["status"] == "failed"
+    assert output["source_rows"] == 46
+    assert output["error_count"] == 1
+    assert output["errors"] == ["expected at least 500 source row(s), got 46"]
+
+
+def test_faq_lifecycle_print_payload_full_json_wins_over_summary_json(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "lifecycle_summary": {"status": "ok"},
+            "reviewed_export": {"rows": [{"markdown": "# full markdown"}]},
+        },
+        as_json=True,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output["lifecycle_summary"] == {"status": "ok"}
+    assert output["reviewed_export"]["rows"][0]["markdown"] == "# full markdown"
 
 
 def test_faq_lifecycle_smoke_rejects_invalid_args() -> None:
