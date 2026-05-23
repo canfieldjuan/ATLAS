@@ -819,6 +819,97 @@ async def test_ingestion_file_import_route_dry_run_uses_file_parser():
 
 
 @pytest.mark.asyncio
+async def test_ingestion_file_import_route_rejects_when_import_gate_is_full():
+    pool = _Pool()
+    provider_started = asyncio.Event()
+    provider_release = asyncio.Event()
+    provider_calls = 0
+
+    async def pool_provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        provider_started.set()
+        await provider_release.wait()
+        return pool
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            ingestion_import_max_concurrency=1,
+        ),
+        opportunity_import_pool_provider=pool_provider,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    route = _route(router, "/ops/ingestion/files/import", "POST")
+    first = asyncio.create_task(
+        route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+            dry_run=False,
+        )
+    )
+    await asyncio.wait_for(provider_started.wait(), timeout=1)
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+            dry_run=False,
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.detail == {
+        "reason": "content_ops_ingestion_import_at_capacity",
+        "max_concurrency": 1,
+    }
+    assert provider_calls == 1
+
+    provider_release.set()
+    first_payload = await first
+    assert first_payload["import"]["inserted"] == 1
+    assert provider_calls == 1
+
+    second_payload = await route.endpoint(
+        file=_ticket_bundle_upload(1),
+        source_rows=True,
+        source="ticket-csv-upload",
+        target_mode="vendor_retention",
+        file_format="json",
+        max_source_text_chars=1200,
+        sample_limit=3,
+        default_fields=json.dumps({
+            "company_name": "Acme",
+            "vendor_name": "Atlas",
+            "contact_email": "support@example.com",
+        }),
+        dry_run=False,
+    )
+    assert second_payload["import"]["inserted"] == 1
+    assert provider_calls == 2
+
+
+@pytest.mark.asyncio
 async def test_ingestion_file_inspect_route_rejects_oversized_upload_bytes():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
@@ -2315,6 +2406,11 @@ def test_content_ops_config_stores_output_pack_names_immutably():
 def test_content_ops_config_rejects_invalid_execute_concurrency():
     with pytest.raises(ValueError, match="execute_max_concurrency must be positive"):
         ContentOpsControlSurfaceApiConfig(execute_max_concurrency=0)
+
+
+def test_content_ops_config_rejects_invalid_ingestion_import_concurrency():
+    with pytest.raises(ValueError, match="ingestion_import_max_concurrency must be positive"):
+        ContentOpsControlSurfaceApiConfig(ingestion_import_max_concurrency=0)
 
 
 def test_content_ops_config_rejects_invalid_falsification_rules_shape():
