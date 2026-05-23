@@ -36,8 +36,8 @@ const post: BlogPost = {
       },
       {
         "name": "overall_dissatisfaction",
-        "strengths": 2,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 2
       }
     ],
     "config": {
