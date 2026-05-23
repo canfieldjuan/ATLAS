@@ -2290,7 +2290,157 @@ function ExecutionStepSummary({
   if (['blog_post', 'report', 'landing_page', 'sales_brief'].includes(output)) {
     return <GeneratedAssetSummary result={result} generatedLabel="Assets generated" />
   }
+  if (output === 'faq_markdown') {
+    return <FAQMarkdownExecutionSummary result={result} />
+  }
   return null
+}
+
+function FAQMarkdownExecutionSummary({ result }: { result: Record<string, unknown> }) {
+  const generated = typeof result.generated === 'number' ? result.generated : null
+  const sourceCount =
+    typeof result.source_count === 'number' ? result.source_count : null
+  const ticketSourceCount =
+    typeof result.ticket_source_count === 'number'
+      ? result.ticket_source_count
+      : null
+  const warningCount = Array.isArray(result.warnings)
+    ? result.warnings.length
+    : null
+  const savedIds = Array.isArray(result.saved_ids)
+    ? result.saved_ids.filter((id): id is string => typeof id === 'string')
+    : []
+  const mappings = faqExecutionTermMappings(result.items)
+  const shownMappings = mappings.slice(0, 3)
+
+  if (
+    generated === null &&
+    sourceCount === null &&
+    ticketSourceCount === null &&
+    warningCount === null &&
+    savedIds.length === 0 &&
+    mappings.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div className="mb-3 space-y-2 rounded-md border border-slate-800 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">
+      <div className="flex flex-wrap items-center gap-3">
+        {generated !== null && (
+          <span>
+            FAQ items:{' '}
+            <span className="font-medium text-slate-100">{generated}</span>
+          </span>
+        )}
+        {sourceCount !== null && (
+          <span>
+            Source rows:{' '}
+            <span className="font-medium text-slate-100">{sourceCount}</span>
+          </span>
+        )}
+        {ticketSourceCount !== null && (
+          <span>
+            Ticket sources:{' '}
+            <span className="font-medium text-slate-100">
+              {ticketSourceCount}
+            </span>
+          </span>
+        )}
+        {warningCount !== null && (
+          <span>
+            Warnings:{' '}
+            <span className="font-medium text-slate-100">{warningCount}</span>
+          </span>
+        )}
+        <span>
+          Vocabulary gaps:{' '}
+          <span className="font-medium text-slate-100">{mappings.length}</span>
+        </span>
+      </div>
+      {shownMappings.length > 0 && (
+        <ul className="space-y-1">
+          {shownMappings.map((mapping, index) => (
+            <li
+              key={`${mapping.customerTerm}-${mapping.documentationTerm}-${index}`}
+              className="rounded border border-slate-800 bg-slate-950/50 px-2 py-1"
+            >
+              <span className="font-medium text-slate-100">
+                {mapping.customerTerm || 'Customer term'}
+              </span>
+              {' -> '}
+              <span className="text-cyan-200">
+                {mapping.documentationTerm || 'Documentation term'}
+              </span>
+              <span className="ml-2 text-slate-500">
+                {faqMappingMeta(mapping).join(' · ')}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {mappings.length > shownMappings.length && (
+        <div className="text-slate-500">
+          +{mappings.length - shownMappings.length} more vocabulary gaps in raw
+          result details
+        </div>
+      )}
+      {savedIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span>Saved:</span>
+          {savedIds.map((id) => (
+            <span
+              key={id}
+              className="max-w-full break-all rounded bg-slate-950/60 px-1.5 py-0.5 font-mono text-slate-100"
+            >
+              {id}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type FAQExecutionTermMapping = {
+  customerTerm: string
+  documentationTerm: string
+  sourceIdCount: number | null
+  zeroResultSourceCount: number | null
+  opportunityScore: number | null
+}
+
+function faqExecutionTermMappings(value: unknown): FAQExecutionTermMapping[] {
+  return recordArray(value).flatMap((item) =>
+    recordArray(item.term_mappings)
+      .map((mapping) => ({
+        customerTerm: stringField(mapping, 'customer_term') ?? '',
+        documentationTerm: stringField(mapping, 'documentation_term') ?? '',
+        sourceIdCount: numberField(mapping, 'source_id_count'),
+        zeroResultSourceCount: numberField(mapping, 'zero_result_source_count'),
+        opportunityScore: numberField(mapping, 'opportunity_score'),
+      }))
+      .filter((mapping) => mapping.customerTerm || mapping.documentationTerm),
+  )
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : []
+}
+
+function faqMappingMeta(mapping: FAQExecutionTermMapping): string[] {
+  return [
+    numberMeta(mapping.sourceIdCount, 'source'),
+    numberMeta(mapping.zeroResultSourceCount, 'zero-result'),
+    mapping.opportunityScore === null
+      ? ''
+      : `score ${mapping.opportunityScore}`,
+  ].filter(Boolean)
+}
+
+function numberMeta(value: number | null, label: string): string {
+  if (value === null) return ''
+  return `${value} ${label}${value === 1 ? '' : 's'}`
 }
 
 function GeneratedAssetSummary({
@@ -2812,6 +2962,14 @@ function stringField(
 ): string | null {
   const field = value[key]
   return typeof field === 'string' && field ? field : null
+}
+
+function numberField(
+  value: Record<string, unknown>,
+  key: string,
+): number | null {
+  const field = value[key]
+  return typeof field === 'number' && Number.isFinite(field) ? field : null
 }
 
 function executionDetailMessage(detail: unknown): string {
