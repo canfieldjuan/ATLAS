@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import logging
 from typing import Any, Mapping, Sequence
 
 from .blog_ports import BlogPostDraft
@@ -17,6 +18,8 @@ from .storage._jsonb_helpers import (
 
 
 _METADATA_KEY = "_metadata"
+_MAX_SLUG_ATTEMPTS = 5
+logger = logging.getLogger(__name__)
 
 
 def _draft_data_context(draft: BlogPostDraft, scope: TenantScope) -> JsonDict:
@@ -80,6 +83,29 @@ def _optional_text(value: Any) -> str | None:
     return text or None
 
 
+def _slug_part(value: Any, *, fallback: str) -> str:
+    chars: list[str] = []
+    previous_dash = False
+    for char in str(value or "").strip().lower():
+        if "a" <= char <= "z" or "0" <= char <= "9":
+            chars.append(char)
+            previous_dash = False
+        elif chars and not previous_dash:
+            chars.append("-")
+            previous_dash = True
+    slug = "".join(chars).strip("-")
+    return slug or fallback
+
+
+def _fallback_slug(base_slug: str, account_id: str, attempt: int) -> str:
+    suffix = _slug_part(account_id, fallback="draft")[:40].strip("-") or "draft"
+    if attempt > 1:
+        suffix = f"{suffix}-{attempt}"
+    base = _slug_part(base_slug, fallback="blog-post")
+    max_base_length = max(1, 180 - len(suffix) - 1)
+    return f"{base[:max_base_length].strip('-')}-{suffix}"
+
+
 def _metadata_json_list(metadata: Mapping[str, Any], key: str) -> tuple[bool, list[Any]]:
     if key not in metadata:
         return False, []
@@ -125,82 +151,113 @@ class PostgresBlogPostRepository:
         saved: list[str] = []
         account_id = scope.account_id or ""
         for draft in drafts:
-            data_context = _draft_data_context(draft, scope)
-            has_secondary_keywords, secondary_keywords = _metadata_json_list(
-                draft.metadata,
-                "secondary_keywords",
+            blog_post_id = await self._save_draft_with_slug(
+                draft,
+                scope=scope,
+                slug=draft.slug,
             )
-            has_faq, faq = _metadata_json_list(draft.metadata, "faq")
-            blog_post_id = await self.pool.fetchval(
-                """
-                INSERT INTO blog_posts (
-                    account_id, slug, title, description, topic_type,
-                    tags, content, charts, data_context, status,
-                    llm_model, source_report_date,
-                    seo_title, seo_description, target_keyword,
-                    secondary_keywords, faq
+            attempt = 1
+            while not blog_post_id and attempt < _MAX_SLUG_ATTEMPTS:
+                blog_post_id = await self._save_draft_with_slug(
+                    draft,
+                    scope=scope,
+                    slug=_fallback_slug(draft.slug, account_id, attempt),
                 )
-                VALUES (
-                    $1, $2, $3, $4, $5,
-                    $6::jsonb, $7, $8::jsonb, $9::jsonb, 'draft',
-                    $10, $11,
-                    $12, $13, $14, $15::jsonb, $16::jsonb
-                )
-                ON CONFLICT (slug) DO UPDATE SET
-                    account_id = EXCLUDED.account_id,
-                    title = EXCLUDED.title,
-                    description = EXCLUDED.description,
-                    topic_type = EXCLUDED.topic_type,
-                    tags = EXCLUDED.tags,
-                    content = EXCLUDED.content,
-                    charts = EXCLUDED.charts,
-                    data_context = EXCLUDED.data_context,
-                    status = EXCLUDED.status,
-                    llm_model = EXCLUDED.llm_model,
-                    source_report_date = EXCLUDED.source_report_date,
-                    seo_title = COALESCE(EXCLUDED.seo_title, blog_posts.seo_title),
-                    seo_description = COALESCE(
-                        EXCLUDED.seo_description,
-                        blog_posts.seo_description
-                    ),
-                    target_keyword = COALESCE(
-                        EXCLUDED.target_keyword,
-                        blog_posts.target_keyword
-                    ),
-                    secondary_keywords = CASE
-                        WHEN $17 THEN EXCLUDED.secondary_keywords
-                        ELSE blog_posts.secondary_keywords
-                    END,
-                    faq = CASE
-                        WHEN $18 THEN EXCLUDED.faq
-                        ELSE blog_posts.faq
-                    END
-                WHERE blog_posts.status != 'published'
-                  AND blog_posts.account_id = EXCLUDED.account_id
-                RETURNING id
-                """,
-                account_id,
-                draft.slug,
-                draft.title,
-                draft.description,
-                draft.topic_type,
-                json_dump_jsonb(list(draft.tags or ())),
-                draft.content,
-                json_dump_jsonb([dict(chart) for chart in draft.charts or ()]),
-                json_dump_jsonb(data_context),
-                str(draft.metadata.get("generation_model") or "") or None,
-                _source_report_date(data_context.get("source_report_date")),
-                _optional_text(draft.metadata.get("seo_title")),
-                _optional_text(draft.metadata.get("seo_description")),
-                _optional_text(draft.metadata.get("target_keyword")),
-                json_dump_jsonb(secondary_keywords),
-                json_dump_jsonb(faq),
-                has_secondary_keywords,
-                has_faq,
-            )
+                attempt += 1
             if blog_post_id:
                 saved.append(str(blog_post_id))
+            else:
+                logger.warning(
+                    "blog_post_draft_save_exhausted_slug_attempts",
+                    extra={
+                        "account_id": account_id,
+                        "slug": draft.slug,
+                        "attempts": _MAX_SLUG_ATTEMPTS,
+                    },
+                )
         return tuple(saved)
+
+    async def _save_draft_with_slug(
+        self,
+        draft: BlogPostDraft,
+        *,
+        scope: TenantScope,
+        slug: str,
+    ) -> Any:
+        account_id = scope.account_id or ""
+        data_context = _draft_data_context(draft, scope)
+        has_secondary_keywords, secondary_keywords = _metadata_json_list(
+            draft.metadata,
+            "secondary_keywords",
+        )
+        has_faq, faq = _metadata_json_list(draft.metadata, "faq")
+        return await self.pool.fetchval(
+            """
+            INSERT INTO blog_posts (
+                account_id, slug, title, description, topic_type,
+                tags, content, charts, data_context, status,
+                llm_model, source_report_date,
+                seo_title, seo_description, target_keyword,
+                secondary_keywords, faq
+            )
+            VALUES (
+                $1, $2, $3, $4, $5,
+                $6::jsonb, $7, $8::jsonb, $9::jsonb, 'draft',
+                $10, $11,
+                $12, $13, $14, $15::jsonb, $16::jsonb
+            )
+            ON CONFLICT (slug) DO UPDATE SET
+                account_id = EXCLUDED.account_id,
+                title = EXCLUDED.title,
+                description = EXCLUDED.description,
+                topic_type = EXCLUDED.topic_type,
+                tags = EXCLUDED.tags,
+                content = EXCLUDED.content,
+                charts = EXCLUDED.charts,
+                data_context = EXCLUDED.data_context,
+                status = EXCLUDED.status,
+                llm_model = EXCLUDED.llm_model,
+                source_report_date = EXCLUDED.source_report_date,
+                seo_title = COALESCE(EXCLUDED.seo_title, blog_posts.seo_title),
+                seo_description = COALESCE(
+                    EXCLUDED.seo_description,
+                    blog_posts.seo_description
+                ),
+                target_keyword = COALESCE(
+                    EXCLUDED.target_keyword,
+                    blog_posts.target_keyword
+                ),
+                secondary_keywords = CASE
+                    WHEN $17 THEN EXCLUDED.secondary_keywords
+                    ELSE blog_posts.secondary_keywords
+                END,
+                faq = CASE
+                    WHEN $18 THEN EXCLUDED.faq
+                    ELSE blog_posts.faq
+                END
+            WHERE blog_posts.status != 'published'
+              AND blog_posts.account_id = EXCLUDED.account_id
+            RETURNING id
+            """,
+            account_id,
+            slug,
+            draft.title,
+            draft.description,
+            draft.topic_type,
+            json_dump_jsonb(list(draft.tags or ())),
+            draft.content,
+            json_dump_jsonb([dict(chart) for chart in draft.charts or ()]),
+            json_dump_jsonb(data_context),
+            str(draft.metadata.get("generation_model") or "") or None,
+            _source_report_date(data_context.get("source_report_date")),
+            _optional_text(draft.metadata.get("seo_title")),
+            _optional_text(draft.metadata.get("seo_description")),
+            _optional_text(draft.metadata.get("target_keyword")),
+            json_dump_jsonb(secondary_keywords),
+            json_dump_jsonb(faq),
+            has_secondary_keywords,
+            has_faq,
+        )
 
     async def list_drafts(
         self,
