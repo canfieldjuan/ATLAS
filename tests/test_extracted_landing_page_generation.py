@@ -12,6 +12,8 @@ from extracted_content_pipeline.campaign_ports import (
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationConfig,
     LandingPageGenerationService,
+    _normalize_section_answer_visibility,
+    _quality_repair_guidance,
     parse_landing_page_response,
 )
 from extracted_content_pipeline.landing_page_ports import (
@@ -305,6 +307,41 @@ def test_parse_landing_page_response_accepts_missing_hero_for_quality_pack_to_ju
     parsed = parse_landing_page_response(payload)
     assert parsed is not None
     assert parsed["title"] == "Title"
+
+
+def test_quality_repair_guidance_explains_section_semantics_contract() -> None:
+    guidance = _quality_repair_guidance(("geo_readiness:section_semantics",))
+
+    assert "metadata.kind must be one of" in guidance
+    assert "body_markdown must start with the exact metadata.answer_summary" in guidance
+    assert "problem, solution, how_it_works, faq, or objection" in guidance
+
+
+def test_normalize_section_answer_visibility_prepends_model_summary() -> None:
+    parsed = {
+        "title": "FAQ Report",
+        "sections": [
+            {
+                "id": "problem",
+                "title": "Support Problems Become Cancellations",
+                "body_markdown": "Small teams keep answering repeat questions.",
+                "metadata": {
+                    "kind": "problem",
+                    "primary_question": "Why do repeat support questions matter?",
+                    "answer_summary": (
+                        "Repeat support questions matter because they show where "
+                        "customers cannot find answers before frustration grows."
+                    ),
+                },
+            }
+        ],
+    }
+
+    normalized = _normalize_section_answer_visibility(parsed)
+
+    body = normalized["sections"][0]["body_markdown"]
+    assert body.startswith(parsed["sections"][0]["metadata"]["answer_summary"])
+    assert "Small teams keep answering repeat questions." in body
 
 
 @pytest.mark.asyncio

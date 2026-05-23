@@ -573,6 +573,24 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --json
 ```
 
+After provider routing and the Atlas DB pool are configured, use the live
+Content Ops generation smoke to prove the hosted landing-page path. It runs the
+same services bundle and executor used by `/content-ops/execute`, calls the
+pipeline-routed OpenRouter/Claude provider, and persists one `landing_pages`
+draft:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --account-id acct_123 \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+If the command reports that `landing_page` is not configured, check DB
+initialization and the pipeline LLM/OpenRouter credentials before testing the
+HTTP route. The provider route expects `OPENROUTER_API_KEY` or
+`ATLAS_B2B_CHURN_OPENROUTER_API_KEY` to be loaded in the host environment.
+
 CFPB complaint narratives are the public support-ticket-like smoke path. Use
 them when the host needs a non-review source before wiring CRM notes, call
 transcripts, support tickets, or case exports. The exporter keeps only rows
