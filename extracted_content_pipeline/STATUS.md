@@ -69,6 +69,15 @@ source of truth for what remains.
   is also available as `faq_markdown` in the AI Content Ops control-surface
   execution path and can persist drafts through `PostgresTicketFAQRepository`
   when DB services are enabled.
+- `support_ticket_input_package` and `support_ticket_input_provider` package
+  already-loaded support-ticket rows or `support_tickets` bundles into the
+  generic Content Ops request shape. The package supplies `source_material`,
+  FAQ Markdown defaults, landing-page SEO/GEO/AEO context, and blog-planning
+  inputs; the provider exposes the same handoff through the
+  `ContentOpsInputProvider` protocol for host-owned loaders. Atlas mounts a
+  host adapter on `/content-ops` that expands only support-ticket-shaped source
+  material and no-ops for empty or generic evidence. File parsing and persisted
+  import lookup remain owned by host ingestion.
 - `campaign_postgres_export` provides a read-only draft export path over
   generated `b2b_campaigns` rows so hosts can review JSON/CSV outputs without
   handwritten SQL.
