@@ -102,7 +102,7 @@ const post: BlogPost = {
   seo_title: 'Close vs Zoho CRM 2026: 102 Reviews Compared',
   seo_description: 'Analysis of 102 Close and Zoho CRM reviews. Compare urgency scores, pain categories, and buyer segment patterns to see which CRM fits your needs.',
   target_keyword: 'close vs zoho crm',
-  secondary_keywords: ["close crm reviews", "zoho crm alternatives", "close vs zoho comparison"],
+  secondary_keywords: ["close crm reviews", "zoho crm alternatives", "close vs zoho comparison", "close crm pricing"],
   faq: [
   {
     "question": "What are the main differences between Close and Zoho CRM?",

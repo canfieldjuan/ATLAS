@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Pipedrive Reviews: Deep Dive Analysis of 262 User Reports',
   seo_description: 'Analysis of 262 Pipedrive reviews reveals billing friction and support quality concerns alongside strong onboarding and integration praise. Data from G2, Reddit, and verified platforms.',
   target_keyword: 'Pipedrive reviews',
-  secondary_keywords: ["Pipedrive CRM feedback", "Pipedrive pricing complaints", "Pipedrive support issues"],
+  secondary_keywords: ["Pipedrive CRM feedback", "Pipedrive pricing complaints", "Pipedrive support issues", "Pipedrive vs HubSpot", "Pipedrive pricing"],
   faq: [
   {
     "question": "What do Pipedrive users complain about most?",

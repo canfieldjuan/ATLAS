@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'HubSpot Reviews 2026: 1680 User Experiences Analyzed',
   seo_description: 'Analysis of 1680 HubSpot reviews: pricing pain, integration strengths, and where reviewer sentiment splits. See what drives satisfaction and frustration.',
   target_keyword: 'hubspot reviews',
-  secondary_keywords: ["hubspot crm reviews", "hubspot pricing complaints", "hubspot vs salesforce", "hubspot alternatives"],
+  secondary_keywords: ["hubspot crm reviews", "hubspot pricing complaints", "hubspot vs salesforce", "hubspot alternatives", "hubspot too expensive"],
   faq: [
   {
     "question": "What are the most common complaints about HubSpot?",
