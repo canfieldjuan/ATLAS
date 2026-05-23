@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 
 import pytest
@@ -93,16 +94,59 @@ async def test_save_drafts_persists_scope_metadata_and_returns_ids() -> None:
 
 
 @pytest.mark.asyncio
-async def test_save_drafts_skips_cross_tenant_slug_conflict() -> None:
+async def test_save_drafts_retries_cross_tenant_slug_conflict_with_scope_slug() -> None:
     pool = _Pool()
-    pool.fetchval_results = [None]
+    pool.fetchval_results = [None, "blog-post-uuid-2"]
     repo = PostgresBlogPostRepository(pool)
 
     saved = await repo.save_drafts([_draft()], scope=TenantScope(account_id="acct-b"))
 
-    assert saved == ()
+    assert saved == ("blog-post-uuid-2",)
+    assert len(pool.fetchval_calls) == 2
+    assert pool.fetchval_calls[0]["args"][1] == "acme-pricing-pressure"
+    assert pool.fetchval_calls[1]["args"][1] == "acme-pricing-pressure-acct-b"
     sql = pool.fetchval_calls[0]["query"]
     assert "blog_posts.account_id = EXCLUDED.account_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_save_drafts_uses_numbered_scope_slug_when_first_fallback_conflicts() -> None:
+    pool = _Pool()
+    pool.fetchval_results = [None, None, "blog-post-uuid-3"]
+    repo = PostgresBlogPostRepository(pool)
+
+    saved = await repo.save_drafts([_draft()], scope=TenantScope(account_id="acct-b"))
+
+    assert saved == ("blog-post-uuid-3",)
+    assert pool.fetchval_calls[1]["args"][1] == "acme-pricing-pressure-acct-b"
+    assert pool.fetchval_calls[2]["args"][1] == "acme-pricing-pressure-acct-b-2"
+
+
+@pytest.mark.asyncio
+async def test_save_drafts_warns_when_slug_retries_are_exhausted(caplog) -> None:
+    pool = _Pool()
+    pool.fetchval_results = [None, None, None, None, None]
+    repo = PostgresBlogPostRepository(pool)
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="extracted_content_pipeline.blog_post_postgres",
+    ):
+        saved = await repo.save_drafts([_draft()], scope=TenantScope(account_id="acct-b"))
+
+    assert saved == ()
+    assert [call["args"][1] for call in pool.fetchval_calls] == [
+        "acme-pricing-pressure",
+        "acme-pricing-pressure-acct-b",
+        "acme-pricing-pressure-acct-b-2",
+        "acme-pricing-pressure-acct-b-3",
+        "acme-pricing-pressure-acct-b-4",
+    ]
+    warning = caplog.records[0]
+    assert warning.message == "blog_post_draft_save_exhausted_slug_attempts"
+    assert warning.account_id == "acct-b"
+    assert warning.slug == "acme-pricing-pressure"
+    assert warning.attempts == 5
 
 
 @pytest.mark.asyncio
