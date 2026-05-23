@@ -111,6 +111,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional JSON object merged over the default inputs.",
     )
     parser.add_argument(
+        "--blog-blueprint-json",
+        type=Path,
+        help=(
+            "Optional custom blog blueprint JSON file for --output blog_post. "
+            "The file must normalize to exactly one blueprint."
+        ),
+    )
+    parser.add_argument(
         "--input",
         action="append",
         default=[],
@@ -350,6 +358,67 @@ def _default_blog_blueprint_payload() -> dict[str, Any]:
     }
 
 
+def _load_single_blog_blueprint_from_file(
+    path: Path,
+    *,
+    target_mode: str,
+) -> tuple[Any, list[dict[str, Any]]]:
+    from extracted_content_pipeline.blog_blueprint_ingest import (  # noqa: PLC0415
+        load_blog_blueprints_from_file,
+    )
+
+    try:
+        loaded = load_blog_blueprints_from_file(
+            path,
+            target_mode=target_mode,
+            topic_type=DEFAULT_BLOG_TOPIC_TYPE,
+        )
+    except OSError as exc:
+        raise ValueError(f"unable to read --blog-blueprint-json: {exc}") from exc
+    except ValueError as exc:
+        raise ValueError(f"invalid --blog-blueprint-json: {exc}") from exc
+    warnings = loaded.warning_dicts()
+    if len(loaded.blueprints) != 1:
+        warning_text = f"; warnings={json.dumps(warnings, sort_keys=True)}" if warnings else ""
+        raise ValueError(
+            "--blog-blueprint-json must load exactly one blueprint; "
+            f"loaded {len(loaded.blueprints)}{warning_text}"
+        )
+    blueprint = loaded.blueprints[0]
+    if str(blueprint.target_mode or "").strip() != target_mode:
+        raise ValueError(
+            "--blog-blueprint-json target_mode "
+            f"{blueprint.target_mode!r} does not match --target-mode {target_mode!r}"
+        )
+    return blueprint, warnings
+
+
+def _align_blog_payload_to_seed(
+    payload: dict[str, Any],
+    seeded_blog_blueprint: Mapping[str, Any],
+) -> None:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict):
+        return
+    topic_type = str(seeded_blog_blueprint.get("topic_type") or "").strip()
+    if topic_type:
+        filters = inputs.get("filters")
+        if not isinstance(filters, dict):
+            filters = {}
+            inputs["filters"] = filters
+        filters["topic_type"] = topic_type
+    slug = str(seeded_blog_blueprint.get("slug") or "").strip()
+    if slug:
+        filters = inputs.get("filters")
+        if not isinstance(filters, dict):
+            filters = {}
+            inputs["filters"] = filters
+        filters["slug"] = slug
+    seeded_topic = str(seeded_blog_blueprint.get("topic") or "").strip()
+    if seeded_topic and inputs.get("topic") == DEFAULT_BLOG_TOPIC:
+        inputs["topic"] = seeded_topic
+
+
 async def _seed_default_blog_blueprint(
     args: argparse.Namespace,
     scope: Any,
@@ -363,22 +432,38 @@ async def _seed_default_blog_blueprint(
     account_slug = _account_slug(args.account_id)
     slug = f"content-ops-blog-live-smoke-{account_slug}"
     target_mode = str(args.target_mode or "vendor_retention").strip() or "vendor_retention"
-    blueprint = BlogBlueprint(
-        target_mode=target_mode,
-        topic_type=DEFAULT_BLOG_TOPIC_TYPE,
-        slug=slug,
-        suggested_title="Support Tickets: FAQ Gaps From 90 Days of Tickets",
-        payload=_default_blog_blueprint_payload(),
-    )
+    custom_path = getattr(args, "blog_blueprint_json", None)
+    custom_warnings: list[dict[str, Any]] = []
+    custom_source = ""
+    if custom_path:
+        blueprint, custom_warnings = _load_single_blog_blueprint_from_file(
+            Path(custom_path),
+            target_mode=target_mode,
+        )
+        custom_source = str(custom_path)
+    else:
+        blueprint = BlogBlueprint(
+            target_mode=target_mode,
+            topic_type=DEFAULT_BLOG_TOPIC_TYPE,
+            slug=slug,
+            suggested_title="Support Tickets: FAQ Gaps From 90 Days of Tickets",
+            payload=_default_blog_blueprint_payload(),
+        )
     saved_ids = await PostgresBlogBlueprintRepository(
         pool=get_db_pool()
     ).save_blueprints((blueprint,), scope=scope)
-    return {
+    seeded = {
         "saved_ids": list(saved_ids),
-        "slug": slug,
-        "target_mode": target_mode,
+        "slug": blueprint.slug,
+        "target_mode": blueprint.target_mode,
         "topic_type": blueprint.topic_type,
+        "topic": blueprint.suggested_title,
     }
+    if custom_source:
+        seeded["source"] = custom_source
+    if custom_warnings:
+        seeded["warnings"] = custom_warnings
+    return seeded
 
 
 async def run_content_ops_live_generation_smoke(
@@ -432,6 +517,7 @@ async def run_content_ops_live_generation_smoke(
             if output == "blog_post":
                 seeder = blog_blueprint_seed_fn or _seed_default_blog_blueprint
                 seeded_blog_blueprint = await seeder(args, scope)
+                _align_blog_payload_to_seed(payload, seeded_blog_blueprint)
             execution_result = await executor(payload, services=services, scope=scope)
             errors.extend(
                 _smoke_errors(
