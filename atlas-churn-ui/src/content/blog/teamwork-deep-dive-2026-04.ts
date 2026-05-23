@@ -176,7 +176,7 @@ const post: BlogPost = {
 <li><strong>Pricing</strong>: The most vocal complaint centers on tiered pricing that locks reporting behind the Premium plan at $33 per user per month, creating executive approval barriers during team expansion.</li>
 <li><strong>Features</strong>: Paradoxically, feature breadth becomes a weakness when teams cannot easily find or configure the capabilities they need without extensive training.</li>
 </ul>
-<p>One verified reviewer on Capterra captured the tension: "Easy to get lost in all the options, but its depth and thoroughness is valu[able]." Another on Trustpilot noted: "Their first paid plan, Pro, costs at least $17 per user per month and still includes zero reporting funct[ions]." The counterevidence is equally clear: "Couldn't live without it to manage my daily business workflow. I couldn't be so precise with my time," according to a verified Capterra reviewer.</p>
+<p>One reviewer captured the tension, noting it is easy to get lost in all the options but that its depth and thoroughness are valuable. Another flagged pricing — the first paid plan, Pro, costs at least $17 per user per month and still includes no reporting functions. The counterevidence is equally clear — another reviewer said they couldn't live without it to manage their daily business workflow, crediting it for letting them manage their time precisely.</p>
 <h2 id="where-teamwork-users-feel-the-most-pain">Where Teamwork Users Feel the Most Pain</h2>
 <p>Pain signals concentrate in six categories, with overall dissatisfaction and pricing pressure dominating the complaint landscape.</p>
 <p>{{chart:pain-radar}}</p>
