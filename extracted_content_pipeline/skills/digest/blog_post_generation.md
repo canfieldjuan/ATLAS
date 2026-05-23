@@ -187,6 +187,7 @@ Start each section with a direct answer in the first 40-60 words. AI engines ext
 
 ### Self-Contained Sections
 Each H2 section should be independently citable (200-500 words). An AI engine should be able to extract any single section and present it as a complete answer without needing context from other sections.
+At least two H2 sections must start with a 40-120 word answer paragraph that names the exact `target_keyword` or clearest named subject. This makes the section understandable when it is quoted by itself.
 
 ### Question-Format H2s
 Where natural, phrase H2 headings as questions that match real search queries. Example: "What Are the Most Common Logitech Mouse Problems?" rather than "Logitech Complaint Analysis."
@@ -199,6 +200,7 @@ Include date references and "as of [month year]" anchoring in key claims. AI eng
 
 ### Entity Clarity
 Use full brand/product names on first mention in each section, not abbreviations. AI engines need unambiguous entity references to cite correctly.
+When `target_keyword` is provided, include that exact phrase in the display `title` and repeat it naturally in the first answer paragraph. If no `target_keyword` is provided, put the clearest named subject from the topic, category, product, or vendor in the title or first answer paragraph. The subject should be clear in the opening 40-60 words so readers and answer engines immediately know what the article is about.
 
 ### Structured Comparisons
 Use HTML tables for any 2+ item comparison. AI engines extract tabular data more reliably than prose comparisons.

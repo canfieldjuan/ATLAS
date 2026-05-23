@@ -62,6 +62,18 @@ def test_host_skill_store_returns_existing_skill_content() -> None:
     assert len(prompt) > 0
 
 
+def test_blog_generation_prompt_requires_early_entity_clarity() -> None:
+    """Blog prompt stays aligned with the GEO entity-clarity gate."""
+
+    store = build_content_ops_skill_store()
+    prompt = store.get_prompt("digest/blog_post_generation")
+    assert isinstance(prompt, str)
+    assert "include that exact phrase in the display `title`" in prompt
+    assert "repeat it naturally in the first answer paragraph" in prompt
+    assert "At least two H2 sections must start with a 40-120 word answer paragraph" in prompt
+    assert "opening 40-60 words" in prompt
+
+
 def test_host_skill_store_falls_back_to_packaged_skills() -> None:
     """Codex P2 fix: skills that the extracted services depend on
     by default (e.g. `digest/landing_page_generation`,

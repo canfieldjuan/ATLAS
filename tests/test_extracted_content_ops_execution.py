@@ -59,6 +59,7 @@ class _OpportunityService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         parse_retry_attempts: int | None = None,
+        quality_repair_attempts: int | None = None,
         quality_revalidation_enabled: bool | None = None,
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
@@ -78,6 +79,7 @@ class _OpportunityService:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "parse_retry_attempts": parse_retry_attempts,
+            "quality_repair_attempts": quality_repair_attempts,
             "quality_revalidation_enabled": quality_revalidation_enabled,
             "quality_prompt_proof_term_limit": quality_prompt_proof_term_limit,
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
@@ -1224,6 +1226,7 @@ async def test_execute_threads_topic_into_blog_post_dispatcher() -> None:
 
     call = blog.calls[0]
     assert call["topic"] == "Renewal pricing pressure"
+    assert call["quality_repair_attempts"] == 2
     assert call["extras"] == {}
 
 
