@@ -57,6 +57,8 @@ _GENERIC_QUESTION_PHRASES = (
     "filed several complaints",
     "submitted a complaint",
     "filing this complaint",
+    "my complaint is about",
+    "our complaint is about",
     "this complaint is about",
 )
 _REDACTION_TOKEN_RE = re.compile(r"\bX{2,}\b", re.IGNORECASE)
@@ -122,6 +124,15 @@ DEFAULT_INTENT_RULES = (
     ("login reset", ("login reset", "password reset", "reset password", "reset my password")),
     ("email and profile updates", ("change my email", "update the email", "email address", "profile")),
     ("login and account access", ("login", "account access")),
+    ("communication and contact issues", (
+        "call at all hours",
+        "calling at all hours",
+        "various numbers",
+        "telephone calls",
+        "harass",
+        "harassed",
+        "harassment",
+    )),
     ("billing and payments", (
         "billing",
         "invoice",
@@ -220,6 +231,10 @@ _ACTION_RULES = (
     (("getting a credit card", "applied for a credit card", "credit card application", "activate card"), (
         "Gather the card application, offer, denial notice, account terms, or activation message tied to the issue.",
         "Ask the issuer to explain the decision, promotion, account status, or card record in writing before you reapply or activate anything.",
+    )),
+    (("communication and contact issues", "call at all hours", "calling at all hours", "various numbers", "telephone calls", "harass", "harassed", "harassment"), (
+        "Save the call log, message, notice, or contact record that shows when and how the company contacted you.",
+        "Ask the company in writing to explain the contact reason and update any communication preferences or dispute notes tied to the account.",
     )),
     (("export", "dashboard", "attribution", "analytics report", "download report", "report export"), (
         "Open the reporting or analytics area and choose the date range you need.",
@@ -627,8 +642,14 @@ def _item(
         snippets,
         " / ".join(_clean(row.get("source_title")) for row in display_rows if _clean(row.get("source_title"))),
     ))
-    question, question_source = _question(topic, display_rows)
-    summary = _summary(topic=topic, rows=display_rows, source_count=len(source_ids))
+    question, question_source, question_row = _question(topic, display_rows)
+    summary_rows = _rows_with_question_source_first(display_rows, question_row)
+    summary = _summary(
+        topic=topic,
+        rows=summary_rows,
+        source_count=len(source_ids),
+        question_source=question_source,
+    )
     steps = _article_steps(topic, action_context, support_contact=support_contact)
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
@@ -965,15 +986,29 @@ def _first_present(*rows: Mapping[str, Any], key: str) -> Any:
     return ""
 
 
-def _question(topic: str, rows: Sequence[Mapping[str, str]]) -> tuple[str, str]:
+def _question(
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+) -> tuple[str, str, Mapping[str, str] | None]:
     for row in rows:
         text = _question_text(row.get("text", ""))
         if text:
-            return (text, "customer_wording")
+            return (text, "customer_wording", row)
     policy_question = _policy_question(topic)
     if policy_question:
-        return (policy_question, "source_policy")
-    return (f"What are customers asking about {topic}?", "topic_fallback")
+        return (policy_question, "source_policy", None)
+    return (f"What are customers asking about {topic}?", "topic_fallback", None)
+
+
+def _rows_with_question_source_first(
+    rows: Sequence[Mapping[str, str]],
+    question_row: Mapping[str, str] | None,
+) -> tuple[Mapping[str, str], ...]:
+    if question_row is None or not rows or rows[0] is question_row:
+        return tuple(rows)
+    ordered = [question_row]
+    ordered.extend(row for row in rows if row is not question_row)
+    return tuple(ordered)
 
 
 def _question_text(value: Any) -> str:
@@ -1126,6 +1161,9 @@ def _looks_malformed_question(value: str) -> bool:
         return True
     if text.count('"') % 2:
         return True
+    letters = [character for character in text if character.isalpha()]
+    if len(letters) >= 5 and all(character.isupper() for character in letters):
+        return True
     return False
 
 
@@ -1246,14 +1284,31 @@ def _term_mapping_impact_line(mapping: Mapping[str, Any]) -> str:
     return f"({'; '.join(parts)}.)"
 
 
-def _summary(*, topic: str, rows: Sequence[Mapping[str, str]], source_count: int) -> str:
+def _summary(
+    *,
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+    source_count: int,
+    question_source: str,
+) -> str:
     issue = _topic_label(topic)
     example = _quote(rows[0].get("text", ""), limit=180) if rows else "the cited ticket evidence"
     if source_count > 1:
+        if question_source != "customer_wording":
+            return (
+                f"Customers are asking about {issue} across {source_count} ticket sources. "
+                f"Representative evidence includes {example}, so this FAQ should answer "
+                "the issue directly and tell users exactly what to try next."
+            )
         return (
             f"Customers are asking about {issue} across {source_count} ticket sources. "
             f"The clearest customer wording is {example}, so this FAQ should answer "
             "that request directly and tell users exactly what to try next."
+        )
+    if question_source != "customer_wording":
+        return (
+            f"A customer asked about {issue}: {example}. This FAQ should answer the "
+            "issue directly and tell the user exactly what to try next."
         )
     return (
         f"A customer asked about {issue}: {example}. This FAQ should answer the "
@@ -1286,6 +1341,11 @@ def _escalation_guidance(topic: str, evidence_text: str, *, support_contact: str
         return (
             f"{_support_sentence(support_contact)} if the servicer will not explain "
             "the payment, payoff, foreclosure, modification, escrow, or insurance issue in writing."
+        )
+    if any(term in text for term in ("communication and contact issues", "call at all hours", "calling at all hours", "various numbers", "telephone calls", "harass", "harassed", "harassment")):
+        return (
+            f"{_support_sentence(support_contact)} if the company keeps contacting "
+            "you after you ask for an explanation or correction in writing."
         )
     if topic in {"opening an account", "closing an account", "getting a credit card"} or any(
         term in text

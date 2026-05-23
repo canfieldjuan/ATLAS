@@ -7,11 +7,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import re
 from typing import Any
 
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 DEFAULT_MIGRATION_TABLE = "content_pipeline_schema_migrations"
+_NON_TRANSACTIONAL_SQL_RE = re.compile(
+    r"\b(?:CREATE|REINDEX|REFRESH\s+MATERIALIZED\s+VIEW)\b[^;]*\bCONCURRENTLY\b",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -103,19 +108,13 @@ async def apply_content_pipeline_migrations(
             if dry_run:
                 applied.append(entry)
                 continue
-            async with _transaction(conn):
+            if _requires_autocommit(migration.sql):
                 await conn.execute(migration.sql)
-                await conn.execute(
-                    f"""
-                    INSERT INTO {table} (version, checksum)
-                    VALUES ($1, $2)
-                    ON CONFLICT (version) DO UPDATE
-                       SET checksum = EXCLUDED.checksum,
-                           applied_at = NOW()
-                    """,
-                    migration.version,
-                    migration.checksum,
-                )
+                await _record_applied_migration(conn, table, migration)
+            else:
+                async with _transaction(conn):
+                    await conn.execute(migration.sql)
+                    await _record_applied_migration(conn, table, migration)
             applied.append(entry)
         return MigrationRunResult(
             applied=tuple(applied),
@@ -136,6 +135,24 @@ async def _ensure_migration_table(conn: Any, table: str) -> None:
         )
         """
     )
+
+
+async def _record_applied_migration(conn: Any, table: str, migration: MigrationFile) -> None:
+    await conn.execute(
+        f"""
+        INSERT INTO {table} (version, checksum)
+        VALUES ($1, $2)
+        ON CONFLICT (version) DO UPDATE
+           SET checksum = EXCLUDED.checksum,
+               applied_at = NOW()
+        """,
+        migration.version,
+        migration.checksum,
+    )
+
+
+def _requires_autocommit(sql: str) -> bool:
+    return bool(_NON_TRANSACTIONAL_SQL_RE.search(sql))
 
 
 async def _read_applied_versions(conn: Any, table: str, *, dry_run: bool) -> set[str]:

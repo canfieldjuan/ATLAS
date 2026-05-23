@@ -2116,6 +2116,124 @@ def test_build_ticket_faq_markdown_rejects_complaint_process_boilerplate_questio
     assert "## 1. What should I do if my husband" not in result.markdown
 
 
+def test_build_ticket_faq_markdown_rejects_all_caps_customer_question() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "complaint",
+        "Product": "Credit card or prepaid card",
+        "Issue": "Advertising",
+        "evidence": [{
+            "text": (
+                "HOW WOULD I HAVE KNOWN? The promotional payment option was not "
+                "available on the statement."
+            ),
+            "source_id": "cfpb:3173636",
+            "source_type": "complaint",
+        }],
+    }])
+
+    assert result.items[0]["topic"] == "advertising"
+    assert result.items[0]["question"] == (
+        "What should I do if a financial product advertisement or offer seems wrong?"
+    )
+    assert result.items[0]["question_source"] == "source_policy"
+    assert "## 1. HOW WOULD I HAVE KNOWN?" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_rejects_complaint_about_as_customer_question() -> None:
+    result = build_ticket_faq_markdown([{
+        "source_type": "complaint",
+        "Product": "Checking or savings account",
+        "Issue": "Opening an account",
+        "evidence": [{
+            "text": (
+                "My complaint is about Capital One opening the Money Market Account "
+                "and getting the Bonus."
+            ),
+            "source_id": "cfpb:3172831",
+            "source_type": "complaint",
+        }],
+    }])
+
+    assert result.items[0]["topic"] == "opening an account"
+    assert result.items[0]["question"] == (
+        "What should I do if a bank will not open an account or says my account was opened incorrectly?"
+    )
+    assert result.items[0]["question_source"] == "source_policy"
+    assert "Capital One opening the Money Market Account" not in result.markdown.splitlines()[2]
+
+
+def test_build_ticket_faq_markdown_summarizes_customer_question_source_row() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "complaint",
+            "Product": "Credit card or prepaid card",
+            "Issue": "Problem with a purchase shown on your statement",
+            "evidence": [{
+                "text": "The charge is wrong on my statement.",
+                "source_id": "cfpb:3584679",
+                "source_type": "complaint",
+            }],
+        },
+        {
+            "source_type": "complaint",
+            "Product": "Credit card or prepaid card",
+            "Issue": "Problem with a purchase shown on your statement",
+            "evidence": [{
+                "text": (
+                    "How am I being held responsible for a package for which there "
+                    "is no proof that I received?"
+                ),
+                "source_id": "cfpb:3442136",
+                "source_type": "complaint",
+            }],
+        },
+    ])
+
+    assert result.items[0]["question"] == (
+        "How am I being held responsible for a package for which there is no proof that I received?"
+    )
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert "The clearest customer wording is \"How am I being held responsible" in result.items[0]["summary"]
+    assert "The clearest customer wording is \"They call at all hours" not in result.items[0]["summary"]
+
+
+def test_build_ticket_faq_markdown_separates_contact_complaints_from_billing_disputes() -> None:
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "complaint",
+            "Product": "Student loan",
+            "Issue": "Dealing with your lender or servicer",
+            "evidence": [{
+                "text": "They call at all hours and on the weekends using various numbers.",
+                "source_id": "cfpb:3584679",
+                "source_type": "complaint",
+            }],
+        },
+        {
+            "source_type": "complaint",
+            "Product": "Credit card or prepaid card",
+            "Issue": "Problem with a purchase shown on your statement",
+            "evidence": [{
+                "text": (
+                    "How am I being held responsible for a package for which there "
+                    "is no proof that I received?"
+                ),
+                "source_id": "cfpb:3442136",
+                "source_type": "complaint",
+            }],
+        },
+    ])
+
+    assert [item["topic"] for item in result.items] == [
+        "billing and payments",
+        "communication and contact issues",
+    ]
+    assert result.items[0]["source_ids"] == ("cfpb:3442136",)
+    assert result.items[1]["source_ids"] == ("cfpb:3584679",)
+    assert "Save the call log" in result.items[1]["steps"][0]
+    assert "keeps contacting you" in result.items[1]["when_to_contact_support"]
+
+
 def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified_rows() -> None:
     result = build_ticket_faq_markdown([
         {
