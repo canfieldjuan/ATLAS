@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'real-cost-of-shopify-2026-04',
-  title: 'The Real Cost of Shopify: Pricing Complaints in 220 Reviews',
+  title: 'The Real Cost of Shopify: Transaction Fees, App Costs & Shipping (220 Complaints)',
   description: 'Analysis of 220 pricing complaints across 606 Shopify reviews. What reviewers say about hidden costs, app fees, and transaction charges — and where Shopify still delivers value.',
   date: '2026-04-05',
   author: 'Churn Signals Team',

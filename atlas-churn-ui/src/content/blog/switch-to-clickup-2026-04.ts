@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-clickup-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to ClickUp from 6 Competitor Platforms',
+  title: 'Switching to ClickUp: Why Teams Leave Asana, Jira & Trello (1,058 Reviews)',
   description: 'Analysis of 1058 ClickUp reviews reveals why teams migrate from Trello, Notion, Jira, Asana, Airtable, and Todoist. Explore common triggers, UX trade-offs, and practical migration considerations based on reviewer experience.',
   date: '2026-04-08',
   author: 'Churn Signals Team',
