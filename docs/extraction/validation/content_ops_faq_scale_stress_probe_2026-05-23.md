@@ -198,3 +198,7 @@ The production hardening requirement is operational: large uploads need
 explicit limits and/or background job execution, and concurrent hosted FAQ
 execution needs bounded database pressure before this flow is exposed as a
 synchronous hosted upload endpoint.
+
+Follow-up: `content_ops_faq_50k_gated_validation_2026-05-23.md` reran the
+50,000-row deterministic generator proof with explicit scale gates for raw row
+count, accepted ticket-source rows, and rendered ticket-source coverage.
