@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-sentinelone-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to SentinelOne',
+  title: 'Switching to SentinelOne: What 488 Reviews Reveal About the Migration',
   description: 'A practical migration guide based on 488 SentinelOne reviews. Learn which competitors users are leaving, what triggers the switch, and what to expect during migration.',
   date: '2026-04-10',
   author: 'Churn Signals Team',

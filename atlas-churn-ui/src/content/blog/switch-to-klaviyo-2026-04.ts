@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-klaviyo-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to Klaviyo from 5 Competitor Platforms',
+  title: 'Switching to Klaviyo: Why Teams Leave Mailchimp, Flodesk & MailerLite (638 Reviews)',
   description: 'Analysis of 638 Klaviyo reviews reveals why teams migrate from Mailchimp, Flodesk, MailerLite, Shopify Emails, and other platforms. Covers migration triggers, practical considerations, and what to expect when switching.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
