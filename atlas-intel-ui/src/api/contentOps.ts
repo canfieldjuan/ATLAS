@@ -7,8 +7,10 @@
  *   GET  /content-ops/control-surfaces
  *   POST /content-ops/preview
  *   POST /content-ops/plan
- *   POST /content-ops/ingestion/inspect
- *   POST /content-ops/ingestion/import
+ *   POST /content-ops/ingestion/files/inspect
+ *   POST /content-ops/ingestion/files/import
+ *   POST /content-ops/ingestion/inspect (deprecated inline fallback)
+ *   POST /content-ops/ingestion/import (deprecated inline fallback)
  *   POST /content-ops/execute
  *   GET  /content-assets/{asset}/drafts
  *   GET  /content-assets/{asset}/drafts/export
@@ -137,6 +139,23 @@ export interface ContentOpsIngestionImportRequest
   extends ContentOpsIngestionInspectRequest {
   replace_existing?: boolean                         // default false
   dry_run?: boolean                                  // default false
+}
+
+export interface ContentOpsIngestionFileInspectRequest {
+  file: File
+  source_rows?: boolean
+  source?: string | null
+  target_mode?: string | null
+  file_format?: 'auto' | 'json' | 'jsonl' | 'csv'
+  max_source_text_chars?: number
+  sample_limit?: number
+  default_fields?: Record<string, unknown>
+}
+
+export interface ContentOpsIngestionFileImportRequest
+  extends ContentOpsIngestionFileInspectRequest {
+  replace_existing?: boolean
+  dry_run?: boolean
 }
 
 export interface ContentOpsIngestionWarning {
@@ -494,6 +513,70 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return rawJson<T>(res)
 }
 
+async function postMultipart<T>(path: string, body: FormData): Promise<T> {
+  const url = `${BASE}${path}`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body,
+    })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const text = await rawText(res)
+    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
+function ingestionFileFormData(
+  body: ContentOpsIngestionFileInspectRequest,
+): FormData {
+  const formData = new FormData()
+  formData.set('file', body.file)
+  appendOptionalBoolean(formData, 'source_rows', body.source_rows)
+  appendOptionalString(formData, 'source', body.source)
+  appendOptionalString(formData, 'target_mode', body.target_mode)
+  appendOptionalString(formData, 'file_format', body.file_format)
+  appendOptionalNumber(
+    formData,
+    'max_source_text_chars',
+    body.max_source_text_chars,
+  )
+  appendOptionalNumber(formData, 'sample_limit', body.sample_limit)
+  if (body.default_fields) {
+    formData.set('default_fields', JSON.stringify(body.default_fields))
+  }
+  return formData
+}
+
+function appendOptionalString(
+  formData: FormData,
+  key: string,
+  value: string | null | undefined,
+): void {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (text) formData.set(key, text)
+}
+
+function appendOptionalNumber(
+  formData: FormData,
+  key: string,
+  value: number | null | undefined,
+): void {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    formData.set(key, String(value))
+  }
+}
+
+function appendOptionalBoolean(
+  formData: FormData,
+  key: string,
+  value: boolean | null | undefined,
+): void {
+  if (typeof value === 'boolean') formData.set(key, String(value))
+}
+
 function queryString(params: GeneratedAssetListParams): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -746,7 +829,17 @@ export function inspectContentOpsIngestion(
   return postJson<ContentOpsIngestionDiagnosticsResponse>('/ingestion/inspect', body)
 }
 
-/** POST /content-ops/ingestion/import -- import inspected opportunity/source rows. */
+/** POST /content-ops/ingestion/files/inspect -- inspect an uploaded ingestion file. */
+export function inspectContentOpsIngestionFile(
+  body: ContentOpsIngestionFileInspectRequest,
+): Promise<ContentOpsIngestionDiagnosticsResponse> {
+  return postMultipart<ContentOpsIngestionDiagnosticsResponse>(
+    '/ingestion/files/inspect',
+    ingestionFileFormData(body),
+  )
+}
+
+/** POST /content-ops/ingestion/import -- deprecated inline compatibility path. */
 export async function importContentOpsIngestion(
   body: ContentOpsIngestionImportRequest,
 ): Promise<ContentOpsIngestionImportOutcome> {
@@ -758,7 +851,30 @@ export async function importContentOpsIngestion(
       body: JSON.stringify(body),
     })
   const res = await withRefreshOn401(doFetch)
+  return ingestionImportOutcomeFromResponse(res)
+}
 
+/** POST /content-ops/ingestion/files/import -- import an uploaded ingestion file. */
+export async function importContentOpsIngestionFile(
+  body: ContentOpsIngestionFileImportRequest,
+): Promise<ContentOpsIngestionImportOutcome> {
+  const url = `${BASE}/ingestion/files/import`
+  const formData = ingestionFileFormData(body)
+  appendOptionalBoolean(formData, 'replace_existing', body.replace_existing)
+  appendOptionalBoolean(formData, 'dry_run', body.dry_run)
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: formData,
+    })
+  const res = await withRefreshOn401(doFetch)
+  return ingestionImportOutcomeFromResponse(res)
+}
+
+async function ingestionImportOutcomeFromResponse(
+  res: Response,
+): Promise<ContentOpsIngestionImportOutcome> {
   if (res.status === 200) {
     return {
       kind: 'success',
