@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -125,6 +126,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
     draft_export: dict[str, Any] | None = None
     reviewed_export: dict[str, Any] | None = None
     generation: dict[str, Any] | None = None
+    normalization_warnings = _normalization_warning_summary([])
     try:
         try:
             if not await _relation_exists(pool, "ticket_faq_markdown"):
@@ -141,14 +143,17 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
                 default_fields=default_fields,
             )
             source_rows = len(loaded.opportunities)
+            loaded_warnings = loaded.warning_dicts()
+            normalization_warnings = _normalization_warning_summary(loaded_warnings)
             if source_rows < int(args.min_source_rows):
                 errors.append(
                     f"expected at least {int(args.min_source_rows)} source row(s), got {source_rows}"
                 )
-            if loaded.warnings and not bool(args.allow_ingestion_warnings):
+            if loaded_warnings and not bool(args.allow_ingestion_warnings):
+                warning_counts = _warning_counts_label(normalization_warnings)
                 errors.append(
-                    "source normalization produced warnings; provide --default-field "
-                    "bindings or pass --allow-ingestion-warnings"
+                    f"source normalization produced warnings ({warning_counts}); "
+                    "provide --default-field bindings or pass --allow-ingestion-warnings"
                 )
             if not errors:
                 repo = PostgresTicketFAQRepository(pool)
@@ -220,6 +225,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
         "generation": generation,
         "draft_export": draft_export,
         "reviewed_export": reviewed_export,
+        "normalization_warnings": normalization_warnings,
         "review_status": str(args.review_status),
         "errors": errors,
     }
@@ -230,6 +236,26 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
             encoding="utf-8",
         )
     return (0 if not errors else 1), payload
+
+
+def _normalization_warning_summary(warnings: list[Mapping[str, Any]]) -> dict[str, Any]:
+    counts = Counter(str(warning.get("code") or "unknown") for warning in warnings)
+    return {
+        "warning_count": len(warnings),
+        "warnings_by_code": dict(sorted(counts.items())),
+        "warning_sample": [dict(warning) for warning in warnings[:10]],
+        "warnings_truncated": len(warnings) > 10,
+    }
+
+
+def _warning_counts_label(summary: Mapping[str, Any]) -> str:
+    counts = summary.get("warnings_by_code")
+    if not isinstance(counts, Mapping) or not counts:
+        return "unknown"
+    return ", ".join(
+        f"{code}={count}"
+        for code, count in sorted(counts.items())
+    )
 
 
 async def _relation_exists(pool: Any, table_name: str) -> bool:

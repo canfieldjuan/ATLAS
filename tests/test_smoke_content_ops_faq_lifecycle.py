@@ -135,6 +135,12 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
         "condensed": True,
         "has_action_items": True,
     }
+    assert payload["normalization_warnings"] == {
+        "warning_count": 0,
+        "warnings_by_code": {},
+        "warning_sample": [],
+        "warnings_truncated": False,
+    }
     assert payload["draft_export"]["rows"][0]["id"] == "faq-uuid-1"
     assert payload["draft_export"]["rows"][0]["status"] == "draft"
     assert payload["reviewed_export"]["rows"][0]["id"] == "faq-uuid-1"
@@ -203,6 +209,49 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
     assert reviewed["ticket_source_count"] == 1000
     assert reviewed["status"] == "published"
     assert "# Customer Ticket FAQ Lifecycle Scale Smoke" in reviewed["markdown"]
+    assert pool.closed is True
+
+
+@pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_reports_normalization_warning_codes(monkeypatch, tmp_path):
+    pool = _Pool()
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+    source = tmp_path / "support_ticket_bundle.json"
+    source.write_text(
+        json.dumps({
+            "support_tickets": [
+                {
+                    "ticket_id": f"ticket-warning-{index}",
+                    "source_type": "support_ticket",
+                    "subject": "Billing renewal question",
+                    "message": "How do I confirm my renewal invoice before payment?",
+                    "pain_category": "billing",
+                    "company_name": "Acme Billing",
+                    "contact_email": "billing@example.com",
+                }
+                for index in range(3)
+            ],
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(path=source, source_format="json", min_source_rows=3)
+    )
+
+    assert code == 1
+    assert payload["generation"] is None
+    assert payload["normalization_warnings"]["warning_count"] == 3
+    assert payload["normalization_warnings"]["warnings_by_code"] == {
+        "missing_vendor_name": 3
+    }
+    assert payload["normalization_warnings"]["warning_sample"][0]["code"] == (
+        "missing_vendor_name"
+    )
+    assert payload["normalization_warnings"]["warnings_truncated"] is False
+    assert any("missing_vendor_name=3" in error for error in payload["errors"])
+    assert pool.execute_calls == []
     assert pool.closed is True
 
 
