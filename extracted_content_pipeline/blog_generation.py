@@ -37,6 +37,7 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 # call-site target_mode (e.g. "vendor_retention") is an unrelated
 # tenant-scope concept.
 _BLOG_REASONING_TARGET_MODE = "blog_blueprint"
+_BLOG_FAILURE_EXCERPT_CHARS = 1500
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,32 @@ def _truncate_text_at_word_boundary(value: str, *, max_chars: int) -> str:
     return trimmed or text[:limit].rstrip()
 
 
+def _blog_failure_candidate_snapshot(
+    parsed: Mapping[str, Any],
+    *,
+    excerpt_chars: int = _BLOG_FAILURE_EXCERPT_CHARS,
+) -> dict[str, Any]:
+    """Return bounded diagnostics for a parsed draft that cannot be saved."""
+
+    content = str(parsed.get("content") or "").strip()
+    limit = max(1, int(excerpt_chars))
+    return {
+        "title": str(parsed.get("title") or "").strip(),
+        "slug": str(parsed.get("slug") or "").strip(),
+        "seo_title": str(parsed.get("seo_title") or "").strip(),
+        "target_keyword": str(parsed.get("target_keyword") or "").strip(),
+        "topic_type": str(parsed.get("topic_type") or "").strip(),
+        "word_count": len(content.split()),
+        "generation_parse_attempts": parsed.get("_parse_attempts"),
+        "generation_quality_repair_attempts": (
+            parsed.get("_quality_repair_attempts") or 0
+        ),
+        "content_excerpt_head": content[:limit],
+        "content_excerpt_tail": content[-limit:] if len(content) > limit else "",
+        "content_truncated": len(content) > limit,
+    }
+
+
 class BlogPostGenerationService:
     """Generate blog-post drafts through product-owned ports."""
 
@@ -411,6 +438,7 @@ class BlogPostGenerationService:
                             "reason": "quality_repair_unparseable",
                             "blockers": quality["blockers"],
                             "quality_repair_attempt_no": repair_attempt_no,
+                            "failed_candidate": _blog_failure_candidate_snapshot(parsed),
                         })
                         repair_failed = True
                         break
@@ -433,6 +461,7 @@ class BlogPostGenerationService:
                         "blueprint_id": blueprint_id,
                         "reason": "quality_blocked",
                         "blockers": quality["blockers"],
+                        "failed_candidate": _blog_failure_candidate_snapshot(parsed),
                     })
                     continue
             if _has_prompt_reasoning_context(blueprint):

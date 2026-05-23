@@ -7,6 +7,7 @@ import pytest
 from extracted_content_pipeline.blog_generation import (
     BlogPostGenerationConfig,
     BlogPostGenerationService,
+    _blog_failure_candidate_snapshot,
     _blog_quality_repair_guidance,
     _normalize_blog_metadata,
     parse_blog_post_response,
@@ -247,6 +248,26 @@ def test_blog_quality_repair_guidance_explains_citation_safety() -> None:
     assert "Remove unresolved placeholders" in guidance
     assert "unsupported claims" in guidance
     assert "visible chart IDs" in guidance
+
+
+def test_blog_failure_candidate_snapshot_is_bounded() -> None:
+    parsed = json.loads(_valid_blog_json(content="alpha " * 200))
+    parsed["_parse_attempts"] = 2
+    parsed["_quality_repair_attempts"] = 1
+
+    snapshot = _blog_failure_candidate_snapshot(parsed, excerpt_chars=25)
+
+    assert snapshot["title"] == "HubSpot Pricing Pressure Is Changing Buyer Shortlists"
+    assert snapshot["slug"] == "hubspot-pricing-pressure"
+    assert snapshot["seo_title"] == "HubSpot Pricing Pressure"
+    assert snapshot["target_keyword"] == "hubspot pricing pressure"
+    assert snapshot["topic_type"] == "vendor_alternative"
+    assert snapshot["word_count"] == 200
+    assert snapshot["generation_parse_attempts"] == 2
+    assert snapshot["generation_quality_repair_attempts"] == 1
+    assert snapshot["content_excerpt_head"] == ("alpha " * 200)[:25]
+    assert snapshot["content_excerpt_tail"] == ("alpha " * 200).strip()[-25:]
+    assert snapshot["content_truncated"] is True
 
 
 @pytest.mark.asyncio
@@ -516,6 +537,10 @@ async def test_generate_does_not_repair_quality_block_without_repair_budget() ->
     assert result.generated == 0
     assert result.skipped == 1
     assert result.errors[0]["reason"] == "quality_blocked"
+    assert result.errors[0]["failed_candidate"]["title"] == (
+        "HubSpot Pricing Pressure Is Changing Buyer Shortlists"
+    )
+    assert result.errors[0]["failed_candidate"]["word_count"] == 24
     assert len(llm.calls) == 1
     assert blog_posts.saved == []
 
@@ -546,6 +571,10 @@ async def test_generate_reports_unparseable_quality_repair_response() -> None:
     assert result.errors[0]["reason"] == "quality_repair_unparseable"
     assert "geo_citable_section_structure_missing" in result.errors[0]["blockers"]
     assert result.errors[0]["quality_repair_attempt_no"] == 1
+    assert result.errors[0]["failed_candidate"]["title"] == (
+        "HubSpot Pricing Pressure Is Changing Buyer Shortlists"
+    )
+    assert result.errors[0]["failed_candidate"]["word_count"] == 24
     assert len(llm.calls) == 2
     assert blog_posts.saved == []
 
