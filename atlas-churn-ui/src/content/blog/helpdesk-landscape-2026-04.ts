@@ -114,7 +114,7 @@ const post: BlogPost = {
   seo_title: 'Helpdesk Software Comparison 2026 | 5 Vendors',
   seo_description: 'Compare 5 helpdesk vendors across 352 reviews. Analyze churn urgency, pricing pressure, support quality, and integration challenges in 2026.',
   target_keyword: 'helpdesk software comparison',
-  secondary_keywords: ["best helpdesk software 2026", "helpdesk platform comparison", "zendesk vs freshdesk"],
+  secondary_keywords: ["best helpdesk software 2026", "helpdesk platform comparison", "zendesk vs freshdesk", "help desk software cost"],
   faq: [
   {
     "question": "What market conditions are driving helpdesk vendor switching in 2026?",

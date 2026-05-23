@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Intercom Reviews 2026: 984 User Reviews Analyzed',
   seo_description: 'Analysis of 984 Intercom reviews from verified platforms and community sources. See what users praise, where pain points emerge, and who the platform fits best.',
   target_keyword: 'intercom reviews',
-  secondary_keywords: ["intercom customer support", "intercom pricing", "intercom vs zendesk"],
+  secondary_keywords: ["intercom customer support", "intercom pricing", "intercom vs zendesk", "intercom too expensive"],
   faq: [
   {
     "question": "What are the main complaints about Intercom?",
