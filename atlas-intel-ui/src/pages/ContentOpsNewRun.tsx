@@ -25,6 +25,7 @@ import {
   fromWirePlan,
   fromWirePreview,
   fromWireRequest,
+  inputContractDisplay,
   toWireIngestionInspectRequest,
   toWireIngestionImportRequest,
   toWireRequest,
@@ -100,6 +101,14 @@ const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
 const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
 const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
+const FAQ_DOCUMENTATION_TERMS_DISPLAY_FALLBACK = {
+  label: 'Documentation terms',
+  placeholder: 'Single sign-on setup\nData export guide',
+}
+const FAQ_VOCABULARY_GAP_RULES_DISPLAY_FALLBACK = {
+  label: 'Vocabulary-gap rules',
+  placeholder: 'SSO, single sign-on\nexport, data export',
+}
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_ORDER = [
   'target_keyword',
   'secondary_keywords',
@@ -198,6 +207,20 @@ export default function ContentOpsNewRun() {
     : ''
   const landingPageOutputSelected = request.outputs.includes('landing_page')
   const faqMarkdownOutputSelected = request.outputs.includes(FAQ_MARKDOWN_OUTPUT)
+  const faqDocumentationTermsContract = faqMarkdownOutputSelected
+    ? catalog.inputContracts[FAQ_DOCUMENTATION_TERMS_INPUT]
+    : undefined
+  const faqVocabularyGapRulesContract = faqMarkdownOutputSelected
+    ? catalog.inputContracts[FAQ_VOCABULARY_GAP_RULES_INPUT]
+    : undefined
+  const faqDocumentationTermsDisplay = inputContractDisplay(
+    faqDocumentationTermsContract,
+    FAQ_DOCUMENTATION_TERMS_DISPLAY_FALLBACK,
+  )
+  const faqVocabularyGapRulesDisplay = inputContractDisplay(
+    faqVocabularyGapRulesContract,
+    FAQ_VOCABULARY_GAP_RULES_DISPLAY_FALLBACK,
+  )
   const landingPageRepairAttemptContract = landingPageOutputSelected
     ? integerInputContract(catalog, LANDING_PAGE_QUALITY_REPAIR_INPUT)
     : null
@@ -908,7 +931,9 @@ export default function ContentOpsNewRun() {
               </div>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
                 <label className="block text-sm">
-                  <span className="text-slate-300">Documentation terms</span>
+                  <span className="text-slate-300">
+                    {faqDocumentationTermsDisplay.label}
+                  </span>
                   <textarea
                     value={faqDocumentationTermsDraftValue(parsedInputsForControls)}
                     onChange={(e) =>
@@ -917,11 +942,13 @@ export default function ContentOpsNewRun() {
                     rows={4}
                     disabled={faqInputsDisabled}
                     className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={'Single sign-on setup\nData export guide'}
+                    placeholder={faqDocumentationTermsDisplay.placeholder}
                   />
                 </label>
                 <label className="block text-sm">
-                  <span className="text-slate-300">Vocabulary-gap rules</span>
+                  <span className="text-slate-300">
+                    {faqVocabularyGapRulesDisplay.label}
+                  </span>
                   <textarea
                     value={faqVocabularyRulesDraftValue(parsedInputsForControls)}
                     onChange={(e) =>
@@ -930,7 +957,7 @@ export default function ContentOpsNewRun() {
                     rows={4}
                     disabled={faqInputsDisabled}
                     className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={'SSO, single sign-on\nexport, data export'}
+                    placeholder={faqVocabularyGapRulesDisplay.placeholder}
                   />
                 </label>
               </div>
