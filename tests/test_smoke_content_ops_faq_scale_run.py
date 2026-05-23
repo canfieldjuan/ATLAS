@@ -49,6 +49,9 @@ def _args(tmp_path: Path, **overrides):
         "support_contact": None,
         "default_field": [],
         "allow_output_check_failures": False,
+        "min_raw_source_rows": None,
+        "min_ticket_source_rows": None,
+        "require_all_ticket_sources_rendered": False,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -118,6 +121,12 @@ def test_faq_scale_smoke_writes_standard_artifacts(
     assert saved_summary["faq_run_summary"]["generated"] == result["generated"]
     assert saved_summary["faq_run_summary"]["weighted_source_volume"] == 4
     assert saved_summary["faq_run_summary"]["output_checks"]["failed"] == 0
+    assert saved_summary["scale_gates"] == {
+        "configured": False,
+        "passed": True,
+        "failed": [],
+        "gates": [],
+    }
     assert saved_summary["source_format"] == fmt
     assert saved_summary["input_profile"]["status"] == "ok"
     assert saved_summary["input_profile"]["raw_row_count"] == 4
@@ -161,6 +170,9 @@ def test_faq_scale_smoke_processes_1000_row_json_bundle_file(tmp_path: Path) -> 
             path=source,
             source_format="json",
             title="Customer Ticket FAQ File Scale Smoke",
+            min_raw_source_rows=1000,
+            min_ticket_source_rows=1000,
+            require_all_ticket_sources_rendered=True,
         )
     )
 
@@ -177,6 +189,29 @@ def test_faq_scale_smoke_processes_1000_row_json_bundle_file(tmp_path: Path) -> 
     assert summary["faq_run_summary"]["weighted_source_volume"] == 1000
     assert summary["faq_run_summary"]["source_channel_counts"]["support_tickets"] == 1000
     assert summary["faq_run_summary"]["output_checks"]["failed"] == 0
+    assert summary["scale_gates"]["configured"] is True
+    assert summary["scale_gates"]["passed"] is True
+    assert summary["scale_gates"]["failed"] == []
+    assert summary["scale_gates"]["gates"] == [
+        {
+            "name": "min_raw_source_rows",
+            "passed": True,
+            "expected": 1000,
+            "actual": 1000,
+        },
+        {
+            "name": "min_ticket_source_rows",
+            "passed": True,
+            "expected": 1000,
+            "actual": 1000,
+        },
+        {
+            "name": "all_ticket_sources_rendered",
+            "passed": True,
+            "expected": 1000,
+            "actual": 1000,
+        },
+    ]
     assert result["status"] == "ok"
     assert result["source_count"] == 1000
     assert result["ticket_source_count"] == 1000
@@ -187,6 +222,94 @@ def test_faq_scale_smoke_processes_1000_row_json_bundle_file(tmp_path: Path) -> 
     assert (artifact_dir / "faq.md").read_text(encoding="utf-8").startswith(
         "# Customer Ticket FAQ File Scale Smoke"
     )
+
+
+def test_faq_scale_smoke_fails_minimum_scale_gates(tmp_path: Path) -> None:
+    source = _write_source(tmp_path, "jsonl")
+
+    code, summary = smoke.run_scale_smoke(
+        _args(
+            tmp_path,
+            path=source,
+            source_format="jsonl",
+            min_raw_source_rows=5,
+            min_ticket_source_rows=5,
+        )
+    )
+
+    failed = summary["scale_gates"]["failed"]
+    assert code == 1
+    assert summary["ok"] is False
+    assert summary["faq_cli_exit_code"] == 0
+    assert summary["failure"]["type"] == "scale_gates"
+    assert [gate["name"] for gate in failed] == [
+        "min_raw_source_rows",
+        "min_ticket_source_rows",
+    ]
+    assert failed[0]["actual"] == 4
+    assert failed[0]["expected"] == 5
+    assert failed[1]["actual"] == 4
+    assert failed[1]["expected"] == 5
+    assert summary["failure"]["failed_scale_gates"] == failed
+    assert (tmp_path / "artifacts" / "faq_result.json").exists()
+    assert (tmp_path / "artifacts" / "run_summary.json").exists()
+
+
+def test_faq_scale_gate_detects_unrendered_ticket_sources(tmp_path: Path) -> None:
+    summary = smoke._scale_gate_summary(
+        _args(tmp_path, require_all_ticket_sources_rendered=True),
+        input_profile={"raw_row_count": 4},
+        result_payload={
+            "ticket_source_count": 4,
+            "diagnostics": {"rendered_ticket_source_count": 2},
+        },
+    )
+
+    assert summary["configured"] is True
+    assert summary["passed"] is False
+    assert summary["failed"] == [
+        {
+            "name": "all_ticket_sources_rendered",
+            "passed": False,
+            "expected": 4,
+            "actual": 2,
+        }
+    ]
+
+
+def test_faq_scale_gates_fail_closed_when_metrics_are_missing(tmp_path: Path) -> None:
+    summary = smoke._scale_gate_summary(
+        _args(
+            tmp_path,
+            min_raw_source_rows=1,
+            min_ticket_source_rows=1,
+            require_all_ticket_sources_rendered=True,
+        ),
+        input_profile={"raw_row_count": None},
+        result_payload={},
+    )
+
+    assert summary["passed"] is False
+    assert summary["failed"] == [
+        {
+            "name": "min_raw_source_rows",
+            "passed": False,
+            "expected": 1,
+            "actual": None,
+        },
+        {
+            "name": "min_ticket_source_rows",
+            "passed": False,
+            "expected": 1,
+            "actual": None,
+        },
+        {
+            "name": "all_ticket_sources_rendered",
+            "passed": False,
+            "expected": None,
+            "actual": None,
+        },
+    ]
 
 
 def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path) -> None:
@@ -239,6 +362,36 @@ def test_faq_scale_smoke_can_allow_output_check_failures(tmp_path: Path) -> None
     assert code == 0
     assert summary["ok"] is False
     assert summary["exit_code"] == 1
+    assert summary["faq_cli_exit_code"] == 1
+
+
+def test_faq_scale_smoke_does_not_allow_scale_gate_failures(
+    tmp_path: Path,
+) -> None:
+    source = _write_source(tmp_path, "jsonl")
+
+    code, summary = smoke.run_scale_smoke(
+        _args(
+            tmp_path,
+            path=source,
+            source_format="jsonl",
+            allow_output_check_failures=True,
+            min_raw_source_rows=5,
+        )
+    )
+
+    assert code == 1
+    assert summary["ok"] is False
+    assert summary["faq_cli_exit_code"] == 0
+    assert summary["failure"]["type"] == "scale_gates"
+    assert summary["failure"]["failed_scale_gates"] == [
+        {
+            "name": "min_raw_source_rows",
+            "passed": False,
+            "expected": 5,
+            "actual": 4,
+        }
+    ]
 
 
 def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> None:
@@ -248,6 +401,7 @@ def test_faq_scale_smoke_does_not_allow_hard_cli_failures(tmp_path: Path) -> Non
 
     assert code != 0
     assert summary["ok"] is False
+    assert summary["faq_cli_exit_code"] != 0
     assert summary["result"] is None
     assert summary["faq_run_summary"] is None
     assert summary["input_profile"]["status"] == "error"
@@ -424,6 +578,8 @@ def _mapping_shape(value: object, path: str = "") -> object:
     ({"max_text_chars": 0}, "--max-text-chars must be positive"),
     ({"window_days": 0}, "--window-days must be positive"),
     ({"as_of_date": "2026-05-01"}, "--as-of-date requires --window-days"),
+    ({"min_raw_source_rows": 0}, "--min-raw-source-rows must be positive"),
+    ({"min_ticket_source_rows": 0}, "--min-ticket-source-rows must be positive"),
 ])
 def test_faq_scale_smoke_rejects_invalid_args(
     tmp_path: Path,

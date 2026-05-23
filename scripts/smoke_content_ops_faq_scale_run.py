@@ -44,6 +44,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--support-contact")
     parser.add_argument("--default-field", action="append", default=[])
     parser.add_argument("--allow-output-check-failures", action="store_true")
+    parser.add_argument(
+        "--min-raw-source-rows",
+        type=int,
+        help="Fail unless the source file profile sees at least this many raw rows.",
+    )
+    parser.add_argument(
+        "--min-ticket-source-rows",
+        type=int,
+        help="Fail unless the FAQ result accepts at least this many ticket source rows.",
+    )
+    parser.add_argument(
+        "--require-all-ticket-sources-rendered",
+        action="store_true",
+        help="Fail unless every accepted ticket source is represented in FAQ items.",
+    )
     return parser.parse_args(argv)
 
 
@@ -66,6 +81,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--window-days must be positive")
     if args.as_of_date and args.window_days is None:
         raise SystemExit("--as-of-date requires --window-days")
+    if args.min_raw_source_rows is not None and args.min_raw_source_rows < 1:
+        raise SystemExit("--min-raw-source-rows must be positive")
+    if args.min_ticket_source_rows is not None and args.min_ticket_source_rows < 1:
+        raise SystemExit("--min-ticket-source-rows must be positive")
 
 
 def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -85,6 +104,14 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     stderr_path.write_text(completed.stderr, encoding="utf-8")
     result_payload = _read_json(result_path)
     faq_run_summary = _faq_run_summary(result_payload)
+    scale_gates = _scale_gate_summary(
+        args,
+        input_profile=input_profile,
+        result_payload=result_payload,
+    )
+    smoke_exit_code = completed.returncode
+    if completed.returncode == 0 and scale_gates["failed"]:
+        smoke_exit_code = 1
     artifact_paths = {
         "markdown": markdown_path,
         "result": result_path,
@@ -93,8 +120,9 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "summary": summary_path,
     }
     summary = {
-        "ok": completed.returncode == 0,
-        "exit_code": completed.returncode,
+        "ok": smoke_exit_code == 0,
+        "exit_code": smoke_exit_code,
+        "faq_cli_exit_code": completed.returncode,
         "source": str(args.path),
         "source_format": args.source_format,
         "command": command,
@@ -109,21 +137,24 @@ def run_scale_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         },
         "artifact_details": _artifact_details(artifact_paths),
         "faq_run_summary": faq_run_summary,
+        "scale_gates": scale_gates,
         "failure": _failure_summary(
-            returncode=completed.returncode,
+            returncode=smoke_exit_code,
+            cli_returncode=completed.returncode,
             result_payload=result_payload,
+            scale_gates=scale_gates,
             stderr=completed.stderr,
         ),
         "result": result_payload,
     }
     _write_summary(summary_path, summary, artifact_paths)
     if (
-        completed.returncode != 0
+        smoke_exit_code != 0
         and bool(args.allow_output_check_failures)
         and _is_output_check_failure(result_payload)
     ):
         return 0, summary
-    return completed.returncode, summary
+    return smoke_exit_code, summary
 
 
 def _faq_run_summary(result_payload: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -284,14 +315,114 @@ def _console_faq_run_summary(value: Any) -> str:
     return " ".join(parts)
 
 
+def _scale_gate_summary(
+    args: argparse.Namespace,
+    *,
+    input_profile: dict[str, Any],
+    result_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    gates: list[dict[str, Any]] = []
+    if args.min_raw_source_rows is not None:
+        gates.append(
+            _minimum_gate(
+                name="min_raw_source_rows",
+                actual=_scale_gate_integer_or_none(input_profile.get("raw_row_count")),
+                expected=int(args.min_raw_source_rows),
+            )
+        )
+    if args.min_ticket_source_rows is not None:
+        gates.append(
+            _minimum_gate(
+                name="min_ticket_source_rows",
+                actual=_scale_gate_integer_or_none(
+                    result_payload.get("ticket_source_count")
+                    if isinstance(result_payload, dict)
+                    else None
+                ),
+                expected=int(args.min_ticket_source_rows),
+            )
+        )
+    if args.require_all_ticket_sources_rendered:
+        ticket_source_count = _scale_gate_integer_or_none(
+            result_payload.get("ticket_source_count")
+            if isinstance(result_payload, dict)
+            else None
+        )
+        diagnostics = (
+            result_payload.get("diagnostics")
+            if isinstance(result_payload, dict)
+            else None
+        )
+        rendered_ticket_source_count = _scale_gate_integer_or_none(
+            diagnostics.get("rendered_ticket_source_count")
+            if isinstance(diagnostics, dict)
+            else None
+        )
+        gates.append(
+            {
+                "name": "all_ticket_sources_rendered",
+                "passed": (
+                    ticket_source_count is not None
+                    and rendered_ticket_source_count is not None
+                    and rendered_ticket_source_count == ticket_source_count
+                ),
+                "expected": ticket_source_count,
+                "actual": rendered_ticket_source_count,
+            }
+        )
+    failed = [gate for gate in gates if gate.get("passed") is not True]
+    return {
+        "configured": bool(gates),
+        "passed": not failed,
+        "failed": failed,
+        "gates": gates,
+    }
+
+
+def _minimum_gate(
+    *,
+    name: str,
+    actual: int | None,
+    expected: int,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "passed": actual is not None and actual >= expected,
+        "expected": expected,
+        "actual": actual,
+    }
+
+
+def _scale_gate_integer_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _failure_summary(
     *,
     returncode: int,
+    cli_returncode: int,
     result_payload: dict[str, Any] | None,
+    scale_gates: dict[str, Any],
     stderr: str,
 ) -> dict[str, Any] | None:
     if returncode == 0:
         return None
+    failed_scale_gates = scale_gates.get("failed")
+    if cli_returncode == 0 and isinstance(failed_scale_gates, list) and failed_scale_gates:
+        return {
+            "type": "scale_gates",
+            "exit_code": returncode,
+            "result_status": (
+                result_payload.get("status") if isinstance(result_payload, dict) else None
+            ),
+            "failed_scale_gates": [dict(gate) for gate in failed_scale_gates],
+            "stderr_tail": _text_tail(stderr),
+        }
     failed_checks: list[str] = []
     result_status = None
     output_check_details: list[dict[str, Any]] = []
