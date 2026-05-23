@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 252,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 252
       },
       {
         "name": "pricing",
@@ -124,7 +124,7 @@ const post: BlogPost = {
   },
   {
     "question": "What does ClickUp do well according to reviewers?",
-    "answer": "ClickUp earns praise for feature breadth (64 mentions), overall satisfaction (252 mentions), and UX strengths (89 mentions). Reviewers highlight customizable workflows, multiple view options (List, Board, Gantt, Calendar), and strong value at lower price tiers before consolidation deepens."
+    "answer": "ClickUp earns praise for feature breadth (64 mentions) and UX strengths (89 mentions). Reviewers highlight customizable workflows, multiple view options (List, Board, Gantt, Calendar), and strong value at lower price tiers before consolidation deepens."
   },
   {
     "question": "Who feels ClickUp pain first?",
@@ -159,7 +159,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <p><strong>Strengths reviewers highlight:</strong></p>
 <ul>
-<li><strong>Overall satisfaction</strong> (252 mentions): Despite specific pain points, users report that ClickUp delivers value. One Principal &amp; Creative Director noted, "I'm amazed at the features this program offers and the value for the price."</li>
+<li><strong>Value for the price.</strong> Despite specific pain points, some users report that ClickUp delivers strong value. One Principal &amp; Creative Director noted, "I'm amazed at the features this program offers and the value for the price."</li>
 <li><strong>UX strengths</strong> (89 mentions): When workflows align with ClickUp's structure, reviewers praise the interface. A Talent Acquisition Executive described how teams "can tailor workflows, statuses, views (List, Board, Gantt, Calendar), and fields to fit almost any team."</li>
 <li><strong>Feature breadth</strong> (64 mentions): The platform's consolidation promise resonates. Users value having task management, docs, time tracking, and collaboration in one place.</li>
 <li><strong>Performance</strong> (17 mentions): Speed and responsiveness earn positive marks when the platform operates as expected.</li>
@@ -170,7 +170,7 @@ const post: BlogPost = {
 <p><strong>Weaknesses that drive complaints:</strong></p>
 <ul>
 <li><strong>Overall dissatisfaction</strong> (252 mentions): The same users who report satisfaction also surface frustration. This dual pattern suggests that ClickUp's value comes with trade-offs users accept but don't love.</li>
-<li><strong>Pricing friction</strong> (142 mentions): Multiple reviewers cite pricing increases that outpace perceived value. One user on Trustpilot reported a jump "from $9 a month to the last suggested price of $29," prompting an explicit abandonment signal.</li>
+<li><strong>Pricing friction</strong> (142 mentions): Multiple reviewers cite pricing increases that outpace perceived value. One user reported a price jump from $9 a month to a suggested $29, prompting an explicit abandonment signal.</li>
 <li><strong>UX complexity</strong> (135 mentions): Navigation confusion emerges as consolidation deepens. Reviewers also note difficulty understanding "what all of the different levels of folders, lists, tasks, can do and what they should be used for. Notifications can be cleaned up."</li>
 <li><strong>Feature gaps</strong> (79 mentions): Despite breadth, specific workflow needs remain unmet. Users report missing capabilities that force workarounds or external tools.</li>
 <li><strong>Performance issues</strong> (63 mentions): Load times, sync delays, and interface lag surface when teams scale usage.</li>
@@ -184,7 +184,7 @@ const post: BlogPost = {
 <p><strong>Pricing friction</strong> ranks second. The jump from $9 to $29 per month cited by one reviewer reflects a broader pattern: as teams add seats or move to higher tiers to access consolidation features, pricing increases feel steep relative to the incremental value. This friction surfaces most sharply in small-to-midsize businesses where budget scrutiny is high.</p>
 <p><strong>Feature gaps</strong> persist despite ClickUp's breadth. Reviewers want capabilities that align with their specific workflows but find that the platform's generalized feature set requires workarounds. This creates a paradox: the platform promises to replace multiple tools but still leaves users reaching for external solutions.</p>
 <p><strong>Performance issues</strong> emerge at scale. Teams report that as projects, tasks, and integrations multiply, the platform slows. Load times increase, sync delays frustrate real-time collaboration, and interface responsiveness degrades.</p>
-<p><strong>Overall dissatisfaction</strong> (which also appears as a strength) reflects the tension between ClickUp's promise and its execution. Users value the consolidation vision but feel friction in daily usage. This dual sentiment—satisfaction with the concept, frustration with the reality—runs through the review data.</p>
+<p><strong>Overall dissatisfaction</strong> reflects the tension between ClickUp's promise and its execution. Users value the consolidation vision but feel friction in daily usage—appreciation for the concept coexisting with frustration over the reality runs through the review data.</p>
 <p><strong>Onboarding challenges</strong> appear less frequently but matter for new users. While initial setup earns praise, teams report that as they move beyond basic task management into docs, time tracking, and custom workflows, the learning curve steepens.</p>
 <p>One Reddit reviewer captured the switching calculus directly: "Any competitors out there that can import your tasks/lists/etc from ClickUp via api or an import?" This signals that friction has crossed a threshold where migration effort becomes worth evaluating.</p>
 <h2 id="the-clickup-ecosystem-integrations-use-cases">The ClickUp Ecosystem: Integrations &amp; Use Cases</h2>

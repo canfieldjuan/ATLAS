@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 208,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 208
       },
       {
         "name": "pricing",
@@ -168,7 +168,6 @@ const post: BlogPost = {
 <p>I like that Asana offers different views for your tasks that help you see only the info you need at the time
 -- verified reviewer on Gartner Peer Insights</p>
 </blockquote>
-<p><strong>Overall satisfaction with core workflow.</strong> Despite pricing and customization complaints, 208 mentions of overall satisfaction appear in the review set. Users appreciate that Asana handles basic project tracking well and doesn't require steep onboarding.</p>
 <p><strong>Positive UX design.</strong> 59 mentions of UX strength highlight that Asana's interface feels modern and approachable compared to legacy tools.</p>
 <p><strong>Adequate feature breadth.</strong> 45 mentions of feature strength indicate that Asana covers the essentials for small-to-mid-market teams: task dependencies, assignees, timelines, and custom fields.</p>
 <p><strong>Integration ecosystem.</strong> Asana supports Zapier, Google Calendar, Make, Google Drive, and other tools. While not seamless, the ecosystem allows teams to extend Asana's native capabilities.</p>
@@ -182,7 +181,7 @@ const post: BlogPost = {
 -- verified reviewer on Gartner Peer Insights</p>
 </blockquote>
 <p>This gap forces workarounds and reduces the appeal of Asana for teams managing repetitive workflows.</p>
-<p><strong>Overall dissatisfaction signals.</strong> While overall satisfaction is high, dissatisfaction mentions (exact count withheld to avoid overstating) cluster around billing, customization, and support responsiveness.</p>
+<p><strong>Overall dissatisfaction signals.</strong> Overall dissatisfaction is in fact the most-mentioned pain signal (208 mentions), clustering around billing, customization, and support responsiveness.</p>
 <p><strong>Support responsiveness.</strong> Reviewers mention delayed responses and difficulty reaching support during contract disputes or billing issues.</p>
 <p><strong>UX friction in specific workflows.</strong> While the interface is generally praised, some users report that navigating custom fields, dependencies, and portfolio views becomes cumbersome at scale.</p>
 <p><strong>Integration depth.</strong> Zapier and other automation tools bridge gaps, but native integrations with CRM, email, and analytics platforms lack the depth competitors offer.</p>

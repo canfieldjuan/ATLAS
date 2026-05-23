@@ -85,7 +85,11 @@ async def apply_content_pipeline_migrations(
     async def _run(conn: Any) -> MigrationRunResult:
         if not dry_run:
             await _ensure_migration_table(conn, table)
-        applied_versions = await _read_applied_versions(conn, table, dry_run=dry_run)
+        applied_versions = await _read_applied_versions(
+            conn,
+            table,
+            missing_table_ok=dry_run,
+        )
         applied: list[MigrationRunEntry] = []
         skipped: list[MigrationRunEntry] = []
         for migration in migrations:
@@ -155,11 +159,27 @@ def _requires_autocommit(sql: str) -> bool:
     return bool(_NON_TRANSACTIONAL_SQL_RE.search(sql))
 
 
-async def _read_applied_versions(conn: Any, table: str, *, dry_run: bool) -> set[str]:
-    if dry_run:
-        return set()
-    rows = await conn.fetch(f"SELECT version FROM {table}")
+async def _read_applied_versions(
+    conn: Any,
+    table: str,
+    *,
+    missing_table_ok: bool = False,
+) -> set[str]:
+    try:
+        rows = await conn.fetch(f"SELECT version FROM {table}")
+    except Exception as exc:
+        if missing_table_ok and _is_undefined_table_error(exc):
+            return set()
+        raise
     return {str(_row_value(row, "version")) for row in rows if _row_value(row, "version")}
+
+
+def _is_undefined_table_error(exc: BaseException) -> bool:
+    if str(getattr(exc, "sqlstate", "") or "") == "42P01":
+        return True
+    if str(getattr(exc, "pgcode", "") or "") == "42P01":
+        return True
+    return exc.__class__.__name__ == "UndefinedTableError"
 
 
 async def _with_connection(

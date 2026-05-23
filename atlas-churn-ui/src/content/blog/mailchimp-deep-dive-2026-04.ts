@@ -188,7 +188,7 @@ const post: BlogPost = {
 </ol>
 <p><strong>UX pain emerges in specific workflows.</strong> Reviewers praise the basic campaign builder but struggle with conditional content, dynamic segmentation, and list hygiene tools. These gaps push mid-market users toward HubSpot or ActiveCampaign.</p>
 <p><strong>Support responsiveness is inconsistent.</strong> Lower-tier plans lack phone support and live chat. Email tickets often take 24–48 hours to resolve, frustrating users with urgent deliverability or list issues.</p>
-<p><strong>Overall dissatisfaction is rising.</strong> Despite positive sentiment around core features, the cumulative effect of pricing increases, policy changes, and feature gaps is driving explicit switching signals. One reviewer captured the tension well: "Despite the many price increases, we do like the basic platform. This may be our goodbye to Mailchimp." -- reviewer on Trustpilot</p>
+<p><strong>Overall dissatisfaction is rising.</strong> Despite positive sentiment around core features, the cumulative effect of pricing increases, policy changes, and feature gaps is driving explicit switching signals. One reviewer captured the tension well, noting that despite the many price increases they still liked the basic platform — but that this might be their goodbye to Mailchimp.</p>
 <hr />
 <h2 id="the-mailchimp-ecosystem-integrations-use-cases">The Mailchimp Ecosystem: Integrations &amp; Use Cases</h2>
 <h3 id="native-integrations">Native Integrations</h3>

@@ -74,7 +74,7 @@ const post: BlogPost = {
   },
   {
     "question": "Is BigCommerce pricing really 3 times higher than agreed rates?",
-    "answer": "One verified reviewer on Software Advice reported being forced to pay almost 3 times their agreed rate as their business scaled. This pricing backlash pattern appears in BigCommerce reviews, though sample size is limited to 54 reviews."
+    "answer": "One reviewer reported being forced to pay almost 3 times their agreed rate as their business scaled. This pricing backlash pattern appears in BigCommerce reviews, though sample size is limited to 54 reviews."
   },
   {
     "question": "Which e-commerce platform has the highest urgency complaints?",

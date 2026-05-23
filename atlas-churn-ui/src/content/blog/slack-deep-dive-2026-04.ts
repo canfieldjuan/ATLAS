@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 293,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 293
       },
       {
         "name": "pricing",
@@ -154,7 +154,7 @@ const post: BlogPost = {
 <p>The analysis identifies 6 strengths and 8 weaknesses, with 46 reviews showing churn intent. Two accounts show active evaluation signals. Witness evidence reveals workflow migration pressure as teams shift primary communication to asynchronous tools within the past few months.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <h2 id="what-slack-does-well-and-where-it-falls-short">What Slack Does Well -- and Where It Falls Short</h2>
-<p>Slack shows 293 mentions of positive overall satisfaction signals, indicating retention anchors exist even as workflow pressure builds. Reviewers praise ease of use and communication efficiency in specific contexts.</p>
+<p>Overall dissatisfaction is Slack's largest pain signal (293 mentions). Even so, reviewers still praise ease of use and communication efficiency in specific contexts—a retention anchor that persists even as workflow pressure builds.</p>
 <blockquote>
 <p>Slack is easy to use and it allows us to communicate with ease</p>
 <p>-- Software Engineer at 1,000-4,999 employee company, verified reviewer on Slashdot</p>
@@ -238,7 +238,7 @@ const post: BlogPost = {
 <p>Slack is easy to use and it allows us to communicate with ease</p>
 <p>-- Software Engineer at 1,000-4,999 employee company, verified reviewer on Slashdot</p>
 </blockquote>
-<p>This positive review emphasizes ease of use and communication efficiency. It represents the retention anchor visible in the overall satisfaction data.</p>
+<p>This positive review emphasizes ease of use and communication efficiency. It represents the retention anchor visible in the ease-of-use praise.</p>
 <p>The fifth quotable phrase is a question:</p>
 <blockquote>
 <p>Please share advice or experience on how your lab communicates with one another and what works or doesn't work in your method</p>
@@ -250,7 +250,7 @@ const post: BlogPost = {
 <p>The entrenchment market regime suggests Slack is not facing traditional competitive displacement. Instead, teams unbundle communication workflows, adopting specialized tools for documentation, async video, and project management while retaining Slack for real-time chat.</p>
 <p>Economic buyers in mid-market accounts and enterprise mid-tier contracts show the strongest current pressure. Two accounts have active evaluation signals. Six active evaluation signals exist across the full dataset. Migrations are happening now, not in a future planning window.</p>
 <p>Pricing friction surfaces alongside workflow fit concerns. One reviewer cited Slack Pro at $8.75/user/month compared to alternatives at lower price points. However, pricing appears as a secondary factor behind workflow model mismatch. Teams migrate to async tools because the synchronous chat model creates context switching and FOMO, not solely because alternatives cost less.</p>
-<p>Slack retains customers through ease of use and overall satisfaction in specific contexts. 293 positive overall satisfaction mentions indicate retention anchors exist. The challenge is workflow scope, not product quality. Slack works well for what it does; teams are questioning whether real-time chat should be the primary communication layer.</p>
+<p>Slack retains customers through ease of use in specific contexts, even though overall dissatisfaction is its largest pain signal (293 mentions). The challenge reviewers describe is workflow scope, not core product quality. Slack works well for what it does; teams are questioning whether real-time chat should be the primary communication layer.</p>
 <p>For teams evaluating Slack:</p>
 <ul>
 <li><strong>Consider workflow fit before pricing.</strong> If your team operates async-first, Slack may create more friction than value.</li>

@@ -157,14 +157,8 @@ const post: BlogPost = {
 <p>Reviewer sentiment splits between strong praise for visualization capabilities and frustration with cost and complexity. The data shows 7 distinct strength categories and 5 weakness areas based on complaint clustering and positive mention patterns.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <p><strong>Strengths reviewers emphasize:</strong></p>
-<p><strong>Visualization flexibility</strong> -- Technical users consistently praise Tableau's ability to create custom, publication-quality visualizations. One Software Developer notes:</p>
-<blockquote>
-<p>"Clear interface for better visualization Simple to use - Drag &amp; Drop Easily integrates with multiple data points Multiple graphical structures Great performance even with large amount of data Good doc" -- Software Developer at a 100-499 employee company, reviewer on Slashdot</p>
-</blockquote>
-<p><strong>Data integration breadth</strong> -- Reviewers highlight Tableau's ability to connect to diverse data sources. A Senior Technical Support reviewer states:</p>
-<blockquote>
-<p>"#1- Data collected from various sources gives us the best insights to analyze" -- Senior Technical Support at a 100-499 employee company, reviewer on Slashdot</p>
-</blockquote>
+<p><strong>Visualization flexibility</strong> -- Technical users consistently praise Tableau's ability to create custom, publication-quality visualizations.</p>
+<p><strong>Data integration breadth</strong> -- Reviewers highlight Tableau's ability to connect to diverse data sources.</p>
 <p><strong>Advanced analytics</strong> -- Power users cite Tableau's statistical functions, calculated fields, and support for R and Python integrations as differentiators for complex analysis workflows.</p>
 <p><strong>Enterprise deployment options</strong> -- Tableau Server and Tableau Cloud receive positive mentions from reviewers managing large-scale deployments, particularly around governance and access control features.</p>
 <p><strong>Community and resources</strong> -- Multiple reviewers reference Tableau's extensive documentation, community forums, and third-party training resources as valuable for onboarding and troubleshooting.</p>
