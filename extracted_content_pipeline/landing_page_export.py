@@ -20,6 +20,14 @@ from .landing_page_structured_data import build_landing_page_structured_data
 
 JsonDict = dict[str, Any]
 
+_PUBLIC_CTA_PLACEHOLDER_URLS = frozenset({
+    "#",
+    "/#",
+    "/demo",
+    "javascript:void(0)",
+    "javascript:;",
+})
+
 
 _EXPORT_COLUMNS = (
     "campaign_name",
@@ -163,7 +171,22 @@ def public_landing_page_robots(draft: LandingPageDraft) -> str:
         return "noindex,follow"
     if landing_page_geo_readiness(draft).get("status") != "ready":
         return "noindex,follow"
+    if not _public_cta_url_indexable(draft.cta):
+        return "noindex,follow"
     return "index,follow"
+
+
+def _public_cta_url_indexable(value: Any) -> bool:
+    cta = _metadata_mapping(value)
+    url = str(cta.get("url") or "").strip()
+    normalized = url.lower()
+    if not normalized or normalized in _PUBLIC_CTA_PLACEHOLDER_URLS:
+        return False
+    if normalized.startswith("javascript:"):
+        return False
+    if normalized.startswith(("https://", "http://", "mailto:", "tel:", "/")):
+        return True
+    return False
 
 
 def _metadata_summary(value: Any) -> JsonDict:

@@ -8,8 +8,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "test:landing-page-prerender": "node --test scripts/verify-landing-page-geo-prerender.test.mjs",
     "test:sitemap-bridge": "node --test scripts/landing-page-sitemap-bridge.test.mjs",
-    "verify:blog-geo": "node scripts/verify-blog-geo-prerender.mjs"
+    "verify:blog-geo": "node scripts/verify-blog-geo-prerender.mjs",
+    "verify:landing-page-geo": "node scripts/verify-landing-page-geo-prerender.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",

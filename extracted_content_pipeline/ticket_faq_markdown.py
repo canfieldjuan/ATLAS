@@ -807,20 +807,32 @@ def _vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[
     return (*_custom_vocabulary_gap_rules(custom_rules), *_VOCABULARY_GAP_RULES)
 
 
-def _custom_vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
+def normalize_vocabulary_gap_rules(
+    custom_rules: Sequence[Sequence[str]],
+    *,
+    label: str = "vocabulary_gap_rules",
+) -> tuple[tuple[str, ...], ...]:
+    """Normalize caller-supplied vocabulary-gap alias groups."""
+    if not isinstance(custom_rules, Sequence) or isinstance(
+        custom_rules,
+        (str, bytes, bytearray),
+    ):
+        raise ValueError(f"{label} must be an array of string arrays")
     rules: list[tuple[str, ...]] = []
-    for aliases in custom_rules:
+    for index, aliases in enumerate(custom_rules, start=1):
         if isinstance(aliases, (str, bytes, bytearray)):
-            raise ValueError(
-                "vocabulary_gap_rules entries must include at least two terms"
-            )
+            raise ValueError(f"{label} entries must include at least two terms")
+        if not isinstance(aliases, Sequence):
+            raise ValueError(f"{label}[{index}] must be a string array")
         cleaned = _clean_terms(aliases)
         if len(cleaned) < 2:
-            raise ValueError(
-                "vocabulary_gap_rules entries must include at least two terms"
-            )
+            raise ValueError(f"{label} entries must include at least two terms")
         rules.append(cleaned)
     return tuple(rules)
+
+
+def _custom_vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
+    return normalize_vocabulary_gap_rules(custom_rules)
 
 
 def _zero_result_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -1555,4 +1567,5 @@ __all__ = [
     "TicketFAQMarkdownResult",
     "TicketFAQMarkdownService",
     "build_ticket_faq_markdown",
+    "normalize_vocabulary_gap_rules",
 ]

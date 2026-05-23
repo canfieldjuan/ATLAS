@@ -26,24 +26,41 @@ and future published page meet the conditions Atlas can control.
 
 ## Current Implementation Baseline
 
-The landing-page generator already has the foundation needed for readiness work:
+Atlas now has draft-level and publish-surface readiness coverage for generated
+landing pages:
 
 - `extracted_content_pipeline/landing_page_generation.py` generates one
-  `LandingPageDraft` from a `MarketingCampaign`.
+  `LandingPageDraft` from a `MarketingCampaign`, uses quality repair attempts,
+  and carries operator-supplied landing-page SEO/GEO/AEO inputs through campaign
+  context.
 - `extracted_content_pipeline/skills/digest/landing_page_generation.md` asks for
   a structured JSON page with `title`, `slug`, `hero`, `sections`, `cta`,
-  `meta`, and `reference_ids`.
-- `extracted_quality_gate/landing_page_pack.py` validates basic title, slug,
-  hero, CTA, sections, blocked phrasing, and optional meta-description length.
-- `extracted_content_pipeline/landing_page_export.py` exports generated drafts
-  for review.
-- `atlas-intel-ui/src/pages/ContentOpsAssetsReview.tsx` already renders landing
-  page previews and basic facts.
+  `meta`, `reference_ids`, and section metadata used for AEO/GEO checks.
+- `extracted_quality_gate/landing_page_pack.py` blocks malformed title, slug,
+  CTA, sections, unresolved placeholders, unsafe phrasing, and selected
+  landing-page readiness failures before save.
+- `extracted_content_pipeline/landing_page_readiness.py` computes
+  `seo_aeo_readiness`, `geo_readiness`, and repair issue names.
+- `extracted_content_pipeline/landing_page_export.py` exposes readiness fields,
+  structured data, public renderer rows, robots policy, and public CTA index
+  policy.
+- `extracted_content_pipeline/api/generated_assets.py` exposes tenant-scoped
+  edit and repair routes for landing-page drafts plus unauthenticated public
+  routes for approved generated landing pages and their sitemap.
+- `atlas-intel-ui/src/pages/ContentOpsAssetsReview.tsx` renders landing-page
+  readiness panels, structured-data preview, edit controls, and repair controls.
+- `atlas-intel-ui/src/pages/PublicLandingPage.tsx` renders approved public
+  generated landing pages at `/lp/:id/:slug`.
+- `atlas-intel-ui/vite.config.ts` imports approved public landing-page sitemap
+  entries at build time and prerenders crawler-visible `/lp/.../index.html`
+  files when `VITE_PUBLIC_LANDING_PAGE_SITEMAP_URL` is configured.
+- `atlas-intel-ui/scripts/verify-landing-page-geo-prerender.mjs` verifies built
+  public landing-page HTML for canonical metadata, robots, JSON-LD, visible
+  body copy, H1, and CTA.
 
-The missing piece is a landing-page-specific readiness contract. Today landing
-pages do not expose `seo_aeo_readiness` or `geo_readiness`, and the quality gate
-does not yet validate answer clarity, audience clarity, offer clarity, trust
-signals, FAQ/objection handling, or conversion-path continuity.
+The current proof is deterministic test and CI coverage, not live search or AI
+answer-engine placement. Continue to describe this as readiness and verification,
+not guaranteed ranking or guaranteed AI answer inclusion.
 
 ## Relationship To SEO, AEO, And GEO
 
@@ -240,55 +257,54 @@ Minimum publish checks:
    - The page returns a successful indexable response and is not blocked by
      robots metadata for the target deployment.
 
-## Implementation Roadmap
+## Implementation Status
 
-Recommended sequence:
+The original roadmap has been implemented through draft and publish readiness:
 
 1. Contract definition
-   - Land this document and a plan doc.
-   - No runtime code changes.
+   - Landed in this document and the associated plan doc.
 
 2. Draft readiness helper
-   - Add landing-page `seo_aeo_readiness` and `geo_readiness` helpers.
-   - Wire them into `landing_page_export.py` rows and CSV output.
-   - Add focused tests for ready and incomplete pages.
+   - `landing_page_readiness.py` computes landing-page `seo_aeo_readiness` and
+     `geo_readiness`.
+   - `landing_page_export.py` includes readiness fields in generated-asset rows
+     and CSV output.
 
 3. Quality gate enforcement
-   - Extend `landing_page_pack.py` with the checks that should block save.
-   - Keep operator-visible readiness checks more detailed than blockers.
+   - `landing_page_pack.py` blocks the save path on malformed structure,
+     placeholder CTAs, unresolved placeholders, unsafe claims, and selected
+     readiness failures.
+   - Operator-visible readiness checks remain more detailed than blockers.
 
 4. Prompt alignment
-   - Update `digest/landing_page_generation.md` so the LLM is asked for the
-     structures the validators expect.
-   - Add FAQ/objection guidance without forcing fake FAQ content when the
-     campaign lacks enough context.
+   - `digest/landing_page_generation.md` asks for the structures the validators
+     expect, including answer-first hero copy, section metadata, FAQ/objection
+     handling, trust cues, and CTA consistency.
 
 5. Review UI visibility
-   - Show landing-page readiness labels and breakdown panels in
-     `ContentOpsAssetsReview.tsx`.
+   - `ContentOpsAssetsReview.tsx` shows landing-page readiness breakdowns,
+     structured data, edit controls, repair controls, and repair history.
 
 6. Publish verification
-   - Only after a concrete public rendering path exists for generated landing
-     pages.
-   - Add crawler-visible page checks at that boundary, not inside the generator.
+   - `PublicLandingPage.tsx` renders approved public generated pages.
+   - The public sitemap includes only approved, readiness-passing, indexable
+     generated landing pages.
+   - The frontend build prerenders public landing pages from the backend sitemap
+     when configured.
+   - `verify-landing-page-geo-prerender.mjs` checks the built public HTML for
+     crawler-visible metadata, JSON-LD, body copy, H1, and CTA.
 
 ## Safe Customer-Facing Language
-
-Before implementation:
-
-> Landing pages include campaign metadata, hero copy, body sections, and CTA
-> structure for review.
-
-After draft-level checks:
-
-> Landing pages are checked for SEO metadata, answer clarity, audience fit, and
-> GEO readiness before review.
-
-After draft and publish checks:
 
 > Landing pages are generated and published with SEO, AEO, and GEO readiness
 > checks for metadata, answer clarity, structured data, and crawler-visible page
 > content.
+
+Use this narrower draft-only version when discussing generated drafts before
+approval or frontend publication:
+
+> Landing-page drafts are checked for SEO metadata, answer clarity, audience
+> fit, CTA consistency, and GEO readiness before review.
 
 Avoid:
 
@@ -298,14 +314,17 @@ Avoid:
 
 > Guaranteed to appear in AI answer engines.
 
-## Open Decisions
+## Decisions Now Reflected In Code
 
-1. Which structured data type should the first public landing-page renderer use
-   by default: `WebPage`, `Service`, `Product`, or `Offer`?
-2. Should FAQ/objection handling be required for all landing pages, or only when
-   the campaign provides enough context?
-3. Should placeholder CTA URLs block draft save, or only publish approval?
-4. Should landing-page `geo_readiness` require evidence/trust signals when
-   `reference_ids` is empty?
-5. Should landing pages inherit the blog UI readiness panel component or use a
-   landing-page-specific panel label and checks?
+1. Structured data defaults to `WebPage`, with `FAQPage` added when
+   question/answer section metadata is present.
+2. FAQ/objection handling is part of draft readiness, but the structured-data
+   builder does not invent FAQ schema when question metadata is absent.
+3. Obvious placeholder CTA URLs such as `#` block the draft quality gate.
+   Publish/index policy also keeps `/demo` and other placeholder destinations
+   `noindex,follow`.
+4. `geo_readiness` accepts either `reference_ids` or visible evidence language
+   as the trust-signal source. If no proof exists, generated pages should avoid
+   pretending proof exists.
+5. The review UI reuses the generated-asset readiness panel pattern with
+   landing-page-specific checks and labels.
