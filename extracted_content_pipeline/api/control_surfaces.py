@@ -264,6 +264,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_drop_falsified: bool = False
     ingestion_opportunity_table: str = "campaign_opportunities"
     execute_max_concurrency: int = 8
+    ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
@@ -303,6 +304,8 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_max_continuations must be non-negative")
         if self.execute_max_concurrency <= 0:
             raise ValueError("execute_max_concurrency must be positive")
+        if self.ingestion_import_max_concurrency <= 0:
+            raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
             self.structured_reasoning_falsification_rules,
             Sequence,
@@ -518,6 +521,9 @@ def create_content_ops_control_surface_router(
     _require_fastapi()
     resolved_config = config or ContentOpsControlSurfaceApiConfig()
     execute_gate = _ExecuteConcurrencyGate(resolved_config.execute_max_concurrency)
+    ingestion_import_gate = _ExecuteConcurrencyGate(
+        resolved_config.ingestion_import_max_concurrency
+    )
     router = APIRouter(
         prefix=resolved_config.prefix,
         tags=list(resolved_config.tags),
@@ -605,15 +611,11 @@ def create_content_ops_control_surface_router(
                 },
             )
         dry_run = bool(data.get("dry_run"))
-        if dry_run:
-            pool = object()
-        else:
-            pool = await _resolve_import_pool(opportunity_import_pool_provider)
-        scope = await _resolve_scope(scope_provider)
-        result = await _import_campaign_opportunities_for_route(
-            pool,
+        result = await _import_ingestion_rows_with_admission(
             report.opportunities,
-            scope=scope,
+            import_gate=ingestion_import_gate,
+            pool_provider=opportunity_import_pool_provider,
+            scope_provider=scope_provider,
             target_mode=target_mode,
             opportunity_table=resolved_config.ingestion_opportunity_table,
             replace_existing=bool(data.get("replace_existing")),
@@ -681,15 +683,11 @@ def create_content_ops_control_surface_router(
                     "diagnostics": diagnostics,
                 },
             )
-        if dry_run:
-            pool = object()
-        else:
-            pool = await _resolve_import_pool(opportunity_import_pool_provider)
-        scope = await _resolve_scope(scope_provider)
-        result = await _import_campaign_opportunities_for_route(
-            pool,
+        result = await _import_ingestion_rows_with_admission(
             report.opportunities,
-            scope=scope,
+            import_gate=ingestion_import_gate,
+            pool_provider=opportunity_import_pool_provider,
+            scope_provider=scope_provider,
             target_mode=target_mode_value,
             opportunity_table=resolved_config.ingestion_opportunity_table,
             replace_existing=bool(replace_existing),
@@ -1240,6 +1238,56 @@ async def _resolve_import_pool(provider: PoolProvider | None) -> Any:
             detail="Content Ops ingestion import database is unavailable.",
         )
     return pool
+
+
+async def _import_ingestion_rows_with_admission(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    import_gate: _ExecuteConcurrencyGate,
+    pool_provider: PoolProvider | None,
+    scope_provider: ScopeProvider | None,
+    target_mode: str,
+    opportunity_table: str,
+    replace_existing: bool,
+    dry_run: bool,
+    source: str | None,
+) -> Any:
+    if dry_run:
+        scope = await _resolve_scope(scope_provider)
+        return await _import_campaign_opportunities_for_route(
+            object(),
+            rows,
+            scope=scope,
+            target_mode=target_mode,
+            opportunity_table=opportunity_table,
+            replace_existing=replace_existing,
+            dry_run=True,
+            source=source,
+        )
+
+    if not await import_gate.acquire():
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "reason": "content_ops_ingestion_import_at_capacity",
+                "max_concurrency": import_gate.max_concurrency,
+            },
+        )
+    try:
+        pool = await _resolve_import_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        return await _import_campaign_opportunities_for_route(
+            pool,
+            rows,
+            scope=scope,
+            target_mode=target_mode,
+            opportunity_table=opportunity_table,
+            replace_existing=replace_existing,
+            dry_run=False,
+            source=source,
+        )
+    finally:
+        await import_gate.release()
 
 
 async def _import_campaign_opportunities_for_route(
