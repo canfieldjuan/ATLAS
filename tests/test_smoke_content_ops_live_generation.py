@@ -62,10 +62,27 @@ class _LandingPageService:
         }
 
 
+class _BlogPostService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        return {
+            "requested": 1,
+            "generated": 1,
+            "skipped": 0,
+            "saved_ids": ["blog-live-smoke-1"],
+            "errors": [],
+        }
+
+
 def _args(**overrides: Any) -> argparse.Namespace:
     values = {
+        "output": "landing_page",
         "account_id": "acct-live-smoke",
         "user_id": "user-live-smoke",
+        "target_mode": "vendor_retention",
         "env_file": [],
         "input_json": None,
         "input": [],
@@ -111,6 +128,58 @@ async def test_live_generation_smoke_executes_landing_page_through_real_executor
     assert call["campaign"].context["cta_url"] == "/custom-intake"
     assert call["campaign"].context["faq_questions"] == ["How long does it take?"]
     assert call["quality_repair_attempts"] == 1
+    assert call["quality_gates_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_seeds_and_executes_blog_post_through_real_executor() -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+    seeded: list[dict[str, Any]] = []
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        seeded.append({"args": args, "scope": scope})
+        return {
+            "saved_ids": ["bp-live-smoke-1"],
+            "slug": "content-ops-blog-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "complaint_roundup",
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            input=["topic=Support ticket FAQ gaps"],
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["configured_outputs"] == ["blog_post"]
+    assert result["seeded_blog_blueprint"]["saved_ids"] == ["bp-live-smoke-1"]
+    assert result["execution"]["status"] == "completed"
+    assert result["execution"]["steps"][0]["result"]["saved_ids"] == [
+        "blog-live-smoke-1"
+    ]
+    assert lifecycle.initialized is True
+    assert lifecycle.closed is True
+    assert len(seeded) == 1
+    assert seeded[0]["scope"].account_id == "acct-live-smoke"
+    assert len(service.calls) == 1
+
+    call = service.calls[0]
+    assert call["scope"].account_id == "acct-live-smoke"
+    assert call["target_mode"] == "vendor_retention"
+    assert call["limit"] == 1
+    assert call["filters"] == {"topic_type": "content_ops_live_smoke"}
+    assert call["topic"] == "Support ticket FAQ gaps"
     assert call["quality_gates_enabled"] is True
 
 

@@ -591,6 +591,21 @@ initialization and the pipeline LLM/OpenRouter credentials before testing the
 HTTP route. The provider route expects `OPENROUTER_API_KEY` or
 `ATLAS_B2B_CHURN_OPENROUTER_API_KEY` to be loaded in the host environment.
 
+Use the same smoke for the hosted blog-post path:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --output blog_post \
+  --account-id acct_123 \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+Blog mode seeds one scoped `blog_blueprints` row, runs `blog_post` through the
+same executor path, and persists one `blog_posts` draft with quality gates on.
+If it reports that `blog_post` is not configured, check the same DB and provider
+settings first.
+
 CFPB complaint narratives are the public support-ticket-like smoke path. Use
 them when the host needs a non-review source before wiring CRM notes, call
 transcripts, support tickets, or case exports. The exporter keeps only rows
