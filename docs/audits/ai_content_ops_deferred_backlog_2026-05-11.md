@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-20
+Last updated: 2026-05-23
 
 ## Purpose
 
@@ -64,6 +64,9 @@ The following items appear in older plan docs but are no longer active backlog:
 - Blog SEO/AEO and GEO save-time quality gates plus GEO repair loop.
 - Blog publish-level SEO/GEO/JSON-LD/crawler-visible article verification.
 - Atlas Intel blog readiness review and breakdown UI.
+- Landing-page SEO/AEO/GEO input contract, prompt consumption, save-time
+  readiness, review UI, draft edit/repair, public rendering,
+  sitemap/prerender, publish verification, and generation smoke coverage.
 
 ## Active Backlog
 
@@ -181,6 +184,18 @@ The original discovery audit now records the merged closeout chain:
 
 Do not take another Content Ops blog SEO/GEO slice unless it is driven by a
 new live-output failure, a UI/operator need, or a publish verifier regression.
+
+The landing-page SEO/AEO/GEO arc is also closed for the current product
+contract. The landing-page contract audit now records the implemented chain:
+
+- `docs/audits/ai_content_ops_landing_page_seo_aeo_geo_contract_2026-05-21.md`
+
+Do not take another Content Ops landing-page SEO/GEO slice unless it is driven
+by a new live-output failure, a UI/operator need, or a publish verifier
+regression. Historical plan-doc deferrals for landing-page input capture,
+prompt usage, readiness gating, review UI, edit, repair, public rendering,
+prerendering, and publish verification are stale after the merged closeout
+chain.
 
 The review-source readiness and Postgres smoke closeouts do not create a new
 active Content Ops implementation backlog. G2 can use the existing exporter,
