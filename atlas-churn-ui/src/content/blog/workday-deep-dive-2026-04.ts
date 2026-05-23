@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Workday Reviews 2026: 868 User Experiences Analyzed',
   seo_description: 'Analysis of 868 Workday reviews reveals implementation complexity, support challenges, and strong core HCM capabilities. See what drives satisfaction and frustration.',
   target_keyword: 'workday reviews',
-  secondary_keywords: ["workday hcm reviews", "workday implementation", "workday vs oracle", "workday user experience"],
+  secondary_keywords: ["workday hcm reviews", "workday implementation", "workday vs oracle", "workday user experience", "workday too expensive", "workday implementation cost"],
   faq: [
   {
     "question": "What are the main complaints about Workday?",
