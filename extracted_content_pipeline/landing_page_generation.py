@@ -59,6 +59,11 @@ from .services._parse_retry_helpers import (
     retry_prompt_with_invalid_response,
 )
 from extracted_quality_gate.landing_page_pack import evaluate_landing_page
+from extracted_quality_gate.landing_page_section_contract import (
+    LANDING_PAGE_QUESTION_SECTION_KINDS,
+    LANDING_PAGE_SECTION_KINDS,
+    normalize_landing_page_section_kind,
+)
 from extracted_quality_gate.types import QualityInput, QualityPolicy
 
 
@@ -192,6 +197,9 @@ def _landing_page_user_prompt(
             "corrected JSON object only:\n"
             f"{blockers}"
         )
+        guidance = _quality_repair_guidance(quality_blockers)
+        if guidance:
+            prompt = f"{prompt}\n\nRepair guidance:\n{guidance}"
     return retry_prompt_with_invalid_response(
         prompt,
         prior_invalid_response=prior_invalid_response,
@@ -200,6 +208,25 @@ def _landing_page_user_prompt(
             "Return one JSON object with non-empty title and sections."
         ),
     )
+
+
+def _quality_repair_guidance(quality_blockers: Sequence[str]) -> str:
+    blockers = tuple(str(item) for item in quality_blockers)
+    lines: list[str] = []
+    if any("section_semantics" in blocker for blocker in blockers):
+        kinds = ", ".join(sorted(LANDING_PAGE_SECTION_KINDS))
+        lines.extend((
+            f"- Every section metadata.kind must be one of: {kinds}.",
+            "- If metadata.primary_question is non-empty, body_markdown must "
+            "start with the exact metadata.answer_summary text, word for word, "
+            "before adding any other copy.",
+            "- For problem, solution, how_it_works, faq, or objection sections, "
+            "include a 35-60 word metadata.answer_summary and start "
+            "body_markdown with that same sentence or paragraph.",
+        ))
+    if not lines:
+        return ""
+    return "\n".join(lines)
 
 
 class LandingPageGenerationService:
@@ -355,6 +382,7 @@ class LandingPageGenerationService:
 
             total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
             total_parse_attempts += int(parsed.get("_parse_attempts") or 0)
+            parsed = _normalize_section_answer_visibility(parsed)
             parsed = {
                 **parsed,
                 "_usage": total_usage,
@@ -575,6 +603,7 @@ class LandingPageGenerationService:
                 )
             total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
             total_parse_attempts += int(parsed.get("_parse_attempts") or 0)
+            parsed = _normalize_section_answer_visibility(parsed)
             parsed = {
                 **parsed,
                 "_usage": total_usage,
@@ -851,6 +880,63 @@ def _quality_repair_history_row(
             str(item) for item in quality.get("repair_issues") or ()
         ),
     }
+
+
+def _normalize_section_answer_visibility(parsed: Mapping[str, Any]) -> dict[str, Any]:
+    """Ensure question-like section summaries are visible at body start.
+
+    The prompt asks the provider to put ``metadata.answer_summary`` at the
+    beginning of ``body_markdown`` for AEO/GEO extraction. Live model output can
+    put a good summary in metadata while starting the body with different copy.
+    Enforce the structured contract with the model's own summary instead of
+    inventing new text.
+    """
+
+    sections = parsed.get("sections")
+    if not isinstance(sections, Sequence) or isinstance(sections, (str, bytes)):
+        return dict(parsed)
+    normalized_sections: list[Any] = []
+    changed = False
+    for section in sections:
+        if not isinstance(section, Mapping):
+            normalized_sections.append(section)
+            continue
+        metadata = (
+            section.get("metadata")
+            if isinstance(section.get("metadata"), Mapping)
+            else {}
+        )
+        if not _section_requires_visible_summary(metadata):
+            normalized_sections.append(section)
+            continue
+        summary = str(metadata.get("answer_summary") or "").strip()
+        body = str(section.get("body_markdown") or "").strip()
+        if not summary or _normalized_startswith(body, summary):
+            normalized_sections.append(section)
+            continue
+        normalized_sections.append({
+            **dict(section),
+            "body_markdown": f"{summary}\n\n{body}" if body else summary,
+        })
+        changed = True
+    if not changed:
+        return dict(parsed)
+    return {**dict(parsed), "sections": normalized_sections}
+
+
+def _section_requires_visible_summary(metadata: Mapping[str, Any]) -> bool:
+    if str(metadata.get("primary_question") or "").strip():
+        return True
+    kind = normalize_landing_page_section_kind(metadata.get("kind"))
+    return kind in LANDING_PAGE_QUESTION_SECTION_KINDS
+
+
+def _normalized_startswith(body: str, summary: str) -> bool:
+    return _normalize_contract_text(body).startswith(_normalize_contract_text(summary))
+
+
+def _normalize_contract_text(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
 def _draft_to_parsed(draft: LandingPageDraft) -> dict[str, Any]:

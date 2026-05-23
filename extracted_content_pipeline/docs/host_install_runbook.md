@@ -573,6 +573,69 @@ python scripts/smoke_content_ops_review_source_postgres.py \
   --json
 ```
 
+After provider routing and the Atlas DB pool are configured, use the live
+Content Ops generation smoke to prove the hosted landing-page path. It runs the
+same services bundle and executor used by `/content-ops/execute`, calls the
+pipeline-routed OpenRouter/Claude provider, and persists one `landing_pages`
+draft:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --account-id acct_123 \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+If the command reports that `landing_page` is not configured, check DB
+initialization and the pipeline LLM/OpenRouter credentials before testing the
+HTTP route. The provider route expects `OPENROUTER_API_KEY` or
+`ATLAS_B2B_CHURN_OPENROUTER_API_KEY` to be loaded in the host environment.
+
+Use the same smoke for the hosted blog-post path:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --output blog_post \
+  --account-id acct_123 \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+Blog mode seeds one scoped `blog_blueprints` row, runs `blog_post` through the
+same executor path, and persists one `blog_posts` draft with quality gates on.
+If it reports that `blog_post` is not configured, check the same DB and provider
+settings first.
+
+To smoke a specific host-supplied blueprint, pass a JSON file that normalizes to
+exactly one blog blueprint:
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --output blog_post \
+  --account-id acct_123 \
+  --blog-blueprint-json ./blog-blueprint.json \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+Minimal `blog-blueprint.json`:
+
+```json
+{
+  "title": "FAQ gaps for onboarding tickets",
+  "sections": [
+    {
+      "id": "onboarding-gaps",
+      "heading": "Where onboarding tickets repeat",
+      "data_summary": "Setup questions repeat across recent support tickets."
+    }
+  ],
+  "data_context": {
+    "audience": "small support team"
+  }
+}
+```
+
 CFPB complaint narratives are the public support-ticket-like smoke path. Use
 them when the host needs a non-review source before wiring CRM notes, call
 transcripts, support tickets, or case exports. The exporter keeps only rows
