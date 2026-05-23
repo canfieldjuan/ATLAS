@@ -29,6 +29,14 @@ parked and note in the plan's Deferred.
 
 ## 2026-05-22
 
+### Some posts DECLARE excluded sources (Capterra/Trustpilot) in their methodology/corpus list
+- File/location: methodology source-lists, e.g. `hubspot-deep-dive-2026-03.ts` L143/L144 ("from G2, Capterra, Reddit, Trustpilot ..."; "verified platforms like G2 and Capterra ... community sources like Reddit and Trustpilot"), `switch-to-clickup-2026-03.ts` L124; generator-side `_gather_data` corpus/source counts vs the `_blog_source_allowlist()` used for quotes.
+- Description: surfaced while fixing excluded-source QUOTES. Several posts name allowlist-EXCLUDED platforms (Capterra, Trustpilot) in the prose source declaration / corpus counts -- i.e. the ANALYSIS corpus appears to include excluded sources, not just the quote pool. DB-verified, Trustpilot reviews for some vendors ARE enriched (e.g. clickup 110, mailchimp 90), so the enriched counts may genuinely include excluded-source reviews. The excluded-source-QUOTE slices remove the quotes but deliberately leave the methodology declarations untouched (that's a corpus-composition question, not a quote).
+- Why it matters: if the blog allowlist is meant to govern the analysis corpus (not just quotes), these posts' counts/source-lists are contaminated and need a recompute; if the allowlist governs only quotes, the declarations are honest and only the quotes needed fixing. Needs the policy clarified before touching the counts. Pairs with the D5 source-list cleanup (52 posts) and the zoho L158 quote-pool-vs-count item below.
+- Effort: M (policy decision) / L (recompute if corpus must be allowlist-restricted)
+- Category: correctness
+- Found during: excluded-source-quote slice (Phase-2)
+
 ### pain-radar chart urgency values don't reproduce from a naive all-time aggregate
 - File/location: deep-dive `pain-radar` chart data (e.g. `workday-deep-dive-2026-04.ts` L73-111, `microsoft-defender-...-2026-04.ts` L57-96); generator-side `_fetch_blog_signal_rows` / scorecard `avg_urgency_when_mentioned`.
 - Description: surfaced while fixing prose_vs_chart. The chart plots `avg_urgency_when_mentioned`, but those per-category values do NOT match a naive all-time aggregate over `b2b_reviews.enrichment` (e.g. Workday chart shows technical_debt 3.2 / data_migration 3.0 as top urgency, but an all-time aggregate has technical_debt freq=1 and pricing/integration higher; MSFT chart Security 3.5 vs all-time security urgency ~1.8). Likely a windowed and/or scorecard-derived computation, not necessarily wrong -- but its provenance isn't reproducible from the obvious query, so "is the chart itself right?" is unverified.
