@@ -274,7 +274,8 @@ python scripts/smoke_content_ops_faq_lifecycle.py \
   --source-format csv \
   --account-id acct_123 \
   --review-status published \
-  --json
+  --output-result tmp/faq_lifecycle_result.json \
+  --summary-json
 ```
 
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
@@ -1175,7 +1176,8 @@ python scripts/smoke_extracted_content_ops_execution.py \
 python scripts/smoke_content_ops_faq_lifecycle.py \
   --account-id acct_123 \
   --review-status published \
-  --json
+  --output-result tmp/faq_lifecycle_result.json \
+  --summary-json
 ```
 
 The smoke uses fake generated-asset services plus the deterministic FAQ

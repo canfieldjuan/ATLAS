@@ -262,7 +262,8 @@ python scripts/smoke_content_ops_faq_lifecycle.py \
   --source-format csv \
   --account-id acct_123 \
   --review-status published \
-  --json
+  --output-result tmp/faq_lifecycle_result.json \
+  --summary-json
 ```
 
 If Atlas already has scraped B2B review rows, export one reliable source as
@@ -1096,7 +1097,7 @@ python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign
 python scripts/smoke_extracted_content_ops_execution.py --outputs email_campaign,landing_page --with-reasoning --reasoning-provider postgres-fixture --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs signal_extraction --source-vendor HubSpot --source-max-text-chars 400 --json
 python scripts/smoke_extracted_content_ops_execution.py --outputs faq_markdown --source-type support_ticket --source-title "login reset" --json
-python scripts/smoke_content_ops_faq_lifecycle.py --account-id acct_123 --review-status published --json
+python scripts/smoke_content_ops_faq_lifecycle.py --account-id acct_123 --review-status published --output-result tmp/faq_lifecycle_result.json --summary-json
 ```
 
 This validates the full campaign preset and the deterministic source-material
