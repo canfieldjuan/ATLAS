@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 396,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 396
       },
       {
         "name": "pricing",
@@ -160,7 +160,6 @@ const post: BlogPost = {
 <li><strong>User experience quality:</strong> Reviewers consistently praise WooCommerce's interface and usability once configured, particularly for users already familiar with WordPress.</li>
 <li><strong>Performance:</strong> When properly optimized, reviewers report solid performance, though this strength coexists with performance complaints in different deployment contexts.</li>
 <li><strong>Pricing flexibility perception:</strong> Despite pricing complaints, some reviewers value the ability to control costs through selective plugin use and hosting choices.</li>
-<li><strong>Overall satisfaction:</strong> Strong positive sentiment appears alongside frustration, suggesting retention anchors remain effective for certain user segments.</li>
 <li><strong>Security:</strong> Reviewers acknowledge WordPress's mature security ecosystem when properly maintained.</li>
 </ul>
 <p><strong>Weaknesses that drive complaint volume:</strong></p>
@@ -255,7 +254,7 @@ const post: BlogPost = {
 <p>No evidence in this sample suggests WooCommerce is displacing competitors at scale. The flow appears directional: from WooCommerce toward Shopify, not bidirectional.</p>
 <h2 id="where-woocommerce-sits-in-the-b2b-software-market">Where WooCommerce Sits in the B2B Software Market</h2>
 <p>The market regime analysis suggests a stable eCommerce platform category with no clear disruption signals, but with incremental competitive pressure on WooCommerce from all-in-one alternatives.</p>
-<p>Evidence suggests WooCommerce faces pricing pressure but retains customers through strong overall satisfaction, pricing flexibility perception, and user experience quality. The contradiction between weakness and strength evidence across multiple dimensions suggests a market in equilibrium rather than transition.</p>
+<p>Evidence suggests WooCommerce faces pricing pressure but retains customers through pricing flexibility perception and user experience quality. The contradiction between weakness and strength evidence across multiple dimensions suggests a market in equilibrium rather than transition.</p>
 <p>Three vendor snapshots illustrate the competitive landscape:</p>
 <p><strong>Shopify:</strong></p>
 <ul>
@@ -306,7 +305,7 @@ const post: BlogPost = {
 <p>WooCommerce serves 1482 reviews in this analysis window with a complex value proposition: genuine flexibility and WordPress integration, but mounting pressure around cumulative costs and integration complexity.</p>
 <p>The synthesis reveals a "price squeeze" wedge: reviewers understand the free core model but experience frustration when transaction fees, payment processors, plugins, hosting, and extensions accumulate into a monthly cost structure that rivals all-in-one alternatives. Recent evidence from this week and the past quarter shows explicit pricing evaluation and dollar-amount discussions, indicating active cost-benefit analysis.</p>
 <p>Shopify emerges as the primary competitive threat, appearing in switching discussions with the highest urgency scores and explicit migration research. The performance perception gap -- whether accurate or not -- drives evaluation activity among reviewers seeking simplicity.</p>
-<p>Counterbalancing the pressure: WooCommerce retains customers through strong overall satisfaction, user experience quality, and the WordPress ecosystem advantage. The contradiction between weakness and strength evidence suggests retention anchors remain effective, even as pricing frustration builds.</p>
+<p>Counterbalancing the pressure: WooCommerce retains customers through user experience quality and the WordPress ecosystem advantage. The contradiction between weakness and strength evidence suggests retention anchors remain effective, even as pricing frustration builds.</p>
 <p>The market regime is stable, not disruptive. WooCommerce faces incremental competitive pressure, not category collapse. For buyers:</p>
 <ul>
 <li><strong>Consider WooCommerce if:</strong> You value WordPress integration, need deep customization, have technical resources for plugin management, and can optimize for performance.</li>

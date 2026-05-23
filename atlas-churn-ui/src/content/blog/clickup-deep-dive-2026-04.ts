@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 252,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 252
       },
       {
         "name": "pricing",
@@ -124,7 +124,7 @@ const post: BlogPost = {
   },
   {
     "question": "What does ClickUp do well according to reviewers?",
-    "answer": "ClickUp earns praise for feature breadth (64 mentions), overall satisfaction (252 mentions), and UX strengths (89 mentions). Reviewers highlight customizable workflows, multiple view options (List, Board, Gantt, Calendar), and strong value at lower price tiers before consolidation deepens."
+    "answer": "ClickUp earns praise for feature breadth (64 mentions) and UX strengths (89 mentions). Reviewers highlight customizable workflows, multiple view options (List, Board, Gantt, Calendar), and strong value at lower price tiers before consolidation deepens."
   },
   {
     "question": "Who feels ClickUp pain first?",
@@ -159,7 +159,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <p><strong>Strengths reviewers highlight:</strong></p>
 <ul>
-<li><strong>Overall satisfaction</strong> (252 mentions): Despite specific pain points, users report that ClickUp delivers value. One Principal &amp; Creative Director noted, "I'm amazed at the features this program offers and the value for the price."</li>
+<li><strong>Value for the price.</strong> Despite specific pain points, some users report that ClickUp delivers strong value. One Principal &amp; Creative Director noted, "I'm amazed at the features this program offers and the value for the price."</li>
 <li><strong>UX strengths</strong> (89 mentions): When workflows align with ClickUp's structure, reviewers praise the interface. A Talent Acquisition Executive described how teams "can tailor workflows, statuses, views (List, Board, Gantt, Calendar), and fields to fit almost any team."</li>
 <li><strong>Feature breadth</strong> (64 mentions): The platform's consolidation promise resonates. Users value having task management, docs, time tracking, and collaboration in one place.</li>
 <li><strong>Performance</strong> (17 mentions): Speed and responsiveness earn positive marks when the platform operates as expected.</li>
