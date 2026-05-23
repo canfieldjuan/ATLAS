@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from typing import Any
 
 from .campaign_source_adapters import source_material_to_source_rows
@@ -131,6 +132,7 @@ def build_support_ticket_input_package(
 
     source_period = f"Last {window_days} days of support tickets"
     faq_questions = _ticket_questions(normalized_rows)
+    faq_source_types = _source_types(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
         "reduce repeat support tickets",
@@ -144,8 +146,7 @@ def build_support_ticket_input_package(
 
     inputs = {
         "source_material": normalized_rows,
-        "faq_window_days": window_days,
-        "faq_source_types": ["support_ticket"],
+        "faq_source_types": faq_source_types,
         "faq_title": campaign_name,
         "topic": "Support-ticket questions customers keep asking",
         "filters": {"topic_type": "content_ops_support_ticket_faq"},
@@ -168,6 +169,8 @@ def build_support_ticket_input_package(
         "cta_label": cta_label,
         "cta_url": cta_url,
     }
+    if _all_rows_have_dates(normalized_rows):
+        inputs["faq_window_days"] = window_days
 
     return ContentOpsInputPackage(
         provider=_clean(provider) or "support_ticket_upload",
@@ -268,6 +271,41 @@ def _ticket_questions(rows: Sequence[Mapping[str, Any]], *, limit: int = 6) -> l
             if len(questions) >= limit:
                 return questions
     return questions
+
+
+def _source_types(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    source_types: list[str] = []
+    for row in rows:
+        source_type = _clean(row.get("source_type"))
+        if source_type and source_type not in source_types:
+            source_types.append(source_type)
+    return source_types or ["support_ticket"]
+
+
+def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
+    return bool(rows) and all(
+        _parse_ticket_source_date(row.get("created_at")) is not None
+        for row in rows
+    )
+
+
+def _parse_ticket_source_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = _clean(value)
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
 
 
 def _first_question(value: Any) -> str:

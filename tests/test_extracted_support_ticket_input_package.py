@@ -23,12 +23,14 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
             "Subject": "How do I change my login email?",
             "Description": "I cannot find where to update the email on my account.",
             "Pain Category": "profile updates",
+            "Created At": "2026-05-01",
         },
         {
             "ticket_id": "ticket-2",
             "subject": "Export dashboard",
             "description": "Where do I export the dashboard before renewal?",
             "source_url": "https://example.test/tickets/2",
+            "created_at": "2026-05-02",
         },
     ])
 
@@ -65,6 +67,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "company_name": "Acme Logistics",
         "vendor_name": "HelpDeskPro",
         "pain_category": "profile updates",
+        "created_at": "2026-05-01",
     }
     assert package.metadata["included_row_count"] == 2
 
@@ -101,6 +104,69 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
         }
     ]
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
+
+
+def test_support_ticket_input_package_derives_faq_source_types_from_rows() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "source_type": "ticket",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "source_type": "support_ticket",
+            "subject": "Export dashboard",
+            "message": "Where do I export the dashboard?",
+        },
+    ])
+
+    assert package.inputs["faq_source_types"] == ["ticket", "support_ticket"]
+
+
+def test_support_ticket_input_package_omits_window_filter_without_row_dates() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+        }
+    ])
+
+    assert "faq_window_days" not in package.inputs
+    assert package.inputs["source_period"] == "Last 90 days of support tickets"
+
+
+def test_support_ticket_input_package_omits_window_filter_without_parseable_row_dates() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+            "created_at": "last week",
+        }
+    ])
+
+    assert "faq_window_days" not in package.inputs
+
+
+def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+            "created_at": "2026-05-02T12:00:00Z",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Export dashboard",
+            "message": "Where do I export the dashboard?",
+        },
+    ])
+
+    assert "faq_window_days" not in package.inputs
 
 
 def test_support_ticket_input_package_accepts_single_mapping_comment_thread() -> None:
