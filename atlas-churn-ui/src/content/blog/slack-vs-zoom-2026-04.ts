@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'slack-vs-zoom-2026-04',
-  title: 'Slack vs Zoom: Comparing Reviewer Complaints Across 120 Reviews',
+  title: 'Slack vs Zoom: Where Each Tool Frustrates Users (120 Reviews)',
   description: 'Side-by-side comparison of Slack and Zoom based on 120 reviewer signals from March-April 2026. Slack shows 3.1 urgency vs Zoom\'s 2.3, with distinct pain patterns around workflow substitution and pricing backlash.',
   date: '2026-04-08',
   author: 'Churn Signals Team',

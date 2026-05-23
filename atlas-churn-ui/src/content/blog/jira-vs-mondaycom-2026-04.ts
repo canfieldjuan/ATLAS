@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'jira-vs-mondaycom-2026-04',
-  title: 'Jira vs Monday.com: Comparing Reviewer Complaints Across 62 Reviews',
+  title: 'Jira vs Monday.com: Is Jira Too Complex? (62 Reviews)',
   description: 'A data-backed comparison of Jira and Monday.com based on 62 reviewer complaint signals collected between March and April 2026. Examines interface complexity, pricing friction, and buyer segment patterns across both project management platforms.',
   date: '2026-04-10',
   author: 'Churn Signals Team',

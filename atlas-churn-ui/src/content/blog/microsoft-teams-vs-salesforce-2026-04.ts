@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'microsoft-teams-vs-salesforce-2026-04',
-  title: 'Microsoft Teams vs Salesforce: Comparing Reviewer Complaints Across 108 Reviews',
+  title: 'Microsoft Teams vs Salesforce: Why Salesforce Frustrates More (108 Reviews)',
   description: 'Direct comparison of Microsoft Teams and Salesforce reviewer complaints across 108 signals. Salesforce shows 3.2x higher urgency driven by pricing backlash, while Microsoft Teams faces Windows 11 upgrade friction. Analysis covers pricing, integration, and buyer segment patterns from February-April 2026.',
   date: '2026-04-08',
   author: 'Churn Signals Team',

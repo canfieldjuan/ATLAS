@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'microsoft-teams-vs-notion-2026-04',
-  title: 'Microsoft Teams vs Notion: Comparing Reviewer Complaints Across 198 Reviews',
+  title: 'Microsoft Teams vs Notion: Price & Learning Curve Compared (198 Reviews)',
   description: 'A side-by-side comparison of Microsoft Teams and Notion based on 198 reviewer signals from March-April 2026. Notion shows 2.7 urgency vs Teams\' 1.8, with pricing and vendor lock-in driving the gap.',
   date: '2026-04-08',
   author: 'Churn Signals Team',

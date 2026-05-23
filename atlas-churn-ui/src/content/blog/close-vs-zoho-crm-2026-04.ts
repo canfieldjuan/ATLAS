@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'close-vs-zoho-crm-2026-04',
-  title: 'Close vs Zoho CRM: 102 Reviews Analyzed',
+  title: 'Close vs Zoho CRM: Pricing, Complaints & Fit (102 Reviews)',
   description: 'Reviewer sentiment analysis comparing Close and Zoho CRM based on 102 public reviews. Where complaint patterns cluster, what urgency scores reveal, and which vendor reviewers favor.',
   date: '2026-04-03',
   author: 'Churn Signals Team',

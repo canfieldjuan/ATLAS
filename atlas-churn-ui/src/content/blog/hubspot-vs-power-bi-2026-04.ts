@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'hubspot-vs-power-bi-2026-04',
-  title: 'HubSpot vs Power BI: Comparing Reviewer Complaints Across 91 Reviews',
+  title: 'HubSpot vs Power BI: Where Pricing Pressure Bites (91 Reviews)',
   description: 'HubSpot shows 49 churn signals with 2.9 urgency versus Power BI\'s 42 signals at 2.1 urgency. Analysis of 91 public reviews from March-April 2026 reveals pricing pressure drives HubSpot complaints while Microsoft Fabric licensing complexity dominates Power BI frustration.',
   date: '2026-04-08',
   author: 'Churn Signals Team',

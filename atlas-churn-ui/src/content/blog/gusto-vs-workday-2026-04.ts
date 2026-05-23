@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'gusto-vs-workday-2026-04',
-  title: 'Gusto vs Workday: Comparing Reviewer Complaints Across 1537 Reviews',
+  title: 'Gusto vs Workday: Where Each HR Platform Frustrates (1,537 Reviews)',
   description: 'A side-by-side comparison of Gusto and Workday based on 1537 public reviews. We analyze pricing backlash, support failures, and churn signals across both HR platforms.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
