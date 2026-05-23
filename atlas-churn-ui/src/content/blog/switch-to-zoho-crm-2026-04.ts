@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-zoho-crm-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to Zoho CRM from 4 Competitor Platforms',
+  title: 'Switching to Zoho CRM: 4 Migration Sources Across 963 Reviews',
   description: 'Analysis of 963 Zoho CRM reviews reveals 4 documented migration sources and the pain categories driving platform switches. Includes practical migration considerations, integration patterns, and support experience patterns from paying customers.',
   date: '2026-04-10',
   author: 'Churn Signals Team',

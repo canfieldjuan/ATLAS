@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-shopify-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to Shopify from 3 Competitor Platforms',
+  title: 'Switching to Shopify: What 2,383 Reviews Reveal About Why Teams Migrate',
   description: 'Analysis of 2383 Shopify reviews reveals 3 primary competitor sources driving inbound migrations. This guide covers the pain categories triggering switches, practical migration considerations, and what to expect when moving to Shopify.',
   date: '2026-04-08',
   author: 'Churn Signals Team',

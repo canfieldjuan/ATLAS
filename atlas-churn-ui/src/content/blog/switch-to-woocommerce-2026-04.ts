@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-woocommerce-2026-04',
-  title: 'Migration Guide: Why Teams Are Switching to WooCommerce',
+  title: 'Switching to WooCommerce: What 1,467 Reviews Reveal About Why Teams Migrate',
   description: 'Analysis of inbound migration patterns to WooCommerce based on 1467 reviews. What drives teams to switch, where they come from, and what to expect during migration.',
   date: '2026-04-03',
   author: 'Churn Signals Team',

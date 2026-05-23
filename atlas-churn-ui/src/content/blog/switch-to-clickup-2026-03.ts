@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'switch-to-clickup-2026-03',
-  title: 'Migration Guide: Why Teams Are Switching to ClickUp',
+  title: 'Switching to ClickUp: What 645 Reviews Reveal About Why Teams Migrate',
   description: 'Analysis of 645 enriched reviews showing migration patterns to ClickUp. Where teams are coming from, what triggers the switch, and what to expect during migration.',
   date: '2026-03-29',
   author: 'Churn Signals Team',
