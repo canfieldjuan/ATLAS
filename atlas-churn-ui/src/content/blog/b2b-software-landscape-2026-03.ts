@@ -2,8 +2,8 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'b2b-software-landscape-2026-03',
-  title: 'B2B Software Landscape 2026: 17 Vendors Compared Across 26,335 Reviews',
-  description: 'Comprehensive analysis of 17 B2B software vendors based on 26,335 reviews. Where reviewer sentiment clusters, which vendors face the highest churn risk, and what the data reveals about market positioning.',
+  title: 'B2B Software Landscape 2026: 17 Vendors Compared Across 9,137 Reviews',
+  description: 'Comprehensive analysis of 17 B2B software vendors based on 9,137 reviews. Where reviewer sentiment clusters, which vendors face the highest churn risk, and what the data reveals about market positioning.',
   date: '2026-03-29',
   author: 'Churn Signals Team',
   tags: ["b2b software", "market-landscape", "comparison", "b2b-intelligence"],
@@ -70,13 +70,13 @@ const post: BlogPost = {
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'B2B Software Comparison 2026: 17 Vendors Analyzed',
-  seo_description: 'Analysis of 17 B2B software vendors across 26,335 reviews. See urgency rankings, complaint patterns, and which platforms reviewers praise or abandon.',
+  seo_description: 'Analysis of 17 B2B software vendors across 9,137 reviews. See urgency rankings, complaint patterns, and which platforms reviewers praise or abandon.',
   target_keyword: 'b2b software comparison',
   secondary_keywords: ["best b2b software 2026", "b2b software reviews", "enterprise software comparison"],
   faq: [
   {
     "question": "Which B2B software vendors have the highest churn risk in 2026?",
-    "answer": "Based on 26,335 reviews analyzed between February and March 2026, urgency scores vary significantly across the 17 vendors examined. The data reveals distinct patterns in where reviewer frustration clusters, with pricing complaints appearing in 114.4 mentions and support concerns declining 86% in recent periods."
+    "answer": "Based on 9,137 reviews analyzed between February and March 2026, urgency scores vary significantly across the 17 vendors examined. The data reveals distinct patterns in where reviewer frustration clusters, with pricing complaints appearing in 114.4 mentions and support concerns declining 86% in recent periods."
   },
   {
     "question": "What are the most common complaints about B2B software platforms?",
@@ -89,7 +89,7 @@ const post: BlogPost = {
 ],
   related_slugs: ["notion-vs-salesforce-2026-03", "jira-vs-trello-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<p>The B2B software market in 2026 presents decision-makers with 17 major platform choices, each showing distinct patterns in reviewer sentiment. This analysis draws on 26,335 enriched reviews from G2, Capterra, Reddit, and other platforms, collected between February 25 and March 29, 2026. Of these, 2,146 reviews show explicit switching intent—8.1% of the enriched sample.</p>
+<p>The B2B software market in 2026 presents decision-makers with 17 major platform choices, each showing distinct patterns in reviewer sentiment. This analysis draws on 9,137 enriched reviews from G2, Capterra, Reddit, and other platforms, collected between February 25 and March 29, 2026. Of these, 2,146 reviews show explicit switching intent—8.1% of the enriched sample.</p>
 <p>These are not product capability assessments. This is perception data: what teams who chose to write reviews report about their experiences. The sample overrepresents strong opinions—both positive and negative—and reflects the self-selected population of software reviewers, not all users.</p>
 <p>The data reveals a market in "price squeeze" mode. Pricing complaints remain stable at high volume (114.4 total mentions, 6 recent), while support quality has eroded sharply (73 total mentions, 1 recent, representing an 86% decline). Feature gaps are accelerating (+50% recent versus prior period), creating what the data suggests is a compounding vulnerability window for vendors who cannot maintain support quality while managing pricing pressure.</p>
 <p>Average churn urgency across the landscape sits at 2.2 out of 10—a relatively stable baseline. But this average masks significant variance. Some vendors show urgency scores well above the mean, indicating elevated frustration among their reviewer populations. Others show lower urgency, suggesting more satisfied user bases or less volatile sentiment patterns.</p>

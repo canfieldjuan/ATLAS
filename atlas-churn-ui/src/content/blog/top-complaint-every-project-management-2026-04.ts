@@ -80,7 +80,7 @@ const post: BlogPost = {
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'Project Management Software Complaints: Top Issues 2026',
-  seo_description: 'Analysis of 1,464 project management software complaints from 3,019 reviews. See the #1 issue for Jira, Notion, Asana, Monday.com, ClickUp, Trello & more.',
+  seo_description: 'Analysis of 1,464 project management software complaints from 2,633 reviews. See the #1 issue for Jira, Notion, Asana, Monday.com, ClickUp, Trello & more.',
   target_keyword: 'project management software complaints',
   secondary_keywords: ["jira alternatives", "notion vs asana", "monday.com pricing issues"],
   faq: [
@@ -102,7 +102,7 @@ const post: BlogPost = {
   },
   {
     "question": "How reliable are project management software reviews?",
-    "answer": "Reviews represent self-selected feedback, not universal product truth. Our analysis included 3,019 enriched reviews from verified platforms (G2, Gartner, PeerSpot) and community sources (Reddit). Sample size was sufficient for high confidence in pattern detection, but individual experiences vary by team size, use case, and implementation quality."
+    "answer": "Reviews represent self-selected feedback, not universal product truth. Our analysis included 1,246 enriched reviews from verified platforms (G2, Gartner, PeerSpot) and community sources (Reddit). Sample size was sufficient for high confidence in pattern detection, but individual experiences vary by team size, use case, and implementation quality."
   }
 ],
   related_slugs: ["best-hr-hcm-for-51-200-2026-04", "marketing-automation-landscape-2026-04", "best-communication-for-51-200-2026-04", "best-helpdesk-for-51-200-2026-04"],
@@ -116,7 +116,7 @@ const post: BlogPost = {
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-07. It captures reviewer perception, not a census of all users.</em></p>
 <p>Every project management tool has a fatal flaw. The question is whether you can live with it.</p>
-<p>We analyzed 3,019 reviews from February 28 to April 7, 2026, spanning verified platforms like G2, Gartner Peer Insights, and PeerSpot, plus community feedback from Reddit and other forums. Out of that set, 1,464 reviews contained actionable complaints about 10 major vendors.</p>
+<p>We analyzed 2,633 reviews from February 28 to April 7, 2026, spanning verified platforms like G2, Gartner Peer Insights, and PeerSpot, plus community feedback from Reddit and other forums. Out of that set, 1,464 reviews contained actionable complaints about 10 major vendors.</p>
 <p>This isn't a hit piece. It's a reality check. Jira has 263 complaint-containing reviews. Notion has 218. Asana, Monday.com, ClickUp, Trello, Basecamp, Smartsheet, and Wrike all show up with documented weaknesses. Some complaints are low-urgency annoyances. Others—like unexpected $265 annual renewal charges with no prorated refund—trigger immediate switching behavior.</p>
 <p>The data comes from public B2B software review platforms. It reflects reviewer perception, not product capability. But perception drives churn. When a reviewer writes "I was just charged $265 for another year of a service I barely used," that's not a feature request—it's a billing trigger point.</p>
 <p>Here's what the evidence shows, vendor by vendor, with exact complaint counts and urgency scores. No fluff. No affiliate spin. Just the #1 complaint for each tool, backed by what reviewers actually said.</p>

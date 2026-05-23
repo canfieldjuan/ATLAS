@@ -3,7 +3,7 @@ import type { BlogPost } from './index'
 const post: BlogPost = {
   slug: 'b2b-software-landscape-2026-04',
   title: 'B2B Software Landscape 2026: 17 Vendors Compared Across 10,698 Churn Signals',
-  description: 'Comprehensive analysis of 17 B2B software vendors based on 23,873 enriched reviews. Where each platform shows strength, where complaints cluster, and how urgency scores compare across the market.',
+  description: 'Comprehensive analysis of 17 B2B software vendors based on 9,137 enriched reviews. Where each platform shows strength, where complaints cluster, and how urgency scores compare across the market.',
   date: '2026-04-01',
   author: 'Churn Signals Team',
   tags: ["b2b software", "market-landscape", "comparison", "b2b-intelligence"],
@@ -84,7 +84,7 @@ const post: BlogPost = {
   },
   {
     "question": "How many reviews were analyzed in this B2B software comparison?",
-    "answer": "This analysis draws on 23,873 enriched reviews from G2, Capterra, Reddit, and other public platforms, collected between February 25 and March 31, 2026. Of these, 10,698 reviews mention churn signals across 17 major vendors."
+    "answer": "This analysis draws on 9,137 enriched reviews from G2, Capterra, Reddit, and other public platforms, collected between February 25 and March 31, 2026. Of these, 10,698 reviews mention churn signals across 17 major vendors."
   },
   {
     "question": "Which B2B software vendors show the strongest reviewer sentiment?",
@@ -105,7 +105,7 @@ const post: BlogPost = {
   "category_filter": "B2B Software"
 },
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-31. It captures reviewer perception, not a census of all users.</em></p>
-<p>The B2B software market in early 2026 shows a landscape defined by pricing friction and competing approaches to customer retention. This analysis examines 23,873 enriched reviews collected between February 25 and March 31, 2026, spanning 17 major vendors and revealing 10,698 churn signals across public review platforms including G2, Capterra, Reddit, and TrustPilot.</p>
+<p>The B2B software market in early 2026 shows a landscape defined by pricing friction and competing approaches to customer retention. This analysis examines 9,137 enriched reviews collected between February 25 and March 31, 2026, spanning 17 major vendors and revealing 10,698 churn signals across public review platforms including G2, Capterra, Reddit, and TrustPilot.</p>
 <p>The data reflects self-selected reviewer feedback — people motivated enough to write public reviews. This overrepresents strong opinions and specific pain points, but it provides valuable signal about where complaint patterns cluster and how reviewer sentiment varies across vendors.</p>
 <p>Across the analyzed vendors, the average churn urgency score sits at 2.5 out of 10, indicating moderate frustration levels in the broader market. However, this average masks significant variation: some vendors face urgency scores above 6.0, while others remain below 2.0. The distribution suggests a market where churn risk concentrates around specific vendors and specific pain categories rather than spreading evenly.</p>
 <p>The most striking pattern in the data is pricing-related complaints. Automatic renewal charges on accounts with low usage or attempted cancellation, combined with refusal to reverse charges, generate the highest-volume weakness signals in the evidence base. Reviewers explicitly cite competitor refund policies — particularly from Notion and Basecamp — as contrast points, raising the salience of less flexible billing practices.</p>
@@ -114,7 +114,7 @@ const post: BlogPost = {
 </blockquote>
 <p>This is not a universal B2B software problem. It is a specific pattern that affects some vendors more acutely than others, and the data shows which ones face the most intense pricing backlash.</p>
 <p>Beyond pricing, technical debt and integration complexity emerge as secondary complaint themes. Reviewers describe platforms that accumulated features faster than they resolved underlying architecture issues, leading to reliability concerns and onboarding friction. Support responsiveness also appears frequently, particularly among mid-market and enterprise reviewers who expect faster resolution times.</p>
-<p>The methodology here is straightforward: public reviews from verified platforms (G2, Capterra, TrustRadius, Gartner Peer Insights, Software Advice) and community sources (Reddit, Trustpilot) were collected, enriched for churn signals, and analyzed for pain category patterns and urgency scoring. The 23,873 enriched reviews represent a subset of 46,097 total reviews analyzed, filtered for those containing actionable churn or sentiment data.</p>
+<p>The methodology here is straightforward: public reviews from verified platforms (G2, Capterra, TrustRadius, Gartner Peer Insights, Software Advice) and community sources (Reddit, Trustpilot) were collected, enriched for churn signals, and analyzed for pain category patterns and urgency scoring. The 9,137 enriched reviews represent a subset of 46,097 total reviews analyzed, filtered for those containing actionable churn or sentiment data.</p>
 <p>Source distribution skews toward community platforms (15,959 Reddit reviews) with 7,914 reviews from verified platforms. This means the data captures both formal review platform sentiment and informal community discussion, providing a fuller picture of reviewer experience than either source alone.</p>
 <p>What follows is a vendor-by-vendor breakdown of where each platform shows strength in reviewer data and where complaints concentrate, followed by an urgency ranking and guidance for choosing the right tool based on your specific requirements.</p>
 <h2 id="which-vendors-face-the-highest-churn-risk">Which Vendors Face the Highest Churn Risk?</h2>
