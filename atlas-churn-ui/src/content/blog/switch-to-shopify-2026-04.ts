@@ -90,7 +90,7 @@ const post: BlogPost = {
   seo_title: 'Switch to Shopify: Migration Guide from 3 Competitors',
   seo_description: 'Why teams switch to Shopify: analysis of 2383 reviews shows 3 competitor sources, pricing triggers, and practical migration steps for e-commerce platforms.',
   target_keyword: 'switch to Shopify',
-  secondary_keywords: ["Shopify migration guide", "migrate to Shopify", "Shopify alternatives comparison"],
+  secondary_keywords: ["Shopify migration guide", "migrate to Shopify", "Shopify alternatives comparison", "Wix to Shopify"],
   faq: [
   {
     "question": "Which platforms are teams leaving to switch to Shopify?",

@@ -80,7 +80,7 @@ const post: BlogPost = {
   seo_title: 'Switch to WooCommerce 2026: Migration Guide & Triggers',
   seo_description: 'Migration guide for WooCommerce: analysis of switching triggers, inbound sources, and practical migration considerations from 1467 reviews.',
   target_keyword: 'switch to woocommerce',
-  secondary_keywords: ["woocommerce migration", "migrate to woocommerce", "woocommerce vs shopify"],
+  secondary_keywords: ["woocommerce migration", "migrate to woocommerce", "woocommerce vs shopify", "shopify to woocommerce"],
   faq: [
   {
     "question": "What are the most common reasons for switching to WooCommerce?",

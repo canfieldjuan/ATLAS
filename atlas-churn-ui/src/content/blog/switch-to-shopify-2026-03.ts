@@ -90,7 +90,7 @@ const post: BlogPost = {
   seo_title: 'Switch to Shopify 2026: 93 Migration Stories Analyzed',
   seo_description: '93 teams describe switching to Shopify. Analysis of migration sources, switching triggers, and what reviewers report about the transition.',
   target_keyword: 'switch to shopify',
-  secondary_keywords: ["migrate to shopify", "shopify migration guide", "woocommerce to shopify"],
+  secondary_keywords: ["migrate to shopify", "shopify migration guide", "woocommerce to shopify", "wix to shopify"],
   faq: [
   {
     "question": "What platforms do teams migrate from to Shopify?",

@@ -36,7 +36,7 @@ const post: BlogPost = {
   seo_title: 'WooCommerce Pricing: 93 Real User Complaints Analyzed',
   seo_description: '93 WooCommerce reviews reveal pricing pain from transaction fees and hidden costs. See what store owners pay beyond the free plugin and when they consider Shopify.',
   target_keyword: 'WooCommerce pricing',
-  secondary_keywords: ["WooCommerce cost", "WooCommerce transaction fees", "WooCommerce vs Shopify pricing"],
+  secondary_keywords: ["WooCommerce cost", "WooCommerce transaction fees", "WooCommerce vs Shopify pricing", "WooCommerce extra fees"],
   faq: [
   {
     "question": "How many WooCommerce users complain about pricing?",
