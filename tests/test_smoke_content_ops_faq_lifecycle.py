@@ -415,6 +415,85 @@ def test_faq_lifecycle_print_payload_includes_input_profile_on_failure(capsys) -
     assert "- expected at least 500 source row(s), got 46" in captured.err
 
 
+def test_faq_lifecycle_print_payload_summary_json(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "lifecycle_summary": {
+                "status": "ok",
+                "source_rows": 1000,
+                "saved_faq_count": 1,
+                "draft_export_count": 1,
+                "reviewed_export_count": 1,
+            },
+            "reviewed_export": {
+                "rows": [
+                    {
+                        "markdown": "# full markdown body should not print",
+                    }
+                ]
+            },
+        },
+        as_json=False,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output == {
+        "status": "ok",
+        "source_rows": 1000,
+        "saved_faq_count": 1,
+        "draft_export_count": 1,
+        "reviewed_export_count": 1,
+    }
+    assert "full markdown body" not in captured.out
+
+
+def test_faq_lifecycle_print_payload_summary_json_on_failure(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": False,
+            "lifecycle_summary": {
+                "status": "failed",
+                "source_rows": 46,
+                "error_count": 1,
+                "errors": ["expected at least 500 source row(s), got 46"],
+            },
+            "errors": ["expected at least 500 source row(s), got 46"],
+        },
+        as_json=False,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output["status"] == "failed"
+    assert output["source_rows"] == 46
+    assert output["error_count"] == 1
+    assert output["errors"] == ["expected at least 500 source row(s), got 46"]
+
+
+def test_faq_lifecycle_print_payload_full_json_wins_over_summary_json(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "lifecycle_summary": {"status": "ok"},
+            "reviewed_export": {"rows": [{"markdown": "# full markdown"}]},
+        },
+        as_json=True,
+        summary_json=True,
+    )
+
+    captured = capsys.readouterr()
+    output = json.loads(captured.out)
+    assert captured.err == ""
+    assert output["lifecycle_summary"] == {"status": "ok"}
+    assert output["reviewed_export"]["rows"][0]["markdown"] == "# full markdown"
+
+
 def test_faq_lifecycle_smoke_rejects_invalid_args() -> None:
     args = _args(min_saved_faqs=0)
 
