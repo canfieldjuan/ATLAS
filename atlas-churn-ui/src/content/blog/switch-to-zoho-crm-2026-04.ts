@@ -160,11 +160,7 @@ const post: BlogPost = {
 -- reviewer on Reddit</p>
 </blockquote>
 <p>This complaint points to a workflow constraint that may not appear in product marketing but surfaces during daily use. For teams migrating from platforms with more flexible contact segmentation, this limitation could require workflow adjustments.</p>
-<p>On the positive side, one reviewer highlighted dashboard usability:</p>
-<blockquote>
-<p>Zoho CRM is an advanced CRM that gives us easy to approach every lead indication directly from its dashboard
--- Senior Project Manager, verified reviewer on Slashdot</p>
-</blockquote>
+<p>On the positive side, reviewers highlight dashboard usability and direct access to lead status.</p>
 <p>The contrast between dashboard praise and filtering complaints suggests Zoho CRM excels at surface-level lead visibility but may require workarounds for complex contact segmentation.</p>
 <h3 id="support-experience-patterns">Support experience patterns</h3>
 <p>The support pain category clusters around a specific shift: from human-first to bot-gated ticketing. Reviewers who used the free tier for years report functional support, but paying customers describe 30-minute bot interactions before reaching human assistance.</p>
