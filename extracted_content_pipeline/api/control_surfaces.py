@@ -83,6 +83,7 @@ ReasoningStatusProvider = Callable[
 ]
 LLMProvider = Callable[[], Any | Awaitable[Any]]
 PoolProvider = Callable[[], Any | Awaitable[Any]]
+ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +503,7 @@ def create_content_ops_control_surface_router(
     reasoning_status_provider: ReasoningStatusProvider | None = None,
     llm_provider: LLMProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
+    ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -614,6 +616,7 @@ def create_content_ops_control_surface_router(
         result = await _import_ingestion_rows_with_admission(
             report.opportunities,
             import_gate=ingestion_import_gate,
+            import_gate_provider=ingestion_import_admission_provider,
             pool_provider=opportunity_import_pool_provider,
             scope_provider=scope_provider,
             target_mode=target_mode,
@@ -686,6 +689,7 @@ def create_content_ops_control_surface_router(
         result = await _import_ingestion_rows_with_admission(
             report.opportunities,
             import_gate=ingestion_import_gate,
+            import_gate_provider=ingestion_import_admission_provider,
             pool_provider=opportunity_import_pool_provider,
             scope_provider=scope_provider,
             target_mode=target_mode_value,
@@ -1244,6 +1248,7 @@ async def _import_ingestion_rows_with_admission(
     rows: Sequence[Mapping[str, Any]],
     *,
     import_gate: _ExecuteConcurrencyGate,
+    import_gate_provider: ImportAdmissionProvider | None,
     pool_provider: PoolProvider | None,
     scope_provider: ScopeProvider | None,
     target_mode: str,
@@ -1265,13 +1270,11 @@ async def _import_ingestion_rows_with_admission(
             source=source,
         )
 
-    if not await import_gate.acquire():
+    active_gate = await _resolve_import_admission_gate(import_gate_provider, import_gate)
+    if not await _acquire_import_admission(active_gate):
         raise HTTPException(
             status_code=429,
-            detail={
-                "reason": "content_ops_ingestion_import_at_capacity",
-                "max_concurrency": import_gate.max_concurrency,
-            },
+            detail=_import_admission_capacity_detail(active_gate),
         )
     try:
         pool = await _resolve_import_pool(pool_provider)
@@ -1287,7 +1290,78 @@ async def _import_ingestion_rows_with_admission(
             source=source,
         )
     finally:
-        await import_gate.release()
+        await _release_import_admission(active_gate)
+
+
+async def _resolve_import_admission_gate(
+    provider: ImportAdmissionProvider | None,
+    default_gate: _ExecuteConcurrencyGate,
+) -> Any:
+    if provider is None:
+        return default_gate
+    try:
+        gate = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops ingestion import admission provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import admission is unavailable.",
+        ) from exc
+    if gate is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import admission is unavailable.",
+        )
+    return gate
+
+
+async def _acquire_import_admission(gate: Any) -> bool:
+    acquire = getattr(gate, "acquire", None)
+    if not callable(acquire):
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import admission is unavailable.",
+        )
+    try:
+        result = acquire()
+        if hasattr(result, "__await__"):
+            result = await result
+    except Exception as exc:
+        logger.warning(
+            "Content Ops ingestion import admission acquire failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops ingestion import admission is unavailable.",
+        ) from exc
+    return bool(result)
+
+
+async def _release_import_admission(gate: Any) -> None:
+    release = getattr(gate, "release", None)
+    if not callable(release):
+        return
+    try:
+        result = release()
+        if hasattr(result, "__await__"):
+            await result
+    except Exception as exc:
+        logger.warning(
+            "Content Ops ingestion import admission release failed",
+            extra={"error_type": type(exc).__name__},
+        )
+
+
+def _import_admission_capacity_detail(gate: Any) -> dict[str, Any]:
+    detail: dict[str, Any] = {"reason": "content_ops_ingestion_import_at_capacity"}
+    max_concurrency = getattr(gate, "max_concurrency", None)
+    if max_concurrency is not None:
+        detail["max_concurrency"] = int(max_concurrency)
+    return detail
 
 
 async def _import_campaign_opportunities_for_route(
