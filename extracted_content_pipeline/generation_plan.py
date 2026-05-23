@@ -33,7 +33,10 @@ from .reasoning_policy import (
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
-from .ticket_faq_markdown import TicketFAQMarkdownConfig
+from .ticket_faq_markdown import (
+    TicketFAQMarkdownConfig,
+    normalize_vocabulary_gap_rules,
+)
 
 @dataclass(frozen=True)
 class GenerationPlanStep:
@@ -232,6 +235,14 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
         as_of_date=as_of_date,
         support_contact=_text_input(request.inputs, "faq_support_contact")
         or defaults.support_contact,
+        documentation_terms=(
+            _text_sequence_input(request.inputs, "faq_documentation_terms")
+            or defaults.documentation_terms
+        ),
+        vocabulary_gap_rules=(
+            _nested_text_sequence_input(request.inputs, "faq_vocabulary_gap_rules")
+            or defaults.vocabulary_gap_rules
+        ),
     )
 
 
@@ -266,6 +277,16 @@ def _text_sequence_input(inputs: Mapping[str, Any], key: str) -> tuple[str, ...]
     else:
         return None
     return items or None
+
+
+def _nested_text_sequence_input(
+    inputs: Mapping[str, Any],
+    key: str,
+) -> tuple[tuple[str, ...], ...] | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    return normalize_vocabulary_gap_rules(raw, label=key) or None
 
 
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
@@ -385,6 +406,12 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             step_config["as_of_date"] = config.as_of_date
         if config.support_contact:
             step_config["support_contact"] = config.support_contact
+        if config.documentation_terms:
+            step_config["documentation_terms"] = list(config.documentation_terms)
+        if config.vocabulary_gap_rules:
+            step_config["vocabulary_gap_rules"] = [
+                list(rule) for rule in config.vocabulary_gap_rules
+            ]
         return GenerationPlanStep(
             output=output,
             runner="TicketFAQMarkdownService.generate",

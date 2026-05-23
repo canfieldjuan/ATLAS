@@ -505,8 +505,8 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                         "ticket_id": "ticket-1",
                         "source_type": "ticket",
                         "created_at": "2026-05-01",
-                        "subject": "Profile email change",
-                        "message": "How do I change my email address?",
+                        "subject": "SSO setup",
+                        "message": "How do I enable SSO for my team?",
                         "pain_category": "login",
                     },
                     {
@@ -521,6 +521,8 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                 "faq_window_days": 90,
                 "faq_as_of_date": "2026-05-20",
                 "faq_support_contact": "1-800-555-0100",
+                "faq_documentation_terms": ["Single sign-on setup"],
+                "faq_vocabulary_gap_rules": [["SSO", "single sign-on"]],
             },
         },
         services=ContentOpsExecutionServices(faq_markdown=TicketFAQMarkdownService()),
@@ -531,8 +533,19 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
     assert step["output"] == "faq_markdown"
     assert step["result"]["generated"] == 1
     assert step["result"]["markdown"].startswith("# Support FAQ")
-    assert "How do I change my email address?" in step["result"]["markdown"]
+    assert "How do I enable SSO for my team?" in step["result"]["markdown"]
     assert "contact support at 1-800-555-0100" in step["result"]["markdown"]
+    assert result["plan"]["steps"][0]["config"]["documentation_terms"] == [
+        "Single sign-on setup"
+    ]
+    assert result["plan"]["steps"][0]["config"]["vocabulary_gap_rules"] == [
+        ["SSO", "single sign-on"]
+    ]
+    assert step["result"]["items"][0]["term_mappings"][0]["customer_term"] == "SSO"
+    assert (
+        step["result"]["items"][0]["term_mappings"][0]["documentation_term"]
+        == "Single sign-on setup"
+    )
     assert "Billing export is confusing." not in step["result"]["markdown"]
 
 

@@ -861,6 +861,39 @@ async def test_execute_generation_route_rejects_invalid_signal_text_cap_as_400()
 
 
 @pytest.mark.asyncio
+async def test_execute_generation_route_rejects_invalid_faq_vocabulary_rules_as_400():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=_CampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": [
+                        {
+                            "source_type": "ticket",
+                            "text": "How do I enable SSO?",
+                        }
+                    ],
+                    "faq_vocabulary_gap_rules": [["SSO"]],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert (
+        exc.value.detail
+        == "faq_vocabulary_gap_rules entries must include at least two terms"
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_requires_configured_services():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),

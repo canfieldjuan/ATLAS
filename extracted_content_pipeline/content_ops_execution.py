@@ -15,6 +15,7 @@ from .generation_plan import GenerationPlan, GenerationPlanStep, build_generatio
 from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
 from .landing_page_ports import MarketingCampaign
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
+from .ticket_faq_markdown import normalize_vocabulary_gap_rules
 
 logger = logging.getLogger(__name__)
 
@@ -553,6 +554,11 @@ async def _dispatch_faq_markdown(
         window_days=_step_config_int(step.config, "window_days"),
         as_of_date=_step_config_text(step.config, "as_of_date"),
         support_contact=_step_config_text(step.config, "support_contact"),
+        documentation_terms=_step_config_sequence(step.config, "documentation_terms"),
+        vocabulary_gap_rules=_step_config_nested_sequence(
+            step.config,
+            "vocabulary_gap_rules",
+        ),
     )
 
 
@@ -675,6 +681,18 @@ def _step_config_sequence(
     else:
         return None
     return tuple(items) if items else None
+
+
+def _step_config_nested_sequence(
+    config: Mapping[str, Any],
+    key: str,
+) -> tuple[tuple[str, ...], ...] | None:
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if raw is None:
+        return None
+    return normalize_vocabulary_gap_rules(raw, label=key) or None
 
 
 def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
