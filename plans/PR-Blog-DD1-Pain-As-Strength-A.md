@@ -92,10 +92,31 @@ counts are the same numbers, now placed and described truthfully.
   open #837/#838 (different regions; this branch is off origin/main). Not touched
   here.
 
+## Review follow-up (#844 review)
+
+The reviewer caught two downstream residuals that the phrase-specific verification
+(`grep "overall satisfaction"`) missed -- same blind-spot class as #837:
+- **clickup L187** (MAJOR): "Overall dissatisfaction (which also appears as a
+  strength) ... This dual sentiment—satisfaction with the concept ..." -- the
+  parenthetical was now FALSE (the chart fix removed it from strengths). Reworded
+  to drop "(which also appears as a strength)" + the satisfaction framing, keeping
+  the legit "value the vision but feel friction" tension.
+- **looker L160** (NIT): "the friction that coexists with that satisfaction" ->
+  "...with those strengths" (the antecedent no longer pointed at a satisfaction
+  line after L158 was reworded).
+
+Concept-grep across the 6 posts (`appears as a strength` / `satisfaction` near
+`overall_dissatisfaction`) confirmed those were the only two real residuals -- the
+other hits (power-bi Power Query, slack/woocommerce integration & pricing "both a
+strength and weakness", asana active-user satisfaction, looker LookML-mastery
+satisfaction) are legitimate feature-level statements, not the overall_dissatisfaction
+bug. (The same concept-grep will gate the sibling chart-only slice #846.)
+
 ## Estimated diff size
 
 | Area | LOC |
 |---|---:|
 | 6 posts (chart move + prose rewrites) | ~50 |
-| Plan doc | ~101 |
-| **Total** | **~151** |
+| review follow-up (clickup L187 + looker L160) | ~4 |
+| Plan doc | ~120 |
+| **Total** | **~174** |

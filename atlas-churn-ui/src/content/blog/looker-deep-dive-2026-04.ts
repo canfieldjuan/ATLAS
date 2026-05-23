@@ -157,7 +157,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <p>On the strength side, UX appears most frequently in positive mentions, followed by pricing and features. Integration, performance, and support round out the strengths. On the weakness side, overall dissatisfaction is the largest signal, with reliability also flagged.</p>
 <p>The weakness profile concentrates heavily in two areas: UX and overall dissatisfaction. This creates an interesting tension—UX appears in both strength and weakness lists, suggesting the platform delivers divergent experiences depending on user technical skill, use case complexity, or organizational context.</p>
-<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with that satisfaction.</p>
+<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with those strengths.</p>
 <p>This duality—strong satisfaction among technical users who master LookML, alongside persistent learning curve complaints from those building advanced reports—defines Looker's current reviewer sentiment landscape.</p>
 <h2 id="where-looker-users-feel-the-most-pain">Where Looker Users Feel the Most Pain</h2>
 <p>Pain point analysis reveals where reviewer frustration clusters most intensely.</p>
