@@ -35,22 +35,4 @@ register under `docs/technical-debt/`.
 > kept separate to avoid append-collisions with the concurrent
 > content-ops-station sessions. Scan that file too when working those lanes.
 
-## 2026-05-22
-
-### Remove landing-page repair legacy lock after rollout
-- File/location: `extracted_content_pipeline/api/generated_assets.py`, `_landing_page_repair_lock`
-- Description: The repair lock still acquires the legacy `hashtext()` advisory lock for rolling-deploy compatibility while also acquiring the widened `hashtextextended()` lock.
-- Why it matters: After the widened-lock release is fully deployed, keeping the legacy compatibility lock preserves the old 32-bit collision surface as a transition guard.
-- Effort: S
-- Category: tech-debt
-- Owner/session: landing-page repair session
-- Found during: PR-Landing-Page-Repair-Lock-Hash-Key review
-
-### Revisit repair lock connection hold time
-- File/location: `extracted_content_pipeline/api/generated_assets.py`, `repair_landing_page_draft`
-- Description: The advisory-lock connection stays checked out while the LLM repair runs.
-- Why it matters: This is acceptable for operator-triggered repair, but higher repair volume could turn LLM latency into pool pressure.
-- Effort: M
-- Category: tech-debt
-- Owner/session: landing-page repair session
-- Found during: PR-Landing-Page-Repair-Cost-Guard review
+No parked items in the root hardening queue.

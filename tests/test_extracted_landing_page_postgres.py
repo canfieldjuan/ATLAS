@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+from uuid import uuid4
 
 import pytest
 
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.landing_page_postgres import (
+    LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY,
     PostgresLandingPageRepository,
 )
 from extracted_content_pipeline.landing_page_ports import (
@@ -347,6 +350,7 @@ async def test_update_draft_updates_editable_fields_and_returns_row() -> None:
     assert "UPDATE landing_pages" in sql
     assert "status <> 'approved'" in sql
     assert "metadata = $10::jsonb" in sql
+    assert "$11::text IS NULL" in sql
     assert "RETURNING id" in sql
     assert args[0:4] == (
         "11111111-1111-1111-1111-111111111111",
@@ -360,6 +364,49 @@ async def test_update_draft_updates_editable_fields_and_returns_row() -> None:
     assert json.loads(args[7]) == {"title_tag": "Updated"}
     assert json.loads(args[8]) == ["r1"]
     assert json.loads(args[9]) == {"key": "value"}
+    assert args[10] is None
+
+
+@pytest.mark.asyncio
+async def test_update_draft_can_be_fenced_by_repair_claim_token() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "draft",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "updated title",
+            "slug": "updated-slug",
+            "hero": {"headline": "Updated hero"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "Book"},
+            "meta": {"title_tag": "Updated"},
+            "reference_ids": ["r1"],
+            "metadata": {
+                LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY: {
+                    "token": "claim-token",
+                    "expires_at_epoch": 9999999999,
+                }
+            },
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    updated = await repo.update_draft(
+        "11111111-1111-1111-1111-111111111111",
+        _draft(),
+        scope=TenantScope(account_id="acct-1"),
+        repair_claim_token="claim-token",
+    )
+
+    assert updated is not None
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "metadata #>>" in sql
+    assert LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY in sql
+    assert args[10] == "claim-token"
 
 
 @pytest.mark.asyncio
@@ -375,6 +422,253 @@ async def test_update_draft_returns_none_on_miss_or_approved_row() -> None:
 
     assert updated is None
     assert len(pool.fetch_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_repair_sets_tokenized_metadata_and_returns_row() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "status": "draft",
+            "campaign_name": "acme",
+            "persona": "vp",
+            "value_prop": "vp",
+            "title": "title",
+            "slug": "slug",
+            "hero": {"headline": "Hero"},
+            "sections": [{"id": "s1", "title": "T", "body_markdown": "B"}],
+            "cta": {"label": "Book"},
+            "meta": {"title_tag": "Title"},
+            "reference_ids": ["r1"],
+            "metadata": {
+                LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY: {
+                    "token": "claim-token",
+                    "expires_at_epoch": 9999999999,
+                }
+            },
+        }
+    ]
+    repo = PostgresLandingPageRepository(pool)
+
+    claimed = await repo.claim_repair(
+        "11111111-1111-1111-1111-111111111111",
+        token="claim-token",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert claimed is not None
+    assert claimed.metadata[LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY]["token"] == (
+        "claim-token"
+    )
+    sql = pool.fetch_calls[0]["query"]
+    args = pool.fetch_calls[0]["args"]
+    assert "UPDATE landing_pages" in sql
+    assert "jsonb_set" in sql
+    assert "status <> 'approved'" in sql
+    assert "expires_at_epoch" in sql
+    assert args[0:2] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct-1",
+    )
+    claim_payload = json.loads(args[2])
+    assert claim_payload["token"] == "claim-token"
+    assert claim_payload["expires_at_epoch"] > claim_payload["claimed_at_epoch"]
+    assert args[3] == "claim-token"
+
+
+@pytest.mark.asyncio
+async def test_claim_repair_returns_none_when_claim_update_misses() -> None:
+    pool = _Pool()
+    repo = PostgresLandingPageRepository(pool)
+
+    claimed = await repo.claim_repair(
+        "11111111-1111-1111-1111-111111111111",
+        token="claim-token",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert claimed is None
+    assert len(pool.fetch_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_repair_removes_matching_tokenized_claim() -> None:
+    pool = _Pool()
+    repo = PostgresLandingPageRepository(pool)
+
+    released = await repo.release_repair(
+        "11111111-1111-1111-1111-111111111111",
+        token="claim-token",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert released is True
+    sql = pool.execute_calls[0]["query"]
+    args = pool.execute_calls[0]["args"]
+    assert "UPDATE landing_pages" in sql
+    assert f"- '{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY}'" in sql
+    assert "metadata #>>" in sql
+    assert args == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct-1",
+        "claim-token",
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_repair_returns_false_when_token_misses() -> None:
+    pool = _Pool()
+    pool.execute_result = "UPDATE 0"
+    repo = PostgresLandingPageRepository(pool)
+
+    released = await repo.release_repair(
+        "11111111-1111-1111-1111-111111111111",
+        token="wrong-token",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert released is False
+    assert len(pool.execute_calls) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_landing_page_repair_claim_contract_against_postgres() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    repo = PostgresLandingPageRepository(pool)
+    landing_page_id = str(uuid4())
+    scope = TenantScope(account_id=f"acct-{uuid4().hex}")
+    other_scope = TenantScope(account_id=f"acct-{uuid4().hex}")
+
+    try:
+        await pool.execute(
+            """
+            INSERT INTO landing_pages (
+                id, account_id, campaign_name, persona, value_prop, title, slug,
+                hero, sections, cta, meta, reference_ids, metadata, status
+            )
+            VALUES (
+                $1::uuid, $2, $3, $4, $5, $6, $7,
+                $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb,
+                $12::jsonb, $13::jsonb, 'draft'
+            )
+            """,
+            landing_page_id,
+            scope.account_id,
+            "repair-contract",
+            "Owner",
+            "Clear support gaps",
+            "Repair Contract",
+            "repair-contract",
+            json.dumps({"headline": "Repair contract"}),
+            json.dumps([{"id": "s1", "title": "Problem", "body_markdown": "Body"}]),
+            json.dumps({"label": "Book", "url": "https://example.com"}),
+            json.dumps({"title_tag": "Repair Contract"}),
+            json.dumps(["r1"]),
+            json.dumps({}),
+        )
+
+        first = await repo.claim_repair(
+            landing_page_id,
+            token="token-a",
+            scope=scope,
+        )
+        assert first is not None
+
+        blocked = await repo.claim_repair(
+            landing_page_id,
+            token="token-b",
+            scope=scope,
+        )
+        assert blocked is None
+
+        same_token = await repo.claim_repair(
+            landing_page_id,
+            token="token-a",
+            scope=scope,
+        )
+        assert same_token is not None
+
+        await pool.execute(
+            f"""
+            UPDATE landing_pages
+               SET metadata = jsonb_set(
+                       metadata,
+                       '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},expires_at_epoch}}',
+                       '0'::jsonb,
+                       true
+                   )
+             WHERE id = $1::uuid
+            """,
+            landing_page_id,
+        )
+        stolen = await repo.claim_repair(
+            landing_page_id,
+            token="token-b",
+            scope=scope,
+        )
+        assert stolen is not None
+
+        cross_tenant = await repo.claim_repair(
+            landing_page_id,
+            token="other-tenant",
+            scope=other_scope,
+        )
+        assert cross_tenant is None
+
+        stale_update = await repo.update_draft(
+            landing_page_id,
+            _draft(),
+            scope=scope,
+            repair_claim_token="token-a",
+        )
+        assert stale_update is None
+
+        wrong_release = await repo.release_repair(
+            landing_page_id,
+            token="token-a",
+            scope=scope,
+        )
+        assert wrong_release is False
+        persisted_token = await pool.fetchval(
+            f"""
+            SELECT metadata #>>
+                   '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},token}}'
+              FROM landing_pages
+             WHERE id = $1::uuid
+            """,
+            landing_page_id,
+        )
+        assert persisted_token == "token-b"
+
+        right_release = await repo.release_repair(
+            landing_page_id,
+            token="token-b",
+            scope=scope,
+        )
+        assert right_release is True
+        claim_exists = await pool.fetchval(
+            f"""
+            SELECT COALESCE(metadata, '{{}}'::jsonb)
+                   ? '{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY}'
+              FROM landing_pages
+             WHERE id = $1::uuid
+            """,
+            landing_page_id,
+        )
+        assert claim_exists is False
+    finally:
+        await pool.execute(
+            "DELETE FROM landing_pages WHERE id = $1::uuid",
+            landing_page_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio

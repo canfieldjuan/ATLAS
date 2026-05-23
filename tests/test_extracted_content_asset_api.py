@@ -74,6 +74,23 @@ class _EditableLandingPagePool(_Pool):
             ):
                 return []
             return [] if self.row is None else [self.row]
+        if "jsonb_set" in str(query):
+            if (
+                self.row is None
+                or self.row.get("status") == "approved"
+                or not getattr(self, "lock_acquired", True)
+                or (
+                    "account_id" in self.row
+                    and self.row["account_id"] != args[1]
+                )
+            ):
+                return []
+            metadata = dict(self.row.get("metadata") or {})
+            metadata[asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY] = json.loads(
+                args[2]
+            )
+            self.row["metadata"] = metadata
+            return [self.row]
         if (
             self.row is None
             or self.row.get("status") == "approved"
@@ -83,6 +100,12 @@ class _EditableLandingPagePool(_Pool):
             )
         ):
             return []
+        repair_claim_token = args[10] if len(args) > 10 else None
+        if repair_claim_token is not None:
+            metadata = dict(self.row.get("metadata") or {})
+            claim = metadata.get(asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY)
+            if not isinstance(claim, dict) or claim.get("token") != repair_claim_token:
+                return []
         self.row.update({
             "id": args[0],
             "title": args[2],
@@ -97,20 +120,20 @@ class _EditableLandingPagePool(_Pool):
         })
         return [self.row]
 
-
-class _RepairLockConnection:
-    def __init__(self, pool, *, acquired: bool) -> None:
-        self.pool = pool
-        self.acquired = acquired
-
-    async def fetchval(self, query, *args):
-        self.pool.lock_calls.append((str(query), args))
-        if "pg_try_advisory_lock" in str(query):
-            return self.acquired
-        if "pg_advisory_unlock" in str(query):
-            self.pool.unlocked = True
-            return True
-        raise AssertionError(f"unexpected lock query: {query}")
+    async def execute(self, query, *args):
+        self.execute_calls.append((str(query), args))
+        if asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY in str(query):
+            if getattr(self, "force_release_miss", False):
+                return "UPDATE 0"
+            metadata = dict((self.row or {}).get("metadata") or {})
+            claim = metadata.get(asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY)
+            if isinstance(claim, dict) and claim.get("token") == args[2]:
+                metadata.pop(asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY, None)
+                if self.row is not None:
+                    self.row["metadata"] = metadata
+                return "UPDATE 1"
+            return "UPDATE 0"
+        return self.execute_result
 
 
 class _LockingEditableLandingPagePool(_EditableLandingPagePool):
@@ -125,7 +148,7 @@ class _LockingEditableLandingPagePool(_EditableLandingPagePool):
 
     async def acquire(self):
         self.acquire_calls += 1
-        return _RepairLockConnection(self, acquired=self.lock_acquired)
+        raise AssertionError("repair should not hold a checked-out lock connection")
 
     async def release(self, conn):
         self.release_calls += 1
@@ -711,14 +734,19 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
     assert body["repair_result"]["saved_ids"] == [
         "11111111-1111-1111-1111-111111111111"
     ]
-    assert len(pool.fetch_calls) == 3
+    assert len(pool.fetch_calls) == 4
     select_query, select_args = pool.fetch_calls[0]
     assert "FROM landing_pages" in select_query
     assert select_args == (
         "11111111-1111-1111-1111-111111111111",
         "acct_1",
     )
-    update_query, update_args = pool.fetch_calls[1]
+    claim_query, claim_args = pool.fetch_calls[1]
+    assert "jsonb_set" in claim_query
+    claim_payload = json.loads(claim_args[2])
+    assert claim_payload["token"]
+    assert claim_payload["expires_at_epoch"] > claim_payload["claimed_at_epoch"]
+    update_query, update_args = pool.fetch_calls[2]
     assert "UPDATE landing_pages" in update_query
     assert update_args[0:2] == (
         "11111111-1111-1111-1111-111111111111",
@@ -729,27 +757,20 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
         "11111111-1111-1111-1111-111111111111"
     )
     assert persisted_metadata["generation_quality_repair_attempts"] == 1
+    assert update_args[10] == claim_payload["token"]
     system_prompt = llm.calls[0]["messages"][0].content
     assert '"repair_mode":"saved_draft"' in system_prompt
     assert '"repair_issues":["seo_aeo_readiness:meta_description"]' in system_prompt
     assert skills.calls == ["digest/landing_page_generation"]
-    assert pool.acquire_calls == 1
-    assert pool.release_calls == 1
-    assert pool.released_connections
-    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
-    assert "hashtext($1), hashtext($2)" in pool.lock_calls[0][0]
-    assert "pg_try_advisory_lock" in pool.lock_calls[1][0]
-    assert "hashtextextended($1, $2)" in pool.lock_calls[1][0]
-    assert "pg_advisory_unlock" in pool.lock_calls[-2][0]
-    assert "hashtextextended($1, $2)" in pool.lock_calls[-2][0]
-    assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
-    assert "hashtext($1), hashtext($2)" in pool.lock_calls[-1][0]
-    assert pool.lock_calls[-2][1] == pool.lock_calls[1][1]
-    assert pool.lock_calls[-1][1] == pool.lock_calls[0][1]
-    assert pool.unlocked is True
+    assert pool.acquire_calls == 0
+    assert pool.release_calls == 0
+    assert pool.released_connections == []
+    assert pool.lock_calls == []
+    assert len(pool.execute_calls) == 1
+    assert asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY not in body["metadata"]
 
 
-def test_generated_asset_router_warns_when_landing_page_repair_lock_is_skipped(caplog) -> None:
+def test_generated_asset_router_repairs_without_advisory_lock_connection(caplog) -> None:
     repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
     needs_repair = {
         **repaired_row,
@@ -777,35 +798,49 @@ def test_generated_asset_router_warns_when_landing_page_repair_lock_is_skipped(c
     assert response.status_code == 200
     assert response.json()["repair_result"]["generated"] == 1
     assert len(llm.calls) == 1
-    assert any(
+    assert not any(
         "repair advisory lock skipped" in record.getMessage()
-        and "account_id=acct_1" in record.getMessage()
-        and (
-            "landing_page_id=11111111-1111-1111-1111-111111111111"
-            in record.getMessage()
-        )
-        and record.landing_page_id == "11111111-1111-1111-1111-111111111111"
-        and record.account_id == "acct_1"
         for record in caplog.records
     )
-
-
-def test_landing_page_repair_lock_key_is_account_scoped() -> None:
-    landing_page_id = "11111111-1111-1111-1111-111111111111"
-
-    first_key = asset_api._landing_page_repair_lock_key(
-        TenantScope(account_id="acct_1", user_id="user_1"),
-        landing_page_id,
-    )
-    second_key = asset_api._landing_page_repair_lock_key(
-        TenantScope(account_id="acct_1", user_id="user_2"),
-        landing_page_id,
+    assert len(pool.execute_calls) == 1
+    assert asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY not in (
+        response.json()["metadata"]
     )
 
-    assert first_key == second_key
-    assert first_key == (
-        "content-assets:landing-page-repair:"
-        "account=acct_1:landing_page=11111111-1111-1111-1111-111111111111"
+
+def test_generated_asset_router_logs_repair_claim_release_miss(caplog) -> None:
+    repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    needs_repair = {
+        **repaired_row,
+        "meta": {
+            key: value
+            for key, value in repaired_row["meta"].items()
+            if key != "description"
+        },
+    }
+    pool = _EditableLandingPagePool(needs_repair)
+    pool.force_release_miss = True
+    llm = _LLM([_landing_page_generation_response(repaired_row)])
+    skills = _Skills()
+    caplog.set_level(logging.WARNING, logger=asset_api.__name__)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 200
+    assert any(
+        "landing page repair claim release missed" in record.getMessage()
+        and record.account_id == "acct_1"
+        and record.landing_page_id == "11111111-1111-1111-1111-111111111111"
+        and record.outcome == "success"
+        for record in caplog.records
     )
 
 
@@ -832,19 +867,39 @@ def test_generated_asset_router_blocks_concurrent_landing_page_repair_before_llm
 
     assert response.status_code == 409
     assert response.json()["detail"] == "landing page draft repair already in progress"
-    assert len(pool.fetch_calls) == 1
-    assert pool.acquire_calls == 1
-    assert pool.release_calls == 1
-    assert pool.released_connections
-    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
-    assert "hashtext($1), hashtext($2)" in pool.lock_calls[0][0]
-    assert pool.lock_calls[0][1] == (
-        "content-assets:landing-page-repair",
-        "account=acct_1:landing_page=11111111-1111-1111-1111-111111111111",
-    )
+    assert len(pool.fetch_calls) == 2
+    assert "jsonb_set" in pool.fetch_calls[1][0]
+    assert pool.acquire_calls == 0
+    assert pool.release_calls == 0
+    assert pool.released_connections == []
+    assert pool.lock_calls == []
     assert pool.unlocked is False
     assert llm.calls == []
     assert skills.calls == []
+
+
+def test_generated_asset_router_blocks_concurrent_repair_before_provider_resolution() -> None:
+    row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    row["meta"] = {
+        key: value
+        for key, value in row["meta"].items()
+        if key != "description"
+    }
+    pool = _LockingEditableLandingPagePool(row, lock_acquired=False)
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "landing page draft repair already in progress"
+    assert len(pool.fetch_calls) == 2
+    assert "jsonb_set" in pool.fetch_calls[1][0]
+    assert pool.execute_calls == []
 
 
 def test_generated_asset_router_repair_requires_llm_provider() -> None:
@@ -863,6 +918,9 @@ def test_generated_asset_router_repair_requires_llm_provider() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "LLM unavailable"
+    assert len(pool.fetch_calls) == 2
+    assert "jsonb_set" in pool.fetch_calls[1][0]
+    assert len(pool.execute_calls) == 1
 
 
 def test_generated_asset_router_repair_requires_skills_provider() -> None:
@@ -883,6 +941,9 @@ def test_generated_asset_router_repair_requires_skills_provider() -> None:
     assert response.status_code == 503
     assert response.json()["detail"] == "Landing page generation skills unavailable"
     assert llm.calls == []
+    assert len(pool.fetch_calls) == 2
+    assert "jsonb_set" in pool.fetch_calls[1][0]
+    assert len(pool.execute_calls) == 1
 
 
 def test_generated_asset_router_returns_404_for_cross_tenant_landing_page_repair() -> None:
@@ -943,17 +1004,14 @@ def test_generated_asset_router_returns_repair_result_when_repair_fails() -> Non
     assert detail["repair_result"]["errors"][0]["blockers"] == [
         "seo_aeo_readiness:meta_description"
     ]
-    assert len(pool.fetch_calls) == 1
-    assert pool.acquire_calls == 1
-    assert pool.release_calls == 1
-    assert pool.released_connections
-    assert "pg_try_advisory_lock" in pool.lock_calls[0][0]
-    assert "pg_try_advisory_lock" in pool.lock_calls[1][0]
-    assert "hashtextextended($1, $2)" in pool.lock_calls[1][0]
-    assert "pg_advisory_unlock" in pool.lock_calls[-1][0]
-    assert pool.lock_calls[-2][1] == pool.lock_calls[1][1]
-    assert pool.lock_calls[-1][1] == pool.lock_calls[0][1]
-    assert pool.unlocked is True
+    assert len(pool.fetch_calls) == 2
+    assert "jsonb_set" in pool.fetch_calls[1][0]
+    assert pool.acquire_calls == 0
+    assert pool.release_calls == 0
+    assert pool.released_connections == []
+    assert pool.lock_calls == []
+    assert pool.unlocked is False
+    assert len(pool.execute_calls) == 1
     assert len(llm.calls) == 1
     assert skills.calls == ["digest/landing_page_generation"]
 

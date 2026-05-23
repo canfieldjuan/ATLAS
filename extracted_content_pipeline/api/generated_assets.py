@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from html import escape as html_escape
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 try:
     from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
@@ -34,7 +33,10 @@ from ..landing_page_export import (
     public_landing_page_robots,
 )
 from ..landing_page_generation import LandingPageGenerationService
-from ..landing_page_postgres import PostgresLandingPageRepository
+from ..landing_page_postgres import (
+    LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY,
+    PostgresLandingPageRepository,
+)
 from ..landing_page_ports import LandingPageDraft, LandingPageSection
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
@@ -50,8 +52,6 @@ ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[
 SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
-_LANDING_PAGE_REPAIR_LOCK_NAMESPACE = "content-assets:landing-page-repair"
-_LANDING_PAGE_REPAIR_LOCK_HASH_SEED = 0
 logger = logging.getLogger(__name__)
 
 
@@ -93,6 +93,54 @@ class GeneratedAssetApiConfig:
             raise ValueError("public_sitemap_limit must be positive")
 
 
+@dataclass(frozen=True)
+class _ClaimedLandingPageRepository:
+    repository: PostgresLandingPageRepository
+    repair_claim_token: str
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.repository, name)
+
+    async def update_draft(
+        self,
+        landing_page_id: str,
+        draft: LandingPageDraft,
+        *,
+        scope: TenantScope,
+    ) -> LandingPageDraft | None:
+        return await self.repository.update_draft(
+            landing_page_id,
+            draft,
+            scope=scope,
+            repair_claim_token=self.repair_claim_token,
+        )
+
+
+async def _release_landing_page_repair_claim(
+    repository: PostgresLandingPageRepository,
+    landing_page_id: str,
+    *,
+    token: str,
+    scope: TenantScope,
+    outcome: str,
+) -> None:
+    released = await repository.release_repair(
+        landing_page_id,
+        token=token,
+        scope=scope,
+    )
+    if released:
+        return
+    logger.warning(
+        "landing page repair claim release missed",
+        extra={
+            "account_id": scope.account_id,
+            "landing_page_id": landing_page_id,
+            "outcome": outcome,
+        },
+    )
+
+
 async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
@@ -130,102 +178,6 @@ async def _resolve_required_provider(
     if value is None:
         raise HTTPException(status_code=503, detail=detail)
     return value
-
-
-def _landing_page_repair_lock_key(scope: TenantScope, landing_page_id: str) -> str:
-    account_id = _clean(scope.account_id) or "unscoped"
-    return (
-        f"{_LANDING_PAGE_REPAIR_LOCK_NAMESPACE}:"
-        f"account={account_id}:landing_page={landing_page_id}"
-    )
-
-
-def _landing_page_repair_legacy_lock_key(
-    scope: TenantScope,
-    landing_page_id: str,
-) -> str:
-    account_id = _clean(scope.account_id) or "unscoped"
-    return f"account={account_id}:landing_page={landing_page_id}"
-
-
-@asynccontextmanager
-async def _landing_page_repair_lock(
-    pool: Any,
-    *,
-    scope: TenantScope,
-    landing_page_id: str,
-):
-    """Hold a DB-backed session advisory lock for one repair request.
-
-    The extracted router can run against simple fake pools in tests and host
-    environments. When the injected pool does not expose asyncpg-style
-    ``acquire()``, the context degrades to no locking instead of changing the
-    port contract for every host.
-    """
-
-    acquire = getattr(pool, "acquire", None)
-    if not callable(acquire):
-        account_id = _clean(scope.account_id) or "unscoped"
-        logger.warning(
-            "Landing page repair advisory lock skipped because pool has no "
-            "acquire() for account_id=%s landing_page_id=%s",
-            account_id,
-            landing_page_id,
-            extra={
-                "landing_page_id": landing_page_id,
-                "account_id": account_id,
-            },
-        )
-        yield True
-        return
-
-    lock_key = _landing_page_repair_lock_key(scope, landing_page_id)
-    legacy_lock_key = _landing_page_repair_legacy_lock_key(scope, landing_page_id)
-    conn = await _maybe_await(acquire())
-    acquired_new_lock = False
-    acquired_legacy_lock = False
-    try:
-        acquired_legacy_lock = bool(await conn.fetchval(
-            """
-            SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))
-            """,
-            _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
-            legacy_lock_key,
-        ))
-        if not acquired_legacy_lock:
-            yield False
-            return
-        acquired_new_lock = bool(await conn.fetchval(
-            """
-            SELECT pg_try_advisory_lock(hashtextextended($1, $2))
-            """,
-            lock_key,
-            _LANDING_PAGE_REPAIR_LOCK_HASH_SEED,
-        ))
-        if not acquired_new_lock:
-            yield False
-            return
-        yield True
-    finally:
-        if acquired_new_lock:
-            await conn.fetchval(
-                """
-                SELECT pg_advisory_unlock(hashtextextended($1, $2))
-                """,
-                lock_key,
-                _LANDING_PAGE_REPAIR_LOCK_HASH_SEED,
-            )
-        if acquired_legacy_lock:
-            await conn.fetchval(
-                """
-                SELECT pg_advisory_unlock(hashtext($1), hashtext($2))
-                """,
-                _LANDING_PAGE_REPAIR_LOCK_NAMESPACE,
-                legacy_lock_key,
-            )
-        release = getattr(pool, "release", None)
-        if callable(release):
-            await _maybe_await(release(conn))
 
 
 def _api_limit(value: int | None, config: GeneratedAssetApiConfig) -> int:
@@ -518,26 +470,33 @@ def create_generated_asset_router(
                 status_code=409,
                 detail="approved landing pages cannot be repaired",
             )
-        async with _landing_page_repair_lock(
-            pool,
+        repair_claim_token = uuid4().hex
+        claimed = await repository.claim_repair(
+            landing_page_id,
+            token=repair_claim_token,
             scope=tenant,
-            landing_page_id=landing_page_id,
-        ) as repair_lock_acquired:
-            if not repair_lock_acquired:
-                raise HTTPException(
-                    status_code=409,
-                    detail="landing page draft repair already in progress",
-                )
+        )
+        if claimed is None:
+            raise HTTPException(
+                status_code=409,
+                detail="landing page draft repair already in progress",
+            )
+        release_claim = True
+        try:
             llm = await _resolve_required_provider(llm_provider, detail="LLM unavailable")
             skills = await _resolve_required_provider(
                 skills_provider,
                 detail="Landing page generation skills unavailable",
             )
+            claimed_repository = _ClaimedLandingPageRepository(
+                repository=repository,
+                repair_claim_token=repair_claim_token,
+            )
             result = await LandingPageGenerationService(
-                landing_pages=repository,
+                landing_pages=claimed_repository,
                 llm=llm,
                 skills=skills,
-            ).repair_draft(scope=tenant, draft=existing)
+            ).repair_draft(scope=tenant, draft=claimed)
             result_payload = result.as_dict()
             if result.generated == 0 and result.skipped > 0:
                 raise HTTPException(
@@ -547,12 +506,29 @@ def create_generated_asset_router(
                         "repair_result": result_payload,
                     },
                 )
+            await _release_landing_page_repair_claim(
+                repository,
+                landing_page_id,
+                token=repair_claim_token,
+                scope=tenant,
+                outcome="success",
+            )
+            release_claim = False
             refreshed = await repository.get_draft(landing_page_id, scope=tenant)
             if refreshed is None:
                 raise HTTPException(status_code=404, detail="Landing page draft not found")
             row = landing_page_draft_export_row(refreshed)
             row["repair_result"] = result_payload
             return row
+        finally:
+            if release_claim:
+                await _release_landing_page_repair_claim(
+                    repository,
+                    landing_page_id,
+                    token=repair_claim_token,
+                    scope=tenant,
+                    outcome="cleanup",
+                )
 
     return router
 
