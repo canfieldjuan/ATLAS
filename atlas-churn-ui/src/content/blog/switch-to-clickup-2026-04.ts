@@ -141,11 +141,7 @@ const post: BlogPost = {
 <p>The inbound migration flow to ClickUp is concentrated across six platforms. Reviewer signals cluster around teams leaving simpler task management tools (Trello, Todoist), collaborative workspace platforms (Notion, Airtable), and enterprise project management systems (Jira, Asana).</p>
 <p>{{chart:sources-bar}}</p>
 <p>Trello and Todoist users report outgrowing feature limitations as team size or workflow complexity increases. Notion and Airtable users cite performance bottlenecks or integration gaps. Jira and Asana users mention pricing pressure or UX regression as drivers.</p>
-<p>One Group Director of Client Operations on TrustRadius described the consolidation appeal:</p>
-<blockquote>
-<p>"can tailor workflows, statuses, views (List, Board, Gantt, Calendar), and fields to fit almost any team"<br />
--- Talent Acquisition Executive, verified reviewer on TrustRadius</p>
-</blockquote>
+<p>One reviewer described the consolidation appeal — ClickUp lets teams tailor workflows, statuses, views (List, Board, Gantt, Calendar), and fields to fit almost any team.</p>
 <p>The customization depth is a recurring strength in the data. However, that same flexibility creates a learning curve. Reviewers pursuing bundled suite consolidation report harder UX understanding across folder/list/task hierarchy levels.</p>
 <p>The migration sources suggest ClickUp occupies a middle ground: more capable than lightweight task tools, more flexible than rigid enterprise systems, but also more complex than either.</p>
 <h3 id="migration-patterns-by-replacement-mode">Migration Patterns by Replacement Mode</h3>
