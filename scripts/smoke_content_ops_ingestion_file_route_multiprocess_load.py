@@ -59,6 +59,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--opportunity-table", default="campaign_opportunities")
     parser.add_argument("--replace-existing", action="store_true")
     parser.add_argument("--database-url", default=_default_database_url())
+    parser.add_argument(
+        "--admission-provider",
+        choices=("local", "postgres"),
+        default="local",
+        help=(
+            "Admission backend passed to each child. 'postgres' exercises the "
+            "Atlas advisory-lock provider across processes."
+        ),
+    )
     parser.add_argument("--processes", type=int, default=2)
     parser.add_argument("--child-concurrency", type=int, default=2)
     parser.add_argument("--child-import-max-concurrency", type=int, default=1)
@@ -66,6 +75,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--child-expect-at-capacity-min", type=int, default=1)
     parser.add_argument("--min-total-successes", type=int, default=1)
     parser.add_argument("--expect-total-at-capacity-min", type=int, default=1)
+    parser.add_argument(
+        "--allow-capacity-only-children",
+        action="store_true",
+        help=(
+            "Treat child processes that only hit admission capacity as expected. "
+            "Use with --admission-provider postgres when global slots are fewer "
+            "than child processes."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, default=ROOT / "tmp" / "content_ops_file_route_multiprocess_load")
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
@@ -151,7 +169,10 @@ async def run_multiprocess_load(args: argparse.Namespace) -> tuple[int, dict[str
             for spec in child_specs
         ]
     )
-    summary = _summarize_children(child_results)
+    summary = _summarize_children(
+        child_results,
+        allow_capacity_only_children=bool(args.allow_capacity_only_children),
+    )
     errors = _load_errors(
         summary,
         min_total_successes=int(args.min_total_successes),
@@ -164,6 +185,8 @@ async def run_multiprocess_load(args: argparse.Namespace) -> tuple[int, dict[str
         "processes": int(args.processes),
         "child_concurrency": int(args.child_concurrency),
         "child_import_max_concurrency": int(args.child_import_max_concurrency),
+        "admission_provider": str(args.admission_provider),
+        "allow_capacity_only_children": bool(args.allow_capacity_only_children),
         "account_id": str(args.account_id).strip(),
         "output_dir": str(args.output_dir),
         "summary": summary,
@@ -225,6 +248,8 @@ def _child_command(
         str(args.opportunity_table),
         "--database-url",
         str(args.database_url),
+        "--admission-provider",
+        str(args.admission_provider),
         "--concurrency",
         str(int(args.child_concurrency)),
         "--import-max-concurrency",
@@ -260,6 +285,7 @@ async def _run_child_process(command: list[str], *, result_path: Path) -> dict[s
         "returncode": int(process.returncode or 0),
         "ok": bool(payload.get("ok")) if isinstance(payload, Mapping) else False,
         "summary": dict(summary or {}),
+        "errors": list(payload.get("errors") or []) if isinstance(payload, Mapping) else [],
         "stdout_tail": _tail(stdout.decode("utf-8", errors="replace")),
         "stderr_tail": _tail(stderr.decode("utf-8", errors="replace")),
         "elapsed_seconds": round(time.monotonic() - started, 6),
@@ -290,11 +316,24 @@ def _load_child_payload(result_path: Path) -> Mapping[str, Any]:
     return value
 
 
-def _summarize_children(children: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _summarize_children(
+    children: list[Mapping[str, Any]],
+    *,
+    allow_capacity_only_children: bool = False,
+) -> dict[str, Any]:
+    accepted_children = [
+        child
+        for child in children
+        if child.get("ok")
+        or (allow_capacity_only_children and _is_capacity_only_child(child))
+    ]
     return {
         "processes": len(children),
-        "successful_processes": sum(1 for child in children if child.get("ok")),
-        "failed_processes": sum(1 for child in children if not child.get("ok")),
+        "successful_processes": len(accepted_children),
+        "capacity_only_processes": sum(
+            1 for child in children if _is_capacity_only_child(child)
+        ),
+        "failed_processes": len(children) - len(accepted_children),
         "successes": sum(_summary_int(child, "successes") for child in children),
         "at_capacity": sum(_summary_int(child, "at_capacity") for child in children),
         "unexpected_failures": sum(
@@ -303,6 +342,15 @@ def _summarize_children(children: list[Mapping[str, Any]]) -> dict[str, Any]:
         "inserted": sum(_summary_int(child, "inserted") for child in children),
         "returncode_counts": _count_by(children, "returncode"),
     }
+
+
+def _is_capacity_only_child(child: Mapping[str, Any]) -> bool:
+    return (
+        not child.get("ok")
+        and _summary_int(child, "successes") == 0
+        and _summary_int(child, "at_capacity") > 0
+        and _summary_int(child, "unexpected_failures") == 0
+    )
 
 
 def _summary_int(child: Mapping[str, Any], key: str) -> int:

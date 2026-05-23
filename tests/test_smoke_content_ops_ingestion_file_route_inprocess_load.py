@@ -122,6 +122,26 @@ class _Pool:
         self.closed = True
 
 
+class _SharedAdmissionGate:
+    max_concurrency = 1
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.acquire_calls = 0
+        self.release_calls = 0
+
+    async def acquire(self) -> bool:
+        self.acquire_calls += 1
+        if self.active >= 1:
+            return False
+        self.active += 1
+        return True
+
+    async def release(self) -> None:
+        self.release_calls += 1
+        self.active = 0
+
+
 def test_inprocess_load_runner_writes_admission_gate_result(monkeypatch, tmp_path: Path) -> None:
     module = _load_script_module()
     source_path = tmp_path / "cfpb_rows.jsonl"
@@ -165,6 +185,64 @@ def test_inprocess_load_runner_writes_admission_gate_result(monkeypatch, tmp_pat
     insert_args = [args for query, args in connection.executed if "INSERT INTO" in query]
     assert len(insert_args) == 3
     assert {args[0] for args in insert_args} == {"acct-route-inprocess-load"}
+
+
+def test_inprocess_load_runner_can_use_postgres_host_admission_provider(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    result_path = tmp_path / "result.json"
+    _write_cfpb_rows(source_path, 3)
+    pool = _Pool(_Connection())
+    gate = _SharedAdmissionGate()
+    builder_calls: list[dict[str, object]] = []
+
+    async def create_pool(database_url: str):
+        del database_url
+        return pool
+
+    def build_gate(*, max_concurrency, pool_provider):
+        builder_calls.append({
+            "max_concurrency": max_concurrency,
+            "pool": pool_provider(),
+        })
+        return gate
+
+    monkeypatch.setattr(module, "_create_pool", create_pool)
+    monkeypatch.setattr(module, "build_content_ops_import_admission_gate", build_gate)
+
+    code = module.main([
+        *_default_args(source_path, result_path),
+        "--admission-provider",
+        "postgres",
+        "--concurrency",
+        "3",
+        "--import-max-concurrency",
+        "1",
+        "--min-successes",
+        "1",
+        "--expect-at-capacity-min",
+        "1",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["admission_provider"] == "postgres"
+    assert builder_calls == [
+        {"max_concurrency": 1, "pool": pool},
+        {"max_concurrency": 1, "pool": pool},
+        {"max_concurrency": 1, "pool": pool},
+    ]
+    assert gate.acquire_calls == 3
+    assert gate.release_calls == 1
+    assert payload["summary"]["successes"] == 1
+    assert payload["summary"]["at_capacity"] == 2
+    assert payload["summary"]["reason_counts"] == {
+        "content_ops_ingestion_import_at_capacity": 2
+    }
 
 
 def test_inprocess_load_runner_fails_when_expected_429_missing(monkeypatch, tmp_path: Path) -> None:

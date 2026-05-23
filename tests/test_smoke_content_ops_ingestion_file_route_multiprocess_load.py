@@ -82,6 +82,8 @@ def test_multiprocess_load_builds_child_command(tmp_path: Path) -> None:
         "4",
         "--child-import-max-concurrency",
         "2",
+        "--admission-provider",
+        "postgres",
         "--replace-existing",
     ])
 
@@ -95,6 +97,7 @@ def test_multiprocess_load_builds_child_command(tmp_path: Path) -> None:
     assert command[command.index("--source") + 1] == "cfpb-route-multiprocess-load-test-p2"
     assert command[command.index("--concurrency") + 1] == "4"
     assert command[command.index("--import-max-concurrency") + 1] == "2"
+    assert command[command.index("--admission-provider") + 1] == "postgres"
     assert command[command.index("--database-url") + 1] == "postgresql://atlas@localhost:5433/atlas"
     assert "--replace-existing" in command
     assert command.count("--default-field") == 3
@@ -139,6 +142,8 @@ def test_multiprocess_load_writes_aggregate_result(monkeypatch, tmp_path: Path) 
         "2",
         "--child-import-max-concurrency",
         "1",
+        "--admission-provider",
+        "postgres",
         "--min-total-successes",
         "2",
         "--expect-total-at-capacity-min",
@@ -148,9 +153,11 @@ def test_multiprocess_load_writes_aggregate_result(monkeypatch, tmp_path: Path) 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 0
     assert payload["ok"] is True
+    assert payload["admission_provider"] == "postgres"
     assert payload["summary"] == {
         "processes": 2,
         "successful_processes": 2,
+        "capacity_only_processes": 0,
         "failed_processes": 0,
         "successes": 2,
         "at_capacity": 2,
@@ -161,6 +168,60 @@ def test_multiprocess_load_writes_aggregate_result(monkeypatch, tmp_path: Path) 
     assert len(payload["children"]) == 2
     assert (output_dir / "child_1.json").exists()
     assert (output_dir / "child_2.json").exists()
+
+
+def test_multiprocess_load_can_accept_capacity_only_children(monkeypatch, tmp_path: Path) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    result_path = tmp_path / "result.json"
+    output_dir = tmp_path / "children"
+    _write_cfpb_rows(source_path, 3)
+
+    async def run_child(command, *, result_path):
+        account_id = command[command.index("--account-id") + 1]
+        capacity_only = account_id.endswith("-p2")
+        summary = {
+            "successes": 0 if capacity_only else 1,
+            "at_capacity": 2 if capacity_only else 1,
+            "unexpected_failures": 0,
+            "inserted": 0 if capacity_only else 3,
+        }
+        return {
+            "result_path": str(result_path),
+            "returncode": 1 if capacity_only else 0,
+            "ok": not capacity_only,
+            "summary": summary,
+            "errors": [
+                "expected at least 3 inserted source row(s), got 0",
+                "expected at least 1 success(es), got 0",
+            ] if capacity_only else [],
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "elapsed_seconds": 0.01,
+        }
+
+    monkeypatch.setattr(module, "_run_child_process", run_child)
+
+    code = module.main([
+        *_default_args(source_path, result_path, output_dir),
+        "--processes",
+        "2",
+        "--min-total-successes",
+        "1",
+        "--expect-total-at-capacity-min",
+        "3",
+        "--allow-capacity-only-children",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["allow_capacity_only_children"] is True
+    assert payload["summary"]["successful_processes"] == 2
+    assert payload["summary"]["capacity_only_processes"] == 1
+    assert payload["summary"]["failed_processes"] == 0
+    assert payload["summary"]["successes"] == 1
+    assert payload["summary"]["at_capacity"] == 3
 
 
 def test_multiprocess_load_fails_on_child_failure(monkeypatch, tmp_path: Path) -> None:
@@ -205,6 +266,7 @@ def test_multiprocess_load_fails_on_child_failure(monkeypatch, tmp_path: Path) -
     assert code == 1
     assert payload["ok"] is False
     assert payload["summary"]["failed_processes"] == 1
+    assert payload["summary"]["capacity_only_processes"] == 0
     assert payload["summary"]["unexpected_failures"] == 1
     assert payload["errors"] == [
         "failed child process count: 1",
@@ -238,4 +300,3 @@ def test_multiprocess_load_requires_database_url(monkeypatch, tmp_path: Path) ->
         ])
 
     assert "Missing --database-url" in str(exc.value)
-

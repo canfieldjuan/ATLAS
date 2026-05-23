@@ -30,6 +30,8 @@ pytest \
   tests/test_smoke_content_ops_faq_scale_run.py \
   tests/test_smoke_content_ops_faq_lifecycle.py \
   tests/test_smoke_content_ops_ingestion_file_route.py \
+  tests/test_smoke_content_ops_ingestion_file_route_inprocess_load.py \
+  tests/test_smoke_content_ops_ingestion_file_route_multiprocess_load.py \
   tests/test_smoke_content_ops_live_generation.py \
   tests/test_export_content_ops_review_sources.py \
   tests/test_export_content_ops_cfpb_sources.py \

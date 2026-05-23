@@ -41,15 +41,6 @@ register under `docs/technical-debt/`.
 - Owner/session: content-ops/faq-generation-scale
 - Found during: PR-Content-Ops-FAQ-50K-Gated-Validation (#914); previously noted in the FAQ scale stress probe.
 
-### FILECONCURRENCY-2 - Uploaded-file imports need hosted multiprocess proof
-- File/location: Hosted `/content-ops/ingestion/files/import` deployment topology; host provider lives at `atlas_brain/_content_ops_import_admission.py`.
-- Description: Atlas now has a Postgres advisory-lock admission provider for shared cross-process capacity, but the remaining production hardening is a live Atlas-mounted multiprocess proof plus durable background job/queue visibility.
-- Why it matters: Production deployments need evidence that the mounted host route stays bounded across workers and enough job visibility to diagnose long-running imports.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/backend-file-ingestion-validation
-- Found during: PR-Content-Ops-File-Cross-Process-Hardening-Register
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
