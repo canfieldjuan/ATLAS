@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'salesforce-deep-dive-2026-04',
-  title: 'Salesforce Deep Dive: Reviewer Sentiment Across 2256 Reviews',
+  title: 'Is Salesforce Too Expensive? Price and the Learning Curve, Across 2,256 Reviews',
   description: 'Comprehensive analysis of Salesforce based on 2256 public reviews. Where reviewers report pain, what they praise, and how the platform stacks up against alternatives.',
   date: '2026-04-05',
   author: 'Churn Signals Team',
@@ -113,7 +113,7 @@ const post: BlogPost = {
   data_context: {
   "booking_url": "https://churnsignals.co"
 },
-  seo_title: 'Salesforce Reviews 2026: 2256 User Experiences Analyzed',
+  seo_title: 'Salesforce Reviews 2026: Price, Learning Curve & 2,256 Verdicts',
   seo_description: 'Analysis of 2256 Salesforce reviews from G2, Reddit, and Gartner. See what drives satisfaction and frustration, plus competitive positioning data.',
   target_keyword: 'salesforce reviews',
   secondary_keywords: ["salesforce complaints", "salesforce vs hubspot", "salesforce pricing issues", "salesforce too expensive", "salesforce learning curve"],

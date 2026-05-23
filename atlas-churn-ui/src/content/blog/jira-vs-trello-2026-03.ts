@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'jira-vs-trello-2026-03',
-  title: 'Jira vs Trello: 72 Churn Signals Across 1902 Reviews Analyzed',
+  title: 'Jira vs Trello: Is Jira Too Complex? 72 Churn Signals, 1,902 Reviews',
   description: 'Head-to-head analysis of Jira and Trello based on 1902 public reviews. Where complaints cluster, what drives switching intent, and which vendor shows stronger reviewer sentiment.',
   date: '2026-03-29',
   author: 'Churn Signals Team',

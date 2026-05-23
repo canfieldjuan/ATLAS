@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'crm-landscape-2026-04',
-  title: 'CRM Landscape 2026: 7 Vendors Compared by Real User Data',
+  title: 'CRM Landscape 2026: 7 Vendors on Setup Cost, Churn & Real Pain (1,054 Reviews)',
   description: 'A comprehensive market overview of the CRM landscape based on 1,054 enriched reviews across 7 vendors. Covers churn urgency, recurring pain patterns, and strength and weakness profiles for the leading vendors.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
@@ -119,7 +119,7 @@ const post: BlogPost = {
   },
   "booking_url": "https://churnsignals.co"
 },
-  seo_title: 'CRM Software Comparison 2026: 7 Vendors by User Reviews',
+  seo_title: 'CRM Software Comparison 2026: Setup Cost & Churn Across 7 Vendors',
   seo_description: 'Compare 7 CRM vendors using 1,054 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
   target_keyword: 'CRM software comparison',
   secondary_keywords: ["best CRM software", "CRM vendor comparison", "CRM churn signals", "CRM implementation cost", "CRM setup cost"],
