@@ -22,6 +22,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 FAQ_CLI = ROOT / "scripts/build_extracted_ticket_faq_markdown.py"
 
 from content_ops_faq_smoke_profile import (  # noqa: E402
+    console_input_profile,
     load_source_input_profile,
     raw_row_profile,
 )
@@ -248,22 +249,7 @@ def _print_scale_summary(summary: Mapping[str, Any]) -> None:
 
 
 def _console_input_profile(value: Any) -> str:
-    if not isinstance(value, Mapping):
-        return "source_rows=unknown"
-    parts = [f"input_status={value.get('status') or 'unknown'}"]
-    usable = value.get("usable_source_count")
-    raw = value.get("raw_row_count")
-    if usable is not None or raw is not None:
-        parts.append(f"source_rows={_console_value(usable)}/{_console_value(raw)}")
-    for key, label in (
-        ("skipped_row_count", "skipped_rows"),
-        ("missing_source_text_count", "missing_source_text"),
-        ("warning_count", "warnings"),
-    ):
-        item = value.get(key)
-        if item not in (None, 0):
-            parts.append(f"{label}={item}")
-    return " ".join(parts)
+    return console_input_profile(value)
 
 
 def _console_value(value: Any) -> str:

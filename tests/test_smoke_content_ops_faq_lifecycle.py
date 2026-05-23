@@ -328,6 +328,59 @@ async def test_faq_lifecycle_smoke_marks_input_profile_error_on_load_failure(mon
     assert pool.closed is True
 
 
+def test_faq_lifecycle_print_payload_includes_input_profile(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": True,
+            "input_profile": {
+                "status": "ok",
+                "usable_source_count": 1000,
+                "raw_row_count": 1000,
+                "warning_count": 0,
+            },
+            "saved_ids": ["faq-uuid-1"],
+            "review_status": "published",
+        },
+        as_json=False,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "Content Ops FAQ lifecycle smoke passed:" in captured.out
+    assert "input_status=ok" in captured.out
+    assert "source_rows=1000/1000" in captured.out
+    assert "saved_faqs=1" in captured.out
+    assert "review_status=published" in captured.out
+
+
+def test_faq_lifecycle_print_payload_includes_input_profile_on_failure(capsys) -> None:
+    smoke._print_payload(
+        {
+            "ok": False,
+            "input_profile": {
+                "status": "ok",
+                "usable_source_count": 46,
+                "raw_row_count": 1000,
+                "skipped_row_count": 954,
+                "missing_source_text_count": 954,
+                "warning_count": 954,
+            },
+            "errors": ["expected at least 500 source row(s), got 46"],
+        },
+        as_json=False,
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Content Ops FAQ lifecycle smoke failed:" in captured.err
+    assert "input_status=ok" in captured.err
+    assert "source_rows=46/1000" in captured.err
+    assert "skipped_rows=954" in captured.err
+    assert "missing_source_text=954" in captured.err
+    assert "warnings=954" in captured.err
+    assert "- expected at least 500 source row(s), got 46" in captured.err
+
+
 def test_faq_lifecycle_smoke_rejects_invalid_args() -> None:
     args = _args(min_saved_faqs=0)
 
