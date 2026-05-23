@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from io import StringIO
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
 from .campaign_ports import TenantScope
 from .landing_page_ports import LandingPageDraft, LandingPageRepository
@@ -184,9 +185,21 @@ def _public_cta_url_indexable(value: Any) -> bool:
         return False
     if normalized.startswith("javascript:"):
         return False
+    if _public_cta_local_path(normalized) == "/demo":
+        return False
     if normalized.startswith(("https://", "http://", "mailto:", "tel:", "/")):
         return True
     return False
+
+
+def _public_cta_local_path(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return ""
+    if parsed.scheme or parsed.netloc:
+        return ""
+    return parsed.path.rstrip("/") or parsed.path
 
 
 def _metadata_summary(value: Any) -> JsonDict:
