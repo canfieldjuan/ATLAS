@@ -252,6 +252,21 @@ The same artifact can run through the Content Ops execution seam by selecting
 When the host wires `PostgresTicketFAQRepository`, execution also persists the
 Markdown document into `ticket_faq_markdown` and returns `saved_ids`.
 
+Support-ticket exports can also enter Content Ops through the input-provider
+handoff instead of being sent as ad hoc request fields. The
+`support_ticket_input_package` builder normalizes already-loaded ticket rows or
+`support_tickets` bundles into `source_material`, FAQ defaults, landing-page SEO
+context, and blog-planning inputs. `SupportTicketInputProvider` wraps that
+builder behind the generic `ContentOpsInputProvider` protocol so hosts can pass
+fixed in-memory source material or a tenant/request-aware loader.
+
+Atlas mounts a host-owned support-ticket provider on the `/content-ops` control
+surface. It no-ops for empty or generic source material and expands only
+support-ticket-shaped rows or bundles, leaving unrelated source-based workflows
+unchanged. File parsing, persisted upload lookup, and import-row lookup remain
+host/ingestion responsibilities; by the time data reaches the provider, it
+should already be loaded as source material.
+
 To prove the persisted review lifecycle in one command, run the FAQ lifecycle
 smoke. It generates from source rows, exports the saved draft, updates it to a
 host-defined review status, and exports the reviewed row:
