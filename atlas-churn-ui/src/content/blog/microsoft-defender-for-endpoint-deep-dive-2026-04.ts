@@ -101,7 +101,7 @@ const post: BlogPost = {
   seo_title: 'Microsoft Defender for Endpoint Reviews | Deep Dive',
   seo_description: 'Read 22 reviews of Microsoft Defender for Endpoint. Learn about integration gaps, AI environment coverage, and when teams consider alternatives.',
   target_keyword: 'Microsoft Defender for Endpoint reviews',
-  secondary_keywords: ["Microsoft Defender for Endpoint integration", "endpoint security software comparison", "Microsoft Defender vs CrowdStrike"],
+  secondary_keywords: ["Microsoft Defender for Endpoint integration", "endpoint security software comparison", "Microsoft Defender vs CrowdStrike", "Microsoft Defender vs SentinelOne"],
   faq: [
   {
     "question": "What do reviewers like most about Microsoft Defender for Endpoint?",

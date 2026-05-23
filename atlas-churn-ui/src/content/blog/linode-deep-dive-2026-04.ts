@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Linode Reviews: 580 User Experiences Analyzed (2026)',
   seo_description: 'Analysis of 580 Linode reviews shows pricing competitiveness retaining users despite Akamai acquisition concerns. 31 active evaluation signals tracked.',
   target_keyword: 'Linode reviews',
-  secondary_keywords: ["Linode vs DigitalOcean", "Linode pricing", "Akamai Linode acquisition"],
+  secondary_keywords: ["Linode vs DigitalOcean", "Linode pricing", "Akamai Linode acquisition", "Linode vs Vultr"],
   faq: [
   {
     "question": "What are the main strengths of Linode according to reviewers?",

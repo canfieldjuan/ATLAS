@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Looker Reviews: Deep Dive Into 514 User Experiences',
   seo_description: 'Analysis of 514 Looker reviews reveals UX learning curve patterns, integration strengths, and competitive positioning against Tableau and Power BI.',
   target_keyword: 'Looker reviews',
-  secondary_keywords: ["Looker vs Tableau", "Looker user experience", "Looker business intelligence"],
+  secondary_keywords: ["Looker vs Tableau", "Looker user experience", "Looker business intelligence", "Looker pricing", "Looker vs Power BI"],
   faq: [
   {
     "question": "What do users like most about Looker?",

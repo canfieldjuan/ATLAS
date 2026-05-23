@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'AWS Reviews 2026: 784 User Experiences Analyzed',
   seo_description: 'Analysis of 784 AWS reviews reveals support responsiveness concerns and unexpected pricing incidents alongside strong feature depth and integration ecosystem.',
   target_keyword: 'aws reviews',
-  secondary_keywords: ["amazon web services reviews", "aws vs azure", "aws vs google cloud", "aws pricing complaints"],
+  secondary_keywords: ["amazon web services reviews", "aws vs azure", "aws vs google cloud", "aws pricing complaints", "aws too expensive"],
   faq: [
   {
     "question": "What are the most common complaints about AWS?",
