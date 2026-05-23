@@ -182,7 +182,7 @@ const post: BlogPost = {
 <p>{{chart:category-pain-fit-map}}</p>
 <p>Overall dissatisfaction leads the pain map, followed by UX friction, pricing complaints, support gaps, feature limitations, and performance issues.</p>
 <p>That's a pricing backlash signal tied to workflow substitution—the reviewer reduced usage but remained locked into an annual contract with no prorated refund.</p>
-<p>Per-seat pricing scales unpredictably. A 200-person team paying $9/seat lands at $1800/month. At $10.99/seat, that's $2198/month. Annual contracts amplify the risk.</p>
+<p>Per-seat pricing adds up quickly at scale. A 200-person team paying $9/seat lands at $1800/month. At $10.99/seat, that's $2198/month. Annual contracts amplify the risk.</p>
 <p>UX friction shows up differently depending on the vendor. Jira reviewers cite complexity for non-technical users. Asana users report limited customization. Monday.com feedback clusters around feature bloat and navigation friction.</p>
 <p>One Wrike reviewer captured the IT consolidation pressure many mid-market teams face:</p>
 <blockquote>
@@ -306,7 +306,7 @@ const post: BlogPost = {
 <strong>Weaknesses:</strong> Data migration, contract lock-in, support</p>
 <p>Smartsheet is strongest for 201-1000 and 51-200 employee teams, particularly organizations with spreadsheet-heavy workflows. It holds a 4.0 rating across 42 reviews—the lowest in the set, but still above the threshold for category inclusion.</p>
 <p>Reviewers cite low technical debt, solid performance, and reliable uptime. The spreadsheet-like interface appeals to teams migrating from Excel or Google Sheets.</p>
-<p>But pricing complaints lead the pain map, followed by support gaps and overall dissatisfaction. Reviewers report unexpected cost increases, per-seat pricing that scales unpredictably, and annual contracts with no prorated refunds.</p>
+<p>But pricing complaints lead the pain map, followed by support gaps and overall dissatisfaction. Reviewers report unexpected cost increases, per-seat pricing that adds up quickly as teams grow, and annual contracts with no prorated refunds.</p>
 <p>Support is a consistent weakness. Reviewers cite slow response times, limited help documentation, and difficulty getting answers for complex formula or automation issues.</p>
 <p>Data migration and contract lock-in are the primary weaknesses. Reviewers report difficulty exporting data in usable formats, and annual contracts create friction when teams want to leave.</p>
 <p><strong>Who should use Smartsheet:</strong></p>
@@ -330,7 +330,7 @@ const post: BlogPost = {
 <p>Teamwork is strongest for 51-200 and 201-1000 employee teams. It holds a 4.5 rating across 32 reviews—tied with Asana and Monday.com for the highest rating in the set.</p>
 <p>Reviewers cite strong UX, solid integration depth, and reliable performance. The interface is clean, and the feature set covers most project management workflows without the bloat that shows up in Monday.com or Jira.</p>
 <p>But overall dissatisfaction appears in the pain data, followed by UX friction. The review sample is smaller (32 reviews), so confidence is lower, but the pattern suggests retention is fragile.</p>
-<p>Support, reliability, and pricing are the primary weaknesses. Reviewers report slow response times, occasional downtime, and pricing that scales unpredictably as teams grow.</p>
+<p>Support, reliability, and pricing are the primary weaknesses. Reviewers report slow response times, occasional downtime, and pricing that adds up quickly as teams grow.</p>
 <p><strong>Who should use Teamwork:</strong></p>
 <ul>
 <li>51-200 or 201-1000 employee teams that prioritize clean UX and integration depth</li>

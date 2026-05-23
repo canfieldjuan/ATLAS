@@ -53,8 +53,20 @@ claims invented.
   already fixed in the open #831). DD3 is NOT in this PR -- asana's case is entangled
   with the parked chart-provenance question (data_migration=6.8 is a suspicious
   outlier), and a clean fix needs the frequency-vs-urgency framing resolved per post.
-  asana therefore still shows `prose_vs_chart_metric` (and `pain_as_strength`, fixed
-  by the open #844 -- this branch is off origin/main).
+  asana therefore still shows `prose_vs_chart_metric` (the deferred DD3; the
+  `pain_as_strength` is resolved now that #844 is merged into this branch).
+
+Parked hardening: none (data-correction; the qualitative "scales unpredictably"
+phrasing and DD3 are deferred above, not parked code-debt).
+
+## Review follow-up (#849 review NIT)
+
+The reviewer's concept-grep (not just `multiplier`/`Nx`) found 3 residual
+"per-seat pricing scales unpredictably" claims in best-project-management
+(L185, L309, L333) -- the same soft-incoherence family (per-seat pricing scales
+*linearly*, and L185 demonstrates exactly that with $9x200=$1800). Reworded all
+three to "adds up quickly (at scale / as teams grow)", matching the L393 reframe.
+grep confirms 0 residual "scales unpredictably".
 
 ## Verification
 
