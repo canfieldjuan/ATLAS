@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'metabase-vs-tableau-2026-04',
-  title: 'Metabase vs Tableau: Comparing Reviewer Complaints Across 1252 Reviews',
+  title: 'Metabase vs Tableau: Open-Source Value vs Enterprise BI (1,252 Reviews)',
   description: 'Analysis of 1252 public reviews comparing Metabase and Tableau complaint patterns, urgency signals, and buyer segments. Based on verified and community feedback from March to April 2026.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'help-scout-vs-zendesk-2026-04',
-  title: 'Help Scout vs Zendesk: Comparing Reviewer Complaints Across 27 Reviews',
+  title: 'Help Scout vs Zendesk: Where Each Helpdesk Wins (27 Reviews)',
   description: 'A side-by-side comparison of Help Scout and Zendesk based on 27 enriched reviews from February to April 2026. Examines urgency scores, pain categories, and buyer segments to reveal which vendor faces more acute churn pressure.',
   date: '2026-04-10',
   author: 'Churn Signals Team',

@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'insightly-vs-zoho-crm-2026-04',
-  title: 'Insightly vs Zoho CRM: Comparing Reviewer Complaints Across 32 Reviews',
+  title: 'Insightly vs Zoho CRM: Support, Value & Fit (32 Reviews)',
   description: 'A side-by-side comparison of Insightly and Zoho CRM based on 32 reviewer complaints analyzed between February and April 2026. We examine support friction, urgency patterns, and pain categories across both platforms.',
   date: '2026-04-11',
   author: 'Churn Signals Team',
