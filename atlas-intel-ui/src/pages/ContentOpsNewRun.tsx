@@ -97,6 +97,9 @@ const LANDING_PAGE_QUALITY_REPAIR_INPUT =
   'landing_page_quality_repair_attempts'
 const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
+const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
+const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
+const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_ORDER = [
   'target_keyword',
   'secondary_keywords',
@@ -194,6 +197,7 @@ export default function ContentOpsNewRun() {
     ? reasoningStatusHint(catalog.reasoning)
     : ''
   const landingPageOutputSelected = request.outputs.includes('landing_page')
+  const faqMarkdownOutputSelected = request.outputs.includes(FAQ_MARKDOWN_OUTPUT)
   const landingPageRepairAttemptContract = landingPageOutputSelected
     ? integerInputContract(catalog, LANDING_PAGE_QUALITY_REPAIR_INPUT)
     : null
@@ -216,6 +220,7 @@ export default function ContentOpsNewRun() {
     ? landingPageSeoGeoAeoInputContracts(catalog)
     : []
   const landingPageInputsDisabled = !parsedInputsForControls.ok
+  const faqInputsDisabled = !parsedInputsForControls.ok
   const landingPageRepairAttemptDisabled =
     !parsedInputsForControls.ok || !landingPageRepairAttemptContract
 
@@ -262,6 +267,20 @@ export default function ContentOpsNewRun() {
     value: string,
   ) => {
     const updated = updateLandingPageInputJson(inputsJson, contract, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleFaqDocumentationTermsChange = (value: string) => {
+    const updated = updateFaqDocumentationTermsInputJson(inputsJson, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleFaqVocabularyRulesChange = (value: string) => {
+    const updated = updateFaqVocabularyRulesInputJson(inputsJson, value)
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -878,6 +897,49 @@ export default function ContentOpsNewRun() {
               >
                 {landingPageRepairAttemptMessage}
               </p>
+            </div>
+          )}
+          {faqMarkdownOutputSelected && (
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-slate-200">
+                  FAQ vocabulary-gap inputs
+                </h3>
+              </div>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <label className="block text-sm">
+                  <span className="text-slate-300">Documentation terms</span>
+                  <textarea
+                    value={faqDocumentationTermsDraftValue(parsedInputsForControls)}
+                    onChange={(e) =>
+                      handleFaqDocumentationTermsChange(e.target.value)
+                    }
+                    rows={4}
+                    disabled={faqInputsDisabled}
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder={'Single sign-on setup\nData export guide'}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="text-slate-300">Vocabulary-gap rules</span>
+                  <textarea
+                    value={faqVocabularyRulesDraftValue(parsedInputsForControls)}
+                    onChange={(e) =>
+                      handleFaqVocabularyRulesChange(e.target.value)
+                    }
+                    rows={4}
+                    disabled={faqInputsDisabled}
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder={'SSO, single sign-on\nexport, data export'}
+                  />
+                </label>
+              </div>
+              {!parsedInputsForControls.ok && (
+                <p className="mt-2 text-xs text-amber-200">
+                  Fix inputs JSON before changing FAQ fields:{' '}
+                  {parsedInputsForControls.message}
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -1577,6 +1639,78 @@ function updateLandingPageInputJson(
   }
 
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function faqDocumentationTermsDraftValue(parsed: ParsedInputsJsonObject): string {
+  if (!parsed.ok) return ''
+  const raw = parsed.value[FAQ_DOCUMENTATION_TERMS_INPUT]
+  if (raw === null || typeof raw === 'undefined') return ''
+  return stringListDraftValue(raw)
+}
+
+function updateFaqDocumentationTermsInputJson(
+  current: string,
+  draftValue: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const values = stringListFromDraft(draftValue)
+  if (values.length === 0) {
+    delete next[FAQ_DOCUMENTATION_TERMS_INPUT]
+  } else {
+    next[FAQ_DOCUMENTATION_TERMS_INPUT] = values
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function faqVocabularyRulesDraftValue(parsed: ParsedInputsJsonObject): string {
+  if (!parsed.ok) return ''
+  const raw = parsed.value[FAQ_VOCABULARY_GAP_RULES_INPUT]
+  if (raw === null || typeof raw === 'undefined') return ''
+  if (!Array.isArray(raw)) return scalarDraftValue(raw)
+  return raw
+    .filter((rule) => typeof rule !== 'undefined' && rule !== null)
+    .map((rule) =>
+      Array.isArray(rule)
+        ? rule
+            .filter((term) => typeof term !== 'undefined' && term !== null)
+            .map((term) => String(term))
+            .join(', ')
+        : String(rule),
+    )
+    .join('\n')
+}
+
+function updateFaqVocabularyRulesInputJson(
+  current: string,
+  draftValue: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const rules = vocabularyRulesFromDraft(draftValue)
+  if (rules.length === 0) {
+    delete next[FAQ_VOCABULARY_GAP_RULES_INPUT]
+  } else {
+    next[FAQ_VOCABULARY_GAP_RULES_INPUT] = rules
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function vocabularyRulesFromDraft(value: string): string[][] {
+  const rules: string[][] = []
+  for (const line of value.split(/\r?\n/)) {
+    const terms = stringListFromDraft(line)
+    if (terms.length > 0) {
+      rules.push(terms)
+    }
+  }
+  return rules
 }
 
 function stringListDraftValue(value: unknown): string {
