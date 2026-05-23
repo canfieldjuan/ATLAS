@@ -104,7 +104,7 @@ const post: BlogPost = {
   seo_title: 'HR / HCM Software Comparison 2026: 4 Vendors Reviewed',
   seo_description: 'Compare BambooHR, Gusto, Rippling, and Workday using 306 real churn signals. See urgency scores, pain patterns, and what reviewers say about each HR / HCM platform.',
   target_keyword: 'HR / HCM software comparison',
-  secondary_keywords: ["BambooHR vs Gusto vs Rippling", "best HR software 2026", "HRIS platform reviews"],
+  secondary_keywords: ["BambooHR vs Gusto vs Rippling", "best HR software 2026", "HRIS platform reviews", "BambooHR vs Gusto", "Rippling vs Gusto", "HR software cost"],
   faq: [
   {
     "question": "Which HR / HCM vendor has the highest churn risk in 2026?",
