@@ -154,7 +154,11 @@ router.include_router(b2b_challenger_claims_router)
 # is logged as disabled and existing routes keep serving.
 try:
     from extracted_content_pipeline.api.control_surfaces import (
+        ContentOpsControlSurfaceApiConfig,
         create_content_ops_control_surface_router,
+    )
+    from .._content_ops_import_admission import (
+        build_content_ops_import_admission_gate,
     )
     from extracted_content_pipeline.api.generated_assets import (
         create_generated_asset_router,
@@ -193,7 +197,9 @@ try:
         set_current_auth_user(user)
         return user
 
+    content_ops_config = ContentOpsControlSurfaceApiConfig()
     content_ops_router = create_content_ops_control_surface_router(
+        config=content_ops_config,
         dependencies=[Depends(_capture_content_ops_auth_user)],
         execution_services_provider=lambda: (
             build_content_ops_execution_services(enable_db_services=True)
@@ -202,6 +208,11 @@ try:
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
         opportunity_import_pool_provider=get_db_pool,
+        ingestion_import_admission_provider=lambda: (
+            build_content_ops_import_admission_gate(
+                max_concurrency=content_ops_config.ingestion_import_max_concurrency
+            )
+        ),
     )
     router.include_router(content_ops_router)
     content_assets_router = create_generated_asset_router(
