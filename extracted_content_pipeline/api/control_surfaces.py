@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -237,6 +238,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_falsification_conservative: bool = True
     structured_reasoning_drop_falsified: bool = False
     ingestion_opportunity_table: str = "campaign_opportunities"
+    execute_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
         if not str(self.prefix or "").strip().startswith("/"):
@@ -274,6 +276,8 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_top_thesis_limit must be positive")
         if self.structured_reasoning_max_continuations < 0:
             raise ValueError("structured_reasoning_max_continuations must be non-negative")
+        if self.execute_max_concurrency <= 0:
+            raise ValueError("execute_max_concurrency must be positive")
         if not isinstance(
             self.structured_reasoning_falsification_rules,
             Sequence,
@@ -302,6 +306,25 @@ class ContentOpsControlSurfaceApiConfig:
                 )
         if not str(self.ingestion_opportunity_table or "").strip():
             raise ValueError("ingestion_opportunity_table is required")
+
+
+class _ExecuteConcurrencyGate:
+    def __init__(self, max_concurrency: int) -> None:
+        self.max_concurrency = int(max_concurrency)
+        self._in_flight = 0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> bool:
+        async with self._lock:
+            if self._in_flight >= self.max_concurrency:
+                return False
+            self._in_flight += 1
+            return True
+
+    async def release(self) -> None:
+        async with self._lock:
+            if self._in_flight > 0:
+                self._in_flight -= 1
 
 
 @dataclass(frozen=True)
@@ -469,6 +492,7 @@ def create_content_ops_control_surface_router(
 
     _require_fastapi()
     resolved_config = config or ContentOpsControlSurfaceApiConfig()
+    execute_gate = _ExecuteConcurrencyGate(resolved_config.execute_max_concurrency)
     router = APIRouter(
         prefix=resolved_config.prefix,
         tags=list(resolved_config.tags),
@@ -656,68 +680,79 @@ def create_content_ops_control_surface_router(
     async def execute_generation(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
-        if execution_services_provider is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Content Ops execution services are not configured.",
-            )
-        services = await _resolve_execution_services(execution_services_provider)
-        if services is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Content Ops execution services are not configured.",
-            )
-        # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
-        # per-request reasoning provider and derive a reasoning-aware
-        # bundle. The base services from execution_services_provider
-        # are not mutated; the derivation rebinds reasoning on each
-        # opt-in service via with_reasoning_context().
-        #
-        # Gate on whether the kwarg was supplied at router construction,
-        # not on the resolved value -- when a host wires a per-request
-        # provider that returns None for tenant-policy reasons, the
-        # bundle is derived with reasoning rebound to None (predictable,
-        # no leak of construction-time reasoning). When the kwarg was
-        # never supplied, leave the host-baked reasoning alone.
         payload_mapping = _payload_to_mapping(payload)
-        if reasoning_context_provider is not None:
-            if _clean(payload_mapping.get("reasoning_preset")):
-                logger.info(
-                    "Content Ops reasoning_preset ignored because host provider is configured"
-                )
-            reasoning_context = await _resolve_reasoning_context(
-                reasoning_context_provider
+        if not await execute_gate.acquire():
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "reason": "content_ops_execute_at_capacity",
+                    "max_concurrency": execute_gate.max_concurrency,
+                },
             )
-            services = services.with_reasoning_context(reasoning_context)
-        else:
-            reasoning_groups = await _structured_reasoning_contexts(
-                payload_mapping,
-                config=resolved_config,
-                services=services,
-                llm_provider=llm_provider,
-            )
-            for reasoning_context, reasoning_outputs in reasoning_groups:
-                services = services.with_reasoning_context(
-                    reasoning_context,
-                    outputs=reasoning_outputs,
-                )
-        scope = await _resolve_scope(scope_provider)
         try:
-            result = await execute_content_ops_from_mapping(
-                payload_mapping,
-                services=services,
-                scope=scope,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result = _sanitize_execution_result(result)
-        if result["status"] == "blocked":
-            raise HTTPException(status_code=400, detail=result)
-        if result["status"] == "failed":
-            raise HTTPException(status_code=502, detail=result)
-        if result["status"] == "partial":
-            raise HTTPException(status_code=207, detail=result)
-        return result
+            if execution_services_provider is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Content Ops execution services are not configured.",
+                )
+            services = await _resolve_execution_services(execution_services_provider)
+            if services is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Content Ops execution services are not configured.",
+                )
+            # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
+            # per-request reasoning provider and derive a reasoning-aware
+            # bundle. The base services from execution_services_provider
+            # are not mutated; the derivation rebinds reasoning on each
+            # opt-in service via with_reasoning_context().
+            #
+            # Gate on whether the kwarg was supplied at router construction,
+            # not on the resolved value -- when a host wires a per-request
+            # provider that returns None for tenant-policy reasons, the
+            # bundle is derived with reasoning rebound to None (predictable,
+            # no leak of construction-time reasoning). When the kwarg was
+            # never supplied, leave the host-baked reasoning alone.
+            if reasoning_context_provider is not None:
+                if _clean(payload_mapping.get("reasoning_preset")):
+                    logger.info(
+                        "Content Ops reasoning_preset ignored because host provider is configured"
+                    )
+                reasoning_context = await _resolve_reasoning_context(
+                    reasoning_context_provider
+                )
+                services = services.with_reasoning_context(reasoning_context)
+            else:
+                reasoning_groups = await _structured_reasoning_contexts(
+                    payload_mapping,
+                    config=resolved_config,
+                    services=services,
+                    llm_provider=llm_provider,
+                )
+                for reasoning_context, reasoning_outputs in reasoning_groups:
+                    services = services.with_reasoning_context(
+                        reasoning_context,
+                        outputs=reasoning_outputs,
+                    )
+            scope = await _resolve_scope(scope_provider)
+            try:
+                result = await execute_content_ops_from_mapping(
+                    payload_mapping,
+                    services=services,
+                    scope=scope,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            result = _sanitize_execution_result(result)
+            if result["status"] == "blocked":
+                raise HTTPException(status_code=400, detail=result)
+            if result["status"] == "failed":
+                raise HTTPException(status_code=502, detail=result)
+            if result["status"] == "partial":
+                raise HTTPException(status_code=207, detail=result)
+            return result
+        finally:
+            await execute_gate.release()
 
     return router
 

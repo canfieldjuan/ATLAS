@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -64,6 +65,25 @@ class _CampaignService:
             "filters": dict(filters or {}),
             "kwargs": dict(kwargs),
         })
+        return {"generated": 1, "saved_ids": ["draft-1"]}
+
+
+class _BlockingCampaignService(_CampaignService):
+    def __init__(self):
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+            "kwargs": dict(kwargs),
+        })
+        self.started.set()
+        await self.release.wait()
         return {"generated": 1, "saved_ids": ["draft-1"]}
 
 
@@ -1134,6 +1154,47 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_rejects_when_concurrency_gate_is_full():
+    service = _BlockingCampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            execute_max_concurrency=1,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
+    )
+    route = _route(router, "/ops/execute", "POST")
+    request = {
+        "outputs": ["email_campaign"],
+        "inputs": {
+            "target_account": "Acme",
+            "offer": "Churn audit",
+        },
+    }
+
+    first = asyncio.create_task(route.endpoint(request))
+    await asyncio.wait_for(service.started.wait(), timeout=1)
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request)
+
+    assert exc.value.status_code == 429
+    assert exc.value.detail == {
+        "reason": "content_ops_execute_at_capacity",
+        "max_concurrency": 1,
+    }
+    assert len(service.calls) == 1
+
+    service.release.set()
+    first_payload = await first
+    assert first_payload["status"] == "completed"
+
+    second_payload = await route.endpoint(request)
+    assert second_payload["status"] == "completed"
+    assert len(service.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -2232,6 +2293,11 @@ def test_content_ops_config_stores_output_pack_names_immutably():
 
     with pytest.raises(TypeError):
         config.structured_reasoning_output_pack_names["blog_post"] = "other_pack"  # type: ignore[index]
+
+
+def test_content_ops_config_rejects_invalid_execute_concurrency():
+    with pytest.raises(ValueError, match="execute_max_concurrency must be positive"):
+        ContentOpsControlSurfaceApiConfig(execute_max_concurrency=0)
 
 
 def test_content_ops_config_rejects_invalid_falsification_rules_shape():
