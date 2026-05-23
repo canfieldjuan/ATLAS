@@ -134,7 +134,7 @@ const post: BlogPost = {
   },
   {
     "question": "How does Asana's pricing compare to alternatives?",
-    "answer": "Reviewers conducting cost analysis note that Asana's per-seat pricing ($10.99/user) is higher than some competitors: Ira at $9.05/user and Monday.com at $9/user. The gap widens when annual commitment is required, and users report difficulty canceling before renewal dates without losing their investment."
+    "answer": "Reviewers conducting cost analysis note that Asana's per-seat pricing ($10.99/user) is higher than some competitors: Jira at $9.05/user and Monday.com at $9/user. The gap widens when annual commitment is required, and users report difficulty canceling before renewal dates without losing their investment."
   },
   {
     "question": "Who is Asana best suited for?",
@@ -189,7 +189,7 @@ const post: BlogPost = {
 <h2 id="where-asana-users-feel-the-most-pain">Where Asana Users Feel the Most Pain</h2>
 <p>{{chart:pain-radar}}</p>
 <p>The pain-radar visualization highlights the concentration of complaints across six dimensions:</p>
-<p><strong>Pricing dominates.</strong> Pricing complaints far exceed other categories, driven by annual renewal shock, per-seat cost ($10.99/user), and inflexible cancellation. Reviewers conducting price-per-user comparisons note that Asana ranks higher than Ira ($9.05/user) and Monday.com ($9/user) on a per-seat basis.</p>
+<p><strong>Pricing dominates.</strong> Pricing complaints far exceed other categories, driven by annual renewal shock, per-seat cost ($10.99/user), and inflexible cancellation. Reviewers conducting price-per-user comparisons note that Asana ranks higher than Jira ($9.05/user) and Monday.com ($9/user) on a per-seat basis.</p>
 <p><strong>UX friction in specific areas.</strong> While overall UX is praised, friction emerges in calendar views, recurring-task creation, and portfolio management. Users report that these workflows require unintuitive workarounds.</p>
 <p><strong>Ecosystem fatigue.</strong> Teams relying on deep integrations with Slack, HubSpot, or email report that Asana's native connectors require Zapier or Make as intermediaries, adding cost and complexity.</p>
 <p><strong>Feature gaps.</strong> Recurring tasks, advanced calendar features, and custom reporting fall short for teams managing complex or repetitive workflows. One reviewer noted that Asana's feature set is "adequate" but not "best-in-class" for their use case.</p>
