@@ -32,6 +32,11 @@ export type {
 } from './types'
 
 export {
+  contentOpsIngestionFilePreflightError,
+  formatContentOpsBytes,
+} from './ingestionLimits'
+
+export {
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,

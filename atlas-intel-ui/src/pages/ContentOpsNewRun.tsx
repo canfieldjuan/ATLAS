@@ -20,6 +20,8 @@ import {
   previewContentOpsRun,
 } from '../api/contentOps'
 import {
+  contentOpsIngestionFilePreflightError,
+  formatContentOpsBytes,
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
@@ -661,6 +663,21 @@ export default function ContentOpsNewRun() {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
     if (!file) return
+
+    const preflightError = contentOpsIngestionFilePreflightError(
+      file,
+      catalog.ingestionLimits,
+    )
+    if (preflightError) {
+      ingestionFileLoadRequestIdRef.current += 1
+      setSelectedIngestionFile(null)
+      setIngestionFileLoadState({
+        kind: 'error',
+        message: preflightError,
+      })
+      markIngestionStale()
+      return
+    }
 
     ingestionFileLoadRequestIdRef.current += 1
     setIngestionFileLoadState({ kind: 'loading' })
@@ -1486,7 +1503,7 @@ function IngestionLimitsSummary({
         <span>
           Upload:{' '}
           <span className="text-slate-100">
-            {formatBytes(limits.fileUpload.maxFileBytes)}
+            {formatContentOpsBytes(limits.fileUpload.maxFileBytes)}
           </span>{' '}
           or{' '}
           <span className="text-slate-100">
@@ -1555,17 +1572,9 @@ function IngestionFileLoadResult({ state }: { state: IngestionFileLoadState }) {
     <div className="mt-3 rounded-md border border-slate-700 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
       Selected{' '}
       <span className="font-mono text-slate-100">{state.filename}</span>{' '}
-      ({formatBytes(state.size)}) for server-side inspection.
+      ({formatContentOpsBytes(state.size)}) for server-side inspection.
     </div>
   )
-}
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return 'unknown size'
-  if (value < 1024) return `${value} B`
-  const kib = value / 1024
-  if (kib < 1024) return `${kib.toFixed(1)} KB`
-  return `${(kib / 1024).toFixed(1)} MB`
 }
 
 function formatCount(value: number): string {
