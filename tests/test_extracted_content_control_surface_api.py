@@ -149,6 +149,22 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert input_contracts["secondary_keywords"]["type"] == "string_list"
     assert input_contracts["cta_url"]["asset"] == "landing_page"
     assert input_contracts["cta_url"]["placeholder"] == "/systems/ai-content-ops/intake"
+    assert input_contracts["faq_documentation_terms"] == {
+        "key": "faq_documentation_terms",
+        "label": "Documentation terms",
+        "type": "string_list",
+        "placeholder": "Single sign-on setup\nData export guide",
+        "asset": "faq_markdown",
+        "group": "vocabulary_gap",
+    }
+    assert input_contracts["faq_vocabulary_gap_rules"] == {
+        "key": "faq_vocabulary_gap_rules",
+        "label": "Vocabulary-gap rules",
+        "type": "nested_string_list",
+        "placeholder": "SSO, single sign-on\nexport, data export",
+        "asset": "faq_markdown",
+        "group": "vocabulary_gap",
+    }
     assert outputs["email_campaign"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["blog_post"]["reasoning_requirement"] == "optional_host_context"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
