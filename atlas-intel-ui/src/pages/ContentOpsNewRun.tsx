@@ -1161,19 +1161,32 @@ export default function ContentOpsNewRun() {
               placeholder='{"company_name": "Acme", "contact_email": "ops@example.com"}'
             />
           </label>
-          <textarea
-            value={ingestionRowsJson}
-            onChange={(e) => {
-              setSelectedIngestionFile(null)
-              setIngestionFileLoadState({ kind: 'idle' })
-              setIngestionRowsJson(e.target.value)
-              markIngestionStale()
-            }}
-            rows={5}
-            spellCheck={false}
-            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
-            placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
-          />
+          <label className="block text-sm">
+            <span className="flex flex-wrap items-center gap-2 text-slate-300">
+              Inline rows JSON
+              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                Deprecated
+              </span>
+              {selectedIngestionFile && (
+                <span className="text-xs text-slate-500">
+                  Ignored while an uploaded file is selected
+                </span>
+              )}
+            </span>
+            <textarea
+              value={ingestionRowsJson}
+              onChange={(e) => {
+                setSelectedIngestionFile(null)
+                setIngestionFileLoadState({ kind: 'idle' })
+                setIngestionRowsJson(e.target.value)
+                markIngestionStale()
+              }}
+              rows={5}
+              spellCheck={false}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+              placeholder='[{"company_name": "Acme", "vendor": "HubSpot", "email": "ops@example.com"}]'
+            />
+          </label>
           <IngestionFileLoadResult state={ingestionFileLoadState} />
           <IngestionInspectResult state={ingestionInspectState} />
           <IngestionImportResult state={ingestionImportState} />
