@@ -50,6 +50,8 @@ pytest \
   tests/test_extracted_content_control_surface_api.py \
   tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_content_ops_execution_smoke.py \
+  tests/test_atlas_content_ops_infrastructure.py \
+  tests/test_atlas_content_ops_execution_services.py \
   tests/test_extracted_content_ops_live_execute_harness.py \
   tests/test_extracted_parse_retry_helpers.py \
   tests/test_extracted_report_postgres.py \

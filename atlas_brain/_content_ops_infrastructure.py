@@ -10,7 +10,8 @@ The extracted Content Ops package declares two ports
 The host already has equivalent infrastructure:
 
 - `atlas_brain.services.LLMService.chat(messages, max_tokens, temperature)
-  -> dict` (sync), accessed via `llm_registry.get_active()`.
+  -> dict` (sync), resolved through the pipeline LLM router or the
+  active registry fallback.
 - `atlas_brain.skills.SkillRegistry.get(name) -> Optional[Skill]`,
   via `get_skill_registry()`.
 
@@ -156,24 +157,42 @@ class _HostSkillStore:
 def build_content_ops_llm_client(
     *,
     llm_registry: Any = None,
+    pipeline_llm_resolver: Any = None,
 ) -> LLMClient | None:
     """Return a Content-Ops-shaped LLM client, or ``None`` if no
-    host LLM is currently active.
+    host LLM is currently routable.
 
     Returning `None` (rather than raising) lets the
     services-bundle factory skip wiring LLM-needing generators
-    when the host hasn't activated a model yet -- those slots
+    when the host hasn't configured a model yet -- those slots
     stay `None` on the bundle and the executor surfaces
     `service_not_configured` per output, which the catalog
     endpoint exposes to the UI's Execute enable-state.
 
-    The registry argument is dependency-injection for tests:
+    The resolver / registry arguments are dependency-injection for tests:
     callers in dev environments without the host's full
     `atlas_brain.services` init chain (torch / ollama
-    implementations) can pass a stub. Production callers omit
-    the kwarg and the factory imports the canonical singleton
-    on demand.
+    implementations) can pass stubs. Production callers omit
+    both kwargs and the factory imports the canonical pipeline
+    router and registry on demand.
     """
+
+    if pipeline_llm_resolver is None and llm_registry is None:
+        # Lazy import: production callers only. The pipeline router knows how to
+        # resolve the configured OpenRouter Claude route even when no global
+        # registry slot has been pre-activated.
+        from atlas_brain.pipelines.llm import get_pipeline_llm
+
+        pipeline_llm_resolver = get_pipeline_llm
+
+    if pipeline_llm_resolver is not None:
+        host_llm = pipeline_llm_resolver(
+            workload="openrouter",
+            try_openrouter=True,
+            auto_activate_ollama=False,
+        )
+        if host_llm is not None:
+            return _HostLLMClient(host_llm)
 
     if llm_registry is None:
         # Lazy import: only production callers reach here. Tests
