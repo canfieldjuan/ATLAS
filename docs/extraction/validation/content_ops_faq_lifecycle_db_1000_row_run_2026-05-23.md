@@ -169,6 +169,89 @@ Maximum resident set size: 40988 KB
 Exit status: 0
 ```
 
+## Summary JSON Rerun
+
+After `--summary-json` landed, the same 1,000-row source artifact was rerun
+through the real local database lifecycle path using compact stdout plus a full
+result artifact.
+
+Command:
+
+```bash
+EXTRACTED_DATABASE_URL="$(python - <<'PY'
+from atlas_brain.storage.config import db_settings
+print(db_settings.dsn)
+PY
+)" /usr/bin/time -v -o tmp/faq_lifecycle_summary_validation_20260523/time.txt \
+  python scripts/smoke_content_ops_faq_lifecycle.py \
+  tmp/content_ops_faq_1000/cfpb_1000_source_rows.jsonl \
+  --source-format jsonl \
+  --account-id acct-faq-db-summary-validation-20260523 \
+  --user-id user-faq-db-summary-validation \
+  --title 'CFPB 1,000 Row FAQ DB Summary JSON Validation 2026-05-23' \
+  --min-source-rows 1000 \
+  --min-saved-faqs 1 \
+  --export-limit 5 \
+  --max-text-chars 1200 \
+  --default-field company_name=CFPB \
+  --default-field contact_email=cfpb-public-archive@example.invalid \
+  --default-field vendor_name=CFPB \
+  --output-result tmp/faq_lifecycle_summary_validation_20260523/result.json \
+  --summary-json > tmp/faq_lifecycle_summary_validation_20260523/stdout_summary.json
+```
+
+Artifact syntax checks:
+
+```bash
+python -m json.tool tmp/faq_lifecycle_summary_validation_20260523/stdout_summary.json
+python -m json.tool tmp/faq_lifecycle_summary_validation_20260523/result.json
+```
+
+Observed result:
+
+```json
+{
+  "draft_export_count": 1,
+  "error_count": 0,
+  "errors": [],
+  "generated_item_count": 8,
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "uses_user_vocabulary": true
+  },
+  "review_status": "published",
+  "reviewed_export_count": 1,
+  "saved_faq_count": 1,
+  "source_count": 1000,
+  "source_format": "jsonl",
+  "source_rows": 1000,
+  "status": "ok",
+  "ticket_source_count": 1000
+}
+```
+
+Additional observed values:
+
+- `stdout_summary.json` exactly matched `result.json.lifecycle_summary`.
+- Full result artifact retained `reviewed_export`.
+- Normalization warning count: `0`.
+- Question sources: `source_policy=8`.
+- Ticket counts by item: `[633, 166, 111, 57, 8, 6, 6, 13]`.
+- Result artifact size: `230K`.
+- Summary stdout artifact size: `807B`.
+
+Timing:
+
+```text
+Elapsed wall time: 0:01.21
+Maximum resident set size: 41508 KB
+Exit status: 0
+```
+
+No new issues surfaced in the summary JSON rerun. The compact stdout path kept
+operator output small while preserving the full lifecycle payload for audit.
+
 ## Issues Surfaced
 
 ### FAQLIFE1000-1 - Migration dry-run reports already-applied migrations as pending
