@@ -37,16 +37,20 @@ reproduce them") in its inverse: trusting a stale local tree to
 | `GET` | `/content-ops/control-surfaces` | Output catalog + presets + ingestion-profile menu + per-output execution flags |
 | `POST` | `/content-ops/preview` | Preflight validation; returns `ControlSurfacePreview` |
 | `POST` | `/content-ops/plan` | Build runnable plan; returns `GenerationPlan` |
-| `POST` | `/content-ops/ingestion/inspect` | Inspect inline opportunity/source rows before import or generation; returns `ContentOpsIngestionDiagnostics` |
-| `POST` | `/content-ops/ingestion/import` | Inspect and import inline opportunity/source rows; returns diagnostics plus import counts |
+| `POST` | `/content-ops/ingestion/files/inspect` | Inspect an uploaded CSV/JSON/JSONL ingestion file before import or generation; returns `ContentOpsIngestionDiagnostics` |
+| `POST` | `/content-ops/ingestion/files/import` | Inspect and import an uploaded CSV/JSON/JSONL ingestion file; returns diagnostics plus import counts |
+| `POST` | `/content-ops/ingestion/inspect` | Deprecated compatibility route for pasted/manual inline opportunity/source rows |
+| `POST` | `/content-ops/ingestion/import` | Deprecated compatibility route for pasted/manual inline opportunity/source rows |
 | `POST` | `/content-ops/execute` | Execute the plan via host-injected services; returns `ContentOpsExecutionResult` |
 
 The router prefix is configurable via `ContentOpsControlSurfaceApiConfig`
 (`api/control_surfaces.py:143`). Preview, plan, and execute share one pydantic
 body model (`ContentOpsRequestModel`, `api/control_surfaces.py:157-185`)
 with bounded sizes (max 50 input keys, depth 6, string <= 10000 chars,
-`outputs` length <= 20, `limit` 1-1000). The ingestion inspect route has its
-own bounded row-inspection body.
+`outputs` length <= 20, `limit` 1-1000). The deprecated inline ingestion
+routes have their own bounded row-inspection body. The file ingestion routes
+accept multipart upload bodies and apply separate file-size and normalized-row
+limits server-side.
 
 ### Catalog response shape (`/content-ops/control-surfaces`)
 
@@ -99,7 +103,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `OutputDefinition` | `control_surfaces.py:16-30` | `id`, `label`, `description`, `implemented`, `estimated_unit_cost_usd`, `required_inputs`, `default_max_items`, `reasoning_requirement`, `default_parse_retry_attempts` |
 | `ControlSurfacePreset` | `control_surfaces.py:33-40` | `id`, `label`, `outputs`, `description` |
 | `ContentOpsRequest` | `control_surfaces.py:43-55` | `target_mode`, `preset`, `outputs`, `limit`, `max_cost_usd`, `inputs`, `ingestion_profile`, `require_quality_gates`, `allow_unimplemented_outputs` |
-| `ContentOpsIngestionDiagnostics` | `ingestion_diagnostics.py:28-57` | `ok`, counts, bounded samples, and row warnings from inline ingestion inspection |
+| `ContentOpsIngestionDiagnostics` | `ingestion_diagnostics.py:28-57` | `ok`, counts, bounded samples, and row warnings from file or inline ingestion inspection |
 | `ContentOpsIngestionImportResult` | `control_surfaces.py` import route response | `inserted`, `skipped`, `dry_run`, `replace_existing`, `target_ids`, `warnings`, `source` |
 | `ControlSurfacePreview` | `control_surfaces.py:58-90` | `can_run`, `outputs`, `estimated_cost_usd`, `missing_inputs`, `blocked_outputs`, `warnings`, `normalized_request` |
 | `GenerationPlanStep` | `generation_plan.py:28-45` | `output`, `runner`, `status`, `config`, `reason` |
@@ -485,8 +489,8 @@ src/api/
   contentOpsControlSurfaces.ts   // GET  /content-ops/control-surfaces
   contentOpsPreview.ts           // POST /content-ops/preview
   contentOpsPlan.ts              // POST /content-ops/plan
-  contentOpsIngestionInspect.ts  // POST /content-ops/ingestion/inspect
-  contentOpsIngestionImport.ts   // POST /content-ops/ingestion/import
+  contentOpsIngestionFiles.ts    // POST /content-ops/ingestion/files/{inspect,import}
+  contentOpsIngestionInline.ts   // deprecated POST /content-ops/ingestion/{inspect,import}
   contentOpsExecute.ts           // POST /content-ops/execute
 ```
 
@@ -522,7 +526,8 @@ src/domain/
   `requested`, `generated`, `skipped`, `saved_ids`, and `errors`
 - Ingestion inspect/import panel (driven by
   `ContentOpsIngestionDiagnostics` and `ContentOpsIngestionImportResult`)
-  for pasted opportunity/source rows before preview or execution.
+  for selected ingestion files or pasted opportunity/source rows before preview
+  or execution.
 - Signal extraction table (driven by `SignalExtractionResultView`)
 
 ### UI layer
@@ -538,9 +543,13 @@ Dumb components only. No fetch, no business rules.
    - Renders preset picker, output picker, required-input form,
      options (`limit`, `maxCostUsd`, `requireQualityGates`,
      `allowUnimplementedOutputs`, `ingestionProfile`).
-   - Supports an ingestion inspector/importer that calls
-     `POST /content-ops/ingestion/inspect` for pasted or loaded JSON/JSONL/CSV rows and
-     `POST /content-ops/ingestion/import` for dry-run or write import.
+   - Supports an ingestion inspector/importer that sends selected
+     JSON/JSONL/CSV files to
+     `POST /content-ops/ingestion/files/inspect` and
+     `POST /content-ops/ingestion/files/import`.
+   - Keeps pasted/manual rows on the deprecated inline
+     `POST /content-ops/ingestion/inspect` and
+     `POST /content-ops/ingestion/import` compatibility routes.
      When import returns `reason="ingestion_not_ready"`, render the
      returned diagnostics instead of collapsing the response into a generic
      API error.
