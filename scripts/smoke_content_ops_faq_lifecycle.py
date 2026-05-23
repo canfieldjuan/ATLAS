@@ -33,6 +33,7 @@ from extracted_content_pipeline.ticket_faq_postgres import (  # noqa: E402
     PostgresTicketFAQRepository,
 )
 from content_ops_faq_smoke_profile import (  # noqa: E402
+    console_input_profile,
     empty_input_profile,
     input_profile_error,
     input_profile_from_loaded,
@@ -321,15 +322,16 @@ def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(dict(payload), indent=2, sort_keys=True, default=str))
         return
+    profile = console_input_profile(payload.get("input_profile"))
     if payload.get("ok"):
         print(
             "Content Ops FAQ lifecycle smoke passed: "
-            f"source_rows={payload.get('source_rows')} "
+            f"{profile} "
             f"saved_faqs={len(payload.get('saved_ids') or [])} "
             f"review_status={payload.get('review_status')}"
         )
         return
-    print("Content Ops FAQ lifecycle smoke failed:", file=sys.stderr)
+    print(f"Content Ops FAQ lifecycle smoke failed: {profile}", file=sys.stderr)
     for error in payload.get("errors") or []:
         print(f"- {error}", file=sys.stderr)
 
