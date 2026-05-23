@@ -102,7 +102,7 @@ const post: BlogPost = {
   seo_title: 'Help Scout vs Zendesk: 27 Reviews Compared (2026)',
   seo_description: 'Help Scout vs Zendesk: 27 reviews compared. Urgency, pain categories, and buyer segments analyzed. See which helpdesk vendor faces higher churn risk in 2026.',
   target_keyword: 'Help Scout vs Zendesk',
-  secondary_keywords: ["Help Scout reviews", "Zendesk reviews", "helpdesk software comparison"],
+  secondary_keywords: ["Help Scout reviews", "Zendesk reviews", "helpdesk software comparison", "Zendesk too expensive", "Zendesk alternatives"],
   faq: [
   {
     "question": "Which vendor has higher urgency signals in recent reviews?",
