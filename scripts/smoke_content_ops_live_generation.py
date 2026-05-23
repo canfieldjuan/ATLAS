@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import json
 from pathlib import Path
 import re
@@ -54,6 +55,11 @@ DEFAULT_BLOG_TOPIC = (
     "Support ticket FAQ gaps: what 90 days of repeat tickets reveal"
 )
 DEFAULT_BLOG_TOPIC_TYPE = "content_ops_live_smoke"
+DEFAULT_SUPPORT_TICKET_CSV = (
+    ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
+)
+SUPPORT_TICKET_BLOG_TOPIC = "Support-ticket questions customers keep asking"
+SUPPORT_TICKET_BLOG_TOPIC_TYPE = "content_ops_support_ticket_faq"
 
 AsyncCallable = Callable[[], Awaitable[None]]
 ServicesFactory = Callable[[], Any]
@@ -111,6 +117,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Optional JSON object merged over the default inputs.",
     )
     parser.add_argument(
+        "--support-ticket-csv",
+        nargs="?",
+        const=DEFAULT_SUPPORT_TICKET_CSV,
+        type=Path,
+        help=(
+            "Load support-ticket source rows from CSV and package them through "
+            "the Atlas support-ticket input provider before execution. When "
+            "no path is provided, uses the packaged support_ticket_sources.csv. "
+            "CSV rows must include support-ticket-shaped fields such as "
+            "ticket id, subject, description/message, or source_type."
+        ),
+    )
+    parser.add_argument(
         "--blog-blueprint-json",
         type=Path,
         help=(
@@ -159,6 +178,14 @@ def _load_json_object(path: Path) -> dict[str, Any]:
     return parsed
 
 
+def _load_csv_rows(path: Path) -> list[dict[str, str]]:
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
+    except OSError as exc:
+        raise SystemExit(f"Unable to read --support-ticket-csv: {exc}") from exc
+
+
 def _parse_override(raw: str) -> tuple[str, Any]:
     if "=" not in raw:
         raise SystemExit("--input overrides must use key=value")
@@ -180,7 +207,9 @@ def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if int(args.quality_repair_attempts) < 0:
         raise SystemExit("--quality-repair-attempts must be >= 0")
     output = str(args.output or "landing_page").strip() or "landing_page"
-    if output == "landing_page":
+    if _uses_support_ticket_csv(args):
+        inputs = {"source_material": _load_csv_rows(Path(args.support_ticket_csv))}
+    elif output == "landing_page":
         inputs = dict(DEFAULT_LANDING_PAGE_INPUTS)
     elif output == "blog_post":
         inputs = {
@@ -204,6 +233,58 @@ def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
         "require_quality_gates": not bool(args.no_quality_gates),
         "inputs": inputs,
     }
+
+
+def _uses_support_ticket_csv(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "support_ticket_csv", None))
+
+
+def _support_ticket_rows_from_args(args: argparse.Namespace) -> list[dict[str, str]]:
+    if not _uses_support_ticket_csv(args):
+        return []
+    return _load_csv_rows(Path(args.support_ticket_csv))
+
+
+async def _payload_with_support_ticket_provider(
+    payload: Mapping[str, Any],
+    *,
+    scope: Any,
+) -> dict[str, Any]:
+    from atlas_brain._content_ops_input_provider import (  # noqa: PLC0415
+        build_content_ops_input_provider,
+    )
+    from extracted_content_pipeline.content_ops_input_provider import (  # noqa: PLC0415
+        merge_content_ops_input_package,
+    )
+
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=scope,
+        request=payload,
+    )
+    if hasattr(package, "__await__"):
+        package = await package
+    if _provider_package_is_noop(package):
+        raise ValueError(
+            "--support-ticket-csv did not contain support-ticket-shaped rows; "
+            "include ticket id, subject, and description/message fields."
+        )
+    return merge_content_ops_input_package(payload, package)
+
+
+def _provider_package_is_noop(package: Any) -> bool:
+    metadata = getattr(package, "metadata", None)
+    inputs = getattr(package, "inputs", None)
+    outputs = getattr(package, "outputs", None)
+    if isinstance(package, Mapping):
+        metadata = package.get("metadata")
+        inputs = package.get("inputs")
+        outputs = package.get("outputs")
+    return (
+        not inputs
+        and not outputs
+        and isinstance(metadata, Mapping)
+        and metadata.get("mode") == "noop"
+    )
 
 
 def _resolve_runtime_dependencies() -> tuple[AsyncCallable, AsyncCallable, ServicesFactory, Executor, Any]:
@@ -358,10 +439,165 @@ def _default_blog_blueprint_payload() -> dict[str, Any]:
     }
 
 
+def _support_ticket_blog_blueprint_payload(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    source_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
+    row_count = len(source_rows)
+    question_like_count = sum(1 for row in source_rows if "?" in _ticket_row_text(row))
+    top_clusters = _top_ticket_clusters(source_rows)
+    cluster_summary = _cluster_summary(top_clusters)
+    draft_faq_entries = min(12, max(1, row_count))
+    return {
+        "topic": SUPPORT_TICKET_BLOG_TOPIC,
+        "data_context": {
+            "review_period": "last 90 days",
+            "source_row_count": row_count,
+            "question_like_ticket_count": question_like_count,
+            "top_clusters": top_clusters,
+            "_known_vendors": [],
+            "report_date": "2026-05-23",
+            "total_reviews_analyzed": row_count,
+            "deep_enriched_count": row_count,
+            "category": "support tickets",
+            "topic": SUPPORT_TICKET_BLOG_TOPIC,
+            "source_period": "Last 90 days of support tickets",
+            "source": "support_ticket_provider",
+        },
+        "sections": [
+            {
+                "id": "repeat-ticket-patterns",
+                "heading": "What do repeat support tickets reveal?",
+                "goal": (
+                    "Explain what the uploaded support-ticket rows show about "
+                    "customer questions and missing customer-facing answers."
+                ),
+                "key_stats": {
+                    "support_ticket_rows": row_count,
+                    "question_like_rows": question_like_count,
+                    "cluster_count": len(top_clusters),
+                },
+                "chart_ids": [],
+                "data_summary": (
+                    f"The uploaded CSV contains {row_count} support-ticket "
+                    f"rows. {question_like_count} rows include direct customer "
+                    f"questions. Top observed clusters: {cluster_summary}."
+                ),
+            },
+            {
+                "id": "faq-gap-priorities",
+                "heading": "Which FAQ gaps should a small team fix first?",
+                "goal": (
+                    "Rank the observed ticket clusters by volume and explain "
+                    "why the highest-volume issues should become FAQ entries."
+                ),
+                "key_stats": _cluster_key_stats(top_clusters),
+                "chart_ids": [],
+                "data_summary": (
+                    "Prioritize FAQ work by observed ticket volume. In this "
+                    f"CSV, the highest-volume clusters are: {cluster_summary}. "
+                    "Those clusters should be reviewed before lower-volume or "
+                    "one-off questions."
+                ),
+            },
+            {
+                "id": "publishable-answer-process",
+                "heading": "How should old tickets become customer-ready answers?",
+                "goal": (
+                    "Show the operational path from CSV upload to clustered "
+                    "questions, customer wording, draft answers, and review."
+                ),
+                "key_stats": {
+                    "source_window_days": 90,
+                    "source_rows": row_count,
+                    "draft_faq_entries": draft_faq_entries,
+                    "review_steps": 3,
+                },
+                "chart_ids": [],
+                "data_summary": (
+                    f"The uploaded ticket CSV can produce up to {draft_faq_entries} "
+                    "first-pass FAQ entries from observed customer wording. "
+                    "Each answer should preserve customer language, summarize "
+                    "the support team's resolution, and stay in review until "
+                    "the team approves it."
+                ),
+            },
+        ],
+        "available_charts": [],
+        "related_posts": [],
+        "grounded_vendors": [
+            "Support Tickets",
+            "Support Ticket FAQ",
+            "Support Ticket FAQ Gaps",
+            "FAQ Report",
+            "Help Center",
+        ],
+        "required_vendors": [],
+    }
+
+
+def _ticket_row_text(row: Mapping[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "").strip()
+        for key in (
+            "Description",
+            "description",
+            "Message",
+            "message",
+            "Text",
+            "text",
+            "Subject",
+            "subject",
+            "Title",
+            "title",
+        )
+        if str(row.get(key) or "").strip()
+    )
+
+
+def _ticket_cluster_label(row: Mapping[str, Any]) -> str:
+    for key in ("Pain Category", "pain_category", "Category", "category", "intent"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return "uncategorized"
+
+
+def _top_ticket_clusters(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        label = _ticket_cluster_label(row)
+        counts[label] = counts.get(label, 0) + 1
+    return [
+        {"label": label, "count": count}
+        for label, count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0].lower()),
+        )[:5]
+    ]
+
+
+def _cluster_summary(clusters: Sequence[Mapping[str, Any]]) -> str:
+    if not clusters:
+        return "no categorized ticket clusters"
+    return ", ".join(
+        f"{cluster.get('label')} ({int(cluster.get('count') or 0)})"
+        for cluster in clusters
+    )
+
+
+def _cluster_key_stats(clusters: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    stats: dict[str, int] = {}
+    for index, cluster in enumerate(clusters[:5], start=1):
+        stats[f"cluster_{index}_count"] = int(cluster.get("count") or 0)
+    return stats or {"cluster_count": 0}
+
+
 def _load_single_blog_blueprint_from_file(
     path: Path,
     *,
     target_mode: str,
+    topic_type: str = DEFAULT_BLOG_TOPIC_TYPE,
 ) -> tuple[Any, list[dict[str, Any]]]:
     from extracted_content_pipeline.blog_blueprint_ingest import (  # noqa: PLC0415
         load_blog_blueprints_from_file,
@@ -371,7 +607,7 @@ def _load_single_blog_blueprint_from_file(
         loaded = load_blog_blueprints_from_file(
             path,
             target_mode=target_mode,
-            topic_type=DEFAULT_BLOG_TOPIC_TYPE,
+            topic_type=topic_type,
         )
     except OSError as exc:
         raise ValueError(f"unable to read --blog-blueprint-json: {exc}") from exc
@@ -415,7 +651,10 @@ def _align_blog_payload_to_seed(
             inputs["filters"] = filters
         filters["slug"] = slug
     seeded_topic = str(seeded_blog_blueprint.get("topic") or "").strip()
-    if seeded_topic and inputs.get("topic") == DEFAULT_BLOG_TOPIC:
+    if seeded_topic and inputs.get("topic") in {
+        DEFAULT_BLOG_TOPIC,
+        SUPPORT_TICKET_BLOG_TOPIC,
+    }:
         inputs["topic"] = seeded_topic
 
 
@@ -430,7 +669,18 @@ async def _seed_default_blog_blueprint(
     from extracted_content_pipeline.blog_ports import BlogBlueprint  # noqa: PLC0415
 
     account_slug = _account_slug(args.account_id)
-    slug = f"content-ops-blog-live-smoke-{account_slug}"
+    support_ticket_mode = _uses_support_ticket_csv(args)
+    topic_type = (
+        SUPPORT_TICKET_BLOG_TOPIC_TYPE
+        if support_ticket_mode
+        else DEFAULT_BLOG_TOPIC_TYPE
+    )
+    slug_prefix = (
+        "content-ops-support-ticket-live-smoke"
+        if support_ticket_mode
+        else "content-ops-blog-live-smoke"
+    )
+    slug = f"{slug_prefix}-{account_slug}"
     target_mode = str(args.target_mode or "vendor_retention").strip() or "vendor_retention"
     custom_path = getattr(args, "blog_blueprint_json", None)
     custom_warnings: list[dict[str, Any]] = []
@@ -439,15 +689,26 @@ async def _seed_default_blog_blueprint(
         blueprint, custom_warnings = _load_single_blog_blueprint_from_file(
             Path(custom_path),
             target_mode=target_mode,
+            topic_type=topic_type,
         )
         custom_source = str(custom_path)
     else:
         blueprint = BlogBlueprint(
             target_mode=target_mode,
-            topic_type=DEFAULT_BLOG_TOPIC_TYPE,
+            topic_type=topic_type,
             slug=slug,
-            suggested_title="Support Tickets: FAQ Gaps From 90 Days of Tickets",
-            payload=_default_blog_blueprint_payload(),
+            suggested_title=(
+                SUPPORT_TICKET_BLOG_TOPIC
+                if support_ticket_mode
+                else "Support Tickets: FAQ Gaps From 90 Days of Tickets"
+            ),
+            payload=(
+                _support_ticket_blog_blueprint_payload(
+                    _support_ticket_rows_from_args(args)
+                )
+                if support_ticket_mode
+                else _default_blog_blueprint_payload()
+            ),
         )
     saved_ids = await PostgresBlogBlueprintRepository(
         pool=get_db_pool()
@@ -514,6 +775,11 @@ async def run_content_ops_live_generation_smoke(
                 account_id=str(args.account_id or "").strip(),
                 user_id=str(args.user_id or "").strip(),
             )
+            if _uses_support_ticket_csv(args):
+                payload = await _payload_with_support_ticket_provider(
+                    payload,
+                    scope=scope,
+                )
             if output == "blog_post":
                 seeder = blog_blueprint_seed_fn or _seed_default_blog_blueprint
                 seeded_blog_blueprint = await seeder(args, scope)

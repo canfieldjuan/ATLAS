@@ -380,6 +380,35 @@ python scripts/smoke_content_ops_live_generation.py \
   --json
 ```
 
+To run the same live smoke with support-ticket-derived inputs, add
+`--support-ticket-csv`. When no path is supplied, the script uses the packaged
+`extracted_content_pipeline/examples/support_ticket_sources.csv`, packages the
+rows through the Atlas support-ticket input provider, and then runs the normal
+landing-page or blog-post executor path:
+
+The CSV must be support-ticket-shaped: include fields such as ticket id,
+subject, description/message text, pain category/intent, or `source_type`.
+Non-ticket CSVs fail before execution so the smoke does not run with unexpanded
+provider defaults.
+
+```bash
+python scripts/smoke_content_ops_live_generation.py \
+  --account-id acct_123 \
+  --support-ticket-csv \
+  --env-file /path/to/Atlas/.env \
+  --json
+```
+
+For low-cost live testing, point the env file at Haiku before running the smoke:
+
+```bash
+ATLAS_LLM__OPENROUTER_REASONING_MODEL=anthropic/claude-haiku-4-5
+```
+
+The blog-post variant also accepts `--support-ticket-csv`; its default seeded
+blueprint uses the same `content_ops_support_ticket_faq` topic type that the
+support-ticket provider emits.
+
 Minimal `blog-blueprint.json`:
 
 ```json

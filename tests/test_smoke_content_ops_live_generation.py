@@ -86,6 +86,7 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "target_mode": "vendor_retention",
         "env_file": [],
         "input_json": None,
+        "support_ticket_csv": None,
         "blog_blueprint_json": None,
         "input": [],
         "quality_repair_attempts": 1,
@@ -95,6 +96,37 @@ def _args(**overrides: Any) -> argparse.Namespace:
     }
     values.update(overrides)
     return argparse.Namespace(**values)
+
+
+def _support_ticket_csv(tmp_path: Path) -> Path:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "Ticket ID,Subject,Description,Pain Category",
+            (
+                "ticket-login-1,Login email change,"
+                "How do I change my login email?,account"
+            ),
+            (
+                "ticket-export-1,Campaign export,"
+                "How do we export campaign attribution data before renewal?,reporting"
+            ),
+        ]),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _non_ticket_csv(tmp_path: Path) -> Path:
+    path = tmp_path / "accounts.csv"
+    path.write_text(
+        "\n".join([
+            "Company,Website,Notes",
+            "Acme,https://example.com,Prospect account",
+        ]),
+        encoding="utf-8",
+    )
+    return path
 
 
 @pytest.mark.asyncio
@@ -131,6 +163,76 @@ async def test_live_generation_smoke_executes_landing_page_through_real_executor
     assert call["campaign"].context["faq_questions"] == ["How long does it take?"]
     assert call["quality_repair_attempts"] == 1
     assert call["quality_gates_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_packages_support_ticket_csv_for_landing_page(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(support_ticket_csv=_support_ticket_csv(tmp_path)),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["payload"]["inputs"]["target_keyword"] == "support ticket FAQ report"
+    assert result["payload"]["inputs"]["source_period"] == (
+        "Last 90 days of support tickets"
+    )
+    assert result["payload"]["inputs"]["faq_questions"] == [
+        "How do I change my login email?",
+        "How do we export campaign attribution data before renewal?",
+    ]
+    assert len(service.calls) == 1
+
+    call = service.calls[0]
+    assert call["campaign"].name == "FAQ Report"
+    assert call["campaign"].persona == (
+        "Small teams answering repeat support questions"
+    )
+    assert call["campaign"].context["cta_label"] == (
+        "Upload Ticket CSV -- Free Analysis"
+    )
+    assert call["campaign"].context["faq_questions"] == [
+        "How do I change my login email?",
+        "How do we export campaign attribution data before renewal?",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_rejects_non_ticket_csv(tmp_path: Path) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(support_ticket_csv=_non_ticket_csv(tmp_path)),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["execution"] is None
+    assert result["errors"] == [
+        "ValueError: --support-ticket-csv did not contain "
+        "support-ticket-shaped rows; include ticket id, subject, and "
+        "description/message fields."
+    ]
+    assert service.calls == []
+    assert lifecycle.initialized is True
+    assert lifecycle.closed is True
 
 
 @pytest.mark.asyncio
@@ -186,6 +288,55 @@ async def test_live_generation_smoke_seeds_and_executes_blog_post_through_real_e
     }
     assert call["topic"] == "Support ticket FAQ gaps"
     assert call["quality_gates_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_packages_support_ticket_csv_for_blog_post(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+    seeded: list[dict[str, Any]] = []
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        seeded.append({"args": args, "scope": scope})
+        return {
+            "saved_ids": ["bp-support-ticket-smoke-1"],
+            "slug": "content-ops-support-ticket-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "content_ops_support_ticket_faq",
+            "topic": "Support-ticket questions customers keep asking",
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["payload"]["inputs"]["filters"] == {
+        "topic_type": "content_ops_support_ticket_faq",
+        "slug": "content-ops-support-ticket-live-smoke-acct-live-smoke",
+    }
+    assert len(seeded) == 1
+    assert len(service.calls) == 1
+
+    call = service.calls[0]
+    assert call["filters"] == {
+        "topic_type": "content_ops_support_ticket_faq",
+        "slug": "content-ops-support-ticket-live-smoke-acct-live-smoke",
+    }
+    assert call["topic"] == "Support-ticket questions customers keep asking"
 
 
 def test_blog_blueprint_json_loader_accepts_one_custom_blueprint(tmp_path: Path) -> None:
@@ -250,6 +401,76 @@ def test_blog_payload_alignment_uses_seeded_topic_type_and_title() -> None:
         "slug": "faq-gaps-for-onboarding-tickets",
     }
     assert payload["inputs"]["topic"] == "FAQ gaps for onboarding tickets"
+
+
+def test_blog_payload_alignment_replaces_support_ticket_provider_default_topic() -> None:
+    payload = {
+        "outputs": ["blog_post"],
+        "inputs": {
+            "topic": smoke.SUPPORT_TICKET_BLOG_TOPIC,
+            "filters": {"topic_type": smoke.SUPPORT_TICKET_BLOG_TOPIC_TYPE},
+        },
+    }
+
+    smoke._align_blog_payload_to_seed(
+        payload,
+        {
+            "topic_type": "custom_support_ticket_topic",
+            "slug": "custom-support-ticket-blueprint",
+            "topic": "Custom support-ticket article",
+        },
+    )
+
+    assert payload["inputs"]["filters"] == {
+        "topic_type": "custom_support_ticket_topic",
+        "slug": "custom-support-ticket-blueprint",
+    }
+    assert payload["inputs"]["topic"] == "Custom support-ticket article"
+
+
+def test_blog_payload_alignment_preserves_custom_operator_topic() -> None:
+    payload = {
+        "outputs": ["blog_post"],
+        "inputs": {
+            "topic": "Operator supplied smoke topic",
+            "filters": {"topic_type": smoke.SUPPORT_TICKET_BLOG_TOPIC_TYPE},
+        },
+    }
+
+    smoke._align_blog_payload_to_seed(
+        payload,
+        {
+            "topic_type": "custom_support_ticket_topic",
+            "slug": "custom-support-ticket-blueprint",
+            "topic": "Custom support-ticket article",
+        },
+    )
+
+    assert payload["inputs"]["topic"] == "Operator supplied smoke topic"
+
+
+def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -> None:
+    rows = smoke._load_csv_rows(_support_ticket_csv(tmp_path))
+
+    payload = smoke._support_ticket_blog_blueprint_payload(rows)
+
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "186" not in serialized
+    assert "78" not in serialized
+    assert "42%" not in serialized
+    assert payload["data_context"]["source_row_count"] == 2
+    assert payload["data_context"]["question_like_ticket_count"] == 2
+    assert payload["data_context"]["top_clusters"] == [
+        {"label": "account", "count": 1},
+        {"label": "reporting", "count": 1},
+    ]
+    first_section = payload["sections"][0]
+    assert first_section["key_stats"] == {
+        "support_ticket_rows": 2,
+        "question_like_rows": 2,
+        "cluster_count": 2,
+    }
+    assert "2 support-ticket rows" in first_section["data_summary"]
 
 
 @pytest.mark.asyncio
