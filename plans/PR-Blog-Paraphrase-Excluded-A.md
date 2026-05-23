@@ -70,11 +70,31 @@ the lead-in is folded into the sentence.
   -- next slice.
 - Slashdot x9 drop -- separate slice.
 
+## Review follow-up (#837 review)
+
+The reviewer caught a real blind spot: the `excluded_source_quote` detector only
+matched the on-form (`reviewer on <Source>`) and missed the **adjective form**
+(`<Source> reviewer`), so two posts still carried excluded-source quotes that
+audited as 0. Fixed:
+- **Detector widened** (untracked auditor): now matches `<role> on <Platform>` AND
+  `<Platform> <role>`; a bare dash-form was tried and dropped (it false-positived
+  on parenthetical em-dashes in methodology lists, e.g. jira). `--self-test` ALL
+  PASS (+3 fixtures, incl. the methodology-FP guard).
+- **microsoft-teams-vs-notion**: paraphrased the remaining Trustpilot quotes (the
+  verbatim Windows-11 quote, repeated 2x; the embedded "$288 / limited usage and
+  product complexity", repeated 4x) -- dropped the `Trustpilot reviewer`
+  attribution and the verbatim form.
+- **insightly-vs-zoho-crm**: dropped the source name from 4 reported-speech
+  attributions (`A Capterra reviewer ...` x2, `... Trustpilot reviewer ...` x2).
+- jira-vs-trello was a detector FALSE POSITIVE under the bare dash-form (its
+  Capterra/Trustpilot are methodology mentions, parked) -- now clean, no change.
+
 ## Verification
 
-- Each of the 7 posts re-audited (`--slug=`): `excluded_source_quote` = 0 and
-  NO findings of any kind (no orphaned-lead-in introduced by the paraphrases).
-- `excluded_source_quote` detector `--self-test`: ALL PASS (unchanged this slice).
+- All 7 posts re-audited under the WIDENED detector (`--slug=`):
+  `excluded_source_quote` = 0, no findings of any kind. grep confirms no residual
+  `<excluded> reviewer` / `reviewer on <excluded>` attributions.
+- `excluded_source_quote` detector `--self-test`: ALL PASS.
 
 ## Estimated diff size
 
@@ -82,5 +102,6 @@ the lead-in is folded into the sentence.
 |---|---:|
 | azure-vs-salesforce (5 paraphrases) | ~10 |
 | 6 single-quote posts | ~12 |
-| Plan doc | ~78 |
-| **Total** | **~100** |
+| review follow-up (microsoft-teams-vs-notion + insightly) | ~20 |
+| Plan doc | ~98 |
+| **Total** | **~140** |
