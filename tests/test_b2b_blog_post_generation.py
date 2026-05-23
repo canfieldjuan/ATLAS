@@ -323,6 +323,54 @@ def test_ensure_methodology_context_injects_review_period_and_disclaimer():
     assert "self-selected" in updated["content"]
 
 
+def _source_blueprint():
+    return blog_mod.PostBlueprint(
+        topic_type="vendor_deep_dive",
+        slug="x-deep-dive-2026-04",
+        suggested_title="X Deep Dive",
+        tags=["crm"],
+        data_context={
+            "enriched_count": 261,
+            "source_distribution": {
+                "sources": [{"name": "g2", "count": 11}, {"name": "reddit", "count": 237}],
+                "verified_count": 24,
+                "community_count": 237,
+            },
+            "source_description": (
+                "24 reviews from verified review platforms and "
+                "237 reviews from community forums"
+            ),
+        },
+        sections=[blog_mod.SectionSpec(id="hook", heading="Introduction", goal="x")],
+        charts=[],
+    )
+
+
+def test_coverage_snapshot_note_uses_generalized_source_description():
+    """D5: the coverage snapshot note must describe sources via the generalized
+    source_description (verified-platform / community-forum buckets), NOT a
+    partial platform enumeration. Reverting to _top_source_summary fails this."""
+    note = blog_mod._build_coverage_snapshot_note(_source_blueprint())
+    assert "24 reviews from verified review platforms and 237 reviews from community forums" in note
+    for platform in ("G2", "g2", "Reddit", "reddit", "Gartner", "PeerSpot"):
+        assert platform not in note
+
+
+def test_blog_payload_generalizes_source_distribution_for_llm():
+    """D5: the LLM payload must NOT carry the per-platform source list (the model
+    enumerates a partial subset of it). It gets counts + the generalized
+    source_description; the stored data_context keeps sources for the chart."""
+    blueprint = _source_blueprint()
+    payload = blog_mod._build_blog_generation_payload(blueprint)
+    payload_sd = payload["data_context"]["source_distribution"]
+    assert "sources" not in payload_sd          # no per-platform list to the LLM
+    assert payload_sd.get("verified_count") == 24
+    assert payload_sd.get("community_count") == 237
+    assert payload["data_context"]["source_description"]
+    # stored data_context untouched -> the source-mix chart still has platforms
+    assert blueprint.data_context["source_distribution"]["sources"]
+
+
 @pytest.mark.asyncio
 async def test_generate_content_async_traces_blog_business_metadata(monkeypatch):
     blueprint = blog_mod.PostBlueprint(

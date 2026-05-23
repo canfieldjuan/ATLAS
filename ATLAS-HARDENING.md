@@ -29,6 +29,22 @@ parked and note in the plan's Deferred.
 
 ## 2026-05-22
 
+### LLM may still narrate a partial source set despite the generalized field (D5 residual)
+- File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py`, blog generation payload + the external `digest/b2b_blog_post_generation` skill (system prompt).
+- Description: D5 stops feeding the per-platform `source_distribution.sources` list to the LLM payload and provides a generalized `source_description`, but the model could still infer/mention platform names from quote `source_name`s or chart labels in the payload, or just not use `source_description`. LLM-fidelity is empirically unverified (same class as the D6 lead-in drift).
+- Why it matters: the deterministic lever is closed, but corpus-wide adherence needs checking; this is what the Phase-2 deep pass should verify (and a detector could flag prose source-lists that omit a quoted source).
+- Effort: M
+- Category: correctness
+- Found during: D5
+
+### Unused `_top_source_summary` helper after D5 dropped its only caller
+- File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py` ~L2461 (and mirror).
+- Description: `_build_coverage_snapshot_note` no longer calls `_top_source_summary`; it's now dead code. (It also had a latent bug — it was fed the `{sources, verified_count, community_count}` dict instead of `{name: count}`.) Remove next pass.
+- Why it matters: dead code + a latent bug; removing it is cleanup, deliberately out of D5's thin scope.
+- Effort: S
+- Category: tech-debt
+- Found during: D5
+
 ### Deep-dive strengths/weaknesses chart fallback cannot show true strengths
 - File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py` ~L8092 (and the byte-identical `extracted_content_pipeline` mirror), the `if len(strengths) + len(weaknesses) < 3 and signals:` fallback in `_blueprint_vendor_deep_dive`.
 - Description: when the product profile is too thin, the "Strengths vs Weaknesses" chart is built only from pain-category signals, which carry weakness data only -- so the `strengths` series is always 0 (a one-sided chart). D4 made the bucketing truthful (all pain -> weaknesses) but did not give the fallback a real strengths source.
