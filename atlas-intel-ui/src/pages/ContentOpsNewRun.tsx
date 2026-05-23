@@ -94,8 +94,7 @@ const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
 const DEFAULT_INGESTION_DEFAULT_FIELDS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_SOURCE = 'manual'
-const INGESTION_SAMPLE_LIMIT = 5
-const INGESTION_MAX_SOURCE_TEXT_CHARS = 1200
+const INGESTION_RESULT_DISPLAY_LIMIT = 5
 const LANDING_PAGE_QUALITY_REPAIR_INPUT =
   'landing_page_quality_repair_attempts'
 const LANDING_PAGE_INPUT_ASSET = 'landing_page'
@@ -536,8 +535,8 @@ export default function ContentOpsNewRun() {
             source: ingestionSource.trim() || null,
             target_mode: request.targetMode,
             file_format: 'auto',
-            max_source_text_chars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-            sample_limit: INGESTION_SAMPLE_LIMIT,
+            max_source_text_chars: catalog.ingestionLimits.maxSourceTextChars,
+            sample_limit: catalog.ingestionLimits.maxSampleLimit,
             default_fields: parsedDefaultFields.fields,
           })
         : await inspectContentOpsIngestion(
@@ -546,8 +545,8 @@ export default function ContentOpsNewRun() {
               sourceRows: ingestionSourceRows,
               source: ingestionSource.trim() || null,
               targetMode: request.targetMode,
-              maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-              sampleLimit: INGESTION_SAMPLE_LIMIT,
+              maxSourceTextChars: catalog.ingestionLimits.maxSourceTextChars,
+              sampleLimit: catalog.ingestionLimits.maxSampleLimit,
               defaultFields: parsedDefaultFields.fields,
             }),
           )
@@ -599,8 +598,8 @@ export default function ContentOpsNewRun() {
             source: ingestionSource.trim() || null,
             target_mode: request.targetMode,
             file_format: 'auto',
-            max_source_text_chars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-            sample_limit: INGESTION_SAMPLE_LIMIT,
+            max_source_text_chars: catalog.ingestionLimits.maxSourceTextChars,
+            sample_limit: catalog.ingestionLimits.maxSampleLimit,
             default_fields: parsedDefaultFields.fields,
             replace_existing: ingestionReplaceExisting,
             dry_run: ingestionDryRun,
@@ -611,8 +610,8 @@ export default function ContentOpsNewRun() {
               sourceRows: ingestionSourceRows,
               source: ingestionSource.trim() || null,
               targetMode: request.targetMode,
-              maxSourceTextChars: INGESTION_MAX_SOURCE_TEXT_CHARS,
-              sampleLimit: INGESTION_SAMPLE_LIMIT,
+              maxSourceTextChars: catalog.ingestionLimits.maxSourceTextChars,
+              sampleLimit: catalog.ingestionLimits.maxSampleLimit,
               defaultFields: parsedDefaultFields.fields,
               replaceExisting: ingestionReplaceExisting,
               dryRun: ingestionDryRun,
@@ -1051,6 +1050,7 @@ export default function ContentOpsNewRun() {
               </button>
             </div>
           </div>
+          <IngestionLimitsSummary limits={catalog.ingestionLimits} />
           <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <label className="block text-sm sm:col-span-2">
               <span className="text-slate-300">Source label</span>
@@ -1456,7 +1456,7 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
       {diagnostics.warnings.length > 0 && (
         <Section label="Warnings">
           <ul className="ml-4 list-disc text-xs text-amber-100">
-            {diagnostics.warnings.slice(0, INGESTION_SAMPLE_LIMIT).map((warning, i) => (
+            {diagnostics.warnings.slice(0, INGESTION_RESULT_DISPLAY_LIMIT).map((warning, i) => (
               <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
                 {warning.code}: {warning.message}
               </li>
@@ -1471,6 +1471,63 @@ function IngestionInspectResult({ state }: { state: IngestionInspectState }) {
           </pre>
         </Section>
       )}
+    </div>
+  )
+}
+
+function IngestionLimitsSummary({
+  limits,
+}: {
+  limits: ContentOpsCatalog['ingestionLimits']
+}) {
+  return (
+    <div className="mb-3 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+      <div className="flex flex-wrap gap-x-5 gap-y-1">
+        <span>
+          Upload:{' '}
+          <span className="text-slate-100">
+            {formatBytes(limits.fileUpload.maxFileBytes)}
+          </span>{' '}
+          or{' '}
+          <span className="text-slate-100">
+            {formatCount(limits.fileUpload.maxRows)}
+          </span>{' '}
+          rows
+        </span>
+        <span>
+          Formats:{' '}
+          <span className="text-slate-100">
+            {formatUploadFormats(limits.fileUpload.supportedFormats)}
+          </span>
+        </span>
+        {supportsAutoDetection(limits.fileUpload.supportedFormats) && (
+          <span>
+            Detection: <span className="text-slate-100">Auto</span>
+          </span>
+        )}
+        <span>
+          Inline JSON:{' '}
+          <span className="text-slate-100">
+            {formatCount(limits.inlineRows.maxRows)}
+          </span>{' '}
+          rows
+          {limits.inlineRows.deprecated ? ' (deprecated)' : ''}
+        </span>
+        <span>
+          Source text:{' '}
+          <span className="text-slate-100">
+            {formatCount(limits.maxSourceTextChars)}
+          </span>{' '}
+          chars
+        </span>
+        <span>
+          Samples:{' '}
+          <span className="text-slate-100">
+            {formatCount(limits.maxSampleLimit)}
+          </span>{' '}
+          rows
+        </span>
+      </div>
     </div>
   )
 }
@@ -1511,6 +1568,23 @@ function formatBytes(value: number): string {
   return `${(kib / 1024).toFixed(1)} MB`
 }
 
+function formatCount(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown'
+  return value.toLocaleString('en-US')
+}
+
+function formatUploadFormats(formats: string[]): string {
+  const concreteFormats = formats.filter((format) => format !== 'auto')
+  if (concreteFormats.length === 0) return 'server-detected'
+  return concreteFormats
+    .map((format) => (format === 'auto' ? 'Auto' : format.toUpperCase()))
+    .join(', ')
+}
+
+function supportsAutoDetection(formats: string[]): boolean {
+  return formats.includes('auto')
+}
+
 function IngestionImportResult({ state }: { state: IngestionImportState }) {
   if (state.kind === 'idle' || state.kind === 'submitting') {
     return null
@@ -1543,7 +1617,7 @@ function IngestionImportResult({ state }: { state: IngestionImportState }) {
           <Section label="Blocking diagnostics">
             <ul className="ml-4 list-disc text-xs text-amber-100">
               {state.diagnostics.warnings
-                .slice(0, INGESTION_SAMPLE_LIMIT)
+                .slice(0, INGESTION_RESULT_DISPLAY_LIMIT)
                 .map((warning, i) => (
                   <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
                     {warning.code}: {warning.message}
@@ -1572,14 +1646,14 @@ function IngestionImportResult({ state }: { state: IngestionImportState }) {
       {result.targetIds.length > 0 && (
         <Section label="Target ids">
           <div className="break-all font-mono text-[11px] text-slate-300">
-            {result.targetIds.slice(0, INGESTION_SAMPLE_LIMIT).join(', ')}
+            {result.targetIds.slice(0, INGESTION_RESULT_DISPLAY_LIMIT).join(', ')}
           </div>
         </Section>
       )}
       {result.warnings.length > 0 && (
         <Section label="Import warnings">
           <ul className="ml-4 list-disc text-xs text-amber-100">
-            {result.warnings.slice(0, INGESTION_SAMPLE_LIMIT).map((warning, i) => (
+            {result.warnings.slice(0, INGESTION_RESULT_DISPLAY_LIMIT).map((warning, i) => (
               <li key={`${warning.code}-${warning.rowIndex ?? i}-${warning.field ?? ''}`}>
                 {warning.code}: {warning.message}
               </li>
