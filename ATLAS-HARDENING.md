@@ -29,6 +29,14 @@ parked and note in the plan's Deferred.
 
 ## 2026-05-22
 
+### zoho-crm-deep-dive L158 source list omits Slashdot (a quoted source) -- quote-pool vs corpus-count scope mismatch
+- File/location: `atlas-churn-ui/src/content/blog/zoho-crm-deep-dive-2026-04.ts` L158; generator-side, the quote pool (`_fetch_quotable_reviews`) vs the corpus counts (`_fetch_source_distribution`).
+- Description: L158 reads "The data comes from G2, Gartner, PeerSpot, and Reddit -- ... (24 reviews) ... (237 reviews)", but the post quotes a Slashdot reviewer (L166/L168, the D6 fix). The naive fix ("add Slashdot to the community bucket and the 237 reconciles", per the #802 review) does NOT work: DB-verified, the windowed-ENRICHED zoho corpus is reddit(237)/g2(11)/peerspot(8)/gartner(5) -- no Slashdot. The Slashdot quote's review is `enrichment_status=not_applicable` (in-window, Zoho-mention, but NOT enriched), so it's excluded from the 261/237 counts. So the quote pool includes non-enriched reviews the corpus counts exclude.
+- Why it matters: live-misleading (a source quoted but undeclared, and it can't simply be added without breaking the verified/community reconciliation). Real fix is a Phase-2 reconciliation of the quote-pool scope vs the corpus-count scope (either restrict quotes to the counted corpus, or count the sources actually quoted). This is the D5 source-list pattern (52 posts) with an extra quote-provenance wrinkle.
+- Effort: M
+- Category: correctness
+- Found during: D6 review (#802); part of the Phase-2 source-list cleanup.
+
 ### Deep-dive quote lead-ins can name a platform the quote isn't from
 - File/location: `atlas_brain/autonomous/tasks/b2b_blog_post_generation.py`, the reviewer/strengths section that surfaces `quote_highlights` to the LLM (around the `quote_highlights = _blog_quote_highlights(...)` call in `_blueprint_vendor_deep_dive`).
 - Description: the LLM-written prose lead-in for a quote can name a platform that doesn't match the quote's `source_name`. The blockquote attribution uses `source_name` correctly; only the free-text lead-in drifts. Found in zoho-crm-deep-dive: "verified reviewer on G2" prose against a Slashdot-source quote (fixed in the published post by D6; the generator can recur).

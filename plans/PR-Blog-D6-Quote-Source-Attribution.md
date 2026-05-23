@@ -60,6 +60,11 @@ per the maintainer; root carries a pointer):
   G2 notes ...:" with no quote following) -- a separate orphaned-intro defect,
   pre-existing, surfaced while scoping D6. Effort S (data) / M (generator guard),
   correctness.
+- zoho L158 source list omits Slashdot (a quoted source) -- added on the #802
+  review. DB-verified the naive "add Slashdot to the 237 community count"
+  doesn't reconcile: the Slashdot quote's review is `not_applicable` (non-enriched,
+  in-window, Zoho-mention), so it's outside the enriched 261/237 counts. Needs a
+  Phase-2 quote-pool-vs-corpus-count reconciliation. M, correctness.
 
 Also remaining: D5 (source-list incompleteness), D2-followup (Zoho/Zoho CRM
 registry merge), D3-followup (frequency-view chart).
@@ -83,4 +88,4 @@ registry merge), D3-followup (frequency-view chart).
 | zoho data (one lead-in) | ~2 |
 | ATLAS-HARDENING.md (2 parked entries) | ~16 |
 | Plan doc | ~70 |
-| **Total** | **~88** |
+| **Total** | **~115** |
