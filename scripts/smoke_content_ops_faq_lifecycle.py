@@ -134,7 +134,7 @@ def _validate_args(args: argparse.Namespace) -> None:
 async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     default_fields = parse_default_fields_or_exit(args.default_field)
     source_path = Path(args.path)
-    pool = await _create_pool(str(args.database_url))
+    pool = None
     errors: list[str] = []
     source_rows = 0
     saved_ids: list[str] = []
@@ -145,6 +145,7 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
     input_profile = empty_input_profile(status="not_started")
     try:
         try:
+            pool = await _create_pool(str(args.database_url))
             if not await _relation_exists(pool, "ticket_faq_markdown"):
                 errors.append(
                     "required Content Ops table missing: ticket_faq_markdown. "
@@ -238,14 +239,15 @@ async def run_faq_lifecycle_smoke(args: argparse.Namespace) -> tuple[int, dict[s
                         expected_status=str(args.review_status),
                     )
                 )
-        except Exception as exc:  # pragma: no cover - exercised by live hosts
+        except Exception as exc:
             errors.append(f"{type(exc).__name__}: {exc}")
     finally:
-        close = getattr(pool, "close", None)
-        if close is not None:
-            maybe_awaitable = close()
-            if hasattr(maybe_awaitable, "__await__"):
-                await maybe_awaitable
+        if pool is not None:
+            close = getattr(pool, "close", None)
+            if close is not None:
+                maybe_awaitable = close()
+                if hasattr(maybe_awaitable, "__await__"):
+                    await maybe_awaitable
     payload = {
         "ok": not errors,
         "source": str(source_path),

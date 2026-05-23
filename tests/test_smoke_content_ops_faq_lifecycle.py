@@ -330,6 +330,38 @@ async def test_faq_lifecycle_smoke_fails_closed_when_table_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_writes_result_when_pool_creation_fails(
+    monkeypatch, tmp_path
+):
+    async def fail_create_pool(*_args, **_kwargs):
+        raise RuntimeError("database connection slots exhausted")
+
+    result_path = tmp_path / "lifecycle_failure.json"
+    monkeypatch.setattr(smoke, "_create_pool", fail_create_pool)
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(output_result=result_path)
+    )
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["source"] == str(SUPPORT_TICKET_CSV)
+    assert payload["source_rows"] == 0
+    assert payload["input_profile"]["status"] == "not_started"
+    assert payload["generation"] is None
+    assert payload["draft_export"] is None
+    assert payload["reviewed_export"] is None
+    assert payload["saved_ids"] == []
+    assert payload["errors"] == ["RuntimeError: database connection slots exhausted"]
+    assert payload["lifecycle_summary"]["status"] == "failed"
+    assert payload["lifecycle_summary"]["source_rows"] == 0
+    assert payload["lifecycle_summary"]["error_count"] == 1
+    assert payload["lifecycle_summary"]["errors"] == payload["errors"]
+    assert result_path.exists()
+    assert json.loads(result_path.read_text(encoding="utf-8")) == payload
+
+
+@pytest.mark.asyncio
 async def test_faq_lifecycle_smoke_reports_review_status_miss(monkeypatch):
     pool = _Pool(update_hits=False)
     monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
