@@ -62,16 +62,27 @@ is updated so the prose stays coherent.
 - Methodology source-list mentions of excluded sources -- parked
   (ATLAS-HARDENING, via #834).
 
+## Review follow-up (#837 widened detector)
+
+After the #837 review widened `excluded_source_quote` to catch the adjective form
+(`<Source> reviewer`, not just `reviewer on <Source>`), a residual surfaced in
+**teamwork** L301: a second paragraph with two verbatim Trustpilot quotes (Pro
+$17 / Premium $33) attributed to "a Trustpilot reviewer" -- the original batch
+fixed only L179. Paraphrased L301 to reported speech (kept the $17/$33 figures,
+dropped the quotes + the "Trustpilot reviewer ... consumer review platform"
+attribution). The other 5 posts were already clean under the widened detector.
+
 ## Verification
 
-- Each of the 6 posts re-audited (`--slug=`): `excluded_source_quote` = 0 and
-  NO findings of any kind (no orphaned-lead-in introduced; switch-to-shopify
-  referents check out).
+- All 6 posts re-audited under the WIDENED detector (`--slug=`):
+  `excluded_source_quote` = 0. (teamwork still shows `pain_as_strength` -- the DD1
+  finding fixed by the open #846, off origin/main; not this slice.)
 
 ## Estimated diff size
 
 | Area | LOC |
 |---|---:|
 | 6 posts (paraphrases + 2 blockquote conversions + referent fixes) | ~26 |
-| Plan doc | ~74 |
-| **Total** | **~100** |
+| review follow-up (teamwork L301) | ~2 |
+| Plan doc | ~85 |
+| **Total** | **~113** |
