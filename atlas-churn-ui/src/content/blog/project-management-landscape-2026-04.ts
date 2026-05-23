@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'project-management-landscape-2026-04',
-  title: 'Project Management Landscape 2026: 10 Vendors Compared by Real User Data',
+  title: 'Project Management Landscape 2026: 10 Vendors on Cost, Complexity & Pain (1,464 Churn Signals)',
   description: 'A data-driven comparison of 10 project management vendors based on 1,464 churn signals from verified reviews and community platforms. See which tools face the highest churn risk and what pain patterns recur across the category.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
