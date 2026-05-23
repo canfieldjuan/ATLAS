@@ -215,6 +215,7 @@ class LandingPageRepository(Protocol):
         draft: LandingPageDraft,
         *,
         scope: TenantScope,
+        repair_claim_token: str | None = None,
     ) -> LandingPageDraft | None:
         """Update trusted draft fields and return the updated row.
 
@@ -222,6 +223,10 @@ class LandingPageRepository(Protocol):
         approved rows. Editing an approved public landing page would bypass the
         review flow. Callers that accept user input must construct metadata
         from trusted state, not request payloads.
+
+        Long-running repair callers can pass ``repair_claim_token`` to make the
+        update conditional on the active repair claim still belonging to the
+        current worker.
         """
 
     async def get_public_approved_draft(

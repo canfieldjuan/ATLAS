@@ -12,6 +12,7 @@ Shared JSONB / command-tag helpers live in
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any, Mapping, Sequence
 
 from .campaign_ports import JsonDict, TenantScope
@@ -26,6 +27,10 @@ from .storage._jsonb_helpers import (
     parse_command_tag,
     row_to_dict,
 )
+
+
+LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY = "landing_page_repair_claim"
+LANDING_PAGE_REPAIR_CLAIM_TTL_SECONDS = 15 * 60
 
 
 def _draft_metadata(draft: LandingPageDraft, scope: TenantScope) -> JsonDict:
@@ -262,11 +267,12 @@ class PostgresLandingPageRepository:
         draft: LandingPageDraft,
         *,
         scope: TenantScope,
+        repair_claim_token: str | None = None,
     ) -> LandingPageDraft | None:
         sections_payload = [_coerce_section(s).as_dict() for s in draft.sections]
         reference_ids_payload = [str(r) for r in draft.reference_ids]
         rows = await self.pool.fetch(
-            """
+            f"""
             UPDATE landing_pages
                SET title = $3,
                    slug = $4,
@@ -281,6 +287,13 @@ class PostgresLandingPageRepository:
              WHERE id = $1
                AND account_id = $2
                AND status <> 'approved'
+               AND (
+                    $11::text IS NULL
+                    OR COALESCE(
+                        metadata #>> '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},token}}',
+                        ''
+                    ) = $11
+               )
             RETURNING id, campaign_name, persona, value_prop, title, slug,
                       hero, sections, cta, meta, reference_ids, metadata, status
             """,
@@ -294,6 +307,7 @@ class PostgresLandingPageRepository:
             json_dump_jsonb(dict(draft.meta or {})),
             json_dump_jsonb(reference_ids_payload),
             json_dump_jsonb(dict(draft.metadata or {})),
+            repair_claim_token,
         )
         if not rows:
             return None
@@ -333,6 +347,105 @@ class PostgresLandingPageRepository:
         return tuple(
             _row_to_public_sitemap_candidate(row_to_dict(row)) for row in rows
         )
+
+    async def claim_repair(
+        self,
+        landing_page_id: str,
+        *,
+        token: str,
+        scope: TenantScope,
+        ttl_seconds: int = LANDING_PAGE_REPAIR_CLAIM_TTL_SECONDS,
+    ) -> LandingPageDraft | None:
+        """Atomically claim a landing-page draft for long-running repair.
+
+        This is deliberately row metadata, not a session advisory lock: the LLM
+        repair call can run for seconds while the DB pool connection remains
+        free. The expiry lets a later request recover from a crashed worker.
+        """
+
+        # The DB decides whether an existing lease has expired with NOW(); the
+        # app clock only writes the new lease horizon. The 15-minute default
+        # keeps small app/DB clock skew from mattering in normal operation.
+        now_epoch = time.time()
+        claim = {
+            "token": str(token),
+            "claimed_at_epoch": now_epoch,
+            "expires_at_epoch": now_epoch + max(1, int(ttl_seconds)),
+        }
+        rows = await self.pool.fetch(
+            f"""
+            UPDATE landing_pages
+               SET metadata = jsonb_set(
+                       COALESCE(metadata, '{{}}'::jsonb),
+                       '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY}}}',
+                       $3::jsonb,
+                       true
+                   ),
+                   updated_at = NOW()
+             WHERE id = $1
+               AND account_id = $2
+               AND status <> 'approved'
+               AND (
+                    NOT (
+                        COALESCE(metadata, '{{}}'::jsonb)
+                        ? '{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY}'
+                    )
+                    OR COALESCE(
+                        metadata #>> '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},token}}',
+                        ''
+                    ) = $4
+                    OR (
+                        CASE
+                            WHEN COALESCE(
+                                metadata #>> '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},expires_at_epoch}}',
+                                ''
+                            ) ~ '^[0-9]+(\\.[0-9]+)?$'
+                            THEN (
+                                metadata #>> '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},expires_at_epoch}}'
+                            )::double precision
+                            ELSE 0
+                        END
+                    ) <= EXTRACT(EPOCH FROM NOW())
+               )
+            RETURNING id, campaign_name, persona, value_prop, title, slug,
+                      hero, sections, cta, meta, reference_ids, metadata, status
+            """,
+            landing_page_id,
+            scope.account_id or "",
+            json_dump_jsonb(claim),
+            str(token),
+        )
+        if not rows:
+            return None
+        return _row_to_draft(row_to_dict(rows[0]))
+
+    async def release_repair(
+        self,
+        landing_page_id: str,
+        *,
+        token: str,
+        scope: TenantScope,
+    ) -> bool:
+        """Release a repair claim only when the stored token matches."""
+
+        result = await self.pool.execute(
+            f"""
+            UPDATE landing_pages
+               SET metadata = COALESCE(metadata, '{{}}'::jsonb)
+                              - '{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY}',
+                   updated_at = NOW()
+             WHERE id = $1
+               AND account_id = $2
+               AND COALESCE(
+                    metadata #>> '{{{LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY},token}}',
+                    ''
+               ) = $3
+            """,
+            landing_page_id,
+            scope.account_id or "",
+            str(token),
+        )
+        return parse_command_tag(result)
 
     async def update_status(
         self,
@@ -388,5 +501,7 @@ class PostgresLandingPageRepository:
 
 
 __all__ = [
+    "LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY",
+    "LANDING_PAGE_REPAIR_CLAIM_TTL_SECONDS",
     "PostgresLandingPageRepository",
 ]
