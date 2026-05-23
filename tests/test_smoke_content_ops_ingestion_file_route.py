@@ -66,6 +66,52 @@ def _default_args(path: Path, result_path: Path) -> list[str]:
     ]
 
 
+class _Transaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+
+class _Connection:
+    def __init__(self) -> None:
+        self.executed = []
+
+    def transaction(self):
+        return _Transaction()
+
+    async def execute(self, query, *args):
+        self.executed.append((str(query), args))
+        return "EXECUTE"
+
+
+class _Acquire:
+    def __init__(self, connection: _Connection) -> None:
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, tb):
+        del exc_type, exc, tb
+        return False
+
+
+class _Pool:
+    def __init__(self, connection: _Connection) -> None:
+        self.connection = connection
+        self.closed = False
+        self.is_initialized = True
+
+    def acquire(self):
+        return _Acquire(self.connection)
+
+    async def close(self):
+        self.closed = True
+
+
 def test_file_route_smoke_writes_success_result_for_cfpb_rows(tmp_path: Path) -> None:
     module = _load_script_module()
     source_path = tmp_path / "cfpb_rows.jsonl"
@@ -117,3 +163,89 @@ def test_file_route_smoke_requires_public_dataset_defaults(tmp_path: Path) -> No
 
     assert "vendor_name" in str(exc.value)
     assert "contact_email" in str(exc.value)
+
+
+def test_file_route_smoke_write_mode_requires_account_id(tmp_path: Path) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    _write_cfpb_rows(source_path, 1)
+
+    with pytest.raises(SystemExit) as exc:
+        module.main([
+            *_default_args(source_path, tmp_path / "result.json"),
+            "--write",
+            "--database-url",
+            "postgresql://atlas@localhost:5433/atlas",
+        ])
+
+    assert "--account-id is required" in str(exc.value)
+
+
+def test_file_route_smoke_write_mode_uses_pool_provider(monkeypatch, tmp_path: Path) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    result_path = tmp_path / "result.json"
+    _write_cfpb_rows(source_path, 3)
+    connection = _Connection()
+    pool = _Pool(connection)
+
+    async def create_pool(database_url: str):
+        assert database_url == "postgresql://atlas@localhost:5433/atlas"
+        return pool
+
+    monkeypatch.setattr(module, "_create_pool", create_pool)
+
+    code = module.main([
+        *_default_args(source_path, result_path),
+        "--write",
+        "--account-id",
+        "acct-route-write",
+        "--user-id",
+        "user-route-write",
+        "--database-url",
+        "postgresql://atlas@localhost:5433/atlas",
+        "--replace-existing",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["dry_run"] is False
+    assert payload["account_id"] == "acct-route-write"
+    assert payload["import"]["dry_run"] is False
+    assert payload["import"]["inserted"] == 3
+    assert payload["import"]["replace_existing"] is True
+    assert pool.closed is True
+    assert any("DELETE FROM" in query for query, _args in connection.executed)
+    insert_args = [args for query, args in connection.executed if "INSERT INTO" in query]
+    assert len(insert_args) == 3
+    assert {args[0] for args in insert_args} == {"acct-route-write"}
+
+
+def test_file_route_smoke_write_mode_writes_pool_failure(monkeypatch, tmp_path: Path) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    result_path = tmp_path / "result.json"
+    _write_cfpb_rows(source_path, 1)
+
+    async def create_pool(database_url: str):
+        del database_url
+        raise RuntimeError("pool unavailable")
+
+    monkeypatch.setattr(module, "_create_pool", create_pool)
+
+    code = module.main([
+        *_default_args(source_path, result_path),
+        "--write",
+        "--account-id",
+        "acct-route-write",
+        "--database-url",
+        "postgresql://atlas@localhost:5433/atlas",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["dry_run"] is False
+    assert payload["status_code"] == 500
+    assert payload["errors"] == ["RuntimeError: pool unavailable"]

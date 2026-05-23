@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -20,9 +21,15 @@ from extracted_content_pipeline.api.control_surfaces import (  # noqa: E402
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.campaign_ports import TenantScope  # noqa: E402
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     parse_default_fields_or_exit,
 )
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional host dependency.
+    load_dotenv = None
 
 
 _REQUIRED_DEFAULT_FIELDS = ("company_name", "vendor_name", "contact_email")
@@ -63,6 +70,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "The smoke requires company_name, vendor_name, and contact_email."
         ),
     )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Persist rows through the route instead of using dry_run=True.",
+    )
+    parser.add_argument("--account-id", default=None)
+    parser.add_argument("--user-id", default=None)
+    parser.add_argument("--opportunity-table", default="campaign_opportunities")
+    parser.add_argument("--replace-existing", action="store_true")
+    parser.add_argument("--database-url", default=_default_database_url())
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -107,6 +124,15 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "uploaded source-row smoke requires default fields: " + ", ".join(missing)
         )
+    if bool(args.write):
+        if not str(args.account_id or "").strip():
+            raise SystemExit("--account-id is required when --write is selected")
+        if not str(args.database_url or "").strip():
+            raise SystemExit(
+                "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
+            )
+    if not str(args.opportunity_table or "").strip():
+        raise SystemExit("--opportunity-table is required")
 
 
 async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -119,6 +145,11 @@ async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         "source_path": str(args.path),
         "source_format": str(args.source_format),
         "source": str(args.source),
+        "dry_run": not bool(args.write),
+        "account_id": str(args.account_id or "").strip() or None,
+        "user_id": str(args.user_id or "").strip() or None,
+        "opportunity_table": str(args.opportunity_table),
+        "replace_existing": bool(args.replace_existing),
         "min_source_rows": int(args.min_source_rows),
         "elapsed_seconds": None,
         "status_code": None,
@@ -126,9 +157,14 @@ async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         "import": None,
         "errors": [],
     }
+    pool = None
     try:
+        if args.write:
+            pool = await _create_pool(str(args.database_url))
         router = create_content_ops_control_surface_router(
             config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+            opportunity_import_pool_provider=(lambda: pool) if pool is not None else None,
+            scope_provider=_scope_provider(args) if args.write else None,
         )
         route = _route(router, route_path, "POST")
         response = await route.endpoint(
@@ -140,8 +176,8 @@ async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]
             max_source_text_chars=int(args.max_source_text_chars),
             sample_limit=int(args.sample_limit),
             default_fields=json.dumps(defaults, sort_keys=True),
-            replace_existing=False,
-            dry_run=True,
+            replace_existing=bool(args.replace_existing),
+            dry_run=not bool(args.write),
         )
     except Exception as exc:
         status_code = getattr(exc, "status_code", 500)
@@ -153,6 +189,9 @@ async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         }
         payload["elapsed_seconds"] = round(time.monotonic() - started, 6)
         return 1, payload
+    finally:
+        if pool is not None:
+            await _close_pool(pool)
 
     diagnostics = _diagnostics_summary(response.get("diagnostics"))
     import_summary = _import_summary(response.get("import"))
@@ -160,6 +199,7 @@ async def run_route_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         diagnostics=diagnostics,
         import_summary=import_summary,
         min_source_rows=int(args.min_source_rows),
+        expected_dry_run=not bool(args.write),
     )
     payload = {
         **base_payload,
@@ -219,6 +259,7 @@ def _result_errors(
     diagnostics: Mapping[str, Any] | None,
     import_summary: Mapping[str, Any] | None,
     min_source_rows: int,
+    expected_dry_run: bool,
 ) -> list[str]:
     errors: list[str] = []
     if not diagnostics or not diagnostics.get("ok"):
@@ -226,12 +267,63 @@ def _result_errors(
     opportunity_count = int((diagnostics or {}).get("opportunity_count") or 0)
     if opportunity_count < min_source_rows:
         errors.append(f"expected at least {min_source_rows} source row(s), got {opportunity_count}")
-    if not import_summary or not import_summary.get("dry_run"):
-        errors.append("file import route did not return a dry-run import result")
+    actual_dry_run = bool((import_summary or {}).get("dry_run"))
+    if actual_dry_run is not bool(expected_dry_run):
+        errors.append(
+            "file import route returned dry_run="
+            f"{str(actual_dry_run).lower()}, expected {str(expected_dry_run).lower()}"
+        )
     inserted = int((import_summary or {}).get("inserted") or 0)
     if inserted < min_source_rows:
         errors.append(f"expected at least {min_source_rows} inserted row(s), got {inserted}")
     return errors
+
+
+def _scope_provider(args: argparse.Namespace):
+    scope = TenantScope(
+        account_id=str(args.account_id or "").strip() or None,
+        user_id=str(args.user_id or "").strip() or None,
+    )
+    return lambda: scope
+
+
+def _default_database_url() -> str | None:
+    _load_dotenv_files()
+    raw = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if raw:
+        return raw
+    try:
+        from atlas_brain.storage.config import db_settings
+    except Exception:
+        return None
+    dsn = str(getattr(db_settings, "dsn", "") or "").strip()
+    return dsn or None
+
+
+async def _create_pool(database_url: str):
+    _load_dotenv_files()
+    try:
+        import asyncpg  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - host dependency.
+        raise RuntimeError(
+            "asyncpg is required for --write; install it in the host app"
+        ) from exc
+    return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=2)
+
+
+async def _close_pool(pool: Any) -> None:
+    close = getattr(pool, "close", None)
+    if close is None:
+        return
+    maybe_awaitable = close()
+    if hasattr(maybe_awaitable, "__await__"):
+        await maybe_awaitable
+
+
+def _load_dotenv_files() -> None:
+    if load_dotenv is not None:
+        load_dotenv(ROOT / ".env")
+        load_dotenv(ROOT / ".env.local", override=True)
 
 
 def _compact_detail(value: Any) -> Any:
