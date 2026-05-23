@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,68 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
     assert "# Customer Ticket FAQ" in payload["reviewed_export"]["rows"][0]["markdown"]
     assert pool.closed is True
     assert pool.execute_calls
+
+
+@pytest.mark.asyncio
+async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tmp_path):
+    pool = _Pool()
+    monkeypatch.setattr(smoke, "_create_pool", lambda *_args, **_kwargs: _return_pool(pool))
+    source = tmp_path / "support_ticket_bundle.json"
+    source.write_text(
+        json.dumps({
+            "support_tickets": [
+                {
+                    "ticket_id": f"ticket-lifecycle-{index}",
+                    "source_type": "support_ticket",
+                    "subject": "Billing renewal question",
+                    "message": "How do I confirm my renewal invoice before payment?",
+                    "pain_category": "billing",
+                }
+                for index in range(1000)
+            ],
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code, payload = await smoke.run_faq_lifecycle_smoke(
+        _args(
+            path=source,
+            source_format="json",
+            title="Customer Ticket FAQ Lifecycle Scale Smoke",
+            min_source_rows=1000,
+            export_limit=5,
+            default_field=[
+                "company_name=Acme Billing",
+                "contact_email=billing@example.com",
+                "vendor_name=Atlas Billing",
+            ],
+        )
+    )
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["source_rows"] == 1000
+    assert payload["saved_ids"] == ["faq-uuid-1"]
+    assert payload["generation"]["source_count"] == 1000
+    assert payload["generation"]["ticket_source_count"] == 1000
+    assert payload["generation"]["items"][0]["ticket_count"] == 1000
+    assert len(payload["generation"]["items"][0]["source_ids"]) == 1000
+    assert payload["generation"]["items"][0]["source_ids"][0] == "ticket-lifecycle-0"
+    assert payload["generation"]["items"][0]["source_ids"][-1] == "ticket-lifecycle-999"
+
+    draft = payload["draft_export"]["rows"][0]
+    reviewed = payload["reviewed_export"]["rows"][0]
+    assert draft["source_count"] == 1000
+    assert draft["ticket_source_count"] == 1000
+    assert draft["status"] == "draft"
+    assert draft["items"][0]["ticket_count"] == 1000
+    assert len(draft["items"][0]["source_ids"]) == 1000
+    assert reviewed["source_count"] == 1000
+    assert reviewed["ticket_source_count"] == 1000
+    assert reviewed["status"] == "published"
+    assert "# Customer Ticket FAQ Lifecycle Scale Smoke" in reviewed["markdown"]
+    assert pool.closed is True
 
 
 @pytest.mark.asyncio
