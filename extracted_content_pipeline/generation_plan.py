@@ -374,6 +374,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "max_tokens": config.max_tokens,
                 "temperature": config.temperature,
                 "quality_gates_enabled": request.require_quality_gates,
+                "quality_repair_attempts": config.quality_repair_attempts,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),

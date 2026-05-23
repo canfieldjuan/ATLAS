@@ -7,6 +7,8 @@ import pytest
 from extracted_content_pipeline.blog_generation import (
     BlogPostGenerationConfig,
     BlogPostGenerationService,
+    _blog_quality_repair_guidance,
+    _normalize_blog_metadata,
     parse_blog_post_response,
 )
 from extracted_content_pipeline.blog_ports import BlogPostDraft
@@ -226,6 +228,27 @@ def test_parse_blog_post_response_returns_none_when_required_fields_missing() ->
     assert parsed["content"] == ""
 
 
+def test_normalize_blog_metadata_trims_overlong_seo_title() -> None:
+    parsed = json.loads(_valid_blog_json(seo_title="A" * 61))
+
+    normalized = _normalize_blog_metadata(parsed, quality_policy=None)
+
+    assert len(normalized["seo_title"]) == 60
+    assert normalized["seo_title"] == "A" * 60
+
+
+def test_blog_quality_repair_guidance_explains_citation_safety() -> None:
+    guidance = _blog_quality_repair_guidance([
+        "seo_title_too_long:61_chars_max_60",
+        "geo_citation_safety_failed",
+    ])
+
+    assert "Shorten `seo_title` to 60 characters or fewer" in guidance
+    assert "Remove unresolved placeholders" in guidance
+    assert "unsupported claims" in guidance
+    assert "visible chart IDs" in guidance
+
+
 @pytest.mark.asyncio
 async def test_generate_persists_blog_drafts_via_ports() -> None:
     service, blueprints, blog_posts, llm, skills = _service()
@@ -273,6 +296,7 @@ async def test_generate_blocks_low_quality_posts_without_saving() -> None:
         responses=[_valid_blog_json(content="Too short.")],
         config=BlogPostGenerationConfig(
             parse_retry_attempts=0,
+            quality_repair_attempts=0,
             quality_policy=QualityPolicy(
                 name="blog_post",
                 thresholds={"min_words": 20, "target_words": 20, "pass_score": 70},
@@ -303,6 +327,7 @@ async def test_generate_blocks_missing_seo_aeo_fields_without_saving() -> None:
         responses=[json.dumps(payload)],
         config=BlogPostGenerationConfig(
             parse_retry_attempts=0,
+            quality_repair_attempts=0,
             quality_policy=QualityPolicy(
                 name="blog_post",
                 thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
@@ -337,6 +362,7 @@ async def test_generate_blocks_missing_geo_contract_without_saving() -> None:
         responses=[json.dumps(payload)],
         config=BlogPostGenerationConfig(
             parse_retry_attempts=0,
+            quality_repair_attempts=0,
             quality_policy=QualityPolicy(
                 name="blog_post",
                 thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
@@ -392,7 +418,81 @@ async def test_generate_repairs_geo_quality_block_with_retry_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_does_not_repair_quality_block_without_retry_budget() -> None:
+async def test_generate_quality_repair_prompt_explains_known_blockers() -> None:
+    payload = json.loads(_valid_blog_json())
+    payload["title"] = "Buyer Shortlists Are Changing"
+    payload["seo_title"] = "A" * 61
+    payload["content"] = (
+        "## Why are buyer shortlists changing?\n\n"
+        "Buyers are comparing renewal costs before they commit to another contract."
+    )
+    service, _blueprints, _blog_posts, llm, _skills = _service(
+        responses=[json.dumps(payload), _valid_blog_json()],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            )
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 1
+    assert len(llm.calls) == 2
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert "Quality blockers:" in retry_prompt
+    assert "content_too_short:" in retry_prompt
+    assert "geo_entity_clarity_missing" in retry_prompt
+    assert "geo_citable_section_structure_missing" in retry_prompt
+    assert "Expand `content` to at least 1500 words" in retry_prompt
+    assert "include the exact current `target_keyword` string" in retry_prompt
+    assert "repeat that exact phrase naturally" in retry_prompt
+    assert "Make at least two H2 sections independently citable" in retry_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_multiple_quality_repair_attempts() -> None:
+    first_payload = json.loads(_valid_blog_json())
+    first_payload["content"] = (
+        "## Why are buyer shortlists changing?\n\n"
+        "Buyers are comparing renewal costs before they commit to another contract."
+    )
+    second_payload = json.loads(_valid_blog_json())
+    second_payload["title"] = "Buyer Shortlist Changes"
+    second_payload["content"] = (
+        _valid_content()
+        .replace("HubSpot pricing pressure", "Buyer renewal pressure")
+        .replace("HubSpot pricing evidence", "Buyer renewal evidence")
+    )
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        responses=[
+            json.dumps(first_payload),
+            json.dumps(second_payload),
+            _valid_blog_json(),
+        ],
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=2,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 1
+    assert result.errors == ()
+    assert len(llm.calls) == 3
+    assert llm.calls[1]["metadata"]["quality_repair_attempt_no"] == 1
+    assert llm.calls[2]["metadata"]["quality_repair_attempt_no"] == 2
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_quality_repair_attempts"] == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_repair_quality_block_without_repair_budget() -> None:
     payload = json.loads(_valid_blog_json())
     payload["content"] = (
         "## How is HubSpot pricing pressure changing shortlists?\n\n"
@@ -403,6 +503,7 @@ async def test_generate_does_not_repair_quality_block_without_retry_budget() -> 
         responses=[json.dumps(payload), _valid_blog_json()],
         config=BlogPostGenerationConfig(
             parse_retry_attempts=0,
+            quality_repair_attempts=0,
             quality_policy=QualityPolicy(
                 name="blog_post",
                 thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
@@ -416,6 +517,36 @@ async def test_generate_does_not_repair_quality_block_without_retry_budget() -> 
     assert result.skipped == 1
     assert result.errors[0]["reason"] == "quality_blocked"
     assert len(llm.calls) == 1
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_reports_unparseable_quality_repair_response() -> None:
+    payload = json.loads(_valid_blog_json())
+    payload["content"] = (
+        "## How is HubSpot pricing pressure changing shortlists?\n\n"
+        "HubSpot pricing pressure changes shortlists because buyers compare "
+        "renewal terms before they commit to another contract."
+    )
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        responses=[json.dumps(payload), "not valid repair json"],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["blueprint_id"] == "bp-1"
+    assert result.errors[0]["reason"] == "quality_repair_unparseable"
+    assert "geo_citable_section_structure_missing" in result.errors[0]["blockers"]
+    assert result.errors[0]["quality_repair_attempt_no"] == 1
+    assert len(llm.calls) == 2
     assert blog_posts.saved == []
 
 
@@ -454,6 +585,7 @@ async def test_generate_quality_repair_failure_skips_one_blueprint_not_batch() -
         "blueprint_id": "bp-1",
         "reason": "quality_repair_failed",
         "error": "repair backend timeout",
+        "error_type": "RuntimeError",
     },)
     assert len(llm.calls) == 3
     assert blog_posts.saved[0]["drafts"][0].slug == "hubspot-pricing-pressure-2"
@@ -467,6 +599,7 @@ async def test_generate_routes_missing_content_to_quality_blocked_not_unparseabl
         responses=[json.dumps(payload)],
         config=BlogPostGenerationConfig(
             parse_retry_attempts=0,
+            quality_repair_attempts=0,
             quality_policy=QualityPolicy(
                 name="blog_post",
                 thresholds={"min_words": 20, "target_words": 20, "pass_score": 70},
@@ -578,6 +711,10 @@ async def test_generate_per_call_llm_tuning_overrides_win_over_construction_conf
             temperature=0.3,
             max_tokens=4096,
             parse_retry_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
         ),
     )
 

@@ -49,6 +49,7 @@ class BlogPostGenerationConfig:
     temperature: float = 0.3
     quality_policy: QualityPolicy | None = None
     quality_gates_enabled: bool = True
+    quality_repair_attempts: int = 2
     parse_retry_attempts: int = 1
     parse_retry_response_excerpt_chars: int = 800
 
@@ -144,17 +145,95 @@ def _blog_quality_repair_user_prompt(
     previous_json: str,
 ) -> str:
     blocker_text = "\n".join(f"- {item}" for item in blockers)
+    guidance = _blog_quality_repair_guidance(blockers)
     return (
         f"{base_prompt}\n\n"
         "The previous blog JSON parsed, but it failed the blog quality gate.\n"
         "Quality blockers:\n"
         f"{blocker_text}\n\n"
+        f"Repair instructions:\n{guidance}\n\n"
         "Return the full blog JSON object again. Keep the valid fields that already "
         "worked, but revise the draft so it fixes every blocker above. Do not return "
         "commentary, markdown fences, or partial JSON.\n\n"
         "Previous parsed JSON:\n"
         f"{previous_json}"
     )
+
+
+def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
+    """Translate gate blocker codes into concrete blog-edit instructions."""
+
+    instructions: list[str] = []
+    for blocker in blockers:
+        code = str(blocker or "").strip()
+        if code.startswith("content_too_short:"):
+            instructions.append(
+                "- Expand `content` to at least 1500 words and keep it in the "
+                "1500-2200 word range. Add useful H2 sections and supporting "
+                "paragraphs instead of filler."
+            )
+        elif code.startswith("seo_title_too_long:"):
+            instructions.append(
+                "- Shorten `seo_title` to 60 characters or fewer while keeping "
+                "the target keyword near the front."
+            )
+        elif code == "geo_entity_clarity_missing":
+            instructions.append(
+                "- Update the display `title` to include the exact current "
+                "`target_keyword` string from the previous JSON. Also repeat "
+                "that exact phrase naturally in the first 40-60 words of `content`."
+            )
+        elif code == "geo_citable_section_structure_missing":
+            instructions.append(
+                "- Make at least two H2 sections independently citable. Each of "
+                "those sections must start with a 40-120 word answer paragraph "
+                "that includes the exact `target_keyword` or clearest named subject."
+            )
+        elif code == "geo_citation_safety_failed":
+            instructions.append(
+                "- Remove unresolved placeholders, placeholder links, unknown chart "
+                "placeholders, and unsupported claims. Keep only claims grounded in "
+                "the blueprint data, source wording, or visible chart IDs."
+            )
+    if not instructions:
+        instructions.append(
+            "- Fix each blocker directly while preserving the required blog JSON "
+            "schema and the factual constraints from the blueprint."
+        )
+    return "\n".join(dict.fromkeys(instructions))
+
+
+def _normalize_blog_metadata(
+    parsed: Mapping[str, Any],
+    *,
+    quality_policy: QualityPolicy | None,
+) -> dict[str, Any]:
+    """Apply deterministic metadata limits before quality validation."""
+
+    normalized = dict(parsed)
+    seo_title = str(normalized.get("seo_title") or "").strip()
+    seo_title_max = 60
+    if quality_policy is not None:
+        raw_max = quality_policy.thresholds.get("seo_title_max_chars")
+        if isinstance(raw_max, (int, float)) and not isinstance(raw_max, bool):
+            seo_title_max = int(raw_max)
+    if seo_title and len(seo_title) > seo_title_max:
+        normalized["seo_title"] = _truncate_text_at_word_boundary(
+            seo_title,
+            max_chars=seo_title_max,
+        )
+    return normalized
+
+
+def _truncate_text_at_word_boundary(value: str, *, max_chars: int) -> str:
+    limit = max(1, int(max_chars))
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    trimmed = text[:limit].rstrip()
+    if " " in trimmed:
+        trimmed = trimmed.rsplit(" ", 1)[0].rstrip()
+    return trimmed or text[:limit].rstrip()
 
 
 class BlogPostGenerationService:
@@ -210,6 +289,7 @@ class BlogPostGenerationService:
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        quality_repair_attempts: int | None = None,
         topic: str | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
@@ -240,6 +320,14 @@ class BlogPostGenerationService:
             if quality_gates_enabled is None
             else bool(quality_gates_enabled)
         )
+        resolved_quality_repair_attempts = (
+            self._config.quality_repair_attempts
+            if quality_repair_attempts is None
+            else int(quality_repair_attempts)
+        )
+        if not resolved_quality_gates_enabled:
+            resolved_quality_repair_attempts = 0
+        resolved_quality_repair_attempts = max(0, resolved_quality_repair_attempts)
         # PR-Blog-Topic-Per-Call: operator-supplied topic for this run.
         # Empty string when None so prompt substitution is a clean no-op.
         resolved_topic = (topic or "").strip()
@@ -282,41 +370,63 @@ class BlogPostGenerationService:
                 skipped += 1
                 errors.append({"blueprint_id": blueprint_id, "reason": "unparseable_response"})
                 continue
+            parsed = _normalize_blog_metadata(
+                parsed,
+                quality_policy=self._config.quality_policy,
+            )
             quality = self._quality_check(
                 parsed,
                 blueprint=blueprint,
                 quality_gates_enabled=resolved_quality_gates_enabled,
             )
             if not quality["passed"]:
-                try:
-                    repaired = await self._repair_quality_once(
-                        prompt_template,
-                        parsed=parsed,
-                        quality=quality,
-                        blueprint=blueprint,
-                        target_mode=target_mode,
-                        temperature=resolved_temperature,
-                        max_tokens=resolved_max_tokens,
-                        parse_retry_attempts=resolved_parse_retry_attempts,
-                        topic=resolved_topic,
-                    )
-                except Exception as exc:
-                    skipped += 1
-                    errors.append({
-                        "blueprint_id": blueprint_id,
-                        "reason": "quality_repair_failed",
-                        "error": str(exc),
-                    })
-                    continue
-                if repaired:
-                    repaired_quality = self._quality_check(
+                repair_failed = False
+                for repair_attempt_no in range(1, resolved_quality_repair_attempts + 1):
+                    try:
+                        repaired = await self._repair_quality_once(
+                            prompt_template,
+                            parsed=parsed,
+                            quality=quality,
+                            blueprint=blueprint,
+                            target_mode=target_mode,
+                            temperature=resolved_temperature,
+                            max_tokens=resolved_max_tokens,
+                            quality_repair_attempt_no=repair_attempt_no,
+                            topic=resolved_topic,
+                        )
+                    except Exception as exc:
+                        skipped += 1
+                        errors.append({
+                            "blueprint_id": blueprint_id,
+                            "reason": "quality_repair_failed",
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        })
+                        repair_failed = True
+                        break
+                    if not repaired:
+                        skipped += 1
+                        errors.append({
+                            "blueprint_id": blueprint_id,
+                            "reason": "quality_repair_unparseable",
+                            "blockers": quality["blockers"],
+                            "quality_repair_attempt_no": repair_attempt_no,
+                        })
+                        repair_failed = True
+                        break
+                    parsed = _normalize_blog_metadata(
                         repaired,
+                        quality_policy=self._config.quality_policy,
+                    )
+                    quality = self._quality_check(
+                        parsed,
                         blueprint=blueprint,
                         quality_gates_enabled=resolved_quality_gates_enabled,
                     )
-                    quality = repaired_quality
-                    if repaired_quality["passed"]:
-                        parsed = repaired
+                    if quality["passed"]:
+                        break
+                if repair_failed:
+                    continue
                 if not quality["passed"]:
                     skipped += 1
                     errors.append({
@@ -445,16 +555,13 @@ class BlogPostGenerationService:
         target_mode: str,
         temperature: float,
         max_tokens: int,
-        parse_retry_attempts: int,
+        quality_repair_attempt_no: int,
         topic: str = "",
     ) -> dict[str, Any] | None:
         blockers = tuple(str(item) for item in quality.get("blockers") or () if item)
         if not blockers:
             return None
         parse_attempts_used = int(parsed.get("_parse_attempts") or 1)
-        retries_used_for_parsing = max(0, parse_attempts_used - 1)
-        if retries_used_for_parsing >= max(0, int(parse_retry_attempts or 0)):
-            return None
         system_prompt, base_user_prompt = _blog_generation_prompts(
             prompt_template,
             blueprint=blueprint,
@@ -479,8 +586,8 @@ class BlogPostGenerationService:
                 "blueprint_id": _blueprint_id(blueprint),
                 "skill_name": self._config.skill_name,
                 "asset_type": "blog_post",
-                "attempt_no": parse_attempts_used + 1,
-                "quality_repair_attempt_no": 1,
+                "attempt_no": parse_attempts_used + quality_repair_attempt_no,
+                "quality_repair_attempt_no": quality_repair_attempt_no,
             },
         )
         repaired = parse_blog_post_response(response.content)

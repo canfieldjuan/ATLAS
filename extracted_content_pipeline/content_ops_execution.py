@@ -511,6 +511,7 @@ async def _dispatch_blog_post(
             step.config, "parse_retry_response_excerpt_chars"
         ),
         quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
+        quality_repair_attempts=_step_config_int(step.config, "quality_repair_attempts"),
         topic=_step_config_text(step.config, "topic"),
     )
 
