@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Wrike Reviews: Feature Gaps & Reporting Friction Analysis',
   seo_description: 'Analysis of 62 Wrike reviews shows feature limitations and reporting gaps frustrate scaling teams, while strong UX and integrations drive retention.',
   target_keyword: 'Wrike reviews',
-  secondary_keywords: ["Wrike reporting limitations", "Wrike free plan", "Wrike project management"],
+  secondary_keywords: ["Wrike reporting limitations", "Wrike free plan", "Wrike project management", "Wrike pricing"],
   faq: [
   {
     "question": "What are the most common complaints about Wrike?",

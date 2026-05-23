@@ -96,7 +96,7 @@ const post: BlogPost = {
   seo_title: 'Switch to ClickUp: Migration Guide from 6 Competitors',
   seo_description: 'Why teams switch to ClickUp: analysis of 1058 reviews shows migration patterns from Trello, Notion, Jira, Asana, Airtable, and Todoist with UX and pricing insights.',
   target_keyword: 'switch to ClickUp',
-  secondary_keywords: ["ClickUp migration guide", "ClickUp vs Trello", "ClickUp alternatives comparison"],
+  secondary_keywords: ["ClickUp migration guide", "ClickUp vs Trello", "ClickUp alternatives comparison", "Asana to ClickUp"],
   faq: [
   {
     "question": "Which platforms do ClickUp users typically migrate from?",

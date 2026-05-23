@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'ClickUp Reviews: 1058 User Complaints & Strengths Analysis',
   seo_description: 'Analysis of 1058 ClickUp reviews shows UX complexity from consolidation strategy, pricing friction from $9 to $29 jumps, but strong feature satisfaction.',
   target_keyword: 'ClickUp reviews',
-  secondary_keywords: ["ClickUp pricing complaints", "ClickUp UX issues", "ClickUp vs Notion"],
+  secondary_keywords: ["ClickUp pricing complaints", "ClickUp UX issues", "ClickUp vs Notion", "ClickUp is overwhelming", "ClickUp vs Asana", "ClickUp learning curve"],
   faq: [
   {
     "question": "What are the most common complaints about ClickUp?",

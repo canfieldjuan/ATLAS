@@ -102,7 +102,7 @@ const post: BlogPost = {
   seo_title: 'Jira vs Monday.com Reviews: 62 Complaint Signals Compared',
   seo_description: 'Jira vs Monday.com: 62 reviewer signals reveal interface complexity and pricing friction. See which platform faces higher urgency complaints.',
   target_keyword: 'jira vs monday.com',
-  secondary_keywords: ["jira monday comparison", "project management software reviews", "jira alternatives"],
+  secondary_keywords: ["jira monday comparison", "project management software reviews", "jira alternatives", "jira too complex"],
   faq: [
   {
     "question": "Which platform has higher reviewer urgency: Jira or Monday.com?",
