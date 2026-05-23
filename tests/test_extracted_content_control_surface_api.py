@@ -155,6 +155,34 @@ class _PoolWithAcquire:
         return _Acquire(self.connection)
 
 
+class _AdmissionGate:
+    def __init__(
+        self,
+        *,
+        allowed=True,
+        max_concurrency=1,
+        fail_acquire=False,
+        fail_release=False,
+    ):
+        self.allowed = allowed
+        self.max_concurrency = max_concurrency
+        self.fail_acquire = fail_acquire
+        self.fail_release = fail_release
+        self.acquire_calls = 0
+        self.release_calls = 0
+
+    async def acquire(self):
+        self.acquire_calls += 1
+        if self.fail_acquire:
+            raise RuntimeError("admission backend unavailable")
+        return self.allowed
+
+    async def release(self):
+        self.release_calls += 1
+        if self.fail_release:
+            raise RuntimeError("admission backend release failed")
+
+
 @pytest.mark.asyncio
 async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     router = create_content_ops_control_surface_router()
@@ -907,6 +935,151 @@ async def test_ingestion_file_import_route_rejects_when_import_gate_is_full():
     )
     assert second_payload["import"]["inserted"] == 1
     assert provider_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_import_route_uses_custom_admission_before_pool_provider():
+    gate = _AdmissionGate(allowed=False, max_concurrency=3)
+    provider_calls = 0
+
+    async def pool_provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return _Pool()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=pool_provider,
+        ingestion_import_admission_provider=lambda: gate,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    route = _route(router, "/ops/ingestion/files/import", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+            dry_run=False,
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.detail == {
+        "reason": "content_ops_ingestion_import_at_capacity",
+        "max_concurrency": 3,
+    }
+    assert gate.acquire_calls == 1
+    assert gate.release_calls == 0
+    assert provider_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_import_route_treats_custom_admission_acquire_failure_as_503():
+    gate = _AdmissionGate(fail_acquire=True)
+    provider_calls = 0
+
+    async def pool_provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return _Pool()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=pool_provider,
+        ingestion_import_admission_provider=lambda: gate,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    route = _route(router, "/ops/ingestion/files/import", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            file=_ticket_bundle_upload(1),
+            source_rows=True,
+            source="ticket-csv-upload",
+            target_mode="vendor_retention",
+            file_format="json",
+            max_source_text_chars=1200,
+            sample_limit=3,
+            default_fields=json.dumps({
+                "company_name": "Acme",
+                "vendor_name": "Atlas",
+                "contact_email": "support@example.com",
+            }),
+            dry_run=False,
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops ingestion import admission is unavailable."
+    assert gate.acquire_calls == 1
+    assert gate.release_calls == 0
+    assert provider_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_releases_custom_admission_after_success():
+    gate = _AdmissionGate(allowed=True)
+    pool = _Pool()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=lambda: pool,
+        ingestion_import_admission_provider=lambda: gate,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    route = _route(router, "/ops/ingestion/import", "POST")
+
+    payload = await route.endpoint({
+        "dry_run": False,
+        "source": "operator-upload",
+        "rows": [{
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "evidence": [{"quote": "Renewal process is too manual."}],
+        }],
+    })
+
+    assert payload["import"]["inserted"] == 1
+    assert gate.acquire_calls == 1
+    assert gate.release_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_ingestion_import_route_keeps_success_when_custom_admission_release_fails():
+    gate = _AdmissionGate(allowed=True, fail_release=True)
+    pool = _Pool()
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        opportunity_import_pool_provider=lambda: pool,
+        ingestion_import_admission_provider=lambda: gate,
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+    route = _route(router, "/ops/ingestion/import", "POST")
+
+    payload = await route.endpoint({
+        "dry_run": False,
+        "source": "operator-upload",
+        "rows": [{
+            "target_id": "opp-1",
+            "company_name": "Acme",
+            "vendor_name": "HubSpot",
+            "evidence": [{"quote": "Renewal process is too manual."}],
+        }],
+    })
+
+    assert payload["import"]["inserted"] == 1
+    assert gate.acquire_calls == 1
+    assert gate.release_calls == 1
 
 
 @pytest.mark.asyncio
