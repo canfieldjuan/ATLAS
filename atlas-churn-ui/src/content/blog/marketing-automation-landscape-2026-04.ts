@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'marketing-automation-landscape-2026-04',
-  title: 'Marketing Automation Landscape 2026: 5 Vendors Compared by Real User Data',
+  title: 'Marketing Automation Landscape 2026: 5 Vendors on Pricing, Churn & Real Pain (640 Reviews)',
   description: 'Compare ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp across 640 enriched reviews. Discover churn signals, pricing pressure, and which vendors face the highest replacement risk.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

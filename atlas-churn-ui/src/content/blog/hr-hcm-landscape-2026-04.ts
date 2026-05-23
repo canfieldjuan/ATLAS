@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'hr-hcm-landscape-2026-04',
-  title: 'HR / HCM Landscape 2026: 4 Vendors Compared by Real User Data',
+  title: 'HR / HCM Landscape 2026: 4 Vendors on Cost, Support & Fit (306 Churn Signals)',
   description: 'A data-backed comparison of BambooHR, Gusto, Rippling, and Workday based on 306 churn signals and public reviews from March–April 2026. See which vendors face the highest churn risk and what pain patterns recur across the HR / HCM market.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

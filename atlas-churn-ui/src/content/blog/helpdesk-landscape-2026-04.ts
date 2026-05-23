@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'helpdesk-landscape-2026-04',
-  title: 'Helpdesk Landscape 2026: 5 Vendors Compared by Real User Data',
+  title: 'Helpdesk Landscape 2026: 5 Vendors on Cost, Churn & Support Pain (352 Reviews)',
   description: 'Compare Freshdesk, Zendesk, Help Scout, HappyFox, and Zoho Desk across 352 enriched reviews. See churn urgency, pain patterns, and strengths/weaknesses in the 2026 helpdesk market.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
