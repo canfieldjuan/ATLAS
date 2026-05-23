@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Zoom Reviews 2026: 1559 User Experiences Analyzed',
   seo_description: 'Analysis of 1559 Zoom reviews: strengths, weaknesses, pain points, and competitive positioning. See what drives satisfaction and frustration among users.',
   target_keyword: 'zoom reviews',
-  secondary_keywords: ["zoom vs teams", "zoom pricing complaints", "zoom alternatives", "zoom business reviews"],
+  secondary_keywords: ["zoom vs teams", "zoom pricing complaints", "zoom alternatives", "zoom business reviews", "zoom vs google meet", "zoom too expensive"],
   faq: [
   {
     "question": "What are the most common complaints about Zoom?",
