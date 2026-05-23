@@ -83,6 +83,42 @@ def test_cli_ignores_open_pr_for_current_branch(tmp_path: Path) -> None:
     assert "OK: no blocking drift detected" in result.stdout
 
 
+def test_cli_uses_github_head_ref_for_current_pr_when_detached(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    path = "plans/PR-Current.md"
+    _commit(
+        repo,
+        path,
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    _git(repo, "checkout", "--detach", "HEAD")
+    gh_bin = _write_fake_gh(
+        tmp_path,
+        prs=[
+            {
+                "number": 25,
+                "title": "Current PR",
+                "headRefName": "claude/current",
+                "url": "https://github.test/pr/25",
+            }
+        ],
+        files={25: [path]},
+        bodies={25: "Plan: plans/PR-Current.md\n\nOwnership lane: atlas-workflow\n"},
+    )
+
+    result = _run_with_path(
+        repo,
+        gh_bin,
+        ["python", "scripts/audit_pr_session_drift.py"],
+        extra_env={"GITHUB_HEAD_REF": "claude/current"},
+    )
+
+    assert result.returncode == 1
+    assert "current PR body slice phase contract failed" in result.stdout
+    assert "current PR body: missing Slice phase" in result.stdout
+
+
 def test_cli_fails_when_current_pr_body_missing_slice_phase(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path, branch="claude/current")
     path = "plans/PR-Current.md"
@@ -616,8 +652,14 @@ def _run_with_path(
     repo: Path,
     bin_dir: Path,
     args: list[str],
+    *,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        **(extra_env or {}),
+    }
     return subprocess.run(
         args,
         cwd=repo,

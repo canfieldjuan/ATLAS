@@ -491,6 +491,9 @@ def format_values(values: Iterable[str]) -> str:
 
 
 def current_head_ref() -> str:
+    github_head_ref = os.environ.get("GITHUB_HEAD_REF", "").strip()
+    if github_head_ref:
+        return github_head_ref
     result = subprocess.run(
         ["git", "branch", "--show-current"],
         check=False,

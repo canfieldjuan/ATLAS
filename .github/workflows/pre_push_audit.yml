@@ -6,6 +6,10 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   pre-push-audit:
     runs-on: ubuntu-latest
@@ -24,5 +28,7 @@ jobs:
         run: |
           git remote set-head origin --auto || git remote set-head origin main
 
-      - name: Run pre-push audit wrapper
-        run: bash scripts/pre_push_audit.sh
+      - name: Run local PR review bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/local_pr_review.sh
