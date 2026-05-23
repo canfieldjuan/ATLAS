@@ -26,7 +26,7 @@ Required sections, in this order:
 | Section | Purpose |
 |---|---|
 | **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. |
-| **Scope (this PR)** | The narrow surface this PR touches. Numbered list of intent. List of files in a "Files touched" subsection. |
+| **Scope (this PR)** | The narrow surface this PR touches. Start with `Slice phase: <phase>.` Numbered list of intent. List of files in a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
 | **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. Include "Parked hardening: none" or list the `HARDENING.md` entries added by this slice. |
@@ -39,6 +39,7 @@ Mirror the plan-doc framing in the PR description:
 
 ```
 Plan: plans/PR-<Slice-Name>.md
+Slice phase: <phase>
 
 <one-paragraph why>
 
@@ -60,9 +61,9 @@ N files, +X / -Y
 
 ### 1c. Commit message
 
-Same `Plan: ...` lead line + Intentional / Deferred / Parked
-hardening sections as the PR body. Squash-merge collapses to one
-canonical commit at merge time.
+Same `Plan: ...` and `Slice phase: ...` lead lines + Intentional /
+Deferred / Parked hardening sections as the PR body. Squash-merge
+collapses to one canonical commit at merge time.
 
 ### 1d. Diff budget
 
@@ -108,7 +109,8 @@ The reviewer should produce something like:
 
 **Plan-doc compliance:** Why / Scope / Mechanism / Files touched /
 Intentional / Deferred / Verification -- matches AGENTS.md framework.
-Parked hardening is named in Deferred or explicitly marked none.
+Slice phase is named and matches the PR's scope. Parked hardening is
+named in Deferred or explicitly marked none.
 
 **Defensible trade-offs (no action needed):**
 - <decision> -- <why it's the right call>
@@ -197,9 +199,28 @@ as the final enforcement layer, not the first reviewer.
 
 ### 3d. Thin-slice and hardening triage
 
-Build the thinnest end-to-end version that exercises the real flow. A
-slice is done only when the builder demonstrates the behavior with a
-concrete test, script, artifact, or command output.
+Every plan names a slice phase in `Scope (this PR)`, and the PR body
+and commit message repeat it. Use these standard phases:
+
+| Phase | Use when |
+|---|---|
+| `Vertical slice` | Building the thinnest end-to-end product path that proves the real flow. |
+| `Functional validation` | Proving the finished flow works on representative inputs and outputs. |
+| `Robust testing` | Pushing scale, concurrency, failure, and integration edges after the flow works. |
+| `Production hardening` | Closing survivability, observability, security, durability, and operational gaps found during validation or robust testing. |
+| `Product polish` | Improving UX, copy, defaults, and ergonomics after the core behavior is proven. |
+| `Workflow/process` | Changing repo workflow, review contracts, audits, or developer tooling rather than product behavior. |
+
+The normal product order is `Vertical slice` -> `Functional validation`
+-> `Robust testing` -> `Production hardening` -> `Product polish`.
+Small corrections can happen out of order, but the plan must name why
+the phase is appropriate now. If implementation changes the phase,
+update the plan and PR body before review.
+
+For a `Vertical slice`, build the thinnest end-to-end version that
+exercises the real flow. A slice is done only when the builder
+demonstrates the behavior with a concrete test, script, artifact, or
+command output.
 
 Only fix inline what the slice cannot function without. Required
 inline fixes include:
@@ -227,7 +248,9 @@ include what shipped, how it was demonstrated, and what was parked in
 
 At the start of each slice, scan `HARDENING.md` for entries touching
 the same ownership lane or files. Fix only entries that are required for
-the slice to function; otherwise leave them parked and mention the
+the slice to function. For `Robust testing` and `Production hardening`
+phases, promote relevant parked entries into the PR scope when they are
+the reason the slice exists. Otherwise leave them parked and mention the
 reason in `Deferred` if they were considered. Periodically drain or
 promote stale entries into the debt register so `HARDENING.md` remains a
 working queue, not an archive.
@@ -349,6 +372,8 @@ Before LGTM, the reviewer confirms:
 
 - [ ] CI green (extracted-checks ✅, Vercel ✅).
 - [ ] Plan doc has all 7 required sections.
+- [ ] Plan, PR body, and commit message name a `Slice phase`, and the
+      diff matches that phase.
 - [ ] Diff size matches the plan's estimate (or the overage is
       justified in **Why**).
 - [ ] No regressions in the named test sweep.
