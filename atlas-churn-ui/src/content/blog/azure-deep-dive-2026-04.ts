@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Azure Reviews: 2327 User Complaints & VMware Migration Signals',
   seo_description: '2327 Azure reviews analyzed. Broadcom pricing, vSphere 7 expiration, and VMware migration pressure drive evaluation activity. Data from March-April 2026.',
   target_keyword: 'Azure reviews',
-  secondary_keywords: ["Azure pricing complaints", "VMware to Azure migration", "Azure vs AWS comparison"],
+  secondary_keywords: ["Azure pricing complaints", "VMware to Azure migration", "Azure vs AWS comparison", "Azure too expensive"],
   faq: [
   {
     "question": "What are the most common Azure complaints in 2026?",

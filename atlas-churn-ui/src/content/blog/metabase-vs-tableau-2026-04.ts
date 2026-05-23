@@ -96,7 +96,7 @@ const post: BlogPost = {
   seo_title: 'Metabase vs Tableau Reviews: 1252 User Complaints Compared',
   seo_description: 'Metabase vs Tableau comparison: 1252 reviews analyzed for complaint patterns, pricing pressure, and churn signals across buyer segments in data analytics tools.',
   target_keyword: 'metabase vs tableau',
-  secondary_keywords: ["metabase tableau comparison", "data analytics software reviews", "business intelligence tool comparison"],
+  secondary_keywords: ["metabase tableau comparison", "data analytics software reviews", "business intelligence tool comparison", "metabase vs power bi", "metabase pricing"],
   faq: [
   {
     "question": "Which has higher urgency signals: Metabase or Tableau?",
