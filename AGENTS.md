@@ -26,7 +26,7 @@ Required sections, in this order:
 | Section | Purpose |
 |---|---|
 | **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. |
-| **Scope (this PR)** | The narrow surface this PR touches. Start with `Slice phase: <phase>.` Numbered list of intent. List of files in a "Files touched" subsection. |
+| **Scope (this PR)** | The narrow surface this PR touches. Start with an `Ownership lane: <lane>` line, then a `Slice phase: <phase>` line, then a numbered list of intent and a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
 | **Deferred** | Things explicitly punted to a follow-up slice. Each item should name the future PR or describe what would unlock it. Include "Parked hardening: none" or list the `HARDENING.md` entries added by this slice. |
@@ -372,8 +372,9 @@ Before LGTM, the reviewer confirms:
 
 - [ ] CI green (extracted-checks ✅, Vercel ✅).
 - [ ] Plan doc has all 7 required sections.
-- [ ] Plan, PR body, and commit message name a `Slice phase`, and the
-      diff matches that phase.
+- [ ] Plan and PR body name a `Slice phase`, and the diff matches that
+      phase. The squash commit message carries the phase from the PR body
+      at merge.
 - [ ] Diff size matches the plan's estimate (or the overage is
       justified in **Why**).
 - [ ] No regressions in the named test sweep.

@@ -34,10 +34,14 @@ Slice phase: Workflow/process.
 ## Mechanism
 
 `AGENTS.md` gains a lightweight phase label instead of a new required
-section, preserving the seven-section plan shape while making phase
-visible in the highest-signal places:
+section. The existing `Ownership lane` line stays first, then the phase
+line follows it, preserving the seven-section plan shape while making
+phase visible in the highest-signal places:
 
 ```md
+Ownership lane: content-ops/faq-generator
+Slice phase: Vertical slice
+
 Plan: plans/PR-<Slice-Name>.md
 Slice phase: <Vertical slice | Functional validation | Robust testing |
 Production hardening | Product polish | Workflow/process>
@@ -72,6 +76,6 @@ LGTM gate.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~70 |
-| AGENTS workflow contract | ~43 |
-| **Total** | ~113 |
+| Plan doc | ~75 |
+| AGENTS workflow contract | ~45 |
+| **Total** | ~120 |
