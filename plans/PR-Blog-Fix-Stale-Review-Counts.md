@@ -105,5 +105,5 @@ the chart-provenance resolution is recorded in this plan + the roadmap memory).
 | Area | LOC |
 |---|---:|
 | 9 posts (number corrections) | ~42 |
-| Plan doc | ~95 |
-| **Total** | **~137** |
+| Plan doc | ~151 |
+| **Total** | **~193** |
