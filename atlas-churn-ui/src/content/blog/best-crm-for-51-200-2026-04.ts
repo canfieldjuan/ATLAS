@@ -181,7 +181,7 @@ const post: BlogPost = {
 <p><strong>Support issues</strong> show up most during onboarding and scaling phases. Slow response times, generic help docs, and long ticket queues compound frustration when teams are already under pressure.</p>
 <p><strong>Overall dissatisfaction</strong> is the catch-all category, but it often reflects unmet expectations around value, flexibility, or vendor responsiveness.</p>
 <p>This type of high-stakes evaluation context shows up when teams feel locked into a platform that no longer fits their needs.</p>
-<p>The counterevidence matters too. Some reviewers stay despite pricing frustration because the platform delivers on UX, reliability, or overall satisfaction.</p>
+<p>The counterevidence matters too. Some reviewers stay despite pricing frustration because the platform delivers on UX or reliability.</p>
 <p>This suggests that retention anchors exist, but they're vulnerable to competitive pressure when pricing or support issues accumulate.</p>
 <h2 id="close-best-for-51-200-1000-teams">Close: Best For 51-200, 1000+ Teams</h2>
 <p>Close earns a 4.5 rating across 12 reviews and positions itself as a sales-focused CRM for teams that prioritize calling, emailing, and pipeline velocity over marketing automation or complex workflows.</p>
@@ -192,7 +192,7 @@ const post: BlogPost = {
 <p><strong>Bottom line:</strong> Close is a strong fit for sales-first teams of 51-200 that expect to scale and want a CRM that won't slow them down. But if you need flexibility or advanced features, test the platform thoroughly before committing.</p>
 <h2 id="copper-best-for-51-200-1-50-teams">Copper: Best For 51-200, 1-50 Teams</h2>
 <p><strong>Who it fits:</strong> Copper is strongest for 51-200 teams that overlap with smaller subsets (1-50) and need a CRM that feels native to Google's ecosystem. It's ideal for teams that want minimal onboarding friction and a clean, uncluttered interface.</p>
-<p><strong>Strengths:</strong> Reviewers praise security, onboarding ease, and overall satisfaction. The Google Workspace integration is seamless, and the UX is intuitive for teams already familiar with Google's design language.</p>
+<p><strong>Strengths:</strong> Reviewers praise security and onboarding ease. The Google Workspace integration is seamless, and the UX is intuitive for teams already familiar with Google's design language.</p>
 <p><strong>Weaknesses:</strong> Despite the high rating, data migration, technical debt, and contract lock-in show up as recurring pain. Reviewers also flag overall dissatisfaction and pricing as concerns, particularly as teams scale.</p>
 <p>One reviewer captured the tension:</p>
 <blockquote>
@@ -226,7 +226,7 @@ const post: BlogPost = {
 <h2 id="pipedrive-best-for-51-200-201-1000-teams">Pipedrive: Best For 51-200, 201-1000 Teams</h2>
 <p>Pipedrive earns a 4.4 rating across 88 reviews—the largest sample in this set—and positions itself as the CRM for sales teams that want visual pipeline management and deal velocity.</p>
 <p><strong>Who it fits:</strong> Pipedrive is strongest for 51-200 teams that overlap with larger subsets (201-1000) and need a CRM that prioritizes deal flow over marketing automation or project management. It's ideal for sales-first teams that want a tool that mirrors their existing process.</p>
-<p><strong>Strengths:</strong> Reviewers highlight onboarding ease, integration flexibility, and overall satisfaction. The visual pipeline interface is intuitive, and the platform's focus on sales velocity means less distraction and faster adoption.</p>
+<p><strong>Strengths:</strong> Reviewers highlight onboarding ease and integration flexibility. The visual pipeline interface is intuitive, and the platform's focus on sales velocity means less distraction and faster adoption.</p>
 <p><strong>Weaknesses:</strong> Pricing, UX, and support lead the pain chart. Reviewers report that Pipedrive's per-seat costs add up quickly as teams grow, and that support responsiveness declines as the platform scales. Contract lock-in also surfaces as a concern.</p>
 <p>One reviewer noted:</p>
 <blockquote>

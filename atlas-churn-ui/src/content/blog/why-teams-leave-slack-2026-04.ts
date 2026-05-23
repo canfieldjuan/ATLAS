@@ -31,7 +31,7 @@ const post: BlogPost = {
   },
   {
     "question": "What will teams miss after switching from Slack?",
-    "answer": "293 mentions of positive overall satisfaction signals suggest retention anchors exist. Reviewers highlight onboarding, integration capabilities, and data migration as genuine strengths. Evidence shows Slack retains customers through overall satisfaction in specific use cases even as primary communication workflows migrate elsewhere."
+    "answer": "Reviewers highlight onboarding, integration capabilities, and data migration as genuine strengths and retention anchors. Evidence shows Slack retains customers through those strengths in specific use cases even as primary communication workflows migrate elsewhere."
   },
   {
     "question": "When are teams making switching decisions?",
@@ -98,7 +98,7 @@ const post: BlogPost = {
 <p>An active evaluation is in progress: the reviewer is comparing tools for specific use cases, not looking for a single Slack replacement.</p>
 <p>The switching pattern suggests category shift, not vendor displacement. Teams are not replacing Slack with a better Slack. They are replacing Slack-first workflows with async-first workflows using different tool categories.</p>
 <h2 id="what-youll-miss-slacks-genuine-strengths">What You'll Miss: Slack's Genuine Strengths</h2>
-<p>Despite switching signals, 293 mentions of positive overall satisfaction signals appear in the data. This is not a universally hated product.</p>
+<p>Despite switching signals, reviewers still highlight genuine strengths. This is not a universally hated product.</p>
 <p>Reviewers highlight onboarding as a strength. Slack's onboarding experience gets positive mentions in the data, suggesting new users can get productive quickly.</p>
 <p>Integration capabilities appear as a retention anchor. Slack's ecosystem of integrations keeps teams locked in even when primary communication workflows migrate elsewhere.</p>
 <p>Data migration gets positive mentions. This is counterintuitive—data migration is usually a pain point. The positive signal suggests Slack makes it relatively easy to export data when teams do decide to leave.</p>
@@ -108,7 +108,7 @@ const post: BlogPost = {
 <p>-- verified reviewer on G2</p>
 </blockquote>
 <p>The excerpt cuts off, but the signal is clear: two years of use as a communication channel for team and manager discussions. This is not a reviewer who hates Slack. This is a reviewer describing successful use over an extended period.</p>
-<p>Slack retains customers through overall satisfaction in specific use cases even as primary communication workflows migrate elsewhere. This is the key insight: Slack is not failing. The workflow culture around real-time chat is creating pressure that drives specific workflows to async tools.</p>
+<p>Slack retains customers through onboarding ease and integration depth in specific use cases even as primary communication workflows migrate elsewhere. This is the key insight: Slack is not failing. The workflow culture around real-time chat is creating pressure that drives specific workflows to async tools.</p>
 <p>Teams that switch will miss Slack's integration ecosystem. If your workflows depend on Slack's integrations with other tools, replacing Slack means rebuilding those connections in the destination platform.</p>
 <p>Teams that switch will miss Slack's onboarding experience. If your team has high turnover or frequent new hires, Slack's ease of onboarding is a genuine advantage.</p>
 <p>Teams that switch will miss Slack's ubiquity. Everyone knows how to use Slack. Switching to a less common platform means training overhead.</p>

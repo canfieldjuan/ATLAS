@@ -373,7 +373,7 @@ const post: BlogPost = {
 <h3 id="the-category-conclusion">The category conclusion</h3>
 <p>The project management category exhibits moderate displacement intensity with a stable market structure. ClickUp is experiencing significant outbound displacement (10 mentions to Asana, 2 to Monday.com) with UX cited as the primary driver. Jira shows end-user dissatisfaction with UX and faces displacement pressure toward both Asana (5 mentions) and ClickUp (3 mentions).</p>
 <p>Pricing backlash is the immediate trigger. Unexpected annual renewal charges combined with inflexible cancellation policies create acute dissatisfaction when users attempt to cancel after discovering charges. This happens immediately following annual renewal charges, particularly when users discover unexpected billing after reduced usage periods.</p>
-<p>Counterevidence exists. Despite pricing and customization frustrations, users remain anchored by overall satisfaction, positive UX experience, and adequate feature sets. However, contradictory evidence exists across all major dimensions, indicating retention is fragile and context-dependent.</p>
+<p>Counterevidence exists. Despite pricing and customization frustrations, users remain anchored by a positive UX experience and adequate feature sets. However, contradictory evidence exists across all major dimensions, indicating retention is fragile and context-dependent.</p>
 <h2 id="what-reviewers-actually-say-in-project-management">What Reviewers Actually Say in Project Management</h2>
 <p>Let's close with direct reviewer evidence, not just rating averages.</p>
 <p>One Asana user shared migration pain:</p>

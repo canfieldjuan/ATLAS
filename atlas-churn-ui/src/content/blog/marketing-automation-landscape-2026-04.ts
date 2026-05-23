@@ -245,7 +245,6 @@ const post: BlogPost = {
 <ul>
 <li>Intuitive UX, especially for email-first workflows</li>
 <li>Robust feature set for the price</li>
-<li>Strong overall satisfaction among small business users</li>
 <li>Free tier enables low-friction adoption</li>
 </ul>
 <p><strong>Weaknesses:</strong></p>
