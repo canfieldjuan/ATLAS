@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Zoho CRM Reviews 2026: 429 User Experiences Analyzed',
   seo_description: 'Analysis of 429 Zoho CRM reviews: strengths, weaknesses, pain points, and buyer profiles. See what users praise and where complaints cluster.',
   target_keyword: 'zoho crm reviews',
-  secondary_keywords: ["zoho crm pricing", "zoho crm vs hubspot", "zoho crm complaints"],
+  secondary_keywords: ["zoho crm pricing", "zoho crm vs hubspot", "zoho crm complaints", "zoho crm vs salesforce"],
   faq: [
   {
     "question": "What are the main complaints about Zoho CRM?",

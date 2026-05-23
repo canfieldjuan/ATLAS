@@ -129,7 +129,7 @@ const post: BlogPost = {
   seo_title: 'Best CRM for 51-200 Teams: 8 Vendors Compared (1163 Reviews)',
   seo_description: 'Compare 8 CRM tools for 51-200 teams using 1163 real reviews. See ratings, pain patterns, and honest fit recommendations for Close, Copper, Freshsales, and more.',
   target_keyword: 'best CRM software for 51-200 teams',
-  secondary_keywords: ["CRM comparison for mid-size teams", "CRM reviews 51-200 employees", "CRM buyer's guide"],
+  secondary_keywords: ["CRM comparison for mid-size teams", "CRM reviews 51-200 employees", "CRM buyer's guide", "CRM implementation cost", "CRM setup cost"],
   faq: [
   {
     "question": "Which CRM is best for teams of 51-200 employees?",

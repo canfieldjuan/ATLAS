@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Copper Reviews 2026: 1619 User Experiences Analyzed',
   seo_description: 'Analysis of 1619 Copper reviews reveals Google integration strengths and customization pain points. See what drives satisfaction and frustration.',
   target_keyword: 'copper reviews',
-  secondary_keywords: ["copper crm reviews", "copper vs salesforce", "copper crm complaints", "copper google integration"],
+  secondary_keywords: ["copper crm reviews", "copper vs salesforce", "copper crm complaints", "copper google integration", "copper crm pricing"],
   faq: [
   {
     "question": "What are the main strengths of Copper according to reviewers?",

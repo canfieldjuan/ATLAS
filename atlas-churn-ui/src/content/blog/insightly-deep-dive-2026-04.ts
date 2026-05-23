@@ -117,7 +117,7 @@ const post: BlogPost = {
   seo_title: 'Insightly Reviews: 200 CRM Users on Support & Usability',
   seo_description: 'Analysis of 200 Insightly CRM reviews reveals support friction after one year, dashboard strengths, and storage limitations that trigger evaluation cycles.',
   target_keyword: 'Insightly reviews',
-  secondary_keywords: ["Insightly CRM support", "Insightly usability", "Insightly pricing complaints"],
+  secondary_keywords: ["Insightly CRM support", "Insightly usability", "Insightly pricing complaints", "Insightly vs Zoho CRM"],
   faq: [
   {
     "question": "What do reviewers like most about Insightly CRM?",

@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'HubSpot Reviews 2026: 1648 User Sentiment Analysis',
   seo_description: 'Analysis of 1648 HubSpot reviews from G2, Capterra, Reddit, and Trustpilot. See what drives teams away, what they praise, and how it compares to alternatives.',
   target_keyword: 'hubspot reviews',
-  secondary_keywords: ["hubspot marketing hub reviews", "hubspot crm reviews", "hubspot pricing complaints", "hubspot alternatives"],
+  secondary_keywords: ["hubspot marketing hub reviews", "hubspot crm reviews", "hubspot pricing complaints", "hubspot alternatives", "hubspot too expensive", "hubspot vs salesforce"],
   faq: [
   {
     "question": "What are the top complaints about HubSpot?",
