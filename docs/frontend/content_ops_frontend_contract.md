@@ -104,6 +104,7 @@ top-level `execution.{configured,configured_outputs}` /
 | `ControlSurfacePreset` | `control_surfaces.py:33-40` | `id`, `label`, `outputs`, `description` |
 | `ContentOpsRequest` | `control_surfaces.py:43-55` | `target_mode`, `preset`, `outputs`, `limit`, `max_cost_usd`, `inputs`, `ingestion_profile`, `require_quality_gates`, `allow_unimplemented_outputs` |
 | `ContentOpsIngestionDiagnostics` | `ingestion_diagnostics.py:28-57` | `ok`, counts, bounded samples, and row warnings from file or inline ingestion inspection |
+| `ContentOpsIngestionLimits` | `control_surfaces.py` catalog response | inline row cap/deprecation, file upload byte/row caps, upload formats, sample/text caps |
 | `ContentOpsIngestionImportResult` | `control_surfaces.py` import route response | `inserted`, `skipped`, `dry_run`, `replace_existing`, `target_ids`, `warnings`, `source` |
 | `ControlSurfacePreview` | `control_surfaces.py:58-90` | `can_run`, `outputs`, `estimated_cost_usd`, `missing_inputs`, `blocked_outputs`, `warnings`, `normalized_request` |
 | `GenerationPlanStep` | `generation_plan.py:28-45` | `output`, `runner`, `status`, `config`, `reason` |

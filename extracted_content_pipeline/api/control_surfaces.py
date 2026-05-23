@@ -93,6 +93,7 @@ _MAX_INGESTION_ROWS = 1000
 _MAX_FILE_INGESTION_ROWS = 10000
 _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
+_UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
@@ -151,6 +152,19 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
             "manual",
             "existing_evidence",
         ),
+        "ingestion_limits": {
+            "inline_rows": {
+                "max_rows": _MAX_INGESTION_ROWS,
+                "deprecated": True,
+            },
+            "file_upload": {
+                "max_file_bytes": _MAX_INGESTION_FILE_BYTES,
+                "max_rows": _MAX_FILE_INGESTION_ROWS,
+                "supported_formats": _UPLOAD_FILE_FORMATS,
+            },
+            "max_source_text_chars": _MAX_INPUT_STRING_CHARS,
+            "max_sample_limit": _MAX_INGESTION_SAMPLE_LIMIT,
+        },
         "input_contracts": {
             LANDING_PAGE_QUALITY_REPAIR_INPUT: landing_page_quality_repair_input_contract(),
             **landing_page_seo_geo_aeo_input_contracts(),
@@ -194,6 +208,17 @@ def _compose_describe_response(
         },
         "reasoning": dict(reasoning_status),
         "ingestion_profiles": list(static["ingestion_profiles"]),
+        "ingestion_limits": {
+            "inline_rows": dict(static["ingestion_limits"]["inline_rows"]),
+            "file_upload": {
+                **static["ingestion_limits"]["file_upload"],
+                "supported_formats": list(
+                    static["ingestion_limits"]["file_upload"]["supported_formats"]
+                ),
+            },
+            "max_source_text_chars": static["ingestion_limits"]["max_source_text_chars"],
+            "max_sample_limit": static["ingestion_limits"]["max_sample_limit"],
+        },
         "input_contracts": {
             key: dict(value)
             for key, value in static["input_contracts"].items()
@@ -838,7 +863,7 @@ async def _read_bounded_upload(file: UploadFile) -> bytes:
 
 def _validate_upload_file_format(value: str) -> str:
     text = _clean(value) or "auto"
-    if text not in {"auto", "json", "jsonl", "csv"}:
+    if text not in _UPLOAD_FILE_FORMATS:
         raise HTTPException(
             status_code=400,
             detail="file_format must be one of: auto, json, jsonl, csv.",

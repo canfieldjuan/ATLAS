@@ -165,6 +165,24 @@
     "manual",
     "existing_evidence"
   ],
+  "ingestion_limits": {
+    "inline_rows": {
+      "max_rows": 1000,
+      "deprecated": true
+    },
+    "file_upload": {
+      "max_file_bytes": 26214400,
+      "max_rows": 10000,
+      "supported_formats": [
+        "auto",
+        "json",
+        "jsonl",
+        "csv"
+      ]
+    },
+    "max_source_text_chars": 10000,
+    "max_sample_limit": 25
+  },
   "reasoning": {
     "configured": true,
     "source": "db",

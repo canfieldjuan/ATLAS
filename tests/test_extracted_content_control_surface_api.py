@@ -228,6 +228,19 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
         "manual",
         "existing_evidence",
     ]
+    assert payload["ingestion_limits"] == {
+        "inline_rows": {
+            "max_rows": 1000,
+            "deprecated": True,
+        },
+        "file_upload": {
+            "max_file_bytes": 25 * 1024 * 1024,
+            "max_rows": 10000,
+            "supported_formats": ["auto", "json", "jsonl", "csv"],
+        },
+        "max_source_text_chars": 10000,
+        "max_sample_limit": 25,
+    }
 
 
 @pytest.mark.asyncio
@@ -481,12 +494,16 @@ async def test_describe_control_surfaces_returns_independent_dict_per_call():
     first["outputs"][0]["required_inputs"].append("injected_field")
     first["presets"][0]["outputs"].append("injected_output")
     first["ingestion_profiles"].append("injected_profile")
+    first["ingestion_limits"]["inline_rows"]["max_rows"] = 999999
+    first["ingestion_limits"]["file_upload"]["supported_formats"].append("yaml")
 
     second = await route.endpoint()
     assert second["outputs"][0]["label"] != "MUTATED"
     assert "injected_field" not in second["outputs"][0]["required_inputs"]
     assert "injected_output" not in second["presets"][0]["outputs"]
     assert "injected_profile" not in second["ingestion_profiles"]
+    assert second["ingestion_limits"]["inline_rows"]["max_rows"] == 1000
+    assert "yaml" not in second["ingestion_limits"]["file_upload"]["supported_formats"]
 
 
 @pytest.mark.asyncio
