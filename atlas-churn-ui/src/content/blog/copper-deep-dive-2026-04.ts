@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'copper-deep-dive-2026-04',
-  title: 'Copper Deep Dive: Reviewer Sentiment Across 1619 Reviews',
+  title: 'Copper CRM: What 1,619 Reviews Reveal About Pricing and Fit',
   description: 'Comprehensive analysis of Copper based on 1619 reviews from G2, Gartner, and Reddit. What reviewers praise, where complaints cluster, and who the platform works best for.',
   date: '2026-04-01',
   author: 'Churn Signals Team',

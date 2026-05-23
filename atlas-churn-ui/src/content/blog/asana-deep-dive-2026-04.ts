@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'asana-deep-dive-2026-04',
-  title: 'Asana Deep Dive: Reviewer Sentiment Across 1012 Reviews',
+  title: 'Is Asana Too Expensive? What 1,012 Reviews Reveal About Price and Fit',
   description: 'Comprehensive analysis of 1012 Asana reviews from G2, Capterra, Gartner, PeerSpot, and Reddit. Discover what users praise, where they struggle, and whether Asana fits your team\'s workflow.',
   date: '2026-04-06',
   author: 'Churn Signals Team',

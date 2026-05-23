@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'amazon-web-services-deep-dive-2026-04',
-  title: 'Amazon Web Services Deep Dive: Reviewer Sentiment Across 784 Reviews',
+  title: 'Is AWS Too Expensive? What 784 Reviews Reveal About Cloud Costs',
   description: 'Comprehensive analysis of Amazon Web Services based on 784 public reviews. Where reviewers report pain, what they praise, and how AWS stacks up against Google Cloud and Azure.',
   date: '2026-04-06',
   author: 'Churn Signals Team',

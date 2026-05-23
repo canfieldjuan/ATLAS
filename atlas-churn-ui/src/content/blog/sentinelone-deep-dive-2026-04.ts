@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'sentinelone-deep-dive-2026-04',
-  title: 'SentinelOne Deep Dive: Reviewer Sentiment Across 484 Reviews',
+  title: 'SentinelOne: What 484 Reviews Reveal About SMB Pricing and EDR Loyalty',
   description: 'A comprehensive analysis of 484 SentinelOne reviews reveals pricing friction in the SMB segment, active evaluation signals, and persistent loyalty driven by best-in-class EDR functionality. This deep dive examines reviewer sentiment, pain patterns, competitive positioning, and timing signals from March 3 to April 6, 2026.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

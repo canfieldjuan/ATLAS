@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'intercom-deep-dive-2026-04',
-  title: 'Intercom Deep Dive: Reviewer Sentiment Across 984 Reviews',
+  title: 'Is Intercom Too Expensive? What 984 Reviews Reveal About Its Pricing',
   description: 'Comprehensive analysis of Intercom based on 984 public reviews. Where reviewers praise the platform, where complaints cluster, and what the data suggests for potential buyers.',
   date: '2026-04-05',
   author: 'Churn Signals Team',

@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'zoho-crm-deep-dive-2026-04',
-  title: 'Zoho CRM Deep Dive: Reviewer Sentiment Across 429 Reviews',
+  title: 'Zoho CRM: What 429 Reviews Reveal About Value vs Salesforce',
   description: 'Comprehensive analysis of Zoho CRM based on 429 reviews collected between February and April 2026. Where the platform excels, where users report frustration, and who it works best for.',
   date: '2026-04-05',
   author: 'Churn Signals Team',

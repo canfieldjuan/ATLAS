@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'basecamp-deep-dive-2026-04',
-  title: 'Basecamp Deep Dive: Reviewer Sentiment Across 794 Reviews',
+  title: 'Basecamp, by 794 Reviews: What Teams Praise and Where It Frustrates',
   description: 'Comprehensive analysis of Basecamp based on 794 public reviews. Where reviewers praise the platform, where pain clusters emerge, and what the competitive landscape reveals.',
   date: '2026-04-06',
   author: 'Churn Signals Team',

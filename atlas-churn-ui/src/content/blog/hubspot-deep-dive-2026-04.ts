@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'hubspot-deep-dive-2026-04',
-  title: 'HubSpot Deep Dive: Reviewer Sentiment Across 1680 Reviews',
+  title: 'Is HubSpot Worth It? What 1,680 Reviews Reveal About Price and Buyer Fit',
   description: 'Comprehensive analysis of HubSpot based on 1680 reviews. Where reviewers praise the platform, where complaints cluster, and what the switching patterns reveal about buyer fit.',
   date: '2026-04-06',
   author: 'Churn Signals Team',
