@@ -482,6 +482,19 @@ def test_public_landing_page_robots_keeps_demo_cta_variants_noindex(
     ) == "noindex,follow"
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["/demos", "/demo/foo", "/demo-page", "/"],
+)
+def test_public_landing_page_robots_indexes_demo_near_misses(url: str) -> None:
+    # Guards the tight `== "/demo"` boundary: real routes whose path only
+    # resembles the placeholder must stay indexable. A future switch to a
+    # prefix match (e.g. startswith("/demo")) would silently de-index these.
+    assert public_landing_page_robots(
+        _ready_draft(status="approved", cta={"label": "Book a demo", "url": url})
+    ) == "index,follow"
+
+
 @pytest.mark.asyncio
 async def test_export_landing_page_drafts_surfaces_ready_readiness() -> None:
     result = await export_landing_page_drafts(

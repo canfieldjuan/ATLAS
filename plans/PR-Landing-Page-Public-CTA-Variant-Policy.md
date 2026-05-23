@@ -58,6 +58,12 @@ blocked destination.
   and repair lock connection hold time. Both are parked under
   `Owner/session: landing-page repair session` and are not required for this
   public CTA variant-policy slice.
+- Anchor-fragment placeholder variants (`/#<frag>`, e.g. `/#section`) remain
+  indexable. Only `/demo` gets variant normalization in this slice. Unlike a
+  `/demo` variant -- which is unambiguously the demo placeholder -- a
+  `/#pricing`-style CTA can be a legitimate same-page anchor on a finished
+  page, so blanket-rejecting `/#<frag>` would de-index real pages. The bare
+  `#` and `/#` placeholders stay rejected via the exact-match set.
 
 ## Parked hardening
 
