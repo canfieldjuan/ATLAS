@@ -92,7 +92,7 @@ const post: BlogPost = {
   seo_title: 'Switch to Klaviyo: Migration Guide from 5 Platforms',
   seo_description: 'Why teams switch to Klaviyo from Mailchimp, Flodesk, MailerLite & more. Migration triggers, integration considerations, and practical switching advice from 638 reviews.',
   target_keyword: 'switch to Klaviyo',
-  secondary_keywords: ["Klaviyo migration", "Mailchimp to Klaviyo", "Klaviyo alternatives"],
+  secondary_keywords: ["Klaviyo migration", "Mailchimp to Klaviyo", "Klaviyo alternatives", "Klaviyo vs Omnisend", "Klaviyo vs Mailchimp", "Klaviyo too expensive"],
   faq: [
   {
     "question": "Which platforms do most Klaviyo users migrate from?",

@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Brevo Reviews: Pricing Pain & Churn Signals',
   seo_description: 'Brevo reviews show pricing complaints and support gaps. See what 38 enriched reviews reveal about churn signals and buyer intent in marketing automation.',
   target_keyword: 'Brevo reviews',
-  secondary_keywords: ["Brevo pricing complaints", "Brevo vs ActiveCampaign", "marketing automation software reviews"],
+  secondary_keywords: ["Brevo pricing complaints", "Brevo vs ActiveCampaign", "marketing automation software reviews", "Brevo vs Sendinblue"],
   faq: [
   {
     "question": "What are the main complaints about Brevo?",

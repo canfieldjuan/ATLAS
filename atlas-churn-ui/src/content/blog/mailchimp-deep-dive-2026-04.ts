@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Mailchimp Reviews: 1,184 User Insights on Pricing & Features',
   seo_description: 'Analysis of 1,184 Mailchimp reviews reveals pricing backlash, UX strengths, and integration gaps. See what real users report about this marketing automation platform.',
   target_keyword: 'Mailchimp reviews',
-  secondary_keywords: ["Mailchimp pricing", "Mailchimp vs alternatives", "marketing automation software comparison"],
+  secondary_keywords: ["Mailchimp pricing", "Mailchimp vs alternatives", "marketing automation software comparison", "Mailchimp too expensive", "Mailchimp price increase"],
   faq: [
   {
     "question": "What are the most common complaints about Mailchimp?",
