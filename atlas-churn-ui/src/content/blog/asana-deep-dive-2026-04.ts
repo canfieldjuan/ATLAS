@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Asana Reviews: Sentiment Analysis of 1012 Users',
   seo_description: 'Analysis of 1012 Asana reviews reveals pricing friction, UX strengths, and integration gaps. See real user feedback on project management fit.',
   target_keyword: 'Asana reviews',
-  secondary_keywords: ["Asana pricing complaints", "Asana vs competitors", "project management software comparison"],
+  secondary_keywords: ["Asana pricing complaints", "Asana vs competitors", "project management software comparison", "Asana too expensive", "Asana vs Monday"],
   faq: [
   {
     "question": "What do Asana users like most?",

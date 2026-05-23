@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Project Management Software Comparison 2026: 10 Vendors',
   seo_description: 'Compare 10 project management platforms using 1,464 real churn signals. See urgency rankings, pain patterns, and vendor profiles from verified reviews.',
   target_keyword: 'project management software comparison',
-  secondary_keywords: ["best project management tools 2026", "project management software reviews", "project management platform comparison"],
+  secondary_keywords: ["best project management tools 2026", "project management software reviews", "project management platform comparison", "project management software cost"],
   faq: [
   {
     "question": "Which project management vendors face the highest churn risk in 2026?",

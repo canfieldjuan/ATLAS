@@ -102,7 +102,7 @@ const post: BlogPost = {
   seo_title: 'Jira vs Trello 2026: 72 Churn Signals Analyzed',
   seo_description: 'Analysis of 72 churn signals across 1902 Jira and Trello reviews. See where each vendor shows pain patterns and what reviewers say about switching.',
   target_keyword: 'jira vs trello',
-  secondary_keywords: ["jira vs trello comparison", "jira alternatives", "trello alternatives", "project management software complaints"],
+  secondary_keywords: ["jira vs trello comparison", "jira alternatives", "trello alternatives", "project management software complaints", "jira too complex"],
   faq: [
   {
     "question": "What are the main differences between Jira and Trello in reviewer complaints?",

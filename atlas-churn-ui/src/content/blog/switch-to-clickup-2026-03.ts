@@ -100,7 +100,7 @@ const post: BlogPost = {
   seo_title: 'Switch to ClickUp 2026: Migration Guide & Review Analysis',
   seo_description: '645 reviews analyzed: Why teams migrate to ClickUp, top pain points driving the switch, and practical migration considerations from reviewers who made the move.',
   target_keyword: 'switch to clickup',
-  secondary_keywords: ["clickup migration guide", "migrate to clickup", "clickup vs asana migration"],
+  secondary_keywords: ["clickup migration guide", "migrate to clickup", "clickup vs asana migration", "asana to clickup"],
   faq: [
   {
     "question": "What are the main reasons teams switch to ClickUp?",
