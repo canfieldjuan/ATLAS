@@ -136,6 +136,59 @@ def test_faq_scale_smoke_writes_standard_artifacts(
     )
 
 
+def test_faq_scale_smoke_processes_1000_row_json_bundle_file(tmp_path: Path) -> None:
+    source = tmp_path / "support_ticket_bundle.json"
+    source.write_text(
+        json.dumps({
+            "support_tickets": [
+                {
+                    "ticket_id": f"ticket-file-{index}",
+                    "source_type": "support_ticket",
+                    "subject": "Billing renewal question",
+                    "message": "How do I confirm my renewal invoice before payment?",
+                    "pain_category": "billing",
+                }
+                for index in range(1000)
+            ],
+        })
+        + "\n",
+        encoding="utf-8",
+    )
+
+    code, summary = smoke.run_scale_smoke(
+        _args(
+            tmp_path,
+            path=source,
+            source_format="json",
+            title="Customer Ticket FAQ File Scale Smoke",
+        )
+    )
+
+    artifact_dir = tmp_path / "artifacts"
+    result = json.loads((artifact_dir / "faq_result.json").read_text(encoding="utf-8"))
+
+    assert code == 0
+    assert summary["ok"] is True
+    assert summary["input_profile"]["raw_row_count"] == 1000
+    assert summary["input_profile"]["raw_row_count_source"] == "json_bundle.support_tickets"
+    assert summary["input_profile"]["usable_source_count"] == 1000
+    assert summary["input_profile"]["skipped_row_count"] == 0
+    assert summary["input_profile"]["missing_source_text_count"] == 0
+    assert summary["faq_run_summary"]["weighted_source_volume"] == 1000
+    assert summary["faq_run_summary"]["source_channel_counts"]["support_tickets"] == 1000
+    assert summary["faq_run_summary"]["output_checks"]["failed"] == 0
+    assert result["status"] == "ok"
+    assert result["source_count"] == 1000
+    assert result["ticket_source_count"] == 1000
+    assert result["diagnostics"]["rendered_ticket_source_count"] == 1000
+    assert result["diagnostics"]["items"][0]["source_id_count"] == 1000
+    assert result["diagnostics"]["items"][0]["first_source_id"] == "ticket-file-0"
+    assert result["diagnostics"]["items"][0]["ticket_count"] == 1000
+    assert (artifact_dir / "faq.md").read_text(encoding="utf-8").startswith(
+        "# Customer Ticket FAQ File Scale Smoke"
+    )
+
+
 def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path) -> None:
     source = _write_ticket_csv(
         tmp_path,
