@@ -204,6 +204,42 @@ def test_inprocess_load_runner_fails_when_expected_429_missing(monkeypatch, tmp_
     ]
 
 
+def test_inprocess_load_runner_fails_when_inserted_rows_below_minimum(monkeypatch, tmp_path: Path) -> None:
+    module = _load_script_module()
+    source_path = tmp_path / "cfpb_rows.jsonl"
+    result_path = tmp_path / "result.json"
+    _write_cfpb_rows(source_path, 1)
+    pool = _Pool(_Connection(delay_seconds=0))
+
+    async def create_pool(database_url: str):
+        del database_url
+        return pool
+
+    monkeypatch.setattr(module, "_create_pool", create_pool)
+
+    code = module.main([
+        *_default_args(source_path, result_path),
+        "--concurrency",
+        "1",
+        "--import-max-concurrency",
+        "1",
+        "--min-successes",
+        "1",
+        "--expect-at-capacity-min",
+        "0",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["min_source_rows"] == 3
+    assert payload["summary"]["successes"] == 1
+    assert payload["summary"]["inserted"] == 1
+    assert payload["errors"] == [
+        "expected at least 3 inserted source row(s), got 1"
+    ]
+
+
 def test_inprocess_load_runner_requires_database_url(monkeypatch, tmp_path: Path) -> None:
     module = _load_script_module()
     source_path = tmp_path / "cfpb_rows.jsonl"
@@ -228,4 +264,3 @@ def test_inprocess_load_runner_requires_database_url(monkeypatch, tmp_path: Path
         ])
 
     assert "Missing --database-url" in str(exc.value)
-

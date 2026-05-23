@@ -156,6 +156,7 @@ async def run_inprocess_load(args: argparse.Namespace) -> tuple[int, dict[str, A
         "replace_existing": bool(args.replace_existing),
         "concurrency": int(args.concurrency),
         "import_max_concurrency": int(args.import_max_concurrency),
+        "min_source_rows": int(args.min_source_rows),
         "min_successes": int(args.min_successes),
         "expect_at_capacity_min": int(args.expect_at_capacity_min),
         "elapsed_seconds": None,
@@ -208,6 +209,7 @@ async def run_inprocess_load(args: argparse.Namespace) -> tuple[int, dict[str, A
     summary = _summarize_results(results)
     errors = _load_errors(
         summary,
+        min_source_rows=int(args.min_source_rows),
         min_successes=int(args.min_successes),
         expect_at_capacity_min=int(args.expect_at_capacity_min),
     )
@@ -330,13 +332,20 @@ def _empty_summary() -> dict[str, Any]:
 def _load_errors(
     summary: Mapping[str, Any],
     *,
+    min_source_rows: int,
     min_successes: int,
     expect_at_capacity_min: int,
 ) -> list[str]:
     errors: list[str] = []
     successes = int(summary.get("successes") or 0)
     at_capacity = int(summary.get("at_capacity") or 0)
+    inserted = int(summary.get("inserted") or 0)
     unexpected_failures = int(summary.get("unexpected_failures") or 0)
+    if inserted < min_source_rows:
+        errors.append(
+            "expected at least "
+            f"{min_source_rows} inserted source row(s), got {inserted}"
+        )
     if successes < min_successes:
         errors.append(f"expected at least {min_successes} success(es), got {successes}")
     if at_capacity < expect_at_capacity_min:
