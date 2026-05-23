@@ -28,6 +28,7 @@ import type {
 } from '../../api/contentOps'
 import type {
   ContentOpsCatalog,
+  ContentOpsIngestionLimits,
   ContentOpsIngestionDiagnostics,
   ContentOpsIngestionImportRequest,
   ContentOpsIngestionImportResponse,
@@ -112,12 +113,31 @@ export function fromWireCatalog(
       capabilities: copyReasoningCapabilities(wire.reasoning.capabilities),
     },
     ingestionProfiles: [...wire.ingestion_profiles],
+    ingestionLimits: fromWireIngestionLimits(wire.ingestion_limits),
     inputContracts: Object.fromEntries(
       Object.entries(wire.input_contracts ?? {}).map(([key, contract]) => [
         key,
         fromWireInputContract(contract),
       ]),
     ),
+  }
+}
+
+function fromWireIngestionLimits(
+  wire: ContentOpsCatalogResponse['ingestion_limits'],
+): ContentOpsIngestionLimits {
+  return {
+    inlineRows: {
+      maxRows: wire.inline_rows.max_rows,
+      deprecated: wire.inline_rows.deprecated,
+    },
+    fileUpload: {
+      maxFileBytes: wire.file_upload.max_file_bytes,
+      maxRows: wire.file_upload.max_rows,
+      supportedFormats: [...wire.file_upload.supported_formats],
+    },
+    maxSourceTextChars: wire.max_source_text_chars,
+    maxSampleLimit: wire.max_sample_limit,
   }
 }
 

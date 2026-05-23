@@ -72,7 +72,22 @@ export interface ContentOpsCatalog {
       | Record<string, ReasoningCapabilityStatus>
   }
   ingestionProfiles: string[]
+  ingestionLimits: ContentOpsIngestionLimits
   inputContracts: Record<string, ContentOpsInputContractView>
+}
+
+export interface ContentOpsIngestionLimits {
+  inlineRows: {
+    maxRows: number
+    deprecated: boolean
+  }
+  fileUpload: {
+    maxFileBytes: number
+    maxRows: number
+    supportedFormats: string[]
+  }
+  maxSourceTextChars: number
+  maxSampleLimit: number
 }
 
 export interface ReasoningCapabilityStatus {

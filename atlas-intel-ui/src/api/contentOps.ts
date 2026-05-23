@@ -99,7 +99,22 @@ export interface ContentOpsCatalogResponse {
       | Record<string, ContentOpsReasoningCapabilityStatus>
   }
   ingestion_profiles: string[]
+  ingestion_limits: ContentOpsIngestionLimits
   input_contracts: Record<string, ContentOpsInputContract>
+}
+
+export interface ContentOpsIngestionLimits {
+  inline_rows: {
+    max_rows: number
+    deprecated: boolean
+  }
+  file_upload: {
+    max_file_bytes: number
+    max_rows: number
+    supported_formats: string[]
+  }
+  max_source_text_chars: number
+  max_sample_limit: number
 }
 
 export interface ContentOpsReasoningCapabilityStatus {
