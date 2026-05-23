@@ -32,6 +32,19 @@ def _route(api_pkg, path: str):
     return route
 
 
+def _ticket_payload() -> dict[str, object]:
+    return {
+        "inputs": {
+            "source_material": [
+                {
+                    "subject": "Billing question",
+                    "body": "Why was I charged twice this month exactly?",
+                }
+            ]
+        }
+    }
+
+
 def test_atlas_content_ops_input_provider_noops_without_source_material() -> None:
     provider = build_content_ops_input_provider()
 
@@ -253,3 +266,44 @@ def test_api_aggregator_wires_content_ops_input_provider() -> None:
 
     assert provider.__class__.__name__ == "_AtlasSupportTicketInputProvider"
     assert package.inputs["faq_questions"] == ["Where is my invoice?"]
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("asyncpg") is None,
+    reason="atlas_brain.api imports the host database module when asyncpg is present",
+)
+@pytest.mark.asyncio
+async def test_api_preview_route_applies_support_ticket_input_provider() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/preview")
+
+    payload = await route.endpoint(_ticket_payload())
+
+    assert payload["can_run"] is True
+    assert payload["outputs"] == ["faq_markdown", "landing_page", "blog_post"]
+    assert payload["missing_inputs"] == []
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("asyncpg") is None,
+    reason="atlas_brain.api imports the host database module when asyncpg is present",
+)
+@pytest.mark.asyncio
+async def test_api_plan_route_applies_support_ticket_input_provider() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/plan")
+
+    payload = await route.endpoint(_ticket_payload())
+
+    assert payload["can_execute"] is True
+    assert [step["output"] for step in payload["steps"]] == [
+        "faq_markdown",
+        "landing_page",
+        "blog_post",
+    ]
+    assert payload["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+    assert payload["preview"]["outputs"] == [
+        "faq_markdown",
+        "landing_page",
+        "blog_post",
+    ]
