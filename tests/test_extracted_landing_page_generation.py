@@ -593,6 +593,38 @@ async def test_generate_skips_when_shared_readiness_blocks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_quality_blocked_error_includes_failed_candidate_snapshot() -> None:
+    response = json.loads(_valid_response())
+    response["sections"][0]["title"] = "Benefits"
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[json.dumps(response)],
+        config=LandingPageGenerationConfig(quality_repair_attempts=0),
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert landing_pages.saved == []
+    error = result.errors[0]
+    assert error["reason"] == "quality_blocked"
+    assert "geo_readiness:section_semantics" in error["blockers"]
+    snapshot = error["failed_candidate"]
+    assert snapshot["title"] == "Acme Q3: Stop Renewal Surprises"
+    assert snapshot["slug"] == "acme-q3-launch"
+    assert snapshot["hero_headline"] == "Stop renewal surprises"
+    assert snapshot["cta_url"] == "/demo"
+    assert snapshot["section_count"] == 3
+    assert snapshot["sections_truncated"] is False
+    first_section = snapshot["sections"][0]
+    assert first_section["title"] == "Benefits"
+    assert first_section["kind"] == "problem"
+    assert first_section["primary_question"] == "Why do renewal surprises cause churn?"
+    assert first_section["answer_summary_word_count"] >= 6
+    assert first_section["body_starts_with_answer_summary"] is True
+
+
+@pytest.mark.asyncio
 async def test_generate_repairs_quality_blocked_response_once_and_persists() -> None:
     """Parsed JSON that fails the quality gate gets one targeted repair pass."""
     bad_response = json.dumps({
@@ -924,6 +956,10 @@ async def test_generate_reports_quality_blockers_when_repair_response_will_not_p
     assert result.errors[0]["reason"] == "unparseable_response"
     assert any("no_cta" in blocker for blocker in result.errors[0]["quality_blockers"])
     assert result.errors[0]["quality_repair_history"] == result.quality_repair_history
+    snapshot = result.errors[0]["failed_candidate"]
+    assert snapshot["title"] == "ok"
+    assert snapshot["section_count"] == 1
+    assert snapshot["sections"][0]["title"] == "T"
     assert len(result.quality_repair_history) == 1
     assert result.quality_repair_history[0]["attempt"] == 0
     assert result.quality_repair_history[0]["passed"] is False

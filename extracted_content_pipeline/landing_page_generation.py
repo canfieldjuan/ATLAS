@@ -68,6 +68,8 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 
 
 _TARGET_MODE = "marketing_campaign"
+_LANDING_PAGE_FAILURE_EXCERPT_CHARS = 240
+_LANDING_PAGE_FAILURE_MAX_SECTIONS = 6
 
 
 @dataclass(frozen=True)
@@ -333,6 +335,7 @@ class LandingPageGenerationService:
             )
 
         parsed: dict[str, Any] | None = None
+        last_parsed_candidate: dict[str, Any] | None = None
         quality: dict[str, Any] = {"passed": False, "blockers": (), "repair_issues": ()}
         quality_blockers: tuple[str, ...] = ()
         quality_repair_history: list[dict[str, Any]] = []
@@ -372,6 +375,10 @@ class LandingPageGenerationService:
                     error["quality_blockers"] = quality_blockers
                 if quality_repair_history:
                     error["quality_repair_history"] = tuple(quality_repair_history)
+                if last_parsed_candidate is not None:
+                    error["failed_candidate"] = _landing_page_failure_candidate_snapshot(
+                        last_parsed_candidate
+                    )
                 return LandingPageGenerationResult(
                     requested=1,
                     generated=0,
@@ -402,6 +409,7 @@ class LandingPageGenerationService:
                 **parsed,
                 "_quality_repair_history": tuple(quality_repair_history),
             }
+            last_parsed_candidate = parsed
             if quality["passed"]:
                 break
             quality_blockers = tuple(str(item) for item in quality["repair_issues"])
@@ -417,6 +425,7 @@ class LandingPageGenerationService:
                     "blockers": tuple(str(item) for item in quality["blockers"]),
                     "quality_repair_attempts": repair_limit,
                     "quality_repair_history": tuple(quality_repair_history),
+                    "failed_candidate": _landing_page_failure_candidate_snapshot(parsed),
                 },),
                 quality_repair_history=tuple(quality_repair_history),
             )
@@ -557,6 +566,7 @@ class LandingPageGenerationService:
         total_usage: dict[str, Any] = {}
         total_parse_attempts = 0
         parsed: dict[str, Any] | None = None
+        last_parsed_candidate: dict[str, Any] | None = None
         campaign_payload: dict[str, Any] = campaign.as_dict()
         for repair_attempt_no in range(1, repair_limit + 1):
             campaign_payload = {
@@ -588,17 +598,22 @@ class LandingPageGenerationService:
                     quality_repair_history=tuple(quality_repair_history),
                 )
             if not parsed:
+                error: dict[str, Any] = {
+                    "landing_page_id": draft.id,
+                    "reason": "unparseable_response",
+                    "blockers": quality_blockers,
+                    "quality_blockers": quality_blockers,
+                    "quality_repair_history": tuple(quality_repair_history),
+                }
+                if last_parsed_candidate is not None:
+                    error["failed_candidate"] = _landing_page_failure_candidate_snapshot(
+                        last_parsed_candidate
+                    )
                 return LandingPageGenerationResult(
                     requested=1,
                     generated=0,
                     skipped=1,
-                    errors=({
-                        "landing_page_id": draft.id,
-                        "reason": "unparseable_response",
-                        "blockers": quality_blockers,
-                        "quality_blockers": quality_blockers,
-                        "quality_repair_history": tuple(quality_repair_history),
-                    },),
+                    errors=(error,),
                     quality_repair_history=tuple(quality_repair_history),
                 )
             total_usage = accumulate_usage(total_usage, parsed.get("_usage"))
@@ -623,6 +638,7 @@ class LandingPageGenerationService:
                 **parsed,
                 "_quality_repair_history": tuple(quality_repair_history),
             }
+            last_parsed_candidate = parsed
             if quality["passed"]:
                 break
             quality_blockers = tuple(str(item) for item in quality["repair_issues"])
@@ -638,6 +654,9 @@ class LandingPageGenerationService:
                     "blockers": tuple(str(item) for item in quality["blockers"]),
                     "quality_repair_attempts": repair_limit,
                     "quality_repair_history": tuple(quality_repair_history),
+                    "failed_candidate": _landing_page_failure_candidate_snapshot(
+                        parsed or last_parsed_candidate or {}
+                    ),
                 },),
                 quality_repair_history=tuple(quality_repair_history),
             )
@@ -878,6 +897,88 @@ def _quality_repair_history_row(
         "blockers": tuple(str(item) for item in quality.get("blockers") or ()),
         "repair_issues": tuple(
             str(item) for item in quality.get("repair_issues") or ()
+        ),
+    }
+
+
+def _clip_failure_text(value: Any, *, max_chars: int) -> str:
+    text = str(value or "").strip()
+    limit = max(1, int(max_chars))
+    if len(text) <= limit:
+        return text
+    trimmed = text[:limit].rstrip()
+    if " " in trimmed:
+        trimmed = trimmed.rsplit(" ", 1)[0].rstrip()
+    return trimmed or text[:limit].rstrip()
+
+
+def _landing_page_failure_candidate_snapshot(
+    parsed: Mapping[str, Any],
+    *,
+    excerpt_chars: int = _LANDING_PAGE_FAILURE_EXCERPT_CHARS,
+) -> dict[str, Any]:
+    """Return bounded diagnostics for a parsed landing page that cannot save."""
+
+    hero = parsed.get("hero") if isinstance(parsed.get("hero"), Mapping) else {}
+    cta = parsed.get("cta") if isinstance(parsed.get("cta"), Mapping) else {}
+    meta = parsed.get("meta") if isinstance(parsed.get("meta"), Mapping) else {}
+    raw_sections = parsed.get("sections")
+    sections = (
+        list(raw_sections)
+        if isinstance(raw_sections, Sequence)
+        and not isinstance(raw_sections, (str, bytes, bytearray))
+        else []
+    )
+    return {
+        "title": str(parsed.get("title") or "").strip(),
+        "slug": str(parsed.get("slug") or "").strip(),
+        "hero_headline": str(hero.get("headline") or "").strip(),
+        "hero_subheadline": str(hero.get("subheadline") or "").strip(),
+        "cta_label": str(cta.get("label") or "").strip(),
+        "cta_url": str(cta.get("url") or "").strip(),
+        "meta_title_tag": str(meta.get("title_tag") or "").strip(),
+        "section_count": len(sections),
+        "sections": tuple(
+            _landing_page_failure_section_snapshot(
+                section,
+                excerpt_chars=excerpt_chars,
+            )
+            for section in sections[:_LANDING_PAGE_FAILURE_MAX_SECTIONS]
+            if isinstance(section, Mapping)
+        ),
+        "sections_truncated": len(sections) > _LANDING_PAGE_FAILURE_MAX_SECTIONS,
+        "generation_parse_attempts": parsed.get("_parse_attempts"),
+        "generation_quality_repair_attempts": (
+            parsed.get("_quality_repair_attempts") or 0
+        ),
+    }
+
+
+def _landing_page_failure_section_snapshot(
+    section: Mapping[str, Any],
+    *,
+    excerpt_chars: int,
+) -> dict[str, Any]:
+    metadata = (
+        section.get("metadata")
+        if isinstance(section.get("metadata"), Mapping)
+        else {}
+    )
+    summary = str(metadata.get("answer_summary") or "").strip()
+    body = str(section.get("body_markdown") or "").strip()
+    return {
+        "id": str(section.get("id") or "").strip(),
+        "title": str(section.get("title") or "").strip(),
+        "kind": normalize_landing_page_section_kind(metadata.get("kind")),
+        "primary_question": str(metadata.get("primary_question") or "").strip(),
+        "answer_summary_word_count": len(summary.split()),
+        "answer_summary_excerpt": _clip_failure_text(
+            summary,
+            max_chars=excerpt_chars,
+        ),
+        "body_excerpt_head": _clip_failure_text(body, max_chars=excerpt_chars),
+        "body_starts_with_answer_summary": (
+            bool(summary) and _normalized_startswith(body, summary)
         ),
     }
 
