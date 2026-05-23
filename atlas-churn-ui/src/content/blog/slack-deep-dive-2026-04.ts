@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Slack Reviews: 1448 User Insights on Migration & Async Tools',
   seo_description: 'Analysis of 1448 Slack reviews shows teams migrating to async tools. Covers pricing, UX pain, workflow substitution, and evaluation timing from 476 enriched reviews.',
   target_keyword: 'Slack reviews',
-  secondary_keywords: ["Slack alternatives", "Slack vs async tools", "Slack pricing complaints"],
+  secondary_keywords: ["Slack alternatives", "Slack vs async tools", "Slack pricing complaints", "Slack notification overload", "too many Slack notifications"],
   faq: [
   {
     "question": "What are the most common pain points in Slack reviews?",

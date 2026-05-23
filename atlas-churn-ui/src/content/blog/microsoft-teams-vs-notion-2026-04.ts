@@ -96,7 +96,7 @@ const post: BlogPost = {
   seo_title: 'Microsoft Teams vs Notion Reviews: 198 Complaints Compared',
   seo_description: 'Microsoft Teams vs Notion: 198 reviews analyzed. Notion shows higher urgency (2.7 vs 1.8), driven by pricing backlash and lock-in concerns. Data from verified platforms.',
   target_keyword: 'Microsoft Teams vs Notion',
-  secondary_keywords: ["Microsoft Teams reviews", "Notion reviews", "collaboration software comparison"],
+  secondary_keywords: ["Microsoft Teams reviews", "Notion reviews", "collaboration software comparison", "Notion too expensive", "Notion learning curve"],
   faq: [
   {
     "question": "Which has higher reviewer urgency, Microsoft Teams or Notion?",
