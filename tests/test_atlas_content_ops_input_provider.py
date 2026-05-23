@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+import extracted_content_pipeline.api.control_surfaces as api_module
 from atlas_brain._content_ops_input_provider import build_content_ops_input_provider
 from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
@@ -294,6 +295,59 @@ def test_api_aggregator_wires_content_ops_input_provider() -> None:
 
     assert provider.__class__.__name__ == "_AtlasSupportTicketInputProvider"
     assert package.inputs["faq_questions"] == ["Where is my invoice?"]
+
+
+@pytest.mark.skipif(
+    api_module.APIRouter is None,
+    reason="fastapi is not installed in this test environment",
+)
+@pytest.mark.asyncio
+async def test_execute_route_generates_support_ticket_faq_at_inline_cap() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService()
+        ),
+        scope_provider=lambda: {"account_id": "acct-route-faq"},
+    )
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "subject": "Billing renewal question",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "billing",
+        }
+        for index in range(1000)
+    ]
+
+    route = _router_route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["faq_markdown"],
+        "inputs": {
+            "source_material": {
+                "support_tickets": rows,
+            },
+        },
+    })
+
+    step = payload["steps"][0]
+    result = step["result"]
+    assert payload["status"] == "completed"
+    assert payload["errors"] == []
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+    assert result["source_count"] == 1000
+    assert result["ticket_source_count"] == 1000
+    assert result["generated"] == 1
+    assert result["output_checks"] == {
+        "condensed": True,
+        "has_action_items": True,
+        "uses_user_vocabulary": True,
+    }
+    assert result["saved_ids"] == []
+    assert result["items"][0]["ticket_count"] == 1000
+    assert len(result["items"][0]["source_ids"]) == 1000
 
 
 @pytest.mark.skipif(
