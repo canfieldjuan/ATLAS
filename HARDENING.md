@@ -32,11 +32,11 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-23
 
-### FILECONCURRENCY-2 - Uploaded-file imports need cross-process admission
-- File/location: Hosted `/content-ops/ingestion/files/import` deployment topology; in-process runner lives at `scripts/smoke_content_ops_ingestion_file_route_inprocess_load.py`.
-- Description: The shared-pool route gate and in-process load runner prove one-router admission, but multi-worker or multi-process deployments can still admit one gate window per process unless backed by a distributed queue, shared semaphore, or job boundary.
-- Why it matters: Production deployments with multiple app workers can multiply the configured import concurrency and pressure Postgres even though each worker is locally bounded.
-- Effort: L
+### FILECONCURRENCY-2 - Uploaded-file imports need hosted multiprocess proof
+- File/location: Hosted `/content-ops/ingestion/files/import` deployment topology; host provider lives at `atlas_brain/_content_ops_import_admission.py`.
+- Description: Atlas now has a Postgres advisory-lock admission provider for shared cross-process capacity, but the remaining production hardening is a live Atlas-mounted multiprocess proof plus durable background job/queue visibility.
+- Why it matters: Production deployments need evidence that the mounted host route stays bounded across workers and enough job visibility to diagnose long-running imports.
+- Effort: M
 - Category: correctness
 - Owner/session: content-ops/backend-file-ingestion-validation
 - Found during: PR-Content-Ops-File-Cross-Process-Hardening-Register
