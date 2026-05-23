@@ -173,7 +173,7 @@ const post: BlogPost = {
 <p><strong>Integration ecosystem.</strong> Asana supports Zapier, Google Calendar, Make, Google Drive, and other tools. While not seamless, the ecosystem allows teams to extend Asana's native capabilities.</p>
 <p><strong>Onboarding simplicity.</strong> Teams report that getting started with Asana is faster than with more complex alternatives.</p>
 <h3 id="asanas-weaknesses">Asana's Weaknesses</h3>
-<p><strong>Pricing friction and auto-renewal shock.</strong> The most acute pain signal centers on unexpected annual charges. A common pattern emerges: users opt into an annual plan, forget about it, then discover a $265+ charge when the renewal hits—especially problematic when usage has dropped.</p>
+<p><strong>Pricing friction and auto-renewal shock.</strong> A central pain signal centers on unexpected annual charges. A common pattern emerges: users opt into an annual plan, forget about it, then discover a $265+ charge when the renewal hits—especially problematic when usage has dropped.</p>
 <p>Reviewers report that cancellation is difficult before the renewal date, and there are no prorated refunds. This creates a sense of being trapped.</p>
 <p><strong>Recurring task limitations.</strong> Asana's calendar view and recurring-task engine lack flexibility. A marketing associate noted:</p>
 <blockquote>
@@ -189,7 +189,7 @@ const post: BlogPost = {
 <h2 id="where-asana-users-feel-the-most-pain">Where Asana Users Feel the Most Pain</h2>
 <p>{{chart:pain-radar}}</p>
 <p>The pain-radar visualization highlights the concentration of complaints across six dimensions:</p>
-<p><strong>Pricing dominates.</strong> Pricing complaints far exceed other categories, driven by annual renewal shock, per-seat cost ($10.99/user), and inflexible cancellation. Reviewers conducting price-per-user comparisons note that Asana ranks higher than Jira ($9.05/user) and Monday.com ($9/user) on a per-seat basis.</p>
+<p><strong>Pricing is a leading churn driver.</strong> Annual renewal shock, per-seat cost ($10.99/user), and inflexible cancellation push reviewers to compare alternatives. Reviewers conducting price-per-user comparisons note that Asana ranks higher than Jira ($9.05/user) and Monday.com ($9/user) on a per-seat basis.</p>
 <p><strong>UX friction in specific areas.</strong> While overall UX is praised, friction emerges in calendar views, recurring-task creation, and portfolio management. Users report that these workflows require unintuitive workarounds.</p>
 <p><strong>Ecosystem fatigue.</strong> Teams relying on deep integrations with Slack, HubSpot, or email report that Asana's native connectors require Zapier or Make as intermediaries, adding cost and complexity.</p>
 <p><strong>Feature gaps.</strong> Recurring tasks, advanced calendar features, and custom reporting fall short for teams managing complex or repetitive workflows. One reviewer noted that Asana's feature set is "adequate" but not "best-in-class" for their use case.</p>
