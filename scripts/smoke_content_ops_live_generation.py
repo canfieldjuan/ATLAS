@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test live Content Ops landing-page generation through host wiring."""
+"""Smoke-test live Content Ops generation through host wiring."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any, Awaitable, Callable, Mapping
 
@@ -21,7 +22,7 @@ except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
 
 
-DEFAULT_INPUTS: Mapping[str, Any] = {
+DEFAULT_LANDING_PAGE_INPUTS: Mapping[str, Any] = {
     "campaign_name": "FAQ Report",
     "offer": "Turn repeat support tickets into customer-ready FAQ answers",
     "audience": "10-50 person SaaS support team",
@@ -49,10 +50,15 @@ DEFAULT_INPUTS: Mapping[str, Any] = {
     "cta_label": "Upload Ticket CSV -- Free Analysis",
     "cta_url": "/systems/ai-content-ops/intake",
 }
+DEFAULT_BLOG_TOPIC = (
+    "Support ticket FAQ gaps: what 90 days of repeat tickets reveal"
+)
+DEFAULT_BLOG_TOPIC_TYPE = "content_ops_live_smoke"
 
 AsyncCallable = Callable[[], Awaitable[None]]
 ServicesFactory = Callable[[], Any]
 Executor = Callable[..., Awaitable[dict[str, Any]]]
+BlogBlueprintSeeder = Callable[[argparse.Namespace, Any], Awaitable[Mapping[str, Any]]]
 
 
 def _load_dotenv_files(extra_env_files: list[Path] | None = None) -> None:
@@ -68,16 +74,27 @@ def _load_dotenv_files(extra_env_files: list[Path] | None = None) -> None:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Smoke-test live AI Content Ops landing-page generation through "
+            "Smoke-test live AI Content Ops generation through "
             "the host DB pool, packaged skills, and pipeline-routed LLM."
         )
     )
     parser.add_argument(
+        "--output",
+        choices=("landing_page", "blog_post"),
+        default="landing_page",
+        help="Content Ops output to smoke-test. Defaults to landing_page.",
+    )
+    parser.add_argument(
         "--account-id",
         required=True,
-        help="Tenant/account id used to scope the generated landing-page draft.",
+        help="Tenant/account id used to scope the generated draft.",
     )
     parser.add_argument("--user-id", default=None)
+    parser.add_argument(
+        "--target-mode",
+        default="vendor_retention",
+        help="Content Ops target_mode for blog blueprints and execution.",
+    )
     parser.add_argument(
         "--env-file",
         action="append",
@@ -91,7 +108,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--input-json",
         type=Path,
-        help="Optional JSON object merged over the default landing-page inputs.",
+        help="Optional JSON object merged over the default inputs.",
     )
     parser.add_argument(
         "--input",
@@ -154,15 +171,27 @@ def _parse_override(raw: str) -> tuple[str, Any]:
 def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if int(args.quality_repair_attempts) < 0:
         raise SystemExit("--quality-repair-attempts must be >= 0")
-    inputs = dict(DEFAULT_INPUTS)
+    output = str(args.output or "landing_page").strip() or "landing_page"
+    if output == "landing_page":
+        inputs = dict(DEFAULT_LANDING_PAGE_INPUTS)
+    elif output == "blog_post":
+        inputs = {
+            "topic": DEFAULT_BLOG_TOPIC,
+            "filters": {"topic_type": DEFAULT_BLOG_TOPIC_TYPE},
+        }
+    else:  # argparse enforces this for CLI callers; keep injected tests honest.
+        raise SystemExit(f"unsupported --output: {output}")
     if args.input_json:
         inputs.update(_load_json_object(args.input_json))
     for raw in args.input:
         key, value = _parse_override(str(raw))
         inputs[key] = value
-    inputs["landing_page_quality_repair_attempts"] = int(args.quality_repair_attempts)
+    if output == "landing_page":
+        inputs["landing_page_quality_repair_attempts"] = int(args.quality_repair_attempts)
     return {
-        "outputs": ["landing_page"],
+        "outputs": [output],
+        "target_mode": str(args.target_mode or "vendor_retention").strip()
+        or "vendor_retention",
         "limit": 1,
         "require_quality_gates": not bool(args.no_quality_gates),
         "inputs": inputs,
@@ -200,13 +229,14 @@ def _step_result(result: Mapping[str, Any], output: str) -> Mapping[str, Any] | 
 
 def _smoke_errors(
     *,
+    output: str,
     configured_outputs: tuple[str, ...],
     result: Mapping[str, Any] | None,
 ) -> list[str]:
     errors: list[str] = []
-    if "landing_page" not in configured_outputs:
+    if output not in configured_outputs:
         errors.append(
-            "landing_page service is not configured; check Atlas DB initialization "
+            f"{output} service is not configured; check Atlas DB initialization "
             "and pipeline LLM/OpenRouter credentials"
         )
         return errors
@@ -214,19 +244,141 @@ def _smoke_errors(
         return errors
     if result.get("status") != "completed":
         errors.append(f"execution status was {result.get('status')!r}, not 'completed'")
-    step = _step_result(result, "landing_page")
+    step = _step_result(result, output)
     if step is None:
-        errors.append("execution result did not include a landing_page step")
+        errors.append(f"execution result did not include a {output} step")
         return errors
     if step.get("status") != "completed":
-        errors.append(f"landing_page step status was {step.get('status')!r}")
+        errors.append(f"{output} step status was {step.get('status')!r}")
     step_payload = step.get("result") if isinstance(step.get("result"), Mapping) else {}
     if not step_payload.get("saved_ids"):
-        errors.append("landing_page generation did not return saved draft ids")
+        errors.append(f"{output} generation did not return saved draft ids")
     history = step_payload.get("quality_repair_history") or ()
     if history and isinstance(history[-1], Mapping) and not history[-1].get("passed"):
-        errors.append("landing_page quality gate did not pass")
+        errors.append(f"{output} quality gate did not pass")
     return errors
+
+
+def _account_slug(value: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug[:60].strip("-") or "acct"
+
+
+def _default_blog_blueprint_payload() -> dict[str, Any]:
+    return {
+        "topic": DEFAULT_BLOG_TOPIC,
+        "data_context": {
+            "review_period": "last 90 days",
+            "report_date": "2026-05-23",
+            "total_reviews_analyzed": 186,
+            "deep_enriched_count": 186,
+            "category": "support tickets",
+            "topic": "support tickets",
+            "_known_vendors": [],
+        },
+        "sections": [
+            {
+                "id": "repeat-ticket-patterns",
+                "heading": "What do repeat support tickets reveal?",
+                "goal": (
+                    "Explain why repeated setup, billing, and account-change "
+                    "questions show missing customer-facing answers."
+                ),
+                "key_stats": {
+                    "tickets_analyzed": 186,
+                    "repeat_question_count": 78,
+                    "repeat_question_rate": "42%",
+                },
+                "chart_ids": [],
+                "data_summary": (
+                    "Across 186 support tickets from the last 90 days, 78 "
+                    "tickets repeated a question another customer had already "
+                    "asked. Setup, billing, and account-change issues were the "
+                    "largest repeat clusters."
+                ),
+            },
+            {
+                "id": "faq-gap-priorities",
+                "heading": "Which FAQ gaps should a small team fix first?",
+                "goal": (
+                    "Rank the repeat-question clusters by volume and explain "
+                    "why the highest-volume issues should become FAQ entries."
+                ),
+                "key_stats": {
+                    "setup_questions": 31,
+                    "billing_questions": 24,
+                    "account_change_questions": 23,
+                },
+                "chart_ids": [],
+                "data_summary": (
+                    "Setup questions appeared 31 times, billing questions 24 "
+                    "times, and account-change questions 23 times. The first "
+                    "FAQ pass should start with those three clusters."
+                ),
+            },
+            {
+                "id": "publishable-answer-process",
+                "heading": "How should old tickets become customer-ready answers?",
+                "goal": (
+                    "Show the operational path from CSV upload to clustered "
+                    "questions, customer wording, draft answers, and review."
+                ),
+                "key_stats": {
+                    "source_window_days": 90,
+                    "draft_faq_entries": 12,
+                    "review_steps": 3,
+                },
+                "chart_ids": [],
+                "data_summary": (
+                    "The 90-day ticket CSV produces 12 first-pass FAQ entries. "
+                    "Each answer should preserve customer wording, summarize "
+                    "the support team's answer, and stay in review until the "
+                    "team approves it."
+                ),
+            },
+        ],
+        "available_charts": [],
+        "related_posts": [],
+        "grounded_vendors": [
+            "Support Tickets",
+            "Support Ticket FAQ",
+            "Support Ticket FAQ Gaps",
+            "FAQ Report",
+            "Help Center",
+        ],
+        "required_vendors": [],
+    }
+
+
+async def _seed_default_blog_blueprint(
+    args: argparse.Namespace,
+    scope: Any,
+) -> Mapping[str, Any]:
+    from atlas_brain.storage.database import get_db_pool  # noqa: PLC0415
+    from extracted_content_pipeline.blog_blueprint_postgres import (  # noqa: PLC0415
+        PostgresBlogBlueprintRepository,
+    )
+    from extracted_content_pipeline.blog_ports import BlogBlueprint  # noqa: PLC0415
+
+    account_slug = _account_slug(args.account_id)
+    slug = f"content-ops-blog-live-smoke-{account_slug}"
+    target_mode = str(args.target_mode or "vendor_retention").strip() or "vendor_retention"
+    blueprint = BlogBlueprint(
+        target_mode=target_mode,
+        topic_type=DEFAULT_BLOG_TOPIC_TYPE,
+        slug=slug,
+        suggested_title="Support Tickets: FAQ Gaps From 90 Days of Tickets",
+        payload=_default_blog_blueprint_payload(),
+    )
+    saved_ids = await PostgresBlogBlueprintRepository(
+        pool=get_db_pool()
+    ).save_blueprints((blueprint,), scope=scope)
+    return {
+        "saved_ids": list(saved_ids),
+        "slug": slug,
+        "target_mode": target_mode,
+        "topic_type": blueprint.topic_type,
+    }
 
 
 async def run_content_ops_live_generation_smoke(
@@ -237,6 +389,7 @@ async def run_content_ops_live_generation_smoke(
     services_factory: ServicesFactory | None = None,
     executor: Executor | None = None,
     tenant_scope_cls: Any = None,
+    blog_blueprint_seed_fn: BlogBlueprintSeeder | None = None,
 ) -> tuple[int, dict[str, Any]]:
     _load_dotenv_files(list(args.env_file or []))
     if (
@@ -255,24 +408,34 @@ async def run_content_ops_live_generation_smoke(
         ) = _resolve_runtime_dependencies()
 
     payload = _payload_from_args(args)
+    output = str(payload["outputs"][0])
     configured_outputs: tuple[str, ...] = ()
     execution_result: dict[str, Any] | None = None
+    seeded_blog_blueprint: Mapping[str, Any] | None = None
     errors: list[str] = []
     try:
         await init_database_fn()
         services = services_factory()
         configured_outputs = tuple(str(item) for item in services.configured_outputs())
         errors.extend(
-            _smoke_errors(configured_outputs=configured_outputs, result=None)
+            _smoke_errors(
+                output=output,
+                configured_outputs=configured_outputs,
+                result=None,
+            )
         )
         if not errors:
             scope = tenant_scope_cls(
                 account_id=str(args.account_id or "").strip(),
                 user_id=str(args.user_id or "").strip(),
             )
+            if output == "blog_post":
+                seeder = blog_blueprint_seed_fn or _seed_default_blog_blueprint
+                seeded_blog_blueprint = await seeder(args, scope)
             execution_result = await executor(payload, services=services, scope=scope)
             errors.extend(
                 _smoke_errors(
+                    output=output,
                     configured_outputs=configured_outputs,
                     result=execution_result,
                 )
@@ -289,6 +452,7 @@ async def run_content_ops_live_generation_smoke(
         "ok": not errors,
         "errors": errors,
         "configured_outputs": list(configured_outputs),
+        "seeded_blog_blueprint": dict(seeded_blog_blueprint or {}),
         "payload": payload,
         "execution": execution_result,
     }
@@ -306,7 +470,10 @@ def _print_result(result: Mapping[str, Any], *, as_json: bool) -> None:
         print(f"error: {error}")
     execution = result.get("execution")
     if isinstance(execution, Mapping):
-        step = _step_result(execution, "landing_page")
+        payload = result.get("payload") if isinstance(result.get("payload"), Mapping) else {}
+        outputs = payload.get("outputs") if isinstance(payload, Mapping) else ()
+        output = str(outputs[0]) if outputs else "landing_page"
+        step = _step_result(execution, output)
         step_payload = step.get("result") if isinstance(step, Mapping) else {}
         if isinstance(step_payload, Mapping):
             saved_ids = step_payload.get("saved_ids") or []
