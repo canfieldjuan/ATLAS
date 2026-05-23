@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 47,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 47
       },
       {
         "name": "pricing",
