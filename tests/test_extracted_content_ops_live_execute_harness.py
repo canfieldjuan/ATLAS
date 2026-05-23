@@ -209,3 +209,57 @@ async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
         item["term_mappings"][0]["documentation_term"]
         == "Single sign-on setup"
     )
+
+
+async def test_live_execute_route_handles_bulk_faq_source_material() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+    source_material = [
+        {
+            "ticket_id": f"ticket-bulk-{index}",
+            "source_type": "support_ticket",
+            "subject": "SSO setup",
+            "message": "How do I enable SSO for my team?",
+            "pain_category": "authentication",
+        }
+        for index in range(1000)
+    ]
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_markdown"],
+        "limit": 5,
+        "require_quality_gates": False,
+        "inputs": {
+            "faq_title": "Hosted FAQ Bulk Smoke",
+            "source_material": source_material,
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["max_items"] == 5
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+
+    result = step["result"]
+    assert result["generated"] == 1
+    assert result["source_count"] == 1000
+    assert result["ticket_source_count"] == 1000
+    assert all(result["output_checks"].values())
+    assert "Hosted FAQ Bulk Smoke" in result["markdown"]
+    assert "`ticket-bulk-0` - SSO setup" in result["markdown"]
+
+    item = result["items"][0]
+    assert item["frequency"] == 1000
+    assert item["evidence_count"] == 3
+    assert len(item["source_ids"]) == 1000
+    assert item["source_ids"][0] == "ticket-bulk-0"
+    assert item["source_ids"][-1] == "ticket-bulk-999"

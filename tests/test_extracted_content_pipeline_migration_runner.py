@@ -119,6 +119,24 @@ async def test_apply_content_pipeline_migrations_applies_pending_files(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_apply_content_pipeline_migrations_runs_concurrent_index_outside_transaction(tmp_path) -> None:
+    _write_migration(
+        tmp_path,
+        "001_concurrent_index.sql",
+        "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_example ON example(id);",
+    )
+    conn = _Conn()
+
+    result = await apply_content_pipeline_migrations(conn, migrations_dir=tmp_path)
+
+    assert [entry.version for entry in result.applied] == ["001_concurrent_index.sql"]
+    assert conn.transactions == 0
+    executed_sql = "\n".join(query for query, _ in conn.executed)
+    assert "CREATE INDEX CONCURRENTLY" in executed_sql
+    assert "INSERT INTO content_pipeline_schema_migrations" in executed_sql
+
+
+@pytest.mark.asyncio
 async def test_apply_content_pipeline_migrations_skips_applied_versions(tmp_path) -> None:
     _write_migration(tmp_path, "001_first.sql", "SELECT 1;")
     _write_migration(tmp_path, "002_second.sql", "SELECT 2;")

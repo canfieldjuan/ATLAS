@@ -641,7 +641,7 @@ async def test_ingestion_inspect_route_rejects_oversized_rows():
         await route.endpoint({
             "rows": [
                 {"target_id": f"opp-{index}"}
-                for index in range(501)
+                for index in range(1001)
             ],
         })
 
@@ -907,6 +907,133 @@ async def test_execute_generation_route_rejects_invalid_faq_vocabulary_rules_as_
         exc.value.detail
         == "faq_vocabulary_gap_rules entries must include at least two terms"
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_rejects_source_material_over_1000_as_422():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=_CampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": [
+                        {
+                            "source_type": "ticket",
+                            "text": f"Ticket row {index}",
+                        }
+                        for index in range(1001)
+                    ],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail[0]["msg"] == "Value error, inputs arrays are too large"
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_keeps_50_cap_for_non_source_material_arrays():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=_CampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "faq_documentation_terms": [
+                        f"Documentation term {index}"
+                        for index in range(51)
+                    ],
+                    "source_material": [
+                        {
+                            "source_type": "ticket",
+                            "text": "How do I enable SSO?",
+                        }
+                    ],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail[0]["msg"] == "Value error, inputs arrays are too large"
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_accepts_source_material_bundle_1000_rows():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=service
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": {
+                    "support_tickets": [
+                        {
+                            "source_type": "ticket",
+                            "text": f"Ticket row {index}",
+                        }
+                        for index in range(1000)
+                    ],
+                },
+            },
+        }
+    )
+
+    assert payload["status"] == "completed"
+    assert len(service.calls[0]["kwargs"]["source_material"]["support_tickets"]) == 1000
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_keeps_50_cap_for_nested_source_material_arrays():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=_CampaignService()
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": [
+                        [
+                            {
+                                "source_type": "ticket",
+                                "text": f"Ticket row {index}",
+                            }
+                            for index in range(51)
+                        ]
+                    ],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail[0]["msg"] == "Value error, inputs arrays are too large"
 
 
 @pytest.mark.asyncio

@@ -82,11 +82,24 @@ logger = logging.getLogger(__name__)
 _MAX_INPUT_KEYS = 50
 _MAX_INPUT_DEPTH = 6
 _MAX_INPUT_STRING_CHARS = 10000
-_MAX_INGESTION_ROWS = 500
+_MAX_INGESTION_ROWS = 1000
 _MAX_INGESTION_SAMPLE_LIMIT = 25
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
+_SOURCE_MATERIAL_ROW_LIST_KEYS = {
+    "sources",
+    "opportunities",
+    "complaints",
+    "search_logs",
+    "search_queries",
+    "support_tickets",
+    "tickets",
+    "cases",
+    "conversations",
+    "feedback",
+    "rows",
+}
 
 
 def _build_static_catalog_payload() -> Mapping[str, Any]:
@@ -1132,7 +1145,12 @@ def _ingestion_import_payload_to_mapping(payload: Any) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
 
-def _validate_input_shape(value: Any, *, depth: int) -> None:
+def _validate_input_shape(
+    value: Any,
+    *,
+    depth: int,
+    path: tuple[str, ...] = (),
+) -> None:
     if depth > _MAX_INPUT_DEPTH:
         raise ValueError("inputs are too deeply nested")
     if isinstance(value, Mapping):
@@ -1141,14 +1159,31 @@ def _validate_input_shape(value: Any, *, depth: int) -> None:
         for key, nested in value.items():
             if len(str(key)) > 100:
                 raise ValueError("inputs keys must be 100 characters or fewer")
-            _validate_input_shape(nested, depth=depth + 1)
+            _validate_input_shape(
+                nested,
+                depth=depth + 1,
+                path=(*path, str(key)),
+            )
     elif isinstance(value, (list, tuple)):
-        if len(value) > _MAX_INPUT_KEYS:
+        max_items = _input_array_max_items(path)
+        if len(value) > max_items:
             raise ValueError("inputs arrays are too large")
         for nested in value:
-            _validate_input_shape(nested, depth=depth + 1)
+            _validate_input_shape(nested, depth=depth + 1, path=(*path, "[]"))
     elif isinstance(value, str) and len(value) > _MAX_INPUT_STRING_CHARS:
         raise ValueError("inputs strings are too large")
+
+
+def _input_array_max_items(path: tuple[str, ...]) -> int:
+    if path == ("source_material",):
+        return _MAX_INGESTION_ROWS
+    if (
+        len(path) == 2
+        and path[0] == "source_material"
+        and path[1] in _SOURCE_MATERIAL_ROW_LIST_KEYS
+    ):
+        return _MAX_INGESTION_ROWS
+    return _MAX_INPUT_KEYS
 
 
 def _sanitize_execution_result(result: Mapping[str, Any]) -> dict[str, Any]:
