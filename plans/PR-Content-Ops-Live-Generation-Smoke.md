@@ -118,5 +118,8 @@ passed.
 | **Total** | **~820** |
 
 This is over the 400 LOC soft cap, but still one thin end-to-end path: a live
-landing-page generation smoke plus the generator contract enforcement needed
-for that smoke to pass against the configured provider.
+provider smoke plus the generator contract enforcement needed for that smoke to
+pass against the configured provider. The first live run uncovered the
+landing-page readiness failure, so splitting the smoke from the source fix
+would leave the operator command documenting a path that still fails in the
+configured environment.
