@@ -120,7 +120,7 @@ const post: BlogPost = {
   faq: [
   {
     "question": "What are the most common complaints about Mailchimp?",
-    "answer": "Pricing is the dominant pain point. Reviewers report paying $126/month for 1,000 contacts and $308/month for 7,000 contacts, with particular frustration around recent free plan cuts in 2026. Support responsiveness, feature limitations, and UX friction in certain workflows also appear frequently in negative reviews."
+    "answer": "Pricing is the most frequently cited specific pain point. Reviewers report paying $126/month for 1,000 contacts and $308/month for 7,000 contacts, with particular frustration around recent free plan cuts in 2026. Support responsiveness, feature limitations, and UX friction in certain workflows also appear frequently in negative reviews."
   },
   {
     "question": "Does Mailchimp work well for small businesses?",
@@ -155,7 +155,7 @@ const post: BlogPost = {
 <hr />
 <h2 id="what-mailchimp-does-well-and-where-it-falls-short">What Mailchimp Does Well -- and Where It Falls Short</h2>
 <p>Mailchimp's reputation rests on two pillars: simplicity and integration breadth. Reviewers consistently praise the drag-and-drop editor, straightforward campaign workflows, and native connectors to Wix, Shopify, and Stripe. The UX is intuitive enough that non-technical marketers can launch campaigns without training.</p>
-<p>Yet this strength masks significant weaknesses. Pricing dominates complaint volume, followed by support responsiveness, UX friction in advanced workflows, and feature gaps relative to competitors.</p>
+<p>Yet this strength masks significant weaknesses. Pricing leads complaint volume among the specific pain categories, followed by support responsiveness, UX friction in advanced workflows, and feature gaps relative to competitors.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <p><strong>Strengths cited most often:</strong></p>
 <ul>
@@ -180,7 +180,7 @@ const post: BlogPost = {
 <h2 id="where-mailchimp-users-feel-the-most-pain">Where Mailchimp Users Feel the Most Pain</h2>
 <p>Pain intensity varies by reviewer segment and use case. The radar chart below maps the six most acute pain areas:</p>
 <p>{{chart:pain-radar}}</p>
-<p><strong>Pricing dominates the pain landscape.</strong> This is not a minor friction point; it is the primary reason reviewers evaluate alternatives. Complaints cluster around three scenarios:</p>
+<p><strong>Pricing is the leading specific complaint.</strong> This is not a minor friction point; it is the primary reason reviewers evaluate alternatives. Complaints cluster around three scenarios:</p>
 <ol>
 <li><strong>Free plan cuts (2026).</strong> Mailchimp removed unlimited contact storage from the free tier, forcing previously free users onto paid plans. Reviewers explicitly cite this as a trigger for evaluation.</li>
 <li><strong>Escalating per-contact costs.</strong> Small list owners (1K–10K contacts) report that marginal contact costs exceed those of competitors. One reviewer stated: "I'm now paying $308 a month to send daily to 7K subs. I'm considering switching." -- reviewer on Reddit</li>
