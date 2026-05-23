@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'zoom-deep-dive-2026-04',
-  title: 'Zoom Deep Dive: Reviewer Sentiment Across 1559 Reviews',
+  title: 'Zoom: What 1,559 Reviews Reveal About Pricing and Competition',
   description: 'Comprehensive analysis of Zoom based on 1559 reviews collected through March 2026. Where reviewers praise the platform, where complaints cluster, and what the data reveals about who Zoom works best for.',
   date: '2026-04-01',
   author: 'Churn Signals Team',

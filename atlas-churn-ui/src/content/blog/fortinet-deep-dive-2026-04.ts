@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'fortinet-deep-dive-2026-04',
-  title: 'Fortinet Deep Dive: Reviewer Sentiment Across 765 Reviews',
+  title: 'Fortinet: What 765 Reviews Reveal About Firewall Value and Support',
   description: 'Comprehensive analysis of Fortinet based on 765 public reviews collected between March and April 2026. Where reviewer sentiment clusters, what drives frustration, and how Fortinet compares to alternatives like Palo Alto and Meraki.',
   date: '2026-04-06',
   author: 'Churn Signals Team',

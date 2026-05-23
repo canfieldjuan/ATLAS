@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'linode-deep-dive-2026-04',
-  title: 'Linode Deep Dive: Reviewer Sentiment Across 580 Reviews',
+  title: 'Linode After Akamai: What 580 Reviews Reveal About Pricing and Uncertainty',
   description: 'A comprehensive analysis of 580 Linode reviews reveals pricing strength anchoring retention despite post-acquisition uncertainty and security management gaps. Evidence from 188 enriched reviews shows 31 active evaluation signals during Akamai integration period.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

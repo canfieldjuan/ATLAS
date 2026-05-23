@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'magento-deep-dive-2026-04',
-  title: 'Magento Deep Dive: Reviewer Sentiment Across 1047 Reviews',
+  title: 'Magento (Adobe Commerce): What 1,047 Reviews Reveal About Cost and Complexity',
   description: 'Comprehensive analysis of Magento based on 1047 public reviews from G2, Gartner, PeerSpot, and Reddit. What reviewers praise, where complaints cluster, and who this platform works best for.',
   date: '2026-04-04',
   author: 'Churn Signals Team',

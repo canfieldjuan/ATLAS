@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'hubspot-deep-dive-2026-03',
-  title: 'HubSpot Deep Dive: Reviewer Sentiment Across 1648 Reviews',
+  title: 'Is HubSpot Too Expensive? What 1,648 Reviews Reveal About Pricing and Churn',
   description: 'Comprehensive analysis of HubSpot based on 1648 public reviews. Where reviewer sentiment clusters, what users praise, and what the churn patterns suggest.',
   date: '2026-03-29',
   author: 'Churn Signals Team',

@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'looker-deep-dive-2026-04',
-  title: 'Looker Deep Dive: Reviewer Sentiment Across 514 Reviews',
+  title: 'Looker: What 514 Reviews Reveal About Pricing and Fit',
   description: 'A comprehensive analysis of Looker based on 514 reviews from verified platforms and community sources. Explore strengths, weaknesses, pain points, and competitive positioning in the Data & Analytics market.',
   date: '2026-04-07',
   author: 'Churn Signals Team',

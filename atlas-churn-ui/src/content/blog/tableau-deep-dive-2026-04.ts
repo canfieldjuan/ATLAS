@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'tableau-deep-dive-2026-04',
-  title: 'Tableau Deep Dive: Reviewer Sentiment Across 1046 Reviews',
+  title: 'Tableau: What 1,046 Reviews Reveal About Pricing and the Learning Curve',
   description: 'Comprehensive analysis of Tableau based on 1046 public reviews. What users praise, where pain clusters, and how it compares to Power BI and Looker.',
   date: '2026-04-04',
   author: 'Churn Signals Team',

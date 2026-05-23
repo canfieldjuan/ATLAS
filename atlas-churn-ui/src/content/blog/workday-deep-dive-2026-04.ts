@@ -2,7 +2,7 @@ import type { BlogPost } from './index'
 
 const post: BlogPost = {
   slug: 'workday-deep-dive-2026-04',
-  title: 'Workday Deep Dive: Reviewer Sentiment Across 868 Reviews',
+  title: 'Workday: What 868 Reviews Reveal About Cost and Implementation',
   description: 'Comprehensive analysis of Workday based on 868 public reviews from HR professionals and system administrators. Where the platform excels, where users struggle, and what the sentiment patterns reveal about deployment success.',
   date: '2026-04-05',
   author: 'Churn Signals Team',
