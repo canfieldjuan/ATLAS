@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Tableau Reviews 2026: 1046 User Experiences Analyzed',
   seo_description: 'Analysis of 1046 Tableau reviews from G2, Gartner, and Reddit. See where users feel pain, what they praise, and how it stacks up against competitors.',
   target_keyword: 'tableau reviews',
-  secondary_keywords: ["tableau vs power bi", "tableau pricing complaints", "tableau user experience"],
+  secondary_keywords: ["tableau vs power bi", "tableau pricing complaints", "tableau user experience", "tableau pricing"],
   faq: [
   {
     "question": "What are the top complaints about Tableau?",

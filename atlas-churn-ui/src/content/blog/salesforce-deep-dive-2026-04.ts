@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Salesforce Reviews 2026: 2256 User Experiences Analyzed',
   seo_description: 'Analysis of 2256 Salesforce reviews from G2, Reddit, and Gartner. See what drives satisfaction and frustration, plus competitive positioning data.',
   target_keyword: 'salesforce reviews',
-  secondary_keywords: ["salesforce complaints", "salesforce vs hubspot", "salesforce pricing issues"],
+  secondary_keywords: ["salesforce complaints", "salesforce vs hubspot", "salesforce pricing issues", "salesforce too expensive", "salesforce learning curve"],
   faq: [
   {
     "question": "What are the most common complaints about Salesforce?",

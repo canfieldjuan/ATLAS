@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'CRM Software Comparison 2026: 7 Vendors by User Reviews',
   seo_description: 'Compare 7 CRM vendors using 1,054 real user reviews. See churn risk, pain patterns, and vendor strengths across Salesforce, HubSpot, Pipedrive, Zoho CRM, and more.',
   target_keyword: 'CRM software comparison',
-  secondary_keywords: ["best CRM software", "CRM vendor comparison", "CRM churn signals"],
+  secondary_keywords: ["best CRM software", "CRM vendor comparison", "CRM churn signals", "CRM implementation cost", "CRM setup cost"],
   faq: [
   {
     "question": "Which CRM vendors face the highest churn risk in 2026?",

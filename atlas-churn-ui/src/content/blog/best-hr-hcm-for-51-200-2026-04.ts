@@ -108,7 +108,7 @@ const post: BlogPost = {
   seo_title: 'Best HR / HCM Software for 51-200 Teams | 2026',
   seo_description: 'Compare BambooHR, Gusto, Rippling, and Workday across 586 reviews. Find the best HR / HCM software for 51–200 employee teams with real user data.',
   target_keyword: 'best HR / HCM software for 51-200 teams',
-  secondary_keywords: ["HR software for mid-market", "HRIS comparison 2026", "BambooHR vs Gusto vs Rippling"],
+  secondary_keywords: ["HR software for mid-market", "HRIS comparison 2026", "BambooHR vs Gusto vs Rippling", "employee self service software"],
   faq: [
   {
     "question": "Which HR / HCM tool has the highest rating for 51\u2013200 teams?",

@@ -42,7 +42,7 @@ const post: BlogPost = {
   seo_title: 'Shopify Pricing 2026: 220 Complaints Analyzed',
   seo_description: '220 Shopify pricing complaints analyzed across 606 reviews. See what drives cost frustration and who reviewers say gets good value.',
   target_keyword: 'shopify pricing',
-  secondary_keywords: ["shopify hidden costs", "shopify app fees", "shopify transaction fees"],
+  secondary_keywords: ["shopify hidden costs", "shopify app fees", "shopify transaction fees", "shopify shipping costs too high"],
   faq: [
   {
     "question": "What are the most common Shopify pricing complaints?",

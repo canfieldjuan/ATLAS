@@ -15,7 +15,7 @@ const post: BlogPost = {
   seo_title: 'Why Teams Leave Slack: 75 Switching Stories Analyzed',
   seo_description: '75 switching signals from 283 Slack reviews show teams migrating to async workflows. Real switching stories, timing patterns, and trade-offs analyzed.',
   target_keyword: 'why teams leave Slack',
-  secondary_keywords: ["Slack switching stories", "Slack alternatives 2026", "leaving Slack for async tools"],
+  secondary_keywords: ["Slack switching stories", "Slack alternatives 2026", "leaving Slack for async tools", "Slack notification overload", "too many Slack notifications"],
   faq: [
   {
     "question": "How many teams are actively switching away from Slack?",
