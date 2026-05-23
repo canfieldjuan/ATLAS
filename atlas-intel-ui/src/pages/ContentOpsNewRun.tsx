@@ -21,6 +21,7 @@ import {
 } from '../api/contentOps'
 import {
   contentOpsIngestionFilePreflightError,
+  contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
   fromWireCatalog,
   fromWireExecution,
@@ -516,6 +517,19 @@ export default function ContentOpsNewRun() {
       })
       return
     }
+    const inlineRowsPreflightError = parsedRows?.ok
+      ? contentOpsInlineRowsPreflightError(
+          parsedRows.rows.length,
+          catalog.ingestionLimits,
+        )
+      : null
+    if (inlineRowsPreflightError) {
+      setIngestionInspectState({
+        kind: 'invalid_input',
+        message: inlineRowsPreflightError,
+      })
+      return
+    }
     const parsedDefaultFields = parseIngestionDefaultFieldsJson(
       ingestionDefaultFieldsJson,
     )
@@ -576,6 +590,19 @@ export default function ContentOpsNewRun() {
       setIngestionImportState({
         kind: 'invalid_input',
         message: parsedRows.message,
+      })
+      return
+    }
+    const inlineRowsPreflightError = parsedRows?.ok
+      ? contentOpsInlineRowsPreflightError(
+          parsedRows.rows.length,
+          catalog.ingestionLimits,
+        )
+      : null
+    if (inlineRowsPreflightError) {
+      setIngestionImportState({
+        kind: 'invalid_input',
+        message: inlineRowsPreflightError,
       })
       return
     }

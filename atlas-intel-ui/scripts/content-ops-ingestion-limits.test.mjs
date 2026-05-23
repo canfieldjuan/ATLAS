@@ -22,7 +22,9 @@ const { fromWireCatalog } = await loadTsModule(
 )
 const {
   contentOpsIngestionFilePreflightError,
+  contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
+  formatContentOpsCount,
 } = await loadTsModule('../src/domain/contentOps/ingestionLimits.ts')
 
 const catalogFixture = JSON.parse(
@@ -109,7 +111,45 @@ test('contentOpsIngestionFilePreflightError fails open when cap is not finite', 
   )
 })
 
+test('contentOpsInlineRowsPreflightError rejects oversized inline rows', () => {
+  const limits = fromWireCatalog(catalogFixture).ingestionLimits
+
+  assert.equal(
+    contentOpsInlineRowsPreflightError(limits.inlineRows.maxRows + 1, limits),
+    'Inline JSON has 1,001 rows. Inline ingestion accepts 1,000 rows or fewer. Use a CSV, JSON, or JSONL file for larger imports.',
+  )
+})
+
+test('contentOpsInlineRowsPreflightError accepts inline rows at the cap', () => {
+  const limits = fromWireCatalog(catalogFixture).ingestionLimits
+
+  assert.equal(
+    contentOpsInlineRowsPreflightError(limits.inlineRows.maxRows, limits),
+    null,
+  )
+})
+
+test('contentOpsInlineRowsPreflightError fails open when cap is not finite', () => {
+  const limits = fromWireCatalog(catalogFixture).ingestionLimits
+
+  assert.equal(
+    contentOpsInlineRowsPreflightError(limits.inlineRows.maxRows + 1, {
+      ...limits,
+      inlineRows: {
+        ...limits.inlineRows,
+        maxRows: Number.NaN,
+      },
+    }),
+    null,
+  )
+})
+
 test('formatContentOpsBytes formats byte caps for operators', () => {
   assert.equal(formatContentOpsBytes(25 * 1024 * 1024), '25.0 MB')
   assert.equal(formatContentOpsBytes(512), '512 B')
+})
+
+test('formatContentOpsCount formats row caps for operators', () => {
+  assert.equal(formatContentOpsCount(1000), '1,000')
+  assert.equal(formatContentOpsCount(Number.NaN), 'unknown')
 })

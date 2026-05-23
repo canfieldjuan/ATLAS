@@ -33,7 +33,9 @@ export type {
 
 export {
   contentOpsIngestionFilePreflightError,
+  contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
+  formatContentOpsCount,
 } from './ingestionLimits'
 
 export {
