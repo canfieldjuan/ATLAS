@@ -62,7 +62,7 @@ const post: BlogPost = {
   seo_title: 'E-commerce Software Complaints: 4 Vendors Compared 2026',
   seo_description: 'Analysis of 1206 reviews across 4 major e-commerce platforms. Shopify, WooCommerce, Magento, and BigCommerce—each has a distinct top complaint.',
   target_keyword: 'e-commerce software complaints',
-  secondary_keywords: ["Shopify reliability issues", "WooCommerce pricing problems", "Magento cost complaints"],
+  secondary_keywords: ["Shopify reliability issues", "WooCommerce pricing problems", "Magento cost complaints", "ecommerce platform cost"],
   faq: [
   {
     "question": "What is the most common complaint about Shopify?",

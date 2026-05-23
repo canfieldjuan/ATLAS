@@ -122,7 +122,7 @@ const post: BlogPost = {
   seo_title: 'Shopify Reviews 2026: Pricing & App Fee Analysis (1067 Users)',
   seo_description: 'Analysis of 1067 Shopify reviews shows app fees climbing from $29 to $87/month, pushing merchants past $300/month budgets and triggering platform evaluations.',
   target_keyword: 'Shopify reviews',
-  secondary_keywords: ["Shopify pricing complaints", "Shopify app fees", "Shopify alternatives 2026"],
+  secondary_keywords: ["Shopify pricing complaints", "Shopify app fees", "Shopify alternatives 2026", "Shopify too expensive", "Shopify transaction fees"],
   faq: [
   {
     "question": "What is the most common complaint about Shopify in 2026?",

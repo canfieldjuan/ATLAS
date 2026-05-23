@@ -116,7 +116,7 @@ const post: BlogPost = {
   seo_title: 'Magento Reviews 2026: Analysis of 1047 User Experiences',
   seo_description: 'Analysis of 1047 Magento reviews. See what drives satisfaction and frustration, common pain points, and how it compares to Shopify and WooCommerce.',
   target_keyword: 'magento reviews',
-  secondary_keywords: ["magento vs shopify", "magento alternatives", "adobe commerce reviews"],
+  secondary_keywords: ["magento vs shopify", "magento alternatives", "adobe commerce reviews", "magento vs adobe commerce"],
   faq: [
   {
     "question": "What are the most common complaints about Magento?",
