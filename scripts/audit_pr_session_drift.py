@@ -16,6 +16,21 @@ from typing import Any, Iterable, Sequence
 
 LANE_RE = re.compile(r"^\s*Ownership lane:\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
 LANE_VALUE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]*[a-z0-9]$")
+SLICE_PHASE_RE = re.compile(r"^\s*Slice phase:\s*`?([^`\n]+?)`?\s*$", re.IGNORECASE | re.MULTILINE)
+SCOPE_SECTION_RE = re.compile(
+    r"^##\s+Scope(?:\s+\(this PR\))?\s*$\n?(.*?)(?=^##\s+|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
+VALID_SLICE_PHASES = frozenset(
+    {
+        "vertical slice",
+        "functional validation",
+        "robust testing",
+        "production hardening",
+        "product polish",
+        "workflow/process",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +42,8 @@ class OpenPullRequest:
     url: str
     files: frozenset[str]
     ownership_lanes: frozenset[str]
+    slice_phases: frozenset[str]
+    slice_phase_errors: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -36,11 +53,14 @@ class DriftReport:
     base_overlap: frozenset[str]
     open_pr_overlaps: tuple[tuple[OpenPullRequest, frozenset[str]], ...]
     branch_ownership_lanes: frozenset[str]
+    branch_slice_phases: frozenset[str]
     open_pr_lane_overlaps: tuple[tuple[OpenPullRequest, frozenset[str]], ...]
     github_status: str
     github_warnings: tuple[str, ...]
     path_errors: tuple[str, ...]
     ownership_errors: tuple[str, ...]
+    phase_errors: tuple[str, ...]
+    current_pr_phase_errors: tuple[str, ...]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -70,6 +90,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if (
         report.path_errors
         or report.ownership_errors
+        or report.phase_errors
+        or report.current_pr_phase_errors
         or report.base_overlap
         or report.open_pr_lane_overlaps
     ):
@@ -82,7 +104,9 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
     base = git_stdout(["merge-base", "HEAD", base_ref])
     branch_files = changed_files([base, "HEAD"], triple_dot=True)
     base_files = changed_files([base, base_ref], triple_dot=False)
-    branch_ownership_lanes, ownership_errors = branch_ownership(added_plan_docs(base))
+    plan_docs = added_plan_docs(base)
+    branch_ownership_lanes, ownership_errors = branch_ownership(plan_docs)
+    branch_slice_phases, phase_errors = collect_branch_slice_phases(plan_docs)
 
     path_errors: list[str] = []
     path_errors.extend(validate_paths(branch_files, "branch diff"))
@@ -91,6 +115,7 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
     base_overlap = frozenset(branch_files & base_files)
     open_pr_overlaps: list[tuple[OpenPullRequest, frozenset[str]]] = []
     open_pr_lane_overlaps: list[tuple[OpenPullRequest, frozenset[str]]] = []
+    current_pr_phase_errors: list[str] = []
     github_status = "skipped (--skip-github)"
     github_warnings: list[str] = []
 
@@ -100,7 +125,21 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
         current_branch = current_head_ref()
         current_oid = current_head_oid()
         for pr in prs:
-            if pr.head_ref == current_branch or (pr.head_oid and pr.head_oid == current_oid):
+            is_current_pr = pr.head_ref == current_branch or (pr.head_oid and pr.head_oid == current_oid)
+            if is_current_pr:
+                current_pr_phase_errors.extend(pr.slice_phase_errors)
+                if branch_slice_phases and not pr.slice_phases:
+                    current_pr_phase_errors.append("current PR body: missing Slice phase")
+                elif (
+                    branch_slice_phases
+                    and pr.slice_phases
+                    and branch_slice_phases.isdisjoint(pr.slice_phases)
+                ):
+                    current_pr_phase_errors.append(
+                        "current PR body Slice phase "
+                        f"{format_values(pr.slice_phases)} does not match branch plan phase(s) "
+                        f"{format_values(branch_slice_phases)}"
+                    )
                 continue
             overlap = frozenset(branch_files & pr.files)
             if overlap:
@@ -115,11 +154,14 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
         base_overlap=base_overlap,
         open_pr_overlaps=tuple(open_pr_overlaps),
         branch_ownership_lanes=branch_ownership_lanes,
+        branch_slice_phases=branch_slice_phases,
         open_pr_lane_overlaps=tuple(open_pr_lane_overlaps),
         github_status=github_status,
         github_warnings=tuple(github_warnings),
         path_errors=tuple(path_errors),
         ownership_errors=tuple(ownership_errors),
+        phase_errors=tuple(phase_errors),
+        current_pr_phase_errors=tuple(current_pr_phase_errors),
     )
 
 
@@ -172,6 +214,25 @@ def branch_ownership(plan_docs: set[str]) -> tuple[frozenset[str], tuple[str, ..
     return frozenset(lanes), tuple(errors)
 
 
+def collect_branch_slice_phases(plan_docs: set[str]) -> tuple[frozenset[str], tuple[str, ...]]:
+    phases: set[str] = set()
+    errors: list[str] = []
+    if not plan_docs:
+        return frozenset(), tuple()
+
+    for plan_doc in plan_docs:
+        text = git_stdout(["show", f"HEAD:{plan_doc}"])
+        doc_phases, doc_errors = extract_plan_slice_phases(text, source=plan_doc)
+        phases.update(doc_phases)
+        errors.extend(doc_errors)
+        if not doc_phases and not doc_errors:
+            errors.append(f"{plan_doc}: missing Slice phase")
+
+    if not phases and plan_docs:
+        errors.append("changed PR plan docs must declare a Slice phase")
+    return frozenset(phases), tuple(errors)
+
+
 def extract_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
     lanes: set[str] = set()
     errors: list[str] = []
@@ -185,6 +246,34 @@ def extract_ownership_lanes(text: str, *, source: str) -> tuple[frozenset[str], 
             continue
         lanes.add(lane)
     return frozenset(lanes), tuple(errors)
+
+
+def extract_plan_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    return extract_slice_phases(scope_section(text), source=source)
+
+
+def extract_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tuple[str, ...]]:
+    phases: set[str] = set()
+    errors: list[str] = []
+    for raw_phase in SLICE_PHASE_RE.findall(text):
+        phase = normalize_slice_phase(raw_phase)
+        if phase not in VALID_SLICE_PHASES:
+            errors.append(
+                f"{source}: invalid Slice phase {raw_phase!r}; "
+                f"use one of: {', '.join(sorted(VALID_SLICE_PHASES))}"
+            )
+            continue
+        phases.add(phase)
+    return frozenset(phases), tuple(errors)
+
+
+def normalize_slice_phase(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().rstrip(".").lower())
+
+
+def scope_section(text: str) -> str:
+    match = SCOPE_SECTION_RE.search(text)
+    return match.group(1) if match else ""
 
 
 def load_open_pull_requests(base_ref: str) -> tuple[str, tuple[OpenPullRequest, ...], tuple[str, ...]]:
@@ -236,7 +325,14 @@ def load_open_pull_requests(base_ref: str) -> tuple[str, tuple[OpenPullRequest, 
 
 
 def load_open_pull_request_files(number: int, row: dict[str, Any]) -> tuple[OpenPullRequest, tuple[str, ...]]:
-    fallback = open_pr_from_row(number, row, files=frozenset(), ownership_lanes=frozenset())
+    fallback = open_pr_from_row(
+        number,
+        row,
+        files=frozenset(),
+        ownership_lanes=frozenset(),
+        slice_phases=frozenset(),
+        slice_phase_errors=(),
+    )
     result = subprocess.run(
         ["gh", "pr", "view", str(number), "--json", "files,body"],
         check=False,
@@ -259,12 +355,15 @@ def load_open_pull_request_files(number: int, row: dict[str, Any]) -> tuple[Open
     }
     body = str(payload.get("body", "") or "")
     lanes, lane_errors = extract_ownership_lanes(body, source=f"PR #{number} body")
-    warnings = tuple(lane_errors)
+    phases, phase_errors = extract_slice_phases(body, source=f"PR #{number} body")
+    warnings = tuple(lane_errors + phase_errors)
     return open_pr_from_row(
         number,
         row,
         files=frozenset(path for path in files if path),
         ownership_lanes=lanes if not lane_errors else frozenset(),
+        slice_phases=phases if not phase_errors else frozenset(),
+        slice_phase_errors=phase_errors,
     ), warnings
 
 
@@ -274,6 +373,8 @@ def open_pr_from_row(
     *,
     files: frozenset[str],
     ownership_lanes: frozenset[str],
+    slice_phases: frozenset[str],
+    slice_phase_errors: tuple[str, ...],
 ) -> OpenPullRequest:
     return OpenPullRequest(
         number=number,
@@ -283,6 +384,8 @@ def open_pr_from_row(
         url=str(row.get("url", "")).strip(),
         files=files,
         ownership_lanes=ownership_lanes,
+        slice_phases=slice_phases,
+        slice_phase_errors=slice_phase_errors,
     )
 
 
@@ -308,6 +411,7 @@ def render_report(base_ref: str, report: DriftReport) -> None:
     print(f"branch changed files: {len(report.branch_files)}")
     print(f"base changed files since branch point: {len(report.base_files)}")
     print(f"branch ownership lanes: {', '.join(sorted(report.branch_ownership_lanes)) or 'none'}")
+    print(f"branch slice phases: {', '.join(sorted(report.branch_slice_phases)) or 'none'}")
     print(f"GitHub open PR check: {report.github_status}")
     if report.github_warnings:
         print()
@@ -325,6 +429,18 @@ def render_report(base_ref: str, report: DriftReport) -> None:
         print()
         print("DRIFT: ownership lane contract failed")
         for error in report.ownership_errors:
+            print(f"- {error}")
+
+    if report.phase_errors:
+        print()
+        print("DRIFT: slice phase contract failed")
+        for error in report.phase_errors:
+            print(f"- {error}")
+
+    if report.current_pr_phase_errors:
+        print()
+        print("DRIFT: current PR body slice phase contract failed")
+        for error in report.current_pr_phase_errors:
             print(f"- {error}")
 
     if report.base_overlap:
@@ -362,10 +478,16 @@ def render_report(base_ref: str, report: DriftReport) -> None:
     if (
         not report.path_errors
         and not report.ownership_errors
+        and not report.phase_errors
+        and not report.current_pr_phase_errors
         and not report.base_overlap
         and not report.open_pr_lane_overlaps
     ):
         print("OK: no blocking drift detected")
+
+
+def format_values(values: Iterable[str]) -> str:
+    return ", ".join(sorted(values)) or "none"
 
 
 def current_head_ref() -> str:
