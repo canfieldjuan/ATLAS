@@ -248,7 +248,7 @@ Teamwork and Basecamp target this segment. Teamwork offers more client-facing fe
 Basecamp's flat-rate pricing appeals to teams frustrated by per-seat charges. ClickUp and Notion offer generous free tiers but face feature lock-out pressure as teams scale.</p>
 <p>The market exhibits a <strong>price squeeze</strong> pattern: teams tolerate friction on free or low-cost plans but churn quickly when forced to upgrade or renew. Unexpected renewal charges create acute dissatisfaction, particularly when usage drops mid-cycle or teams discover charges after reduced engagement.</p>
 <p>Asana emerges as the primary beneficiary in displacement flows, capturing inbound switches from ClickUp and Jira. The platform balances UX simplicity with feature breadth, appealing to teams that outgrow simpler tools without requiring Jira's technical depth.</p>
-<p>Counterevidence exists: despite pricing and customization frustrations, users remain anchored by overall satisfaction, positive UX experiences, and adequate feature sets. Retention is fragile and context-dependent, not universally predictable.</p>
+<p>Counterevidence exists: despite pricing and customization frustrations, users remain anchored by positive UX experiences and adequate feature sets. Retention is fragile and context-dependent, not universally predictable.</p>
 <h2 id="what-reviewers-say-across-the-project-management-market">What Reviewers Say Across the Project Management Market</h2>
 <p>Direct reviewer feedback grounds the landscape analysis in visible evidence. The quotes below span four vendors and illustrate recurring pain patterns.</p>
 <p><strong>Asana:</strong></p>

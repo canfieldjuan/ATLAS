@@ -56,7 +56,7 @@ const post: BlogPost = {
   },
   {
     "question": "What features do Copper users value despite pricing concerns?",
-    "answer": "Despite pricing complaints, Copper maintains positive sentiment anchors with 928 mentions of overall satisfaction. However, the evidence does not clearly identify which specific features drive retention when pricing concerns exist."
+    "answer": "Despite pricing complaints, Copper maintains positive sentiment anchors in specific areas. However, the evidence does not clearly identify which specific features drive retention when pricing concerns exist."
   }
 ],
   related_slugs: ["microsoft-teams-vs-notion-2026-04", "azure-deep-dive-2026-04", "microsoft-teams-vs-salesforce-2026-04", "palo-alto-networks-deep-dive-2026-04"],
@@ -89,7 +89,7 @@ const post: BlogPost = {
 <p>One witness highlight flags a common pattern of workflow substitution tied to pricing backlash. The reviewer who described Copper as "a spreadsheet with a pretty interface" also reported feeling less productive after deployment. That productivity delta claim is significant: if users invest setup time (20+ hours reported in the claim plan) but end up less productive than before, the cost feels like a double loss—both the subscription fee and the opportunity cost of wasted implementation effort.</p>
 <p>The claim plan also notes that buyers discover feature gaps (custom fields, data import flexibility) after initial deployment. That post-purchase disappointment is a classic driver of pricing backlash. When you pay for a tool expecting certain capabilities and then discover they are missing, the price-to-value ratio collapses even if the absolute cost has not changed.</p>
 <h2 id="where-copper-genuinely-delivers">Where Copper Genuinely Delivers</h2>
-<p>Despite pricing concerns, Copper maintains positive sentiment anchors. The claim plan notes 928 mentions of overall satisfaction, which is a substantial counterweight to the 90 pricing complaints. That 10:1 ratio suggests most users find enough value to stay, even if pricing is not the highlight of their experience.</p>
+<p>Despite pricing concerns, Copper maintains positive sentiment anchors. Positive sentiment provides a counterweight to the 90 pricing complaints, suggesting most users find enough value to stay, even if pricing is not the highlight of their experience.</p>
 <p>What specific features drive that satisfaction? The dataset does not clearly answer this. The CRM-relevant strength categories—integration, onboarding, performance, security, and UX—suggest that when reviewers discuss Copper's strengths they cluster around those themes, but the corpus does not isolate which ones drive retention.</p>
 <p>The claim plan acknowledges that "contradictory evidence between weakness and strength signals prevents clear identification of specific retention mechanisms." That is an honest limitation. We know Copper retains users despite pricing concerns, but we cannot pinpoint which features or workflows create enough value to justify the cost.</p>
 <p>One plausible explanation: Copper's Google Workspace integration is a known strength in the CRM market. Teams already embedded in Gmail, Google Calendar, and Google Drive may find Copper's native integration valuable enough to tolerate pricing friction. However, that hypothesis is not directly supported by the review corpus in this dataset.</p>

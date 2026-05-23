@@ -116,7 +116,7 @@ const post: BlogPost = {
   },
   {
     "question": "What keeps customers from leaving Slack or Zoom despite complaints?",
-    "answer": "Slack retains customers through overall satisfaction in specific use cases, with 293 positive mentions. Zoom customers cite feature completeness, performance reliability, and integration ecosystem lock-in, particularly when client or partner requirements mandate Zoom compatibility."
+    "answer": "Slack retains customers through ease of use and integration depth in specific use cases. Zoom customers cite feature completeness, performance reliability, and integration ecosystem lock-in, particularly when client or partner requirements mandate Zoom compatibility."
   }
 ],
   related_slugs: ["ringcentral-deep-dive-2026-04", "microsoft-teams-deep-dive-2026-04", "zoom-deep-dive-2026-04"],
@@ -188,7 +188,7 @@ const post: BlogPost = {
 <p>Slack's defensive position is more precarious because Teams directly competes in the same chat-first workflow space. Zoom's video-first positioning creates more differentiation from bundled alternatives, though Google Meet still applies pressure.</p>
 <p>The entrenchment regime means switching costs and integration lock-in matter more than feature velocity. Reviewers describe operational friction and workflow migration patterns, not product capability gaps.</p>
 <h3 id="counterevidence-and-retention-anchors">Counterevidence and retention anchors</h3>
-<p>Slack retains customers through overall satisfaction in specific use cases, with 293 positive mentions in the data. Reviewers describe Slack as effective for certain team sizes, communication styles, and integration ecosystems. The workflow substitution pattern suggests Slack remains in the stack even as primary communication migrates elsewhere.</p>
+<p>Slack retains customers through ease of use and integration depth in specific use cases. Reviewers describe Slack as effective for certain team sizes, communication styles, and integration ecosystems. The workflow substitution pattern suggests Slack remains in the stack even as primary communication migrates elsewhere.</p>
 <p>Zoom retains customers through feature completeness and client compatibility requirements. Reviewers describe staying on Zoom because partners or clients mandate it, creating network effects that override individual pricing or support complaints.</p>
 <p>Neither vendor shows catastrophic retention failure in this sample. The urgency gap reflects incremental pressure, not mass exodus.</p>
 <h2 id="what-reviewers-say-about-slack-and-zoom">What Reviewers Say About Slack and Zoom</h2>
@@ -259,7 +259,7 @@ const post: BlogPost = {
 </tr>
 <tr>
 <td>Retention anchor</td>
-<td>Overall satisfaction (293 positive mentions)</td>
+<td>Ease of use, integration depth</td>
 <td>Feature completeness, client compatibility</td>
 </tr>
 </tbody>

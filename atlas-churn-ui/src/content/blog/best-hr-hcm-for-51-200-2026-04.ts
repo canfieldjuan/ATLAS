@@ -251,7 +251,6 @@ const post: BlogPost = {
 <ul>
 <li>Integration ecosystem</li>
 <li>Feature breadth and innovation</li>
-<li>Overall satisfaction (for many segments)</li>
 </ul>
 <p><strong>Weaknesses:</strong></p>
 <ul>

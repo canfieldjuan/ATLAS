@@ -241,7 +241,7 @@ const post: BlogPost = {
 <p>This gap becomes more acute as team size grows. Teams migrating from tools with built-in resource capacity planning (like Asana or Monday.com) may need to configure ClickUp's workload view or integrate a third-party capacity tool.</p>
 <h3 id="learning-curve-and-productivity-delta">Learning Curve and Productivity Delta</h3>
 <p>The reasoning context includes a <code>productivity_delta_claim</code> of "more_productive" for bundled suite consolidation cases. However, this claim is based on reviewer self-report, not measured productivity data.</p>
-<p>The counterevidence section notes that "customers remain anchored by overall satisfaction (252 mentions), UX strengths (89 mentions), and feature breadth (64 mentions)." This suggests retained users find value despite complexity trade-offs.</p>
+<p>The counterevidence section notes that "customers remain anchored by UX strengths (89 mentions) and feature breadth (64 mentions)." This suggests retained users find value despite complexity trade-offs.</p>
 <p>Teams should expect:</p>
 <ul>
 <li>Initial productivity dip during the learning phase</li>
@@ -268,7 +268,7 @@ const post: BlogPost = {
 <li><strong>Scheduling visibility gaps</strong>: Available hours not visible during task scheduling</li>
 <li><strong>Pricing volatility</strong>: One outlier case documented a 222% pricing increase</li>
 </ul>
-<p>Despite these friction points, the counterevidence shows that customers remain anchored by overall satisfaction (252 mentions), UX strengths (89 mentions), and feature breadth (64 mentions). This suggests ClickUp delivers value that outweighs navigation frustration for retained users.</p>
+<p>Despite these friction points, the counterevidence shows that customers remain anchored by UX strengths (89 mentions) and feature breadth (64 mentions). This suggests ClickUp delivers value that outweighs navigation frustration for retained users.</p>
 <h3 id="who-should-migrate-to-clickup">Who Should Migrate to ClickUp?</h3>
 <p>The data supports migration for:</p>
 <ul>
