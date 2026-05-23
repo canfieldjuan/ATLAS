@@ -8,8 +8,11 @@ from extracted_content_pipeline.api.control_surfaces import (
     create_content_ops_control_surface_router,
 )
 from extracted_content_pipeline.content_ops_execution import (
+    ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 from tests.content_ops_live_execute_harness import (
     build_content_ops_live_execute_harness,
     default_content_ops_execute_payload,
@@ -143,3 +146,66 @@ async def test_live_execute_route_persists_all_outputs_with_reasoning() -> None:
         for scope, _draft in repository.saved:
             assert scope.account_id == "acct-live"
             assert scope.user_id == "user-live"
+
+
+async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_markdown"],
+        "limit": 2,
+        "require_quality_gates": False,
+        "inputs": {
+            "faq_title": "Hosted FAQ Vocabulary Gap Smoke",
+            "faq_documentation_terms": ["Single sign-on setup"],
+            "faq_vocabulary_gap_rules": [["SSO", "single sign-on"]],
+            "source_material": {
+                "support_tickets": [
+                    {
+                        "ticket_id": "ticket-sso-1",
+                        "source_type": "support_ticket",
+                        "subject": "SSO setup",
+                        "message": "How do I enable SSO for my team?",
+                        "pain_category": "authentication",
+                    }
+                ]
+            },
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["documentation_terms"] == [
+        "Single sign-on setup"
+    ]
+    assert payload["plan"]["steps"][0]["config"]["vocabulary_gap_rules"] == [
+        ["SSO", "single sign-on"]
+    ]
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+
+    result = step["result"]
+    assert result["generated"] == 1
+    assert result["ticket_source_count"] == 1
+    assert all(result["output_checks"].values())
+    assert "Hosted FAQ Vocabulary Gap Smoke" in result["markdown"]
+    assert "`ticket-sso-1` - SSO setup" in result["markdown"]
+
+    item = result["items"][0]
+    assert item["source_ids"] == ("ticket-sso-1",)
+    assert item["term_mappings"][0]["customer_term"] == "SSO"
+    # Resolves to the faq_documentation_terms entry through the rule alias,
+    # proving documentation_terms and vocabulary_gap_rules combine.
+    assert (
+        item["term_mappings"][0]["documentation_term"]
+        == "Single sign-on setup"
+    )
