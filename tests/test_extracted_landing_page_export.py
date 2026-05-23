@@ -470,6 +470,18 @@ def test_public_landing_page_robots_keeps_placeholder_cta_noindex() -> None:
     ) == "noindex,follow"
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["/demo/", "/demo?utm=1", "/demo#hero", "/demo/?utm=1"],
+)
+def test_public_landing_page_robots_keeps_demo_cta_variants_noindex(
+    url: str,
+) -> None:
+    assert public_landing_page_robots(
+        _ready_draft(status="approved", cta={"label": "Book a demo", "url": url})
+    ) == "noindex,follow"
+
+
 @pytest.mark.asyncio
 async def test_export_landing_page_drafts_surfaces_ready_readiness() -> None:
     result = await export_landing_page_drafts(

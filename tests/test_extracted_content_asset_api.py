@@ -1069,6 +1069,24 @@ def test_generated_asset_router_keeps_placeholder_cta_landing_page_noindex() -> 
     assert response.json()["robots"] == "noindex,follow"
 
 
+@pytest.mark.parametrize(
+    "url",
+    ["/demo/", "/demo?utm=1", "/demo#hero", "/demo/?utm=1"],
+)
+def test_generated_asset_router_keeps_demo_cta_variants_noindex(url: str) -> None:
+    row = _ready_landing_page_row()
+    row["cta"] = {"label": "Book a demo", "url": url}
+    pool = _Pool(rows=[row])
+
+    response = _public_client(pool).get(
+        "/content-assets/landing_page/public/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["robots"] == "noindex,follow"
+
+
 def test_generated_asset_router_sitemap_includes_only_indexable_landing_pages() -> None:
     incomplete = {**_landing_page_row(), "status": "approved"}
     incomplete["id"] = "22222222-2222-2222-2222-222222222222"
