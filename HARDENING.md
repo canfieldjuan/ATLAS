@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-05-23
+
+### FILECONCURRENCY-2 - Uploaded-file imports need cross-process admission
+- File/location: Hosted `/content-ops/ingestion/files/import` deployment topology; in-process runner lives at `scripts/smoke_content_ops_ingestion_file_route_inprocess_load.py`.
+- Description: The shared-pool route gate and in-process load runner prove one-router admission, but multi-worker or multi-process deployments can still admit one gate window per process unless backed by a distributed queue, shared semaphore, or job boundary.
+- Why it matters: Production deployments with multiple app workers can multiply the configured import concurrency and pressure Postgres even though each worker is locally bounded.
+- Effort: L
+- Category: correctness
+- Owner/session: content-ops/backend-file-ingestion-validation
+- Found during: PR-Content-Ops-File-Cross-Process-Hardening-Register
+
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
