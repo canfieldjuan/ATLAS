@@ -162,11 +162,7 @@ const post: BlogPost = {
 <h2 id="what-shopify-does-well-and-where-it-falls-short">What Shopify Does Well -- and Where It Falls Short</h2>
 <p>Shopify's strength and weakness profile shows a platform with clear integration and feature advantages, but significant pressure across pricing, support, and technical infrastructure.</p>
 <p>{{chart:strengths-weaknesses}}</p>
-<p>Reviewers identify two primary strengths: <strong>integration ecosystem</strong> and <strong>feature breadth</strong>. The integration advantage is concrete. Shopify connects to Etsy, QuickBooks, Slack, Elementor, WooCommerce, Notion, and Amazon, among others. One verified Account Executive described the integration experience this way:</p>
-<blockquote>
-<p>Shopify is incredibly user-friendly and yet extremely professional and easily integrates with multiple plug-ins such as Mailchimp, Google Analytics, and brick-and-mortar POS systems like Clover.</p>
-<p>-- Account Executive on Slashdot</p>
-</blockquote>
+<p>Reviewers identify two primary strengths: <strong>integration ecosystem</strong> and <strong>feature breadth</strong>. The integration advantage is concrete. Shopify connects to Etsy, QuickBooks, Slack, Elementor, WooCommerce, Notion, and Amazon, among others.</p>
 <p>Feature breadth shows up in use case diversity. Shopify supports retail storefronts, wholesale operations (Faire integration), in-house production workflows, and brick-and-mortar POS. One reviewer captured the scope of their requirements:</p>
 <blockquote>
 <p>I'm looking for an inventory management system that can handle our brick-and-mortar store, wholesale (Faire), and in-house production all in one place.</p>
@@ -290,12 +286,7 @@ const post: BlogPost = {
 <p>-- reviewer on Reddit</p>
 </blockquote>
 <p>This quote shows the scope of requirements that bring merchants to Shopify: multi-channel inventory, wholesale integration, production workflows. It also shows the complexity that drives app adoption and cost escalation.</p>
-<blockquote>
-<p>Shopify is incredibly user-friendly and yet extremely professional and easily integrates with multiple plug-ins such as Mailchimp, Google Analytics, and brick-and-mortar POS systems like Clover</p>
-<p>-- Account Executive, 26-99 employees, verified reviewer on Slashdot</p>
-</blockquote>
-<p>This is the strongest positive quote in the dataset. It highlights integration breadth, ease of use, and professional polish. The reviewer role (Account Executive) suggests this is a business buyer perspective, not an end-user perspective.</p>
-<p>The quote set is small, but it reflects the broader pattern: positive reviews focus on integration and features, negative reviews focus on pricing and cost escalation. The contradiction between integration as a strength and integration as a weakness appears in both the quantitative data and the qualitative quotes.</p>
+<p>Though the quote set is small, it reflects the broader pattern: positive reviews focus on integration and features, negative reviews focus on pricing and cost escalation. The contradiction between integration as a strength and integration as a weakness appears in both the quantitative data and the qualitative quotes.</p>
 <h2 id="the-bottom-line-on-shopify">The Bottom Line on Shopify</h2>
 <p>Shopify remains a widely deployed e-commerce platform with clear strengths in integration breadth and feature coverage, but pricing pressure is creating a budget threshold effect that is pushing small merchants toward alternative platforms. The $300/month threshold appears repeatedly in witness evidence as the point where evaluation activity begins.</p>
 <p>The core tension is between platform depth and total cost of ownership. Merchants choose Shopify for its ecosystem, then discover that ecosystem depth requires third-party apps, and those apps compound costs quickly. App fees climbing from $29 to $87 per month over six months is a concrete example of this pattern.</p>

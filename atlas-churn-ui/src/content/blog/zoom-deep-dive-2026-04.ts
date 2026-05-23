@@ -153,10 +153,7 @@ const post: BlogPost = {
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths">Strengths</h3>
 <p>Reviewers consistently praise three areas:</p>
-<p><strong>Reliable core performance</strong> — When Zoom works, it works well. Reviewers describe stable connections, good audio/video quality, and predictable behavior across devices. One system engineer describes the platform's utility:</p>
-<blockquote>
-<p>"Zoom has been of great help since it helps me to engage and interact with my colleagues, clients, employers and people from all over the world" -- System Engineer at a company with 100-499 employees, reviewer on Slashdot</p>
-</blockquote>
+<p><strong>Reliable core performance</strong> — When Zoom works, it works well. Reviewers describe stable connections, good audio/video quality, and predictable behavior across devices.</p>
 <p>This reliability extends to the recording and playback features, which reviewers cite as particularly strong for training, documentation, and compliance use cases.</p>
 <p><strong>Broad platform compatibility</strong> — Zoom runs on Windows, Mac, Linux, iOS, and Android with consistent behavior. Reviewers in cross-platform environments report fewer compatibility headaches than with some bundled alternatives.</p>
 <h3 id="weaknesses">Weaknesses</h3>

@@ -161,10 +161,6 @@ const post: BlogPost = {
 <blockquote>
 <p>"provides a variety of sources through the system such as feedback; oversight of benefits; payroll" -- ANALYST at a large services company, reviewer on Gartner</p>
 </blockquote>
-<p>Another manager describes the operational impact:</p>
-<blockquote>
-<p>"Makes Effortless management for the HR department" -- Manager at a mid-market company, reviewer on Slashdot</p>
-</blockquote>
 <p>The positive sentiment clusters around organizations with dedicated implementation teams and HR departments that invest in proper configuration. When Workday works, reviewers describe it as a comprehensive system that centralizes HR workflows effectively.</p>
 <p><strong>Where Workday falls short:</strong></p>
 <p>The weakness categories dominate the chart. Overall dissatisfaction leads the complaint patterns, followed by pricing concerns, feature accessibility issues, reliability problems, and integration complexity. Each category represents a cluster of reviewer frustration that appears consistently across the sample.</p>
