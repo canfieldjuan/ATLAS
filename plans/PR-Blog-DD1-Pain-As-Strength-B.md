@@ -62,6 +62,8 @@ detector and diff.
 - DD2 (fabricated "Ira"/incoherent multipliers) and DD3 (widen prose_vs_chart for
   "X dominates") -- next, after DD1.
 
+Parked hardening: none (chart-only data fix; no new non-blocking issues surfaced).
+
 ## Verification
 
 - `pain_as_strength` detector: all 13 cleared (corpus run shows the only remaining
