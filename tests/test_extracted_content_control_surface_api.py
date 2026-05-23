@@ -9,6 +9,7 @@ from extracted_content_pipeline.api.control_surfaces import (
     create_content_ops_control_surface_router,
 )
 from extracted_content_pipeline.campaign_ports import CampaignReasoningContext
+from extracted_content_pipeline.content_ops_input_provider import ContentOpsInputPackage
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 
 
@@ -66,6 +67,34 @@ class _CampaignService:
             "kwargs": dict(kwargs),
         })
         return {"generated": 1, "saved_ids": ["draft-1"]}
+
+
+class _SyncInputProvider:
+    def __init__(self, package: ContentOpsInputPackage):
+        self.package = package
+        self.calls = []
+
+    def build_content_ops_input_package(self, *, scope, request=None):
+        self.calls.append({"scope": scope, "request": dict(request or {})})
+        return self.package
+
+
+class _AsyncInputProvider(_SyncInputProvider):
+    async def build_content_ops_input_package(self, *, scope, request=None):
+        self.calls.append({"scope": scope, "request": dict(request or {})})
+        return self.package
+
+
+class _FailingInputProvider:
+    def build_content_ops_input_package(self, *, scope, request=None):
+        del scope, request
+        raise RuntimeError("postgres://user:secret@example/internal")
+
+
+class _HTTPFailingInputProvider:
+    def build_content_ops_input_package(self, *, scope, request=None):
+        del scope, request
+        raise api_module.HTTPException(status_code=400, detail="bad ticket payload")
 
 
 class _BlockingCampaignService(_CampaignService):
@@ -626,6 +655,99 @@ async def test_plan_generation_route_returns_execution_plan():
     assert payload["steps"][0]["runner"] == "CampaignGenerationService.generate"
     assert payload["steps"][0]["status"] == "runnable"
     assert payload["preview"]["can_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_applies_sync_input_provider():
+    provider = _SyncInputProvider(
+        ContentOpsInputPackage(
+            provider="ticket_upload",
+            outputs=("landing_page",),
+            inputs={
+                "audience": "10-50 person SaaS teams",
+                "offer": "Provider offer",
+            },
+        )
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=provider,
+        scope_provider=lambda: {"account_id": " acct-1 "},
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint({
+        "inputs": {
+            "offer": "Operator offer",
+        },
+    })
+
+    assert payload["can_run"] is True
+    assert payload["outputs"] == ["landing_page"]
+    assert payload["missing_inputs"] == []
+    assert provider.calls[0]["scope"].account_id == "acct-1"
+    assert provider.calls[0]["request"]["inputs"]["offer"] == "Operator offer"
+
+
+@pytest.mark.asyncio
+async def test_plan_generation_route_applies_async_input_provider():
+    provider = _AsyncInputProvider(
+        ContentOpsInputPackage(
+            provider="ticket_upload",
+            outputs=("faq_markdown",),
+            inputs={
+                "source_material": [{
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                    "text": "How do I export my dashboard?",
+                }],
+            },
+        )
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=provider,
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    payload = await route.endpoint({})
+
+    assert payload["can_execute"] is True
+    assert payload["steps"][0]["output"] == "faq_markdown"
+    assert payload["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+    assert provider.calls[0]["scope"].account_id is None
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_wraps_input_provider_failure(caplog):
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=_FailingInputProvider(),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({"outputs": ["landing_page"]})
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops input provider is unavailable."
+    assert "postgres://" not in str(exc.value.detail)
+    assert "postgres://" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_passes_through_input_provider_http_exception():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=_HTTPFailingInputProvider(),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({"outputs": ["landing_page"]})
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "bad ticket payload"
 
 
 @pytest.mark.asyncio
@@ -1435,6 +1557,43 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_applies_input_provider_before_generation():
+    service = _CampaignService()
+    provider = _SyncInputProvider(
+        ContentOpsInputPackage(
+            provider="ticket_upload",
+            outputs=("email_campaign",),
+            inputs={
+                "target_account": "Provider account",
+                "offer": "Provider offer",
+                "filters": {"status": "provider"},
+            },
+        )
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
+        input_provider=provider,
+        scope_provider=lambda: {"account_id": " acct-1 "},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint({
+        "inputs": {
+            "offer": "Operator offer",
+            "filters": {"status": "operator"},
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert provider.calls[0]["scope"].account_id == "acct-1"
+    assert service.calls[0]["scope"].account_id == "acct-1"
+    assert service.calls[0]["filters"] == {"status": "operator"}
+    assert service.calls[0]["target_mode"] == "vendor_retention"
+    assert service.calls[0]["limit"] == 1
 
 
 @pytest.mark.asyncio

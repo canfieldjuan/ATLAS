@@ -38,6 +38,10 @@ from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from ..content_ops_input_provider import (
+    ContentOpsInputProvider,
+    merge_content_ops_input_package,
+)
 from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
@@ -84,6 +88,7 @@ ReasoningStatusProvider = Callable[
 LLMProvider = Callable[[], Any | Awaitable[Any]]
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
+InputProvider = ContentOpsInputProvider
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +507,7 @@ def create_content_ops_control_surface_router(
     reasoning_context_provider: ReasoningContextProvider | None = None,
     reasoning_status_provider: ReasoningStatusProvider | None = None,
     llm_provider: LLMProvider | None = None,
+    input_provider: InputProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     dependencies: Sequence[Any] | None = None,
@@ -555,14 +561,24 @@ def create_content_ops_control_surface_router(
     async def preview_generation(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
-        return preview_from_mapping(_payload_to_mapping(payload))
+        payload_mapping = await _payload_with_input_provider(
+            _payload_to_mapping(payload, exclude_unset=input_provider is not None),
+            input_provider=input_provider,
+            scope_provider=scope_provider,
+        )
+        return preview_from_mapping(payload_mapping)
 
     @router.post("/plan")
     async def plan_generation(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
         try:
-            return build_generation_plan_from_mapping(_payload_to_mapping(payload))
+            payload_mapping = await _payload_with_input_provider(
+                _payload_to_mapping(payload, exclude_unset=input_provider is not None),
+                input_provider=input_provider,
+                scope_provider=scope_provider,
+            )
+            return build_generation_plan_from_mapping(payload_mapping)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -707,7 +723,7 @@ def create_content_ops_control_surface_router(
     async def execute_generation(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
-        payload_mapping = _payload_to_mapping(payload)
+        payload_mapping = _payload_to_mapping(payload, exclude_unset=input_provider is not None)
         if not await execute_gate.acquire():
             raise HTTPException(
                 status_code=429,
@@ -728,6 +744,12 @@ def create_content_ops_control_surface_router(
                     status_code=503,
                     detail="Content Ops execution services are not configured.",
                 )
+            scope = await _resolve_scope(scope_provider)
+            payload_mapping = await _payload_with_input_provider(
+                payload_mapping,
+                input_provider=input_provider,
+                scope=scope,
+            )
             # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
             # per-request reasoning provider and derive a reasoning-aware
             # bundle. The base services from execution_services_provider
@@ -761,7 +783,6 @@ def create_content_ops_control_surface_router(
                         reasoning_context,
                         outputs=reasoning_outputs,
                     )
-            scope = await _resolve_scope(scope_provider)
             try:
                 result = await execute_content_ops_from_mapping(
                     payload_mapping,
@@ -958,6 +979,39 @@ async def _resolve_reasoning_context(
             detail="Content Ops reasoning context provider is unavailable.",
         ) from exc
     return value
+
+
+async def _payload_with_input_provider(
+    payload: Mapping[str, Any],
+    *,
+    input_provider: InputProvider | None,
+    scope_provider: ScopeProvider | None = None,
+    scope: TenantScope | None = None,
+) -> dict[str, Any]:
+    if input_provider is None:
+        return dict(payload)
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = await _resolve_scope(scope_provider)
+    try:
+        package = input_provider.build_content_ops_input_package(
+            scope=resolved_scope or TenantScope(),
+            request=payload,
+        )
+        if hasattr(package, "__await__"):
+            package = await package
+        return merge_content_ops_input_package(payload, package)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Content Ops input provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops input provider is unavailable.",
+        ) from exc
 
 
 async def _structured_reasoning_contexts(
@@ -1524,11 +1578,13 @@ def _clean_sequence(value: Any) -> tuple[str, ...]:
     return tuple(cleaned)
 
 
-def _payload_to_mapping(payload: Any) -> dict[str, Any]:
+def _payload_to_mapping(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
     if BaseModel is not None and isinstance(payload, ContentOpsRequestModel):
-        return payload.model_dump()
+        return payload.model_dump(exclude_unset=exclude_unset)
     try:
-        return ContentOpsRequestModel.model_validate(payload).model_dump()
+        return ContentOpsRequestModel.model_validate(payload).model_dump(
+            exclude_unset=exclude_unset
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
