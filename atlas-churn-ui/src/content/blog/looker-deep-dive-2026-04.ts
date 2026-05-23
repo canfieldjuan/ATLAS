@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 115,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 115
       },
       {
         "name": "ux",
@@ -155,9 +155,9 @@ const post: BlogPost = {
 <h2 id="what-looker-does-well-and-where-it-falls-short">What Looker Does Well -- and Where It Falls Short</h2>
 <p>Reviewers identify 8 distinct strength categories and 2 weakness areas based on structured analysis of complaint and praise patterns.</p>
 <p>{{chart:strengths-weaknesses}}</p>
-<p>On the strength side, overall satisfaction appears most frequently in positive mentions, followed closely by UX, pricing, and features. Integration and performance round out the top-tier strengths, with support and reliability mentioned less frequently but still positively.</p>
+<p>On the strength side, UX appears most frequently in positive mentions, followed by pricing and features. Integration, performance, and support round out the strengths. On the weakness side, overall dissatisfaction is the largest signal, with reliability also flagged.</p>
 <p>The weakness profile concentrates heavily in two areas: UX and overall dissatisfaction. This creates an interesting tension—UX appears in both strength and weakness lists, suggesting the platform delivers divergent experiences depending on user technical skill, use case complexity, or organizational context.</p>
-<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with that satisfaction.</p>
+<p>But a Mechanical Design Engineer on G2 highlighted the friction that coexists with those strengths.</p>
 <p>This duality—strong satisfaction among technical users who master LookML, alongside persistent learning curve complaints from those building advanced reports—defines Looker's current reviewer sentiment landscape.</p>
 <h2 id="where-looker-users-feel-the-most-pain">Where Looker Users Feel the Most Pain</h2>
 <p>Pain point analysis reveals where reviewer frustration clusters most intensely.</p>

@@ -21,8 +21,8 @@ const post: BlogPost = {
       },
       {
         "name": "overall_dissatisfaction",
-        "strengths": 17,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 17
       },
       {
         "name": "ux",

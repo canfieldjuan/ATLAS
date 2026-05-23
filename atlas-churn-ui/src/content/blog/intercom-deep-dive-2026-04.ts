@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 79,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 79
       },
       {
         "name": "pricing",
@@ -223,11 +223,7 @@ const post: BlogPost = {
 <p>"Customer support manager for B2B software (150 tickets/day)" -- software reviewer on Reddit</p>
 </blockquote>
 <p>This scale (150 tickets/day) represents a mid-market support volume where Intercom's automation features should deliver value. The reviewer's mention in a negative sentiment context suggests the platform may not meet expectations at this scale.</p>
-<p>Another reviewer highlights a strength:</p>
-<blockquote>
-<p>"Intercom streamlines our sales and lead approach process" -- Sales and Marketing Manager at a company with 100-499 employees, reviewer on Slashdot</p>
-</blockquote>
-<p>This positive sentiment from a sales role indicates Intercom's value extends beyond pure support into lead management and sales workflows. The company size (100-499 employees) aligns with mid-market adoption patterns.</p>
+<p>Reviewer sentiment from sales roles indicates Intercom's value extends beyond pure support into lead management and sales workflows, a pattern that aligns with mid-market adoption.</p>
 <h2 id="who-reviews-intercom-buyer-personas">Who Reviews Intercom: Buyer Personas</h2>
 <p>The reviewer distribution shows distinct buyer roles and purchase stages. Understanding who writes reviews helps contextualize the sentiment patterns.</p>
 <p><strong>Unknown role</strong> dominates the review set with 12 post-purchase reviews and 1 renewal decision review. This category includes reviewers who did not disclose their role or whose role could not be determined from review content. The high count suggests many Intercom reviewers write anonymously or casually without professional context.</p>

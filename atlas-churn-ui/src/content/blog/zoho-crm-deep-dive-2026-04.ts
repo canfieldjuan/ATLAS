@@ -16,8 +16,8 @@ const post: BlogPost = {
     "data": [
       {
         "name": "overall_dissatisfaction",
-        "strengths": 186,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 186
       },
       {
         "name": "pricing",
@@ -163,10 +163,7 @@ const post: BlogPost = {
 <p>Reviewer sentiment splits into clear strength and weakness categories. The platform shows distinct advantages in certain areas while revealing consistent pain points in others.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths">Strengths</h3>
-<p><strong>Dashboard accessibility and lead tracking</strong> emerge as the most frequently praised capabilities. One reviewer on Slashdot describes the core value:</p>
-<blockquote>
-<p>"Zoho CRM is an advanced CRM that gives us easy to approach every lead indication directly from its dashboard" -- Senior Project Manager at a company with 100-499 employees, reviewer on Slashdot</p>
-</blockquote>
+<p><strong>Dashboard accessibility and lead tracking</strong> emerge as the most frequently praised capabilities.</p>
 <p>The dashboard design receives specific praise from users managing small to mid-sized sales pipelines. Reviewers describe quick access to lead status, deal progression, and customer follow-up tasks without navigating multiple screens.</p>
 <p><strong>Zoho ecosystem integration</strong> shows up as a secondary strength. Reviewers who use multiple Zoho products (Zoho Desk, Zoho Campaigns, Zoho Forms) report smoother workflows than those attempting to integrate with third-party tools. The native connections reduce friction for teams already committed to the Zoho suite.</p>
 <p><strong>Small team deployment</strong> appears as a recurring use case where reviewers report success. Teams under 10 users describe manageable setup processes and sufficient feature sets for basic lead tracking and customer follow-ups. The free tier receives positive mentions from evaluators testing the platform before committing to paid plans.</p>

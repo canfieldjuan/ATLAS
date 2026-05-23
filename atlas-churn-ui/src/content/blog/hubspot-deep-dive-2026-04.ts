@@ -155,10 +155,7 @@ const post: BlogPost = {
 <p>The market regime for Marketing Automation is classified as <strong>fragmented</strong>, meaning no single vendor dominates sentiment and buyer preferences vary significantly by segment. This context matters: HubSpot operates in a category where switching costs are moderate and alternatives are numerous.</p>
 <h2 id="what-hubspot-does-well-and-where-it-falls-short">What HubSpot Does Well -- and Where It Falls Short</h2>
 <p>Reviewer sentiment on HubSpot splits along predictable fault lines. <strong>Integration ecosystem, email tracking, and unified CRM/marketing hub architecture</strong> receive consistent praise. <strong>Pricing structure, feature complexity, and support responsiveness</strong> dominate complaint patterns.</p>
-<p>The strengths are specific and actionable. Reviewers cite Gmail integration (11 mentions), Google Ads integration (11 mentions), and LinkedIn connectivity (10 mentions) as workflow accelerators. Email tracking and signature creation tools receive positive mentions from sales-focused users. One Contact Center Engineer notes:</p>
-<blockquote>
-<p>"Pros for Hub spot would be its integrations, the ability to create signatures, the tracking that it gives you into your emails sent" -- reviewer on Slashdot</p>
-</blockquote>
+<p>The strengths are specific and actionable. Reviewers cite Gmail integration (11 mentions), Google Ads integration (11 mentions), and LinkedIn connectivity (10 mentions) as workflow accelerators. Email tracking and signature creation tools receive positive mentions from sales-focused users.</p>
 <p>The unified platform approach — combining CRM, marketing automation, and sales tools under one roof — resonates with teams seeking to consolidate their tech stack. This is HubSpot's core value proposition, and reviewers confirm it delivers for buyers who prioritize integration simplicity over best-of-breed specialization.</p>
 <p>The weaknesses are equally specific. <strong>Pricing complaints dominate the pain landscape</strong>, particularly among teams hitting tier boundaries. Multiple reviewers describe budget shocks when scaling from 6-8 seats to the next pricing tier. One reviewer describes the evaluation context:</p>
 <blockquote>

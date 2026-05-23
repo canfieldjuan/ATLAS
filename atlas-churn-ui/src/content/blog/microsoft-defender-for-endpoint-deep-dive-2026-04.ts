@@ -36,8 +36,8 @@ const post: BlogPost = {
       },
       {
         "name": "overall_dissatisfaction",
-        "strengths": 2,
-        "weaknesses": 0
+        "strengths": 0,
+        "weaknesses": 2
       }
     ],
     "config": {
@@ -144,7 +144,7 @@ const post: BlogPost = {
 <p>Performance concerns also surface in specific deployment scenarios. One IT administrator reported persistent performance issues across Dell fleets, suggesting environment-specific compatibility challenges that are difficult to diagnose without direct vendor support.</p>
 <h2 id="where-microsoft-defender-for-endpoint-users-feel-the-most-pain">Where Microsoft Defender for Endpoint Users Feel the Most Pain</h2>
 <p>{{chart:pain-radar}}</p>
-<p>Integration emerges as the dominant pain category across reviews. Reviewers repeatedly cite the need for better visibility into developer environments, particularly as organizations adopt modern tooling. The gap is not about missing core security features but rather about incomplete coverage of the expanding attack surface in development workflows.</p>
+<p>Integration emerges as a recurring pain theme across reviews. Reviewers repeatedly cite the need for better visibility into developer environments, particularly as organizations adopt modern tooling. The gap is not about missing core security features but rather about incomplete coverage of the expanding attack surface in development workflows.</p>
 <p>This pattern repeats across multiple accounts.</p>
 <p>Feature gaps cluster around the same axis. Reviewers note that Microsoft Defender for Endpoint lacks native integration points for emerging development environments. The product was designed for traditional Windows endpoint protection; it does not natively extend into containerized, Linux, or AI-assisted development contexts without supplementary tools.</p>
 <p>Support and overall dissatisfaction also register in the pain analysis, though with lower frequency. When reviewers report frustration, it often stems from the integration gaps rather than from core security detection or response capabilities.</p>
