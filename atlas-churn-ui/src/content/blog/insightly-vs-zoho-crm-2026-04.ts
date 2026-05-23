@@ -160,7 +160,7 @@ const post: BlogPost = {
 <h3 id="zoho-crm-pain-categories">Zoho CRM Pain Categories</h3>
 <p>Zoho CRM's complaint profile centers on paid-tier support degradation.</p>
 <p>The bot-gated ticketing workflow creates friction for customers who previously experienced functional free-tier support. This operational model shift—from immediate chat to ticket routing—appears repeatedly in recent complaints.</p>
-<p>Pricing friction emerges as the second category. One reviewer on Trustpilot mentioned paying over $80 and receiving inadequate support attention. The pricing backlash connects directly to perceived value erosion after upgrading from free tiers.</p>
+<p>Pricing friction emerges as the second category. One reviewer mentioned paying over $80 and receiving inadequate support attention. The pricing backlash connects directly to perceived value erosion after upgrading from free tiers.</p>
 <p>Overall dissatisfaction and UX complaints appear but remain secondary. Zoho CRM's free tier functionality satisfies many users when support is not required. Features and integration complaints register minimal mentions in this analysis window.</p>
 <h3 id="comparative-pain-intensity">Comparative Pain Intensity</h3>
 <p>Insightly's support complaints concentrate on help function inadequacy and delayed responses. Zoho CRM's support complaints focus on workflow degradation and bot friction. Both platforms lose reviewer confidence when implementation deepens or when paid tiers fail to deliver expected support quality.</p>
