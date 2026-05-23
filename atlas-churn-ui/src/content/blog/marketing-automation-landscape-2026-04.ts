@@ -108,7 +108,7 @@ const post: BlogPost = {
   seo_title: 'Marketing Automation Landscape 2026 | 5 Vendors',
   seo_description: 'Marketing automation landscape analysis of 5 vendors across 640 reviews. See churn urgency, pricing pressure, and switching patterns in 2026.',
   target_keyword: 'marketing automation landscape',
-  secondary_keywords: ["marketing automation software comparison", "marketing automation vendors 2026", "marketing automation churn signals"],
+  secondary_keywords: ["marketing automation software comparison", "marketing automation vendors 2026", "marketing automation churn signals", "marketing automation cost", "marketing automation pricing"],
   faq: [
   {
     "question": "Which marketing automation vendors face the highest churn risk?",
