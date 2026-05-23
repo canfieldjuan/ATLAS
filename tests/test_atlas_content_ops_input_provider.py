@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import csv
 import importlib
 import importlib.util
+from pathlib import Path
 import sys
 
 import pytest
 
 from atlas_brain._content_ops_input_provider import build_content_ops_input_provider
+from extracted_content_pipeline.api.control_surfaces import (
+    ContentOpsControlSurfaceApiConfig,
+    create_content_ops_control_surface_router,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 from extracted_content_pipeline.content_ops_input_provider import (
     merge_content_ops_input_package,
 )
@@ -15,6 +22,10 @@ from extracted_content_pipeline.control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _fresh_api_package():
@@ -32,6 +43,17 @@ def _route(api_pkg, path: str):
     return route
 
 
+def _router_route(router, path: str, method: str):
+    for route in router.routes:
+        if getattr(route, "path", None) == path and method.upper() in getattr(
+            route,
+            "methods",
+            set(),
+        ):
+            return route
+    raise AssertionError(f"Route {method.upper()} {path!r} not mounted")
+
+
 def _ticket_payload() -> dict[str, object]:
     return {
         "inputs": {
@@ -43,6 +65,12 @@ def _ticket_payload() -> dict[str, object]:
             ]
         }
     }
+
+
+def _support_ticket_csv_rows() -> list[dict[str, str]]:
+    path = ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
 
 
 def test_atlas_content_ops_input_provider_noops_without_source_material() -> None:
@@ -307,3 +335,50 @@ async def test_api_plan_route_applies_support_ticket_input_provider() -> None:
         "landing_page",
         "blog_post",
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_route_generates_faq_from_support_ticket_input_provider() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        input_provider=build_content_ops_input_provider(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService(),
+        ),
+        scope_provider=lambda: TenantScope(
+            account_id="acct-support-ticket-execute",
+            user_id="user-support-ticket-execute",
+        ),
+    )
+    route = _router_route(router, "/content-ops/execute", "POST")
+
+    payload = await route.endpoint({
+        "outputs": ["faq_markdown"],
+        "limit": 3,
+        "require_quality_gates": False,
+        "inputs": {
+            "source_material": _support_ticket_csv_rows(),
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+
+    step = payload["steps"][0]
+    result = step["result"]
+
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+    assert result["source_count"] == 4
+    assert result["ticket_source_count"] == 4
+    assert result["generated"] == 2
+    assert result["output_checks"] == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+    }
+    assert "FAQ Report" in result["markdown"]
+    assert result["items"][0]["source_ids"] == (
+        "ticket-northstar-1",
+        "ticket-northstar-2",
+    )
