@@ -360,7 +360,7 @@ const post: BlogPost = {
 <li>Asana: $10.99/seat</li>
 </ul>
 <p>For a 200-person team, that's $1810/month (Jira), $1800/month (Monday), or $2198/month (Asana). Annual contracts lock you in with no prorated refunds.</p>
-<p>One Software Advice reviewer was charged $265 for an annual renewal on a barely-used service. No refund. No flexibility.</p>
+<p>One reviewer was charged $265 for an annual renewal on a barely-used service. No refund. No flexibility.</p>
 <p>If budget predictability matters, Basecamp's flat-rate pricing is the only option in this set that eliminates per-seat risk.</p>
 <h3 id="finally-test-for-your-must-have-features">Finally, test for your must-have features</h3>
 <p>Don't assume every tool covers your workflow. The pain data shows:</p>

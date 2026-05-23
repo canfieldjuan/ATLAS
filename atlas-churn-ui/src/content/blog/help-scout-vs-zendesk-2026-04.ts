@@ -152,13 +152,13 @@ const post: BlogPost = {
 <p>Pain categories reveal where each vendor's architecture or go-to-market model creates friction. Help Scout complaints cluster around integration gaps, customization depth, and workflow flexibility. Zendesk complaints cluster around pricing disputes, support response delays, and operational complexity.</p>
 <h3 id="help-scout-integration-and-workflow-gaps">Help Scout: Integration and Workflow Gaps</h3>
 <p>Help Scout's integration limitations are not hypothetical. A Customer Success Manager on G2 explicitly cited the lack of CRM connectivity as a dislike, noting the need for easy access to client history when handling tickets. That is a workflow substitution signal: the reviewer is manually bridging a gap that should be automated.</p>
-<p>Customization depth also surfaces as a recurring friction point. A TrustRadius reviewer criticized the inability to create folders or customize specific pages, suggesting the product's simplicity—a strength for some teams—becomes a constraint for others.</p>
+<p>Customization depth also surfaces as a recurring friction point. One reviewer criticized the inability to create folders or customize specific pages, suggesting the product's simplicity—a strength for some teams—becomes a constraint for others.</p>
 <p>Help Scout's support weakness mentions show a recent uptick: 1 mention in the recent window versus 0 in prior periods. That is a small sample, but it aligns with the broader claim plan: support friction is emerging as a secondary pain point, likely tied to integration gaps that force users to contact support for workarounds.</p>
 <p>Help Scout retains customers primarily through strong support experience satisfaction and acceptable pricing perception.</p>
 <p>That endorsement is not generic. It is tied to customer satisfaction outcomes, suggesting the core value proposition holds for accounts where CRM integration is not a requirement.</p>
 <h3 id="zendesk-pricing-support-and-operational-friction">Zendesk: Pricing, Support, and Operational Friction</h3>
 <p>Zendesk's pain categories are more acute. Pricing disputes appear in multiple reviews, including the November 13, 2024 charge of $138 for two unused users and the May 14, 2025 cancellation dispute that dragged on for weeks. Those are not complaints about list price. They are complaints about billing transparency, cancellation friction, and support responsiveness during disputes.</p>
-<p>Support delays surface as a common pattern. A Trustpilot reviewer described a support interaction where the vendor acknowledged frustration but did not resolve the issue. That is a support erosion signal: the team is present but ineffective, either due to policy constraints or capacity limits.</p>
+<p>Support delays surface as a common pattern. One reviewer described a support interaction where the vendor acknowledged frustration but did not resolve the issue. That is a support erosion signal: the team is present but ineffective, either due to policy constraints or capacity limits.</p>
 <p>Operational complexity also surfaces.</p>
 <p>That is counterevidence: the reviewer acknowledges pricing and complexity as weaknesses but remains due to feature capabilities that improve efficiency. However, that retention anchor is vulnerable when operational issues—like email delivery failures or billing disputes—prevent access to those features.</p>
 <h3 id="category-level-context">Category-Level Context</h3>
@@ -190,7 +190,7 @@ const post: BlogPost = {
 <ul>
 <li>A Zendesk reviewer on Reddit described a "small business (four employees)" using Zendesk Sell</li>
 <li>A Gartner reviewer described Zendesk as handling "emails, chat and socials in one view," suggesting a mid-market or enterprise use case</li>
-<li>A Software Advice reviewer noted Zendesk is "pricey and complex for small teams"</li>
+<li>One reviewer noted Zendesk is pricey and complex for small teams</li>
 </ul>
 <p>That suggests Zendesk's friction points are most acute for small teams (under 10 employees) who lack the operational capacity to navigate billing disputes or support delays. Help Scout's friction points, by contrast, are most acute for teams that rely on deep CRM integration or advanced workflow automation—likely mid-market teams (50-200 employees) with dedicated Customer Success or Support Operations roles.</p>
 <h2 id="the-verdict">The Verdict</h2>
