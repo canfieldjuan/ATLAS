@@ -3,7 +3,7 @@ import type { BlogPost } from './index'
 const post: BlogPost = {
   slug: 'marketing-automation-landscape-2026-04',
   title: 'Marketing Automation Landscape 2026: 5 Vendors Compared by Real User Data',
-  description: 'Compare ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp across 1,568 enriched reviews. Discover churn signals, pricing pressure, and which vendors face the highest replacement risk.',
+  description: 'Compare ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp across 640 enriched reviews. Discover churn signals, pricing pressure, and which vendors face the highest replacement risk.',
   date: '2026-04-07',
   author: 'Churn Signals Team',
   tags: ["marketing automation", "market-landscape", "comparison", "b2b-intelligence"],
@@ -106,13 +106,13 @@ const post: BlogPost = {
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'Marketing Automation Landscape 2026 | 5 Vendors',
-  seo_description: 'Marketing automation landscape analysis of 5 vendors across 1,568 reviews. See churn urgency, pricing pressure, and switching patterns in 2026.',
+  seo_description: 'Marketing automation landscape analysis of 5 vendors across 640 reviews. See churn urgency, pricing pressure, and switching patterns in 2026.',
   target_keyword: 'marketing automation landscape',
   secondary_keywords: ["marketing automation software comparison", "marketing automation vendors 2026", "marketing automation churn signals"],
   faq: [
   {
     "question": "Which marketing automation vendors face the highest churn risk?",
-    "answer": "ActiveCampaign and Mailchimp show the highest churn urgency signals, driven primarily by pricing complaints and competitive pressure. Our analysis of 1,568 enriched reviews identified pricing as the dominant pain point across all five vendors, with reviewers citing specific cost gaps\u2014for example, ActiveCampaign's Plus plan running $500\u2013$800 more per month than Mailchimp Premium. Brevo and GetResponse show moderate urgency, while Klaviyo maintains stronger retention anchors despite pricing friction."
+    "answer": "ActiveCampaign and Mailchimp show the highest churn urgency signals, driven primarily by pricing complaints and competitive pressure. Our analysis of 640 enriched reviews identified pricing as the dominant pain point across all five vendors, with reviewers citing specific cost gaps\u2014for example, ActiveCampaign's Plus plan running $500\u2013$800 more per month than Mailchimp Premium. Brevo and GetResponse show moderate urgency, while Klaviyo maintains stronger retention anchors despite pricing friction."
   },
   {
     "question": "What is the primary reason teams switch marketing automation platforms?",
@@ -120,7 +120,7 @@ const post: BlogPost = {
   },
   {
     "question": "How do ActiveCampaign and Mailchimp compare on customer satisfaction?",
-    "answer": "Both ActiveCampaign (4.3 rating) and Mailchimp (4.3 rating) maintain similar overall satisfaction scores across 1,568 reviews. However, they face different pain pressures: ActiveCampaign reviewers cite overall dissatisfaction, pricing, and competitive inferiority most frequently; Mailchimp reviewers focus on pricing, UX, and feature gaps. Both platforms retain customers through strong core functionality, UX quality, and integration depth\u2014even as pricing complaints mount."
+    "answer": "Both ActiveCampaign (4.3 rating) and Mailchimp (4.3 rating) maintain similar overall satisfaction scores across 640 reviews. However, they face different pain pressures: ActiveCampaign reviewers cite overall dissatisfaction, pricing, and competitive inferiority most frequently; Mailchimp reviewers focus on pricing, UX, and feature gaps. Both platforms retain customers through strong core functionality, UX quality, and integration depth\u2014even as pricing complaints mount."
   },
   {
     "question": "Which vendors show the strongest retention anchors?",
@@ -128,7 +128,7 @@ const post: BlogPost = {
   },
   {
     "question": "What data sources were used for this analysis?",
-    "answer": "This analysis examined 1,568 enriched reviews from 2,531 total reviews collected between February 28 and April 6, 2026. Sources include Reddit (1,420 reviews), G2 (86 reviews), Gartner Peer Insights (41 reviews), and PeerSpot (21 reviews). Verified platform reviews (148 total) provide structured ratings and roles; community platforms provide broader sentiment and switching intent signals. Results reflect reviewer perception, not product capability."
+    "answer": "This analysis examined 640 enriched reviews from 2,531 total reviews collected between February 28 and April 6, 2026. Sources include Reddit (1,420 reviews), G2 (86 reviews), Gartner Peer Insights (41 reviews), and PeerSpot (21 reviews). Verified platform reviews (148 total) provide structured ratings and roles; community platforms provide broader sentiment and switching intent signals. Results reflect reviewer perception, not product capability."
   }
 ],
   related_slugs: ["best-communication-for-51-200-2026-04", "best-helpdesk-for-51-200-2026-04", "best-marketing-automation-for-51-200-2026-04", "gusto-vs-rippling-2026-04"],
@@ -142,7 +142,7 @@ const post: BlogPost = {
 },
   content: `<h1 id="marketing-automation-landscape-2026-5-vendors-compared-by-real-user-data">Marketing Automation Landscape 2026: 5 Vendors Compared by Real User Data</h1>
 <p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-28 to 2026-04-06. It captures reviewer perception, not a census of all users.</em></p>
-<p>The marketing automation category has become a crowded, price-sensitive market where feature parity is high and cost differentiation drives switching behavior. This analysis examines 1,568 enriched reviews of five major vendors—ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp—collected between February 28 and April 6, 2026.</p>
+<p>The marketing automation category has become a crowded, price-sensitive market where feature parity is high and cost differentiation drives switching behavior. This analysis examines 640 enriched reviews of five major vendors—ActiveCampaign, Brevo, GetResponse, Klaviyo, and Mailchimp—collected between February 28 and April 6, 2026.</p>
 <p>Our data comes from verified review platforms (G2, Gartner Peer Insights, PeerSpot) and community platforms (Reddit, Software Advice, TrustPilot), giving us both structured ratings and unfiltered switching intent signals. The goal is not to declare a winner, but to show you where the churn pressure lies, which vendors face the highest replacement risk, and what patterns repeat across the category.</p>
 <p><strong>Key facts:</strong></p>
 <ul>
@@ -150,7 +150,7 @@ const post: BlogPost = {
 <li>57 total churn signals identified</li>
 <li>Average urgency score: 4.1 (on a 10-point scale)</li>
 <li>Market regime: fragmented</li>
-<li>Confidence level: high (based on 1,568 enriched reviews)</li>
+<li>Confidence level: high (based on 640 enriched reviews)</li>
 </ul>
 <h2 id="what-market-regime-are-we-in">What Market Regime Are We In?</h2>
 <p>The marketing automation market is fragmented. No single vendor dominates; instead, we see clear displacement flows where teams switch based on cost and perceived feature gaps. This fragmentation creates opportunity for specialists (Klaviyo for e-commerce, GetResponse for small business) and pressure on generalists (ActiveCampaign, Mailchimp) to justify premium pricing.</p>
@@ -299,7 +299,7 @@ const post: BlogPost = {
 <p>Your vendor choice should align with your use case (e-commerce, SMB, enterprise), budget constraints, and integration requirements. Pricing renewal is the key churn moment; teams evaluate alternatives when contracts come due. Support quality and contract flexibility matter more in a fragmented market where switching is possible.</p>
 <p>For the most current churn signals and switching patterns in your segment, review the full industry report below.</p>
 <hr />
-<p><strong>Methodology note:</strong> This analysis examined 1,568 enriched reviews from 2,531 total reviews collected between February 28 and April 6, 2026. Sources include Reddit (1,420), G2 (86), Gartner Peer Insights (41), and PeerSpot (21). Verified platform reviews provide structured ratings; community reviews provide broader sentiment and switching intent. Results reflect reviewer perception, not product capability. Sample sizes vary by vendor; confidence is high overall but lower for vendors with fewer than 15 reviews in scope.</p>`,
+<p><strong>Methodology note:</strong> This analysis examined 640 enriched reviews from 2,531 total reviews collected between February 28 and April 6, 2026. Sources include Reddit (1,420), G2 (86), Gartner Peer Insights (41), and PeerSpot (21). Verified platform reviews provide structured ratings; community reviews provide broader sentiment and switching intent. Results reflect reviewer perception, not product capability. Sample sizes vary by vendor; confidence is high overall but lower for vendors with fewer than 15 reviews in scope.</p>`,
 }
 
 export default post

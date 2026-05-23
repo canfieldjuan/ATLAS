@@ -3,7 +3,7 @@ import type { BlogPost } from './index'
 const post: BlogPost = {
   slug: 'top-complaint-every-b2b-software-2026-03',
   title: 'The #1 Complaint About Every Major B2B Software Tool in 2026',
-  description: 'Reviewer sentiment analysis of 54 B2B software vendors based on 26,335 public reviews. Where complaints cluster, what reviewers praise, and what the patterns reveal about each tool\'s biggest weakness.',
+  description: 'Reviewer sentiment analysis of 54 B2B software vendors based on 9,137 public reviews. Where complaints cluster, what reviewers praise, and what the patterns reveal about each tool\'s biggest weakness.',
   date: '2026-03-29',
   author: 'Churn Signals Team',
   tags: ["b2b software", "complaints", "comparison", "honest-review", "b2b-intelligence"],
@@ -74,13 +74,13 @@ const post: BlogPost = {
   "booking_url": "https://churnsignals.co"
 },
   seo_title: 'B2B Software Complaints 2026: Top Issues by Vendor',
-  seo_description: 'Analysis of 11,399 complaints across 54 B2B software vendors from 26,335 reviews. See each tool\'s #1 weakness based on reviewer data.',
+  seo_description: 'Analysis of 9,137 complaints across 54 B2B software vendors from 9,137 reviews. See each tool\'s #1 weakness based on reviewer data.',
   target_keyword: 'b2b software complaints',
   secondary_keywords: ["salesforce complaints", "notion problems", "zendesk alternatives", "b2b software reviews"],
   faq: [
   {
     "question": "What is the most common complaint about B2B software in 2026?",
-    "answer": "Based on 11,399 complaints across 26,335 reviews, pricing concerns dominate the complaint landscape, with 114.4 mentions and stable high volume. Feature gaps are accelerating (+50% recent vs. prior period), while support quality shows an 86% decline in recent mentions."
+    "answer": "Based on 9,137 complaints across 9,137 reviews, pricing concerns dominate the complaint landscape, with 114.4 mentions and stable high volume. Feature gaps are accelerating (+50% recent vs. prior period), while support quality shows an 86% decline in recent mentions."
   },
   {
     "question": "Which B2B software vendors have the highest complaint urgency?",
@@ -88,7 +88,7 @@ const post: BlogPost = {
   },
   {
     "question": "Are there any B2B software tools without major complaints?",
-    "answer": "No. Every vendor in this analysis of 26,335 reviews shows a dominant complaint category. The data reveals that all B2B software involves trade-offs\u2014the question is which weakness matters least for your specific use case."
+    "answer": "No. Every vendor in this analysis of 9,137 reviews shows a dominant complaint category. The data reveals that all B2B software involves trade-offs\u2014the question is which weakness matters least for your specific use case."
   },
   {
     "question": "How has B2B software reviewer sentiment changed in 2026?",
@@ -97,12 +97,12 @@ const post: BlogPost = {
 ],
   related_slugs: ["b2b-software-landscape-2026-03", "notion-vs-salesforce-2026-03", "jira-vs-trello-2026-03"],
   content: `<p><em>Methodology note: This analysis reflects self-selected feedback from Public B2B software review platforms collected between 2026-02-25 to 2026-03-29. It captures reviewer perception, not a census of all users.</em></p>
-<p>Every B2B software tool has flaws. This analysis examines 11,399 complaints across 54 vendors, drawn from 26,335 enriched reviews collected between February 25 and March 29, 2026. The data comes from public review platforms including G2, Capterra, TrustRadius, Reddit, and Trustpilot—7,985 verified reviews and 18,350 community-sourced reviews.</p>
+<p>Every B2B software tool has flaws. This analysis examines 9,137 complaints across 54 vendors, drawn from 9,137 enriched reviews collected between February 25 and March 29, 2026. The data comes from public review platforms including G2, Capterra, TrustRadius, Reddit, and Trustpilot—7,985 verified reviews and 18,350 community-sourced reviews.</p>
 <p>The goal is simple: show you each vendor's biggest weakness based on what reviewers actually say, not marketing claims. No vendor gets a pass. If a tool's top complaint is pricing, we say so. If it's feature gaps, we say so. If reviewers report support erosion, we say so.</p>
 <p>This is not a hit piece on any single vendor. It is a comparative analysis that acknowledges the reality every software buyer faces: <strong>there is no perfect tool.</strong> The question is which set of trade-offs fits your situation.</p>
-<p>Sample size context: 26,335 reviews is a high-confidence dataset. The patterns described here reflect consistent themes across thousands of reviewer experiences, not isolated anecdotes. Where complaint volumes are lower (under 100 reviews for a specific vendor), we note it explicitly.</p>
+<p>Sample size context: 9,137 reviews is a high-confidence dataset. The patterns described here reflect consistent themes across thousands of reviewer experiences, not isolated anecdotes. Where complaint volumes are lower (under 100 reviews for a specific vendor), we note it explicitly.</p>
 <h2 id="the-landscape-at-a-glance">The Landscape at a Glance</h2>
-<p>The B2B software category shows a stable market regime with 54 vendors analyzed. Total complaint volume: 11,399. Average urgency across all complaints: 1.9/10. This low urgency average reflects that most complaints describe frustrations rather than blocking issues—but the distribution varies significantly by vendor.</p>
+<p>The B2B software category shows a stable market regime with 54 vendors analyzed. Total complaint volume: 9,137. Average urgency across all complaints: 1.9/10. This low urgency average reflects that most complaints describe frustrations rather than blocking issues—but the distribution varies significantly by vendor.</p>
 <p>{{chart:vendor-urgency}}</p>
 <p>Pricing concerns dominate the category with 114.4 total mentions and stable high volume (6 recent mentions in the current window). Feature gaps are accelerating: 3 recent mentions versus 2 in the prior period, a 50% increase. Support quality shows an 86% decline in recent mentions (1 recent versus 7 prior), removing what was once a key retention lever for many vendors.</p>
 <p>The synthesis assessment labels this pattern a <strong>price squeeze</strong>: pricing dissatisfaction remains high while support quality erodes, and feature gaps accelerate. The causal trigger: "Pricing complaints accelerated in recent window, with 6 recent mentions against a declining support baseline (1 recent vs. 7 prior), while feature gaps (3 recent, accelerating from 2 prior) compound buyer frustration."</p>
@@ -182,9 +182,9 @@ const post: BlogPost = {
 </ol>
 <p>For teams evaluating project management tools specifically, the <a href="/blog/jira-vs-trello-2026-03">Jira vs Trello</a> comparison provides detailed context on how different tools serve different team profiles.</p>
 <p><strong>The bottom line:</strong> Every B2B software tool has a #1 complaint. The vendors that succeed are not the ones without flaws—they are the ones whose flaws matter least to their target buyers. Use this analysis to identify which trade-offs fit your situation, then evaluate accordingly.</p>
-<p>For a broader view of how these vendors compare across the category, see the <a href="/blog/b2b-software-landscape-2026-03">B2B Software Landscape 2026</a>, which examines 17 vendors across 26,335 reviews.</p>
+<p>For a broader view of how these vendors compare across the category, see the <a href="/blog/b2b-software-landscape-2026-03">B2B Software Landscape 2026</a>, which examines 17 vendors across 9,137 reviews.</p>
 <h2 id="methodology-note">Methodology Note</h2>
-<p>This analysis draws on 26,335 enriched reviews from G2, Capterra, TrustRadius, PeerSpot, Gartner Peer Insights, Software Advice, Trustpilot, and Reddit, collected between February 25 and March 29, 2026. The dataset includes 7,985 verified reviews from structured review platforms and 18,350 community-sourced reviews from Reddit and other forums.</p>
+<p>This analysis draws on 9,137 enriched reviews from G2, Capterra, TrustRadius, PeerSpot, Gartner Peer Insights, Software Advice, Trustpilot, and Reddit, collected between February 25 and March 29, 2026. The dataset includes 7,985 verified reviews from structured review platforms and 18,350 community-sourced reviews from Reddit and other forums.</p>
 <p>Reviews are a self-selected sample that overrepresents strong opinions. The patterns described here reflect reviewer sentiment, not universal product truth. Where sample sizes are smaller (under 100 reviews for a specific vendor), we note it explicitly. Urgency scores measure the intensity of reviewer frustration, not the objective severity of issues.</p>
 <p>The "other" complaint category encompasses issues that do not fit neatly into pricing, features, support, or UX buckets. This includes workflow friction, integration quirks, administrative overhead, and edge-case limitations. The breadth of "other" complaints varies by vendor complexity—platforms like Azure and Salesforce show more diverse "other" complaints than single-purpose tools like Close.</p>
 <p>For questions about methodology or data sources, see the full <a href="/blog/b2b-software-landscape-2026-03">B2B Software Landscape 2026</a> report.</p>`,
