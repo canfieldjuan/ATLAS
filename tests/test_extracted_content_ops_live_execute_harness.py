@@ -1,19 +1,32 @@
 from __future__ import annotations
 
+import csv
+import json
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
 import pytest
 
+from atlas_brain._content_ops_input_provider import build_content_ops_input_provider
 import extracted_content_pipeline.api.control_surfaces as api_module
 from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.blog_generation import BlogPostGenerationService
+from extracted_content_pipeline.campaign_ports import LLMMessage, LLMResponse
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.landing_page_generation import (
+    LandingPageGenerationService,
+)
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 from tests.content_ops_live_execute_harness import (
+    MemoryDraftRepository,
+    MemorySkillStore,
     build_content_ops_live_execute_harness,
     default_content_ops_execute_payload,
 )
@@ -31,6 +44,132 @@ def _route(router, path: str, method: str):
         if getattr(route, "path", None) == path and method.upper() in methods:
             return route
     raise AssertionError(f"route not found: {method} {path}")
+
+
+def _support_ticket_csv_rows() -> list[dict[str, str]]:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "extracted_content_pipeline"
+        / "examples"
+        / "support_ticket_sources.csv"
+    )
+    with source_path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+class _RecordingContentLLM:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int,
+        temperature: float,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> LLMResponse:
+        del max_tokens, temperature
+        meta = dict(metadata or {})
+        self.calls.append({
+            "messages": tuple(messages),
+            "metadata": meta,
+        })
+        content = json.dumps(
+            _real_service_response_for_metadata(meta),
+            separators=(",", ":"),
+        )
+        return LLMResponse(
+            content=content,
+            model="support-ticket-provider-real-service-test",
+            usage={"input_tokens": 11, "output_tokens": 17},
+        )
+
+
+class _RecordingBlueprintRepository:
+    def __init__(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        self.rows = [dict(row) for row in rows]
+        self.calls: list[dict[str, Any]] = []
+
+    async def read_blog_blueprints(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int,
+        filters: Mapping[str, Any] | None = None,
+    ) -> Sequence[dict[str, Any]]:
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+        })
+        return self.rows[:limit]
+
+
+def _real_service_response_for_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    asset_type = str(metadata.get("asset_type") or "")
+    if asset_type == "landing_page":
+        return {
+            "title": "FAQ Report From Support Tickets",
+            "slug": "faq-report-from-support-tickets",
+            "hero": {
+                "headline": "Turn repeat support tickets into answers",
+                "subheadline": (
+                    "Use customer wording from old tickets to make answers "
+                    "easier to find."
+                ),
+            },
+            "sections": [{
+                "id": "problem",
+                "title": "Repeat Questions Mean Missing Answers",
+                "body_markdown": (
+                    "When customers keep asking the same question, the answer "
+                    "is not where they are looking."
+                ),
+                "metadata": {"kind": "problem"},
+            }],
+            "cta": {
+                "label": "Upload Ticket CSV -- Free Analysis",
+                "url": "/systems/ai-content-ops/intake",
+            },
+            "meta": {
+                "title_tag": "FAQ Report From Support Tickets",
+                "description": (
+                    "Turn your last 90 days of support tickets into FAQ "
+                    "answers customers can use before they email support."
+                ),
+            },
+            "reference_ids": ["ticket-acme-1", "ticket-northstar-1"],
+        }
+    if asset_type == "blog_post":
+        return {
+            "slug": "support-ticket-faq-report",
+            "title": "Support Ticket FAQ Report",
+            "content": (
+                "A support ticket FAQ report shows small teams the repeat "
+                "questions customers keep asking and turns those questions "
+                "into answers people can find before they email support."
+            ),
+            "topic_type": "content_ops_support_ticket_faq",
+            "description": "How repeat support tickets become FAQ articles.",
+            "seo_title": "Support Ticket FAQ Report",
+            "seo_description": (
+                "Use support tickets to find repeat customer questions and "
+                "write clearer FAQ answers."
+            ),
+            "target_keyword": "support ticket FAQ report",
+            "secondary_keywords": [
+                "customer support FAQ",
+                "reduce repeat support tickets",
+            ],
+        }
+    raise AssertionError(f"unexpected LLM metadata: {metadata!r}")
+
+
+def _message_texts(call: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(str(message.content) for message in call["messages"])
 
 
 async def test_live_execute_harness_runs_all_outputs_with_reasoning() -> None:
@@ -146,6 +285,143 @@ async def test_live_execute_route_persists_all_outputs_with_reasoning() -> None:
         for scope, _draft in repository.saved:
             assert scope.account_id == "acct-live"
             assert scope.user_id == "user-live"
+
+
+async def test_support_ticket_provider_feeds_real_landing_page_generation() -> None:
+    llm = _RecordingContentLLM()
+    landing_pages = MemoryDraftRepository("landing")
+    service = LandingPageGenerationService(
+        landing_pages=landing_pages,
+        llm=llm,
+        skills=MemorySkillStore(),
+    )
+    scope = TenantScope(
+        account_id="acct-support-ticket-real",
+        user_id="user-support-ticket-real",
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            landing_page=service,
+        ),
+        scope_provider=lambda: scope,
+        input_provider=build_content_ops_input_provider(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["landing_page"],
+        "limit": 1,
+        "require_quality_gates": False,
+        "inputs": {"source_material": _support_ticket_csv_rows()},
+    })
+
+    assert payload["status"] == "completed"
+    step = payload["steps"][0]
+    assert step["output"] == "landing_page"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["landing-1"]
+
+    assert len(landing_pages.saved) == 1
+    saved_scope, draft = landing_pages.saved[0]
+    assert saved_scope == scope
+    assert draft.campaign_name == "FAQ Report"
+    assert draft.persona == "Small teams answering repeat support questions"
+    assert (
+        draft.value_prop
+        == "Turn repeat support tickets into clear FAQ answers customers can "
+        "use before they email support"
+    )
+    assert draft.cta == {
+        "label": "Upload Ticket CSV -- Free Analysis",
+        "url": "/systems/ai-content-ops/intake",
+    }
+    assert draft.reference_ids == ("ticket-acme-1", "ticket-northstar-1")
+
+    assert len(llm.calls) == 1
+    call = llm.calls[0]
+    assert call["metadata"]["skill_name"] == "digest/landing_page_generation"
+    assert call["metadata"]["asset_type"] == "landing_page"
+    system_prompt, user_prompt = _message_texts(call)
+    assert "support ticket FAQ report" in system_prompt
+    assert "Last 90 days of support tickets" in system_prompt
+    assert "How do I change my login email?" in system_prompt
+    assert "How do we export campaign attribution data before renewal?" in system_prompt
+    assert "Generate one landing page" in user_prompt
+
+
+async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None:
+    blueprints = _RecordingBlueprintRepository([{
+        "id": "bp-support-ticket-faq",
+        "slug": "support-ticket-faq-report",
+        "topic": "Support-ticket questions customers keep asking",
+        "topic_type": "content_ops_support_ticket_faq",
+        "data_context": {
+            "source": "support_ticket_provider",
+            "source_period": "Last 90 days of support tickets",
+        },
+    }])
+    llm = _RecordingContentLLM()
+    blog_posts = MemoryDraftRepository("blog")
+    service = BlogPostGenerationService(
+        blueprints=blueprints,
+        blog_posts=blog_posts,
+        llm=llm,
+        skills=MemorySkillStore(),
+    )
+    scope = TenantScope(
+        account_id="acct-support-ticket-real",
+        user_id="user-support-ticket-real",
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=service,
+        ),
+        scope_provider=lambda: scope,
+        input_provider=build_content_ops_input_provider(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["blog_post"],
+        "limit": 1,
+        "require_quality_gates": False,
+        "inputs": {"source_material": _support_ticket_csv_rows()},
+    })
+
+    assert payload["status"] == "completed"
+    step = payload["steps"][0]
+    assert step["output"] == "blog_post"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["blog-1"]
+
+    assert blueprints.calls == [{
+        "scope": scope,
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "filters": {"topic_type": "content_ops_support_ticket_faq"},
+    }]
+    assert len(blog_posts.saved) == 1
+    saved_scope, draft = blog_posts.saved[0]
+    assert saved_scope == scope
+    assert draft.title == "Support Ticket FAQ Report"
+    assert draft.topic_type == "content_ops_support_ticket_faq"
+    assert draft.metadata["target_keyword"] == "support ticket FAQ report"
+    assert draft.metadata["secondary_keywords"] == [
+        "customer support FAQ",
+        "reduce repeat support tickets",
+    ]
+    assert draft.data_context["source_period"] == "Last 90 days of support tickets"
+
+    assert len(llm.calls) == 1
+    call = llm.calls[0]
+    assert call["metadata"]["skill_name"] == "digest/blog_post_generation"
+    assert call["metadata"]["asset_type"] == "blog_post"
+    system_prompt, user_prompt = _message_texts(call)
+    assert "Support-ticket questions customers keep asking" in system_prompt
+    assert "content_ops_support_ticket_faq" in system_prompt
+    assert "Generate one blog post" in user_prompt
 
 
 async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
