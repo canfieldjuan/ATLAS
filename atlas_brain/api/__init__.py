@@ -164,6 +164,7 @@ try:
         create_generated_asset_router,
         create_public_landing_page_router,
     )
+    from .._content_ops_input_provider import build_content_ops_input_provider
     from .._content_ops_infrastructure import (
         build_content_ops_llm_client,
         build_content_ops_skill_store,
@@ -207,6 +208,7 @@ try:
         scope_provider=build_content_ops_scope,
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
+        input_provider=build_content_ops_input_provider(),
         opportunity_import_pool_provider=get_db_pool,
         ingestion_import_admission_provider=lambda: (
             build_content_ops_import_admission_gate(
