@@ -163,7 +163,7 @@ const post: BlogPost = {
 <p>Reviewer sentiment splits into clear strength and weakness categories. The platform shows distinct advantages in certain areas while revealing consistent pain points in others.</p>
 <p>{{chart:strengths-weaknesses}}</p>
 <h3 id="strengths">Strengths</h3>
-<p><strong>Dashboard accessibility and lead tracking</strong> emerge as the most frequently praised capabilities. One verified reviewer on G2 describes the core value:</p>
+<p><strong>Dashboard accessibility and lead tracking</strong> emerge as the most frequently praised capabilities. One reviewer on Slashdot describes the core value:</p>
 <blockquote>
 <p>"Zoho CRM is an advanced CRM that gives us easy to approach every lead indication directly from its dashboard" -- Senior Project Manager at a company with 100-499 employees, reviewer on Slashdot</p>
 </blockquote>
