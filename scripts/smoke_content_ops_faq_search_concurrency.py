@@ -341,6 +341,45 @@ def _failure_summary(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _summary_payload(
+    *,
+    ok: bool,
+    run_id: str,
+    args: argparse.Namespace,
+    cases: Sequence[SearchCase],
+    results: Sequence[dict[str, Any]],
+    setup: dict[str, Any],
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    failure = _failure_summary(results)
+    latency = _latency_summary(results)
+    latency_budget = _latency_budget_summary(
+        latency,
+        max_p95_ms=args.max_p95_ms,
+        max_single_request_ms=args.max_single_request_ms,
+    )
+    return {
+        "ok": ok and failure["count"] == 0 and latency_budget["ok"] and setup["ok"],
+        "run_id": run_id,
+        "requests": {
+            "total": len(results),
+            "iterations": int(args.iterations),
+            "concurrency": int(args.concurrency),
+        },
+        "seed": {
+            "accounts": int(args.account_count),
+            "corpora_per_account": int(args.corpora_per_account),
+            "documents_per_corpus": int(args.documents_per_corpus),
+            "search_cases": len(cases),
+        },
+        "setup": setup,
+        "latency": latency,
+        "latency_budget": latency_budget,
+        "isolation": failure,
+        "elapsed_seconds": round(elapsed_seconds, 6),
+    }
+
+
 async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     _validate_args(args)
     run_id = uuid4().hex[:10]
@@ -349,9 +388,28 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         account_count=int(args.account_count),
         corpora_per_account=int(args.corpora_per_account),
     )
-    pool = await _create_pool(str(args.database_url), pool_size=int(args.pool_size))
-    repo = PostgresTicketFAQSearchRepository(pool)
     started = time.perf_counter()
+    try:
+        pool = await _create_pool(str(args.database_url), pool_size=int(args.pool_size))
+    except Exception as exc:
+        summary = _summary_payload(
+            ok=False,
+            run_id=run_id,
+            args=args,
+            cases=cases,
+            results=[],
+            setup={
+                "ok": False,
+                "phase": "pool_create",
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+            },
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        return 1, summary
+    repo = PostgresTicketFAQSearchRepository(pool)
     results: list[dict[str, Any]] = []
     try:
         await _apply_migrations(pool)
@@ -366,32 +424,15 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if not bool(args.keep_data):
             await _cleanup(pool, cases)
         await pool.close()
-    failure = _failure_summary(results)
-    latency = _latency_summary(results)
-    latency_budget = _latency_budget_summary(
-        latency,
-        max_p95_ms=args.max_p95_ms,
-        max_single_request_ms=args.max_single_request_ms,
+    summary = _summary_payload(
+        ok=True,
+        run_id=run_id,
+        args=args,
+        cases=cases,
+        results=results,
+        setup={"ok": True, "phase": "complete", "error": None},
+        elapsed_seconds=time.perf_counter() - started,
     )
-    summary = {
-        "ok": failure["count"] == 0 and latency_budget["ok"],
-        "run_id": run_id,
-        "requests": {
-            "total": len(results),
-            "iterations": int(args.iterations),
-            "concurrency": int(args.concurrency),
-        },
-        "seed": {
-            "accounts": int(args.account_count),
-            "corpora_per_account": int(args.corpora_per_account),
-            "documents_per_corpus": int(args.documents_per_corpus),
-            "search_cases": len(cases),
-        },
-        "latency": latency,
-        "latency_budget": latency_budget,
-        "isolation": failure,
-        "elapsed_seconds": round(time.perf_counter() - started, 6),
-    }
     return (0 if summary["ok"] else 1), summary
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -177,6 +178,53 @@ def test_validate_args_rejects_nonpositive_latency_budgets() -> None:
 
     with pytest.raises(SystemExit, match="--max-p95-ms must be positive"):
         smoke._validate_args(args)
+
+
+def test_main_writes_result_for_pool_creation_failure(tmp_path, monkeypatch) -> None:
+    async def _raise_pool(*_args, **_kwargs):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(smoke, "_create_pool", _raise_pool)
+    result_path = tmp_path / "faq-search-result.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "pool_create",
+        "error": {
+            "type": "RuntimeError",
+            "message": "resolver failed",
+        },
+    }
+    assert payload["latency"] == {
+        "count": 0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "max_ms": 0.0,
+    }
 
 
 def test_failure_summary_limits_output() -> None:
