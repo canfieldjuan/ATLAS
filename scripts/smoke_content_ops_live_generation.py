@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import Any, Awaitable, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +65,7 @@ AsyncCallable = Callable[[], Awaitable[None]]
 ServicesFactory = Callable[[], Any]
 Executor = Callable[..., Awaitable[dict[str, Any]]]
 BlogBlueprintSeeder = Callable[[argparse.Namespace, Any], Awaitable[Mapping[str, Any]]]
+DraftExporter = Callable[[str, Sequence[str], Any], Awaitable[Mapping[str, Any]]]
 
 
 def _load_dotenv_files(extra_env_files: list[Path] | None = None) -> None:
@@ -161,6 +162,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-result",
         type=Path,
         help="Write the smoke result JSON to this path.",
+    )
+    parser.add_argument(
+        "--export-saved-draft",
+        type=Path,
+        help=(
+            "Write a JSON export of the exact saved landing_page/blog_post "
+            "draft ids produced by this smoke run."
+        ),
     )
     parser.add_argument("--json", action="store_true", help="Print machine JSON.")
     return parser.parse_args(argv)
@@ -314,6 +323,67 @@ def _step_result(result: Mapping[str, Any], output: str) -> Mapping[str, Any] | 
         if isinstance(step, Mapping) and step.get("output") == output:
             return step
     return None
+
+
+def _saved_ids_for_output(
+    result: Mapping[str, Any] | None,
+    output: str,
+) -> tuple[str, ...]:
+    if not isinstance(result, Mapping):
+        return ()
+    step = _step_result(result, output)
+    step_payload = step.get("result") if isinstance(step, Mapping) else {}
+    if not isinstance(step_payload, Mapping):
+        return ()
+    raw_ids = step_payload.get("saved_ids") or ()
+    if isinstance(raw_ids, (str, bytes)) or not isinstance(raw_ids, Sequence):
+        return ()
+    return tuple(str(item).strip() for item in raw_ids if str(item).strip())
+
+
+async def _export_saved_drafts(
+    output: str,
+    saved_ids: Sequence[str],
+    scope: Any,
+) -> Mapping[str, Any]:
+    if output not in {"landing_page", "blog_post"}:
+        raise ValueError(f"saved draft export is unsupported for output: {output}")
+
+    from atlas_brain.storage.database import get_db_pool  # noqa: PLC0415
+    from extracted_content_pipeline.blog_post_export import (  # noqa: PLC0415
+        export_blog_post_drafts,
+    )
+    from extracted_content_pipeline.blog_post_postgres import (  # noqa: PLC0415
+        PostgresBlogPostRepository,
+    )
+    from extracted_content_pipeline.landing_page_export import (  # noqa: PLC0415
+        export_landing_page_drafts,
+    )
+    from extracted_content_pipeline.landing_page_postgres import (  # noqa: PLC0415
+        PostgresLandingPageRepository,
+    )
+
+    pool = get_db_pool()
+    if output == "landing_page":
+        return (
+            await export_landing_page_drafts(
+                PostgresLandingPageRepository(pool),
+                scope=scope,
+                status=None,
+                ids=saved_ids,
+                limit=len(saved_ids),
+            )
+        ).as_dict()
+    if output == "blog_post":
+        return (
+            await export_blog_post_drafts(
+                PostgresBlogPostRepository(pool),
+                scope=scope,
+                status=None,
+                ids=saved_ids,
+                limit=len(saved_ids),
+            )
+        ).as_dict()
 
 
 def _smoke_errors(
@@ -736,6 +806,7 @@ async def run_content_ops_live_generation_smoke(
     executor: Executor | None = None,
     tenant_scope_cls: Any = None,
     blog_blueprint_seed_fn: BlogBlueprintSeeder | None = None,
+    draft_export_fn: DraftExporter | None = None,
 ) -> tuple[int, dict[str, Any]]:
     _load_dotenv_files(list(args.env_file or []))
     if (
@@ -758,6 +829,7 @@ async def run_content_ops_live_generation_smoke(
     configured_outputs: tuple[str, ...] = ()
     execution_result: dict[str, Any] | None = None
     seeded_blog_blueprint: Mapping[str, Any] | None = None
+    saved_draft_export: Mapping[str, Any] | None = None
     errors: list[str] = []
     try:
         await init_database_fn()
@@ -792,6 +864,15 @@ async def run_content_ops_live_generation_smoke(
                     result=execution_result,
                 )
             )
+            if not errors and getattr(args, "export_saved_draft", None):
+                saved_ids = _saved_ids_for_output(execution_result, output)
+                if not saved_ids:
+                    errors.append(
+                        "--export-saved-draft requested, but generation returned no saved_ids"
+                    )
+                else:
+                    exporter = draft_export_fn or _export_saved_drafts
+                    saved_draft_export = await exporter(output, saved_ids, scope)
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     finally:
@@ -807,6 +888,9 @@ async def run_content_ops_live_generation_smoke(
         "seeded_blog_blueprint": dict(seeded_blog_blueprint or {}),
         "payload": payload,
         "execution": execution_result,
+        "saved_draft_export": (
+            dict(saved_draft_export) if isinstance(saved_draft_export, Mapping) else None
+        ),
     }
     return (0 if result["ok"] else 1), result
 
@@ -839,6 +923,11 @@ async def _amain(argv: list[str] | None = None) -> int:
     if args.output_result:
         args.output_result.write_text(
             json.dumps(result, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    if args.export_saved_draft and result.get("saved_draft_export") is not None:
+        args.export_saved_draft.write_text(
+            json.dumps(result["saved_draft_export"], indent=2, sort_keys=True),
             encoding="utf-8",
         )
     _print_result(result, as_json=bool(args.json))
