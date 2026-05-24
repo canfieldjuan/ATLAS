@@ -65,6 +65,11 @@ def test_input_package_builds_existing_content_ops_request_payload() -> None:
     assert request.inputs["source_material"] == _source_material()
     assert request.inputs["topic"] == "Support ticket FAQ gaps customers keep asking about"
     assert request.inputs["offer"] == "Turn repeat support tickets into customer-ready FAQ answers"
+    assert payload["input_provider"] == {
+        "provider": "support_ticket_csv",
+        "metadata": {"source": "upload"},
+        "warnings": [{"code": "sampled_rows", "message": "Using first 1,000 rows."}],
+    }
 
 
 def test_merge_input_package_keeps_explicit_request_inputs_authoritative() -> None:
@@ -97,6 +102,11 @@ def test_merge_input_package_keeps_explicit_request_inputs_authoritative() -> No
     assert payload["outputs"] == ["landing_page"]
     assert payload["target_mode"] == "custom_target"
     assert payload["ingestion_profile"] == "manual"
+    assert payload["input_provider"] == {
+        "provider": "ticket_import",
+        "metadata": {},
+        "warnings": [],
+    }
     assert request.inputs["source_material"] == _source_material()
     assert request.inputs["audience"] == "Provider audience"
     assert request.inputs["offer"] == "Operator offer"

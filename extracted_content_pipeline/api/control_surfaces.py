@@ -103,6 +103,14 @@ _UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
+_INPUT_PROVIDER_RESPONSE_METADATA_KEYS = frozenset({
+    "source",
+    "source_period",
+    "source_row_count",
+    "included_row_count",
+    "skipped_row_count",
+    "truncated_row_count",
+})
 _SOURCE_MATERIAL_ROW_LIST_KEYS = {
     "sources",
     "opportunities",
@@ -581,7 +589,10 @@ def create_content_ops_control_surface_router(
             input_provider=input_provider,
             scope_provider=scope_provider,
         )
-        return preview_from_mapping(payload_mapping)
+        return _with_input_provider_diagnostics(
+            preview_from_mapping(payload_mapping),
+            payload_mapping,
+        )
 
     @router.post("/plan")
     async def plan_generation(
@@ -593,7 +604,10 @@ def create_content_ops_control_surface_router(
                 input_provider=input_provider,
                 scope_provider=scope_provider,
             )
-            return build_generation_plan_from_mapping(payload_mapping)
+            return _with_input_provider_diagnostics(
+                build_generation_plan_from_mapping(payload_mapping),
+                payload_mapping,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -807,6 +821,7 @@ def create_content_ops_control_surface_router(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             result = _sanitize_execution_result(result)
+            result = _with_input_provider_diagnostics(result, payload_mapping)
             if result["status"] == "blocked":
                 raise HTTPException(status_code=400, detail=result)
             if result["status"] == "failed":
@@ -1027,6 +1042,51 @@ async def _payload_with_input_provider(
             status_code=503,
             detail="Content Ops input provider is unavailable.",
         ) from exc
+
+
+def _with_input_provider_diagnostics(
+    response: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    diagnostics = payload.get("input_provider")
+    if not isinstance(diagnostics, Mapping):
+        return dict(response)
+    warnings = [
+        dict(warning)
+        for warning in diagnostics.get("warnings") or ()
+        if isinstance(warning, Mapping)
+    ]
+    if _is_noop_input_provider_diagnostics(diagnostics, warnings):
+        return dict(response)
+    out = dict(response)
+    out["input_provider"] = {
+        "provider": _clean(diagnostics.get("provider")),
+        "metadata": _input_provider_response_metadata(diagnostics.get("metadata")),
+        "warnings": warnings,
+    }
+    return out
+
+
+def _is_noop_input_provider_diagnostics(
+    diagnostics: Mapping[str, Any],
+    warnings: Sequence[Mapping[str, Any]],
+) -> bool:
+    metadata = diagnostics.get("metadata")
+    return (
+        not warnings
+        and isinstance(metadata, Mapping)
+        and _clean(metadata.get("mode")) == "noop"
+    )
+
+
+def _input_provider_response_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: value[key]
+        for key in sorted(_INPUT_PROVIDER_RESPONSE_METADATA_KEYS)
+        if key in value
+    }
 
 
 async def _structured_reasoning_contexts(
