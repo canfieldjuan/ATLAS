@@ -142,7 +142,7 @@ async def test_support_ticket_provider_feeds_landing_page_execute_context() -> N
         "Small teams looking for a practical way to turn repeat support "
         "questions into help-center answers."
     )
-    assert context["source_period"] == "Last 90 days of support tickets"
+    assert context["source_period"] == "Uploaded support tickets"
     assert context["cta_label"] == "Upload Ticket CSV -- Free Analysis"
     assert context["cta_url"] == "/systems/ai-content-ops/intake"
     assert context["faq_questions"] == [

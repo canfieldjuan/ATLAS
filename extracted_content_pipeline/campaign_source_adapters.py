@@ -372,6 +372,16 @@ def load_source_campaign_opportunities_from_file(
     )
 
 
+def load_source_rows_from_file(
+    path: str | Path,
+    *,
+    file_format: SourceDataFormat = "auto",
+) -> list[Any]:
+    """Load source rows from a CSV, JSON, or JSONL file without opportunity mapping."""
+
+    return _load_source_rows(Path(path), file_format=file_format)
+
+
 def source_rows_to_campaign_opportunities(
     rows: Sequence[Any],
     *,
@@ -886,6 +896,7 @@ def _compact_field_key(key: str) -> str:
 __all__ = [
     "SourceDataFormat",
     "load_source_campaign_opportunities_from_file",
+    "load_source_rows_from_file",
     "parse_default_fields",
     "parse_default_fields_with_booking_url_or_exit",
     "parse_default_fields_or_exit",
