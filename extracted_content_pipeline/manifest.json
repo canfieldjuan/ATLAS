@@ -277,6 +277,9 @@
       "target": "extracted_content_pipeline/ticket_faq_postgres.py"
     },
     {
+      "target": "extracted_content_pipeline/ticket_faq_search.py"
+    },
+    {
       "target": "extracted_content_pipeline/ingestion_diagnostics.py"
     },
     {
