@@ -38,6 +38,7 @@ import {
   type ContentOpsIngestionDiagnostics,
   type ContentOpsIngestionImportResponse,
   type ContentOpsExecutionResult,
+  type ContentOpsInputProviderDiagnostics,
   type ContentOpsInputContractView,
   type ContentOpsRequest,
   type CampaignReasoningContextView,
@@ -1447,6 +1448,8 @@ function PreviewVerdict({
         </Section>
       )}
 
+      <InputProviderDiagnosticsSection diagnostics={preview.inputProvider} />
+
       {preview.normalizedRequest && (
         <Section label="Normalized request">
           <pre className="overflow-x-auto rounded-md bg-slate-950/80 p-3 font-mono text-xs text-slate-300">
@@ -2210,6 +2213,8 @@ function PlanPanel({
         </button>
       </div>
 
+      <InputProviderDiagnosticsSection diagnostics={plan.inputProvider} />
+
       <div className="space-y-3">
         {plan.steps.map((step) => (
           <PlanStepCard key={step.output} step={step} />
@@ -2325,7 +2330,57 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
           </pre>
         </Section>
       )}
+
+      <InputProviderDiagnosticsSection diagnostics={result.inputProvider} />
     </section>
+  )
+}
+
+function InputProviderDiagnosticsSection({
+  diagnostics,
+}: {
+  diagnostics?: ContentOpsInputProviderDiagnostics
+}) {
+  if (!diagnostics) return null
+  const metadata = Object.entries(diagnostics.metadata).filter(
+    ([, value]) => value !== null && value !== undefined && value !== '',
+  )
+  if (diagnostics.warnings.length === 0 && metadata.length === 0) return null
+
+  return (
+    <Section label="Source package">
+      <div className="space-y-2 rounded-md border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-300">
+        <div className="font-mono text-[11px] text-slate-500">
+          {diagnostics.provider}
+        </div>
+        {diagnostics.warnings.length > 0 && (
+          <ul className="ml-4 list-disc text-amber-200">
+            {diagnostics.warnings.map((warning, index) => (
+              <li key={`${warning.code}-${index}`}>
+                {warning.message}
+                {warning.code && (
+                  <span className="ml-2 font-mono text-[10px] text-amber-300/70">
+                    {warning.code}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {metadata.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {metadata.map(([key, value]) => (
+              <span
+                key={key}
+                className="rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-[11px] text-slate-300"
+              >
+                {key}: {String(value)}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </Section>
   )
 }
 

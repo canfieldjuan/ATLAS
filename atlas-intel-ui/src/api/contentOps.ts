@@ -138,6 +138,18 @@ export interface ContentOpsRequestBody {
   allow_unimplemented_outputs?: boolean            // default false
 }
 
+export interface ContentOpsInputProviderWarning {
+  code?: string
+  message?: string
+  [key: string]: unknown
+}
+
+export interface ContentOpsInputProviderDiagnostics {
+  provider: string
+  metadata: Record<string, unknown>
+  warnings: ContentOpsInputProviderWarning[]
+}
+
 // POST /content-ops/ingestion/inspect body and response
 
 export interface ContentOpsIngestionInspectRequest {
@@ -225,6 +237,7 @@ export interface ContentOpsPreviewResponse {
   blocked_outputs: string[]
   warnings: string[]
   normalized_request: ContentOpsRequestBody | null
+  input_provider?: ContentOpsInputProviderDiagnostics
 }
 
 // POST /content-ops/plan response
@@ -245,6 +258,7 @@ export interface GenerationPlanResponse {
   limit: number
   steps: GenerationPlanStep[]
   preview: ContentOpsPreviewResponse
+  input_provider?: ContentOpsInputProviderDiagnostics
 }
 
 // POST /content-ops/execute response (wire shape)
@@ -294,6 +308,7 @@ export interface ContentOpsExecutionResult {
   plan: GenerationPlanResponse
   steps: ContentOpsStepExecution[]
   errors: Array<Record<string, unknown>>
+  input_provider?: ContentOpsInputProviderDiagnostics
 }
 
 // HTTP-code-aware execute outcome. The /execute route maps the

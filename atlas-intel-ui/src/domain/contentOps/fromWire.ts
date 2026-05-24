@@ -17,6 +17,7 @@ import type {
   ContentOpsIngestionImportResponse as WireIngestionImportResponse,
   ContentOpsIngestionInspectRequest as WireIngestionInspectRequest,
   ContentOpsExecutionResult as WireExecutionResult,
+  ContentOpsInputProviderDiagnostics as WireInputProviderDiagnostics,
   ContentOpsInputContract as WireInputContract,
   ContentOpsOutputDefinition as WireOutputDefinition,
   ContentOpsPreset as WirePreset,
@@ -35,6 +36,8 @@ import type {
   ContentOpsIngestionInspectRequest,
   ContentOpsExecutionResult,
   ContentOpsInputContractView,
+  ContentOpsInputProviderDiagnostics,
+  ContentOpsInputProviderWarning,
   CampaignReasoningContextView,
   ContentOpsRequest,
   ContentOpsStepExecution,
@@ -293,7 +296,7 @@ export function fromWireIngestionImportResponse(
 export function fromWirePreview(
   wire: ContentOpsPreviewResponse,
 ): ControlSurfacePreview {
-  return {
+  const preview: ControlSurfacePreview = {
     canRun: wire.can_run,
     outputs: [...wire.outputs],
     estimatedCostUsd: wire.estimated_cost_usd,
@@ -318,6 +321,36 @@ export function fromWirePreview(
         }
       : null,
   }
+  const inputProvider = fromWireInputProviderDiagnostics(wire.input_provider)
+  if (inputProvider) {
+    preview.inputProvider = inputProvider
+  }
+  return preview
+}
+
+export function fromWireInputProviderDiagnostics(
+  wire: WireInputProviderDiagnostics | undefined,
+): ContentOpsInputProviderDiagnostics | undefined {
+  if (!wire) return undefined
+  return {
+    provider: wire.provider,
+    metadata: { ...wire.metadata },
+    warnings: (wire.warnings ?? []).map(fromWireInputProviderWarning),
+  }
+}
+
+function fromWireInputProviderWarning(
+  warning: Record<string, unknown>,
+): ContentOpsInputProviderWarning {
+  const { code, message, ...details } = warning
+  return {
+    code: typeof code === 'string' && code ? code : 'input_provider_warning',
+    message:
+      typeof message === 'string' && message
+        ? message
+        : 'Input provider warning',
+    details,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,13 +368,18 @@ export function fromWirePlanStep(wire: WirePlanStep): GenerationPlanStep {
 }
 
 export function fromWirePlan(wire: GenerationPlanResponse): GenerationPlan {
-  return {
+  const plan: GenerationPlan = {
     canExecute: wire.can_execute,
     targetMode: wire.target_mode,
     limit: wire.limit,
     steps: wire.steps.map(fromWirePlanStep),
     preview: fromWirePreview(wire.preview),
   }
+  const inputProvider = fromWireInputProviderDiagnostics(wire.input_provider)
+  if (inputProvider) {
+    plan.inputProvider = inputProvider
+  }
+  return plan
 }
 
 // ---------------------------------------------------------------------------
@@ -449,10 +487,15 @@ function toReferenceIds(value: unknown): Record<string, string[]> | undefined {
 export function fromWireExecution(
   wire: WireExecutionResult,
 ): ContentOpsExecutionResult {
-  return {
+  const result: ContentOpsExecutionResult = {
     status: wire.status,
     plan: fromWirePlan(wire.plan),
     steps: wire.steps.map(fromWireStepExecution),
     errors: wire.errors.map((e) => ({ ...e })),
   }
+  const inputProvider = fromWireInputProviderDiagnostics(wire.input_provider)
+  if (inputProvider) {
+    result.inputProvider = inputProvider
+  }
+  return result
 }
