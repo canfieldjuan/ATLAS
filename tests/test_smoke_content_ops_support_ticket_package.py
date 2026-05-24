@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+
+
+_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "smoke_content_ops_support_ticket_package.py"
+)
+_SCRIPT_SPEC = importlib.util.spec_from_file_location(
+    "smoke_content_ops_support_ticket_package",
+    _SCRIPT_PATH,
+)
+assert _SCRIPT_SPEC is not None
+assert _SCRIPT_SPEC.loader is not None
+_SCRIPT_MODULE = importlib.util.module_from_spec(_SCRIPT_SPEC)
+_SCRIPT_SPEC.loader.exec_module(_SCRIPT_MODULE)
+
+build_support_ticket_package_smoke_summary = (
+    _SCRIPT_MODULE.build_support_ticket_package_smoke_summary
+)
+main = _SCRIPT_MODULE.main
+
+
+def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    headers: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in headers:
+                headers.append(key)
+    lines = [",".join(headers)]
+    for row in rows:
+        lines.append(",".join(_csv_cell(row.get(header, "")) for header in headers))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _csv_cell(value: str) -> str:
+    escaped = str(value).replace('"', '""')
+    return f'"{escaped}"'
+
+
+def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filter(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I change my login email?",
+            "description": "I cannot find where to update the email on my account.",
+            "pain_category": "profile updates",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Export dashboard",
+            "description": "Where do I export the dashboard before renewal?",
+        },
+        {"ticket_id": "ticket-3"},
+    ])
+
+    summary = build_support_ticket_package_smoke_summary(path)
+
+    assert summary["source_row_count"] == 3
+    assert summary["included_ticket_row_count"] == 2
+    assert summary["skipped_ticket_row_count"] == 1
+    assert summary["truncated_ticket_row_count"] == 0
+    assert summary["source_period"] == "Uploaded support tickets"
+    assert summary["has_window_filter"] is False
+    assert summary["faq_question_count"] == 2
+    assert summary["question_like_ticket_count"] == 2
+    assert summary["top_ticket_clusters"] == [
+        {"label": "profile updates", "count": 1},
+        {"label": "Export dashboard", "count": 1},
+    ]
+    assert summary["customer_wording_examples"][0] == {
+        "source_id": "ticket-1",
+        "source_title": "How do I change my login email?",
+        "pain_category": "profile updates",
+        "text": (
+            "How do I change my login email? I cannot find where to update the "
+            "email on my account."
+        ),
+    }
+    assert summary["warnings"] == [
+        {
+            "code": "ticket_row_missing_text",
+            "row_index": 3,
+            "message": "Skipped ticket row because it did not include customer wording.",
+        }
+    ]
+
+
+def test_support_ticket_package_smoke_keeps_date_window_for_dated_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [
+        {
+            "ticket_id": "ticket-1",
+            "description": "How do I export reports?",
+            "created_at": "2026-05-01",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "description": "Where do I update billing?",
+            "created_at": "2026-05-02T12:00:00Z",
+        },
+    ])
+
+    summary = build_support_ticket_package_smoke_summary(path, window_days=45)
+
+    assert summary["source_period"] == "Last 45 days of support tickets"
+    assert summary["has_window_filter"] is True
+    assert summary["faq_window_days"] == 45
+
+
+def test_support_ticket_package_smoke_reports_cluster_rollup_and_truncation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "description": f"How do I fix issue {index}?",
+            "pain_category": f"category-{index}",
+        }
+        for index in range(1, 9)
+    ]
+    rows.append({"ticket_id": "ticket-9", "description": "Can I change my plan?"})
+    rows.append({"ticket_id": "ticket-10", "description": "Why was I charged?"})
+    _write_csv(path, rows)
+
+    summary = build_support_ticket_package_smoke_summary(path, max_rows=9)
+
+    assert summary["source_row_count"] == 10
+    assert summary["included_ticket_row_count"] == 9
+    assert summary["truncated_ticket_row_count"] == 1
+    assert summary["top_ticket_clusters"] == [
+        {"label": "category-1", "count": 1},
+        {"label": "category-2", "count": 1},
+        {"label": "category-3", "count": 1},
+        {"label": "category-4", "count": 1},
+        {"label": "category-5", "count": 1},
+        {"label": "category-6", "count": 1},
+        {"label": "remaining", "count": 2},
+        {"label": "uncategorized", "count": 1},
+    ]
+    assert summary["warning_count"] == 1
+    assert summary["warnings"][0]["code"] == "ticket_rows_truncated"
+
+
+def test_support_ticket_package_smoke_main_writes_json(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I export reports?",
+            "created_at": "2026-05-01",
+        }
+    ])
+
+    assert main([str(path), "--outputs", "landing_page", "--pretty"]) == 0
+
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert summary["outputs"] == ["landing_page"]
+    assert summary["included_ticket_row_count"] == 1
+    assert captured.err == ""
+
+
+def test_support_ticket_package_smoke_can_fail_when_no_rows_survive(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [{"ticket_id": "ticket-1"}])
+
+    assert main([str(path), "--require-included-rows"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No usable support-ticket rows survived packaging." in captured.err
