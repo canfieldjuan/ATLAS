@@ -92,6 +92,7 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "quality_repair_attempts": 1,
         "no_quality_gates": False,
         "output_result": None,
+        "export_saved_draft": None,
         "json": True,
     }
     values.update(overrides)
@@ -130,6 +131,42 @@ def _non_ticket_csv(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
+async def test_live_generation_smoke_main_writes_saved_draft_export(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "saved-draft.json"
+
+    async def _run(args: argparse.Namespace):
+        assert args.export_saved_draft == output_path
+        return 0, {
+            "ok": True,
+            "errors": [],
+            "configured_outputs": ["landing_page"],
+            "saved_draft_export": {
+                "count": 1,
+                "rows": [{"id": "lp-live-smoke-1"}],
+            },
+        }
+
+    monkeypatch.setattr(smoke, "run_content_ops_live_generation_smoke", _run)
+
+    code = await smoke._amain([
+        "--account-id",
+        "acct-live-smoke",
+        "--export-saved-draft",
+        str(output_path),
+        "--json",
+    ])
+
+    assert code == 0
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {
+        "count": 1,
+        "rows": [{"id": "lp-live-smoke-1"}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_live_generation_smoke_executes_landing_page_through_real_executor() -> None:
     lifecycle = _Lifecycle()
     service = _LandingPageService()
@@ -163,6 +200,128 @@ async def test_live_generation_smoke_executes_landing_page_through_real_executor
     assert call["campaign"].context["faq_questions"] == ["How long does it take?"]
     assert call["quality_repair_attempts"] == 1
     assert call["quality_gates_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_exports_exact_saved_landing_page_draft(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+    export_calls: list[dict[str, Any]] = []
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        export_calls.append({
+            "output": output,
+            "saved_ids": tuple(saved_ids),
+            "scope": scope,
+            "closed_before_export": lifecycle.closed,
+        })
+        return {
+            "count": 1,
+            "rows": [{"id": saved_ids[0], "title": "Generated landing page"}],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(export_saved_draft=tmp_path / "landing-page-draft.json"),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["saved_draft_export"] == {
+        "count": 1,
+        "rows": [{"id": "lp-live-smoke-1", "title": "Generated landing page"}],
+    }
+    assert export_calls == [{
+        "output": "landing_page",
+        "saved_ids": ("lp-live-smoke-1",),
+        "scope": TenantScope(
+            account_id="acct-live-smoke",
+            user_id="user-live-smoke",
+        ),
+        "closed_before_export": False,
+    }]
+    assert lifecycle.closed is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_fails_export_when_no_saved_ids(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+
+    class _NoSavedIdLandingPageService:
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "requested": 1,
+                "generated": 1,
+                "skipped": 0,
+                "saved_ids": [],
+            }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(export_saved_draft=tmp_path / "landing-page-draft.json"),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(
+            landing_page=_NoSavedIdLandingPageService()
+        ),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["saved_draft_export"] is None
+    assert result["errors"] == [
+        "landing_page generation did not return saved draft ids"
+    ]
+    assert lifecycle.closed is True
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_fails_export_when_saved_ids_are_unusable(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+
+    class _MalformedSavedIdLandingPageService:
+        async def generate(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "requested": 1,
+                "generated": 1,
+                "skipped": 0,
+                "saved_ids": "lp-live-smoke-1",
+            }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(export_saved_draft=tmp_path / "landing-page-draft.json"),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(
+            landing_page=_MalformedSavedIdLandingPageService()
+        ),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["saved_draft_export"] is None
+    assert result["errors"] == [
+        "--export-saved-draft requested, but generation returned no saved_ids"
+    ]
+    assert lifecycle.closed is True
 
 
 @pytest.mark.asyncio
@@ -339,6 +498,55 @@ async def test_live_generation_smoke_packages_support_ticket_csv_for_blog_post(
     assert call["topic"] == "Support-ticket questions customers keep asking"
 
 
+@pytest.mark.asyncio
+async def test_live_generation_smoke_exports_exact_saved_blog_post_draft(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+    export_calls: list[dict[str, Any]] = []
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        return {
+            "saved_ids": ["bp-live-smoke-1"],
+            "slug": "content-ops-blog-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "complaint_roundup",
+        }
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        export_calls.append({"output": output, "saved_ids": tuple(saved_ids)})
+        return {"count": 1, "rows": [{"id": saved_ids[0]}]}
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            export_saved_draft=tmp_path / "blog-post-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 0
+    assert result["saved_draft_export"] == {
+        "count": 1,
+        "rows": [{"id": "blog-live-smoke-1"}],
+    }
+    assert export_calls == [{
+        "output": "blog_post",
+        "saved_ids": ("blog-live-smoke-1",),
+    }]
+
+
 def test_blog_blueprint_json_loader_accepts_one_custom_blueprint(tmp_path: Path) -> None:
     path = tmp_path / "blueprint.json"
     path.write_text(
@@ -447,6 +655,59 @@ def test_blog_payload_alignment_preserves_custom_operator_topic() -> None:
     )
 
     assert payload["inputs"]["topic"] == "Operator supplied smoke topic"
+
+
+def test_saved_ids_for_output_rejects_malformed_shapes() -> None:
+    assert smoke._saved_ids_for_output(None, "landing_page") == ()
+    assert smoke._saved_ids_for_output({"steps": []}, "landing_page") == ()
+    assert smoke._saved_ids_for_output(
+        {"steps": [{"output": "landing_page", "result": "bad"}]},
+        "landing_page",
+    ) == ()
+    assert smoke._saved_ids_for_output(
+        {"steps": [{"output": "landing_page", "result": {}}]},
+        "landing_page",
+    ) == ()
+    assert smoke._saved_ids_for_output(
+        {
+            "steps": [{
+                "output": "landing_page",
+                "result": {"saved_ids": "lp-live-smoke-1"},
+            }]
+        },
+        "landing_page",
+    ) == ()
+    assert smoke._saved_ids_for_output(
+        {
+            "steps": [{
+                "output": "landing_page",
+                "result": {"saved_ids": ["  "]},
+            }]
+        },
+        "landing_page",
+    ) == ()
+
+
+def test_saved_ids_for_output_strips_and_preserves_multiple_ids() -> None:
+    assert smoke._saved_ids_for_output(
+        {
+            "steps": [{
+                "output": "blog_post",
+                "result": {"saved_ids": [" blog-1 ", "blog-2"]},
+            }]
+        },
+        "blog_post",
+    ) == ("blog-1", "blog-2")
+
+
+@pytest.mark.asyncio
+async def test_export_saved_drafts_rejects_unsupported_output() -> None:
+    with pytest.raises(ValueError, match="unsupported for output"):
+        await smoke._export_saved_drafts(
+            "report",
+            ("report-1",),
+            TenantScope(account_id="acct-live-smoke"),
+        )
 
 
 def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -> None:

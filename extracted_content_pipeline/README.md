@@ -344,6 +344,7 @@ and the same executor path used by `/content-ops/execute`:
 python scripts/smoke_content_ops_live_generation.py \
   --account-id acct_123 \
   --env-file /path/to/Atlas/.env \
+  --export-saved-draft landing-page-draft.json \
   --json
 ```
 
@@ -351,8 +352,9 @@ The command fails if `landing_page` is not configured, which usually means the
 DB pool did not initialize or the pipeline LLM/OpenRouter credentials are not
 available. Set `OPENROUTER_API_KEY` or
 `ATLAS_B2B_CHURN_OPENROUTER_API_KEY` for the pipeline-routed Claude provider.
-On success it prints the saved `landing_pages` draft id. Export that exact row
-for inspection with:
+On success it prints the saved `landing_pages` draft id and, when
+`--export-saved-draft` is supplied, writes that exact exported draft row for
+inspection. You can also export the row after the fact with:
 
 ```bash
 python scripts/export_extracted_content_assets.py \
@@ -372,11 +374,13 @@ python scripts/smoke_content_ops_live_generation.py \
   --output blog_post \
   --account-id acct_123 \
   --env-file /path/to/Atlas/.env \
+  --export-saved-draft blog-post-draft.json \
   --json
 ```
 
 On success it prints the saved `blog_posts` draft id and the seeded blueprint
-id. Export that exact row for inspection with:
+id. When `--export-saved-draft` is supplied, it writes that exact exported draft
+row for inspection. You can also export the row after the fact with:
 
 ```bash
 python scripts/export_extracted_content_assets.py \
