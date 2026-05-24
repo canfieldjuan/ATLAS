@@ -113,6 +113,18 @@ export interface ContentOpsRequest {
   allowUnimplementedOutputs: boolean
 }
 
+export interface ContentOpsInputProviderWarning {
+  code: string
+  message: string
+  details: Record<string, unknown>
+}
+
+export interface ContentOpsInputProviderDiagnostics {
+  provider: string
+  metadata: Record<string, unknown>
+  warnings: ContentOpsInputProviderWarning[]
+}
+
 // ---------------------------------------------------------------------------
 // Ingestion inspect (POST /content-ops/ingestion/inspect)
 // ---------------------------------------------------------------------------
@@ -179,6 +191,7 @@ export interface ControlSurfacePreview {
   missingInputs: string[]
   blockedOutputs: string[]
   warnings: string[]
+  inputProvider?: ContentOpsInputProviderDiagnostics
   // The preview's normalized request omits `inputs` per the
   // backend's `as_dict()` contract (see contract doc); it is
   // typed as a partial of `ContentOpsRequest` here.
@@ -205,6 +218,7 @@ export interface GenerationPlan {
   limit: number
   steps: GenerationPlanStep[]
   preview: ControlSurfacePreview
+  inputProvider?: ContentOpsInputProviderDiagnostics
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +270,7 @@ export interface ContentOpsExecutionResult {
   plan: GenerationPlan
   steps: ContentOpsStepExecution[]
   errors: Array<Record<string, unknown>>
+  inputProvider?: ContentOpsInputProviderDiagnostics
 }
 
 // ---------------------------------------------------------------------------

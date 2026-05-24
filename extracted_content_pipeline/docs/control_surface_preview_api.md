@@ -142,6 +142,20 @@ preset.
     "ingestion_profile": "domain_specific",
     "require_quality_gates": true,
     "allow_unimplemented_outputs": false
+  },
+  "input_provider": {
+    "provider": "atlas_support_ticket_request",
+    "metadata": {
+      "source_row_count": 10000,
+      "included_row_count": 1000,
+      "truncated_row_count": 9000
+    },
+    "warnings": [
+      {
+        "code": "ticket_rows_truncated",
+        "message": "Used first 1000 ticket rows out of 10000."
+      }
+    ]
   }
 }
 ```
@@ -154,6 +168,12 @@ retry, so preview budgets include the worst-case retry attempt count. Landing
 pages also include the quality-repair loop when quality gates are enabled:
 `landing_page_quality_repair_attempts` can raise, lower, or disable that repair
 multiplier for the request.
+
+When the host configures a request-aware input provider, preview, plan, and
+execute responses may include `input_provider`. Use this diagnostics object to
+show operational source-package warnings, such as support-ticket rows being
+truncated to the synchronous generation cap. It is not prompt context:
+generators consume only the normalized request inputs.
 
 > **Upgrade note (breaking):** Prior to 2026-05-08, `estimated_cost_usd`
 > reflected a single LLM call per output. It now reflects worst-case retry
@@ -216,6 +236,20 @@ multiplier for the request.
     "missing_inputs": [],
     "blocked_outputs": [],
     "warnings": []
+  },
+  "input_provider": {
+    "provider": "atlas_support_ticket_request",
+    "metadata": {
+      "source_row_count": 10000,
+      "included_row_count": 1000,
+      "truncated_row_count": 9000
+    },
+    "warnings": [
+      {
+        "code": "ticket_rows_truncated",
+        "message": "Used first 1000 ticket rows out of 10000."
+      }
+    ]
   }
 }
 ```

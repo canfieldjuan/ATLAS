@@ -24,6 +24,23 @@
       "reason": ""
     }
   ],
+  "input_provider": {
+    "provider": "atlas_support_ticket_request",
+    "metadata": {
+      "source_row_count": 10000,
+      "included_row_count": 1000,
+      "truncated_row_count": 9000
+    },
+    "warnings": [
+      {
+        "code": "ticket_rows_truncated",
+        "message": "Used first 1000 ticket rows out of 10000.",
+        "row_count": 10000,
+        "max_rows": 1000,
+        "truncated_row_count": 9000
+      }
+    ]
+  },
   "preview": {
     "can_run": true,
     "outputs": [
