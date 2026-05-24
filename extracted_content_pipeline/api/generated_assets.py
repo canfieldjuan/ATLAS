@@ -272,6 +272,7 @@ def create_generated_asset_router(
         slug: str | None = Query(None),
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
+        ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
     ) -> dict[str, Any]:
         asset_name = _asset_arg(asset)
@@ -288,6 +289,7 @@ def create_generated_asset_router(
             slug=slug,
             topic_type=topic_type,
             brief_type=brief_type,
+            ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
         return result.as_dict()
@@ -302,6 +304,7 @@ def create_generated_asset_router(
         slug: str | None = Query(None),
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
+        ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
         format: str = Query("csv", description="csv or json"),
     ) -> Any:
@@ -319,6 +322,7 @@ def create_generated_asset_router(
             slug=slug,
             topic_type=topic_type,
             brief_type=brief_type,
+            ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
         format_name = _clean(format).lower()
@@ -629,14 +633,21 @@ async def _export_for_asset(
     slug: str | None,
     topic_type: str | None,
     brief_type: str | None,
+    ids: Sequence[str] | None,
     limit: int,
 ) -> Any:
+    if ids and asset not in {"blog_post", "landing_page"}:
+        raise HTTPException(
+            status_code=400,
+            detail="id filters are only supported for blog_post and landing_page",
+        )
     if asset == "blog_post":
         return await export_blog_post_drafts(
             PostgresBlogPostRepository(pool),
             scope=scope,
             status=status,
             topic_type=topic_type,
+            ids=ids,
             limit=limit,
         )
     if asset == "report":
@@ -655,6 +666,7 @@ async def _export_for_asset(
             status=status,
             campaign_name=campaign_name,
             slug=slug,
+            ids=ids,
             limit=limit,
         )
     if asset == "sales_brief":
