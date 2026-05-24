@@ -1,0 +1,227 @@
+"""Search projection helpers for generated ticket FAQ Markdown drafts."""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+import re
+from typing import Any
+
+from .campaign_ports import JsonDict
+from .ticket_faq_ports import TicketFAQDraft
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+@dataclass(frozen=True)
+class TicketFAQSearchDocument:
+    """Compact searchable projection for one generated FAQ item."""
+
+    account_id: str
+    corpus_id: str
+    faq_id: str
+    target_id: str
+    target_mode: str
+    status: str
+    rank: int
+    topic: str
+    question: str
+    answer_summary: str
+    source_ids: tuple[str, ...] = field(default_factory=tuple)
+    ticket_count: int = 0
+    search_text: str = ""
+
+    def as_dict(self) -> JsonDict:
+        return {
+            "account_id": self.account_id,
+            "corpus_id": self.corpus_id,
+            "faq_id": self.faq_id,
+            "target_id": self.target_id,
+            "target_mode": self.target_mode,
+            "status": self.status,
+            "rank": self.rank,
+            "topic": self.topic,
+            "question": self.question,
+            "answer_summary": self.answer_summary,
+            "source_ids": list(self.source_ids),
+            "ticket_count": self.ticket_count,
+        }
+
+
+@dataclass(frozen=True)
+class TicketFAQSearchResult:
+    """A matched FAQ search document plus deterministic score."""
+
+    document: TicketFAQSearchDocument
+    score: int
+
+    def as_dict(self) -> JsonDict:
+        row = self.document.as_dict()
+        row["score"] = self.score
+        row.pop("search_text", None)
+        return row
+
+
+@dataclass(frozen=True)
+class TicketFAQSearchResponse:
+    """API-shaped FAQ search response envelope."""
+
+    query: str
+    results: tuple[TicketFAQSearchResult, ...]
+
+    def as_dict(self) -> JsonDict:
+        return {
+            "query": self.query,
+            "results": [result.as_dict() for result in self.results],
+            "count": len(self.results),
+        }
+
+
+def build_ticket_faq_search_documents(
+    draft: TicketFAQDraft,
+    *,
+    account_id: str | None = None,
+    corpus_id: str | None = None,
+) -> tuple[TicketFAQSearchDocument, ...]:
+    """Project a generated FAQ draft into one searchable row per FAQ item."""
+
+    resolved_account_id = _clean(account_id) or _metadata_account_id(draft.metadata)
+    resolved_corpus_id = _clean(corpus_id) or _metadata_corpus_id(draft.metadata) or draft.target_id
+    documents: list[TicketFAQSearchDocument] = []
+    for index, item in enumerate(draft.items, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        topic = _clean(item.get("topic"))
+        question = _clean(item.get("question"))
+        answer_summary = _answer_summary(item)
+        search_text = _search_text(item, topic=topic, question=question, answer_summary=answer_summary)
+        if not question and not search_text:
+            continue
+        documents.append(
+            TicketFAQSearchDocument(
+                account_id=resolved_account_id,
+                corpus_id=resolved_corpus_id,
+                faq_id=draft.id,
+                target_id=draft.target_id,
+                target_mode=draft.target_mode,
+                status=draft.status,
+                rank=_int_value(item.get("rank"), default=index),
+                topic=topic,
+                question=question,
+                answer_summary=answer_summary,
+                source_ids=_source_ids(item.get("source_ids")),
+                ticket_count=_int_value(item.get("ticket_count"), default=0),
+                search_text=search_text,
+            )
+        )
+    return tuple(documents)
+
+
+def search_ticket_faq_documents(
+    documents: Iterable[TicketFAQSearchDocument],
+    *,
+    query: str,
+    account_id: str,
+    corpus_id: str | None = None,
+    status: str | None = "approved",
+    limit: int = 10,
+) -> TicketFAQSearchResponse:
+    """Search projected FAQ rows with tenant/corpus/status isolation."""
+
+    normalized_query = _clean(query)
+    normalized_account_id = _clean(account_id)
+    query_tokens = _tokens(normalized_query)
+    if not normalized_account_id or not query_tokens or limit <= 0:
+        return TicketFAQSearchResponse(query=normalized_query, results=())
+    matches: list[TicketFAQSearchResult] = []
+    for document in documents:
+        if document.account_id != normalized_account_id:
+            continue
+        if corpus_id is not None and document.corpus_id != corpus_id:
+            continue
+        if status is not None and document.status != status:
+            continue
+        score = _score_document(document, query_tokens)
+        if score <= 0:
+            continue
+        matches.append(TicketFAQSearchResult(document=document, score=score))
+    matches.sort(key=lambda result: (-result.score, result.document.rank, result.document.question))
+    return TicketFAQSearchResponse(
+        query=normalized_query,
+        results=tuple(matches[:limit]),
+    )
+
+
+def _score_document(document: TicketFAQSearchDocument, query_tokens: Sequence[str]) -> int:
+    question_tokens = set(_tokens(document.question))
+    topic_tokens = set(_tokens(document.topic))
+    text_counts = Counter(_tokens(document.search_text))
+    score = 0
+    for token in query_tokens:
+        if token in question_tokens:
+            score += 4
+        if token in topic_tokens:
+            score += 2
+        score += min(text_counts.get(token, 0), 3)
+    return score
+
+
+def _search_text(item: Mapping[str, Any], *, topic: str, question: str, answer_summary: str) -> str:
+    parts: list[str] = [topic, question, answer_summary]
+    for key in ("answer", "when_to_contact_support"):
+        parts.append(_clean(item.get(key)))
+    steps = item.get("steps")
+    if isinstance(steps, Sequence) and not isinstance(steps, (str, bytes)):
+        parts.extend(_clean(step) for step in steps)
+    return " ".join(part for part in parts if part)
+
+
+def _answer_summary(item: Mapping[str, Any]) -> str:
+    for key in ("summary", "answer"):
+        value = _clean(item.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _source_ids(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return tuple(dict.fromkeys(_clean(item) for item in value if _clean(item)))
+
+
+def _metadata_account_id(metadata: Mapping[str, Any]) -> str:
+    scope = metadata.get("scope")
+    if isinstance(scope, Mapping):
+        return _clean(scope.get("account_id"))
+    return _clean(metadata.get("account_id"))
+
+
+def _metadata_corpus_id(metadata: Mapping[str, Any]) -> str:
+    return _clean(metadata.get("corpus_id") or metadata.get("source_file_id"))
+
+
+def _tokens(value: str) -> tuple[str, ...]:
+    return tuple(_TOKEN_RE.findall(value.lower()))
+
+
+def _int_value(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean(value: Any) -> str:
+    return str(value or "").strip()
+
+
+__all__ = [
+    "TicketFAQSearchDocument",
+    "TicketFAQSearchResponse",
+    "TicketFAQSearchResult",
+    "build_ticket_faq_search_documents",
+    "search_ticket_faq_documents",
+]
