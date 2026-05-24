@@ -8,6 +8,7 @@ from typing import Any, Mapping
 import pytest
 
 from atlas_brain._content_ops_input_provider import build_content_ops_input_provider
+import extracted_content_pipeline.api.control_surfaces as api_module
 from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
@@ -38,6 +39,33 @@ class _LandingPageCaptureService:
             "campaign": campaign,
             "kwargs": dict(kwargs),
         })
+        return {
+            "generated": 1,
+            "saved_ids": ["landing-support-ticket-1"],
+            "campaign_name": getattr(campaign, "name", ""),
+        }
+
+
+class _BlockingLandingPageCaptureService(_LandingPageCaptureService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        campaign: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "scope": scope,
+            "campaign": campaign,
+            "kwargs": dict(kwargs),
+        })
+        self.started.set()
+        await self.release.wait()
         return {
             "generated": 1,
             "saved_ids": ["landing-support-ticket-1"],
@@ -407,3 +435,57 @@ async def test_loader_backed_support_ticket_execute_is_stable_under_concurrency(
     else:
         limits = {call["limit"] for call in service.calls}
         assert limits == set(range(1, 26))
+
+
+@pytest.mark.asyncio
+async def test_loader_backed_support_ticket_execute_rejects_overload_before_loading_source() -> None:
+    rows = _generated_support_ticket_rows(50_000)
+    loader_calls: list[dict[str, Any]] = []
+
+    def loader(scope: TenantScope, request: Mapping[str, Any]) -> list[dict[str, str]]:
+        loader_calls.append({"scope": scope, "request": dict(request)})
+        return rows
+
+    service = _BlockingLandingPageCaptureService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(execute_max_concurrency=1),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            landing_page=service,
+        ),
+        input_provider=SupportTicketInputProvider(source_material_loader=loader),
+        scope_provider=lambda: TenantScope(
+            account_id="acct-support-ticket-overload",
+            user_id="user-support-ticket-overload",
+        ),
+    )
+    route = _route(router, "/content-ops/execute", "POST")
+    request = {
+        "outputs": ["landing_page"],
+        "require_quality_gates": False,
+    }
+
+    first = asyncio.create_task(route.endpoint(request))
+    try:
+        await asyncio.wait_for(service.started.wait(), timeout=1)
+        assert len(loader_calls) == 1
+
+        with pytest.raises(api_module.HTTPException) as exc:
+            await route.endpoint(request)
+
+        assert exc.value.status_code == 429
+        assert exc.value.detail == {
+            "reason": "content_ops_execute_at_capacity",
+            "max_concurrency": 1,
+        }
+        assert len(loader_calls) == 1
+        assert len(service.calls) == 1
+    finally:
+        service.release.set()
+
+    first_payload = await first
+    assert first_payload["status"] == "completed"
+
+    second_payload = await route.endpoint(request)
+    assert second_payload["status"] == "completed"
+    assert len(loader_calls) == 2
+    assert len(service.calls) == 2
