@@ -37,9 +37,19 @@ from smoke_content_ops_ingestion_file_route import (  # noqa: E402
     _import_summary,
 )
 
-
 _EXPECTED_AT_CAPACITY_REASON = "content_ops_ingestion_import_at_capacity"
 _REQUIRED_DEFAULT_FIELDS = ("company_name", "vendor_name", "contact_email")
+
+
+def build_content_ops_import_admission_gate(*, max_concurrency: int, pool_provider):
+    from atlas_brain._content_ops_import_admission import (
+        build_content_ops_import_admission_gate as build_gate,
+    )
+
+    return build_gate(
+        max_concurrency=max_concurrency,
+        pool_provider=pool_provider,
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -70,6 +80,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--opportunity-table", default="campaign_opportunities")
     parser.add_argument("--replace-existing", action="store_true")
     parser.add_argument("--database-url", default=_default_database_url())
+    parser.add_argument(
+        "--admission-provider",
+        choices=("local", "postgres"),
+        default="local",
+        help=(
+            "Admission backend. 'local' uses the extracted in-memory gate; "
+            "'postgres' uses the Atlas host advisory-lock provider."
+        ),
+    )
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--import-max-concurrency", type=int, default=2)
     parser.add_argument("--min-successes", type=int, default=1)
@@ -154,6 +173,7 @@ async def run_inprocess_load(args: argparse.Namespace) -> tuple[int, dict[str, A
         "user_id": str(args.user_id or "").strip() or None,
         "opportunity_table": str(args.opportunity_table),
         "replace_existing": bool(args.replace_existing),
+        "admission_provider": str(args.admission_provider),
         "concurrency": int(args.concurrency),
         "import_max_concurrency": int(args.import_max_concurrency),
         "min_source_rows": int(args.min_source_rows),
@@ -166,15 +186,17 @@ async def run_inprocess_load(args: argparse.Namespace) -> tuple[int, dict[str, A
     }
     try:
         pool = await _create_pool(str(args.database_url))
+        config = ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            ingestion_opportunity_table=str(args.opportunity_table),
+            ingestion_import_max_concurrency=int(args.import_max_concurrency),
+        )
         router = create_content_ops_control_surface_router(
-            config=ContentOpsControlSurfaceApiConfig(
-                prefix="/ops",
-                tags=("ops",),
-                ingestion_opportunity_table=str(args.opportunity_table),
-                ingestion_import_max_concurrency=int(args.import_max_concurrency),
-            ),
+            config=config,
             opportunity_import_pool_provider=lambda: pool,
             scope_provider=_scope_provider(args),
+            ingestion_import_admission_provider=_admission_provider(args, pool),
         )
         route = _route(router, route_path, "POST")
         start_event = asyncio.Event()
@@ -290,6 +312,16 @@ def _scope_provider(args: argparse.Namespace):
         user_id=str(args.user_id or "").strip() or None,
     )
     return lambda: scope
+
+
+def _admission_provider(args: argparse.Namespace, pool: Any):
+    if str(args.admission_provider) != "postgres":
+        return None
+    max_concurrency = int(args.import_max_concurrency)
+    return lambda: build_content_ops_import_admission_gate(
+        max_concurrency=max_concurrency,
+        pool_provider=lambda: pool,
+    )
 
 
 def _summarize_results(results: list[Mapping[str, Any]]) -> dict[str, Any]:
