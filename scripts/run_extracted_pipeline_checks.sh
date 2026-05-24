@@ -27,6 +27,7 @@ pytest \
   tests/test_extracted_campaign_customer_data.py \
   tests/test_extracted_campaign_source_adapters.py \
   tests/test_extracted_ticket_faq_markdown.py \
+  tests/test_smoke_content_ops_faq_search_concurrency.py \
   tests/test_smoke_content_ops_faq_scale_run.py \
   tests/test_smoke_content_ops_faq_lifecycle.py \
   tests/test_smoke_content_ops_ingestion_file_route.py \
