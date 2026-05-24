@@ -31,6 +31,46 @@ class _Pool:
         return self.execute_result
 
 
+class _AsyncContext:
+    def __init__(self, value=None, enter=None) -> None:
+        self.value = value
+        self.enter = enter
+
+    async def __aenter__(self):
+        if self.enter is not None:
+            self.enter()
+        return self.value
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _Connection(_Pool):
+    def __init__(self) -> None:
+        super().__init__()
+        self.transaction_entries = 0
+
+    def transaction(self):
+        return _AsyncContext(enter=lambda: setattr(
+            self,
+            "transaction_entries",
+            self.transaction_entries + 1,
+        ))
+
+
+class _AcquirePool(_Pool):
+    def __init__(self, connection: _Connection) -> None:
+        super().__init__()
+        self.connection = connection
+        self.acquire_entries = 0
+
+    def acquire(self):
+        return _AsyncContext(
+            self.connection,
+            enter=lambda: setattr(self, "acquire_entries", self.acquire_entries + 1),
+        )
+
+
 def _draft() -> TicketFAQDraft:
     return TicketFAQDraft(
         target_id="ticket-1",
@@ -44,6 +84,30 @@ def _draft() -> TicketFAQDraft:
         warnings=({"code": "missing_source_text", "row_index": 2},),
         metadata={"source_types": ["ticket"]},
     )
+
+
+def _draft_row(*, draft_id: str = "11111111-1111-1111-1111-111111111111") -> dict:
+    return {
+        "id": draft_id,
+        "target_id": "ticket-1",
+        "target_mode": "vendor_retention",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ",
+        "items": json.dumps([{
+            "rank": 1,
+            "topic": "Login access",
+            "question": "How do I reset login?",
+            "answer": "Use the reset link.",
+            "source_ids": ["ticket-1"],
+            "ticket_count": 2,
+        }]),
+        "source_count": 3,
+        "ticket_source_count": 2,
+        "output_checks": json.dumps({"condensed": True}),
+        "warnings": json.dumps([]),
+        "metadata": json.dumps({"corpus_id": "corpus-1"}),
+        "status": "approved",
+    }
 
 
 @pytest.mark.asyncio
@@ -114,7 +178,7 @@ async def test_list_drafts_filters_by_status_target_mode_and_limit() -> None:
 @pytest.mark.asyncio
 async def test_update_status_returns_false_on_miss() -> None:
     pool = _Pool()
-    pool.execute_result = "UPDATE 0"
+    pool.fetch_rows = []
     repo = PostgresTicketFAQRepository(pool)
 
     updated = await repo.update_status(
@@ -124,22 +188,137 @@ async def test_update_status_returns_false_on_miss() -> None:
     )
 
     assert updated is False
-    assert "UPDATE ticket_faq_markdown" in pool.execute_calls[0]["query"]
-    assert pool.execute_calls[0]["args"] == ("faq-uuid-1", "approved", "acct-1")
+    assert "UPDATE ticket_faq_markdown" in pool.fetch_calls[0]["query"]
+    assert pool.fetch_calls[0]["args"] == ("faq-uuid-1", "approved", "acct-1")
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_status_replaces_search_projection() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row()]
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_status(
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated is True
+    assert "RETURNING id, target_id" in pool.fetch_calls[0]["query"]
+    assert "DELETE FROM ticket_faq_search_documents" in pool.execute_calls[0]["query"]
+    assert pool.execute_calls[0]["args"] == (
+        "acct-1",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+    )
+    assert "INSERT INTO ticket_faq_search_documents" in pool.execute_calls[1]["query"]
+    assert pool.execute_calls[1]["args"][:10] == (
+        "acct-1",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+        "ticket-1",
+        "vendor_retention",
+        "approved",
+        1,
+        "Login access",
+        "How do I reset login?",
+        "Use the reset link.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_status_indexes_projection_on_acquired_transaction() -> None:
+    connection = _Connection()
+    connection.fetch_rows = [_draft_row()]
+    pool = _AcquirePool(connection)
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_status(
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated is True
+    assert pool.acquire_entries == 1
+    assert connection.transaction_entries == 2
+    assert pool.fetch_calls == []
+    assert "UPDATE ticket_faq_markdown" in connection.fetch_calls[0]["query"]
+    assert "INSERT INTO ticket_faq_search_documents" in connection.execute_calls[1]["query"]
+
+
+@pytest.mark.asyncio
+async def test_update_status_clears_stale_projection_for_empty_items() -> None:
+    pool = _Pool()
+    row = _draft_row()
+    row["items"] = json.dumps([])
+    pool.fetch_rows = [row]
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_status(
+        "11111111-1111-1111-1111-111111111111",
+        "rejected",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated is True
+    assert len(pool.execute_calls) == 1
+    assert "DELETE FROM ticket_faq_search_documents" in pool.execute_calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_update_status_without_projection_scope_keeps_review_update() -> None:
+    pool = _Pool()
+    row = _draft_row()
+    row["metadata"] = json.dumps({})
+    pool.fetch_rows = [row]
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_status(
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        scope=TenantScope(),
+    )
+
+    assert updated is True
+    assert pool.execute_calls == []
 
 
 @pytest.mark.asyncio
 async def test_update_statuses_returns_matched_ids() -> None:
     pool = _Pool()
-    pool.fetch_rows = [{"id": "faq-uuid-1"}]
+    pool.fetch_rows = [_draft_row(draft_id="22222222-2222-2222-2222-222222222222")]
     repo = PostgresTicketFAQRepository(pool)
 
     updated = await repo.update_statuses(
-        ["faq-uuid-1", ""],
+        ["22222222-2222-2222-2222-222222222222", ""],
         "approved",
         scope=TenantScope(account_id="acct-1"),
     )
 
-    assert updated == ("faq-uuid-1",)
+    assert updated == ("22222222-2222-2222-2222-222222222222",)
     assert "id = ANY($1::uuid[])" in pool.fetch_calls[0]["query"]
-    assert pool.fetch_calls[0]["args"] == (["faq-uuid-1"], "approved", "acct-1")
+    assert pool.fetch_calls[0]["args"] == (
+        ["22222222-2222-2222-2222-222222222222"],
+        "approved",
+        "acct-1",
+    )
+    assert "INSERT INTO ticket_faq_search_documents" in pool.execute_calls[1]["query"]
+
+
+@pytest.mark.asyncio
+async def test_update_statuses_skips_projection_when_no_rows_match() -> None:
+    pool = _Pool()
+    pool.fetch_rows = []
+    repo = PostgresTicketFAQRepository(pool)
+
+    updated = await repo.update_statuses(
+        ["22222222-2222-2222-2222-222222222222"],
+        "approved",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert updated == ()
+    assert pool.execute_calls == []

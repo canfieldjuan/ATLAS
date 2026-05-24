@@ -3,6 +3,7 @@ from __future__ import annotations
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 from extracted_content_pipeline.ticket_faq_search import (
     build_ticket_faq_search_documents,
+    build_ticket_faq_search_projection_key,
     search_ticket_faq_documents,
 )
 
@@ -69,6 +70,23 @@ def test_build_ticket_faq_search_documents_projects_item_fields() -> None:
     assert first.ticket_count == 2
     assert "reset email" in first.search_text
     assert "search_text" not in first.as_dict()
+
+
+def test_build_ticket_faq_search_projection_key_uses_same_scope_defaults() -> None:
+    key = build_ticket_faq_search_projection_key(_draft())
+
+    assert key.account_id == "acct-1"
+    assert key.corpus_id == "corpus-1"
+    assert key.faq_id == "faq-1"
+
+
+def test_build_ticket_faq_search_projection_key_falls_back_to_target_id() -> None:
+    draft = _draft(corpus_id="", target_id="support-account-1", items=[])
+
+    key = build_ticket_faq_search_projection_key(draft, account_id="acct-override")
+
+    assert key.account_id == "acct-override"
+    assert key.corpus_id == "support-account-1"
 
 
 def test_search_ticket_faq_documents_returns_route_shaped_envelope() -> None:

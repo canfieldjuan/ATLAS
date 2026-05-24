@@ -1370,7 +1370,11 @@ def test_generated_asset_router_reviews_report_with_host_defined_status() -> Non
 
 
 def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() -> None:
-    pool = _Pool()
+    row = _ticket_faq_row()
+    row["id"] = "11111111-1111-1111-1111-111111111111"
+    row["status"] = "approved"
+    row["metadata"] = {"corpus_id": "corpus-1"}
+    pool = _Pool(rows=[row])
 
     response = _client(
         pool,
@@ -1389,9 +1393,22 @@ def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() ->
         "status": "approved",
         "updated": True,
     }
-    query, args = pool.execute_calls[0]
+    query, args = pool.fetch_calls[0]
     assert "UPDATE ticket_faq_markdown" in query
     assert args == ("11111111-1111-1111-1111-111111111111", "approved", "acct_1")
+    delete_query, delete_args = pool.execute_calls[0]
+    assert "DELETE FROM ticket_faq_search_documents" in delete_query
+    assert delete_args == ("acct_1", "corpus-1", "11111111-1111-1111-1111-111111111111")
+    insert_query, insert_args = pool.execute_calls[1]
+    assert "INSERT INTO ticket_faq_search_documents" in insert_query
+    assert insert_args[:6] == (
+        "acct_1",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+        "acct_1",
+        "support_account",
+        "approved",
+    )
 
 
 def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:
