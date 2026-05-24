@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+from datetime import date, datetime
 import json
 from pathlib import Path
 import re
@@ -518,10 +519,17 @@ def _support_ticket_blog_blueprint_payload(
     top_clusters = _top_ticket_clusters(source_rows)
     cluster_summary = _cluster_summary(top_clusters)
     draft_faq_entries = min(12, max(1, row_count))
+    has_valid_date_window = _support_ticket_rows_have_dates(source_rows)
+    review_period = "last 90 days" if has_valid_date_window else "uploaded tickets"
+    source_period = (
+        "Last 90 days of support tickets"
+        if has_valid_date_window
+        else "Uploaded support tickets"
+    )
     return {
         "topic": SUPPORT_TICKET_BLOG_TOPIC,
         "data_context": {
-            "review_period": "last 90 days",
+            "review_period": review_period,
             "source_row_count": row_count,
             "question_like_ticket_count": question_like_count,
             "top_clusters": top_clusters,
@@ -531,7 +539,7 @@ def _support_ticket_blog_blueprint_payload(
             "deep_enriched_count": row_count,
             "category": "support tickets",
             "topic": SUPPORT_TICKET_BLOG_TOPIC,
-            "source_period": "Last 90 days of support tickets",
+            "source_period": source_period,
             "source": "support_ticket_provider",
         },
         "sections": [
@@ -578,10 +586,10 @@ def _support_ticket_blog_blueprint_payload(
                     "questions, customer wording, draft answers, and review."
                 ),
                 "key_stats": {
-                    "source_window_days": 90,
                     "source_rows": row_count,
                     "draft_faq_entries": draft_faq_entries,
                     "review_steps": 3,
+                    **({"source_window_days": 90} if has_valid_date_window else {}),
                 },
                 "chart_ids": [],
                 "data_summary": (
@@ -623,6 +631,38 @@ def _ticket_row_text(row: Mapping[str, Any]) -> str:
         )
         if str(row.get(key) or "").strip()
     )
+
+
+def _support_ticket_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
+    return bool(rows) and all(_ticket_row_date(row) is not None for row in rows)
+
+
+def _ticket_row_date(row: Mapping[str, Any]) -> date | None:
+    for key in (
+        "Created At",
+        "created_at",
+        "Submitted At",
+        "submitted_at",
+        "Date",
+        "date",
+    ):
+        value = row.get(key)
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            pass
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            continue
+    return None
 
 
 def _ticket_cluster_label(row: Mapping[str, Any]) -> str:
