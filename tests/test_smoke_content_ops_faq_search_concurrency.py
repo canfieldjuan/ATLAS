@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -121,9 +122,61 @@ def test_latency_summary_reports_empty_and_percentiles() -> None:
     assert summary == {
         "count": 4,
         "p50_ms": 2.5,
-        "p95_ms": 3.0,
+        "p95_ms": 4.0,
         "max_ms": 4.0,
     }
+
+
+def test_latency_budget_summary_reports_passes_and_failures() -> None:
+    latency = {"p95_ms": 4.0, "max_ms": 5.0}
+
+    assert smoke._latency_budget_summary(
+        latency,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+    ) == {"ok": True, "checks": [], "failures": []}
+
+    passing = smoke._latency_budget_summary(
+        latency,
+        max_p95_ms=4.0,
+        max_single_request_ms=5.0,
+    )
+    failing = smoke._latency_budget_summary(
+        latency,
+        max_p95_ms=3.5,
+        max_single_request_ms=4.5,
+    )
+
+    assert passing == {
+        "ok": True,
+        "checks": [
+            {"metric": "p95_ms", "actual_ms": 4.0, "max_ms": 4.0, "ok": True},
+            {"metric": "max_ms", "actual_ms": 5.0, "max_ms": 5.0, "ok": True},
+        ],
+        "failures": [],
+    }
+    assert failing["ok"] is False
+    assert failing["failures"] == [
+        "p95_ms exceeded 3.5 ms",
+        "max_ms exceeded 4.5 ms",
+    ]
+
+
+def test_validate_args_rejects_nonpositive_latency_budgets() -> None:
+    args = SimpleNamespace(
+        database_url="postgresql://example",
+        account_count=1,
+        corpora_per_account=1,
+        documents_per_corpus=1,
+        iterations=1,
+        concurrency=1,
+        pool_size=1,
+        max_p95_ms=0,
+        max_single_request_ms=None,
+    )
+
+    with pytest.raises(SystemExit, match="--max-p95-ms must be positive"):
+        smoke._validate_args(args)
 
 
 def test_failure_summary_limits_output() -> None:
