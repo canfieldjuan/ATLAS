@@ -459,6 +459,18 @@ async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload()
                 "objections": ["Will this publish automatically?"],
                 "faq_questions": ["What happens after upload?"],
                 "source_period": "Last 90 days of support tickets",
+                "source_row_count": 4,
+                "included_ticket_row_count": 4,
+                "skipped_ticket_row_count": 0,
+                "truncated_ticket_row_count": 0,
+                "question_like_ticket_count": 2,
+                "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
+                "customer_wording_examples": [{
+                    "source_id": "ticket-1",
+                    "source_title": "Reporting dashboard export",
+                    "pain_category": "reporting friction",
+                    "text": "We cannot export the reporting dashboard for analysts.",
+                }],
                 "internal_links": ["/systems/ai-content-ops/intake"],
                 "cta_label": "Upload Ticket CSV -- Free Analysis",
                 "cta_url": "/systems/ai-content-ops/intake",
@@ -471,8 +483,58 @@ async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload()
     assert '"target_keyword":"support ticket FAQ"' in system_msg
     assert '"secondary_keywords":["reduce repeat support tickets"]' in system_msg
     assert '"primary_entity":"FAQ Report"' in system_msg
+    assert '"source_row_count":4' in system_msg
+    assert '"top_ticket_clusters":[{"label":"reporting friction","count":2}]' in system_msg
+    assert "We cannot export the reporting dashboard for analysts." in system_msg
     assert '"cta_url":"/systems/ai-content-ops/intake"' in system_msg
     assert "support ticket FAQ" not in user_msg
+
+
+def test_build_draft_preserves_support_ticket_source_context_metadata() -> None:
+    service, _lp, _llm, _skills, _rp = _service()
+    campaign = MarketingCampaign(
+        name="support-faq-report",
+        persona="10-50 person SaaS team",
+        value_prop="Turn repeat support tickets into customer-ready FAQs",
+        context={
+            "source_row_count": 4,
+            "included_ticket_row_count": 4,
+            "skipped_ticket_row_count": 0,
+            "truncated_ticket_row_count": 0,
+            "question_like_ticket_count": 2,
+            "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
+            "customer_wording_examples": [{
+                "source_id": "ticket-1",
+                "source_title": "Reporting dashboard export",
+                "pain_category": "reporting friction",
+                "text": "We cannot export the reporting dashboard for analysts.",
+            }],
+            "support_ticket_source_summary": {"unsafe": "should not be copied"},
+            "target_account": "should not be copied",
+        },
+    )
+
+    draft = service._build_draft(  # noqa: SLF001 - source metadata contract
+        parse_landing_page_response(_valid_response()) or {},
+        campaign=campaign,
+    )
+
+    assert draft.metadata["source_context"] == {
+        "source_row_count": 4,
+        "included_ticket_row_count": 4,
+        "skipped_ticket_row_count": 0,
+        "truncated_ticket_row_count": 0,
+        "question_like_ticket_count": 2,
+        "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
+        "customer_wording_examples": [{
+            "source_id": "ticket-1",
+            "source_title": "Reporting dashboard export",
+            "pain_category": "reporting friction",
+            "text": "We cannot export the reporting dashboard for analysts.",
+        }],
+    }
+    assert "target_account" not in draft.metadata["source_context"]
+    assert "support_ticket_source_summary" not in draft.metadata["source_context"]
 
 
 @pytest.mark.asyncio

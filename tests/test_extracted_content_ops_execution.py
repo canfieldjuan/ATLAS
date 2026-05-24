@@ -1094,6 +1094,19 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
                     "What happens after upload?",
                 ],
                 "cta_url": "/systems/ai-content-ops/intake",
+                "source_row_count": 4,
+                "included_ticket_row_count": 4,
+                "skipped_ticket_row_count": 0,
+                "truncated_ticket_row_count": 0,
+                "question_like_ticket_count": 2,
+                "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
+                "customer_wording_examples": [{
+                    "source_id": "ticket-1",
+                    "source_title": "Export dashboard",
+                    "pain_category": "reporting friction",
+                    "text": "How do we export campaign attribution data before renewal?",
+                }],
+                "support_ticket_source_summary": {"unsafe": "should not pass through"},
             },
         },
         services=ContentOpsExecutionServices(landing_page=landing),
@@ -1115,6 +1128,21 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
         "What happens after upload?",
     ]
     assert context.get("cta_url") == "/systems/ai-content-ops/intake"
+    assert context.get("source_row_count") == 4
+    assert context.get("included_ticket_row_count") == 4
+    assert context.get("skipped_ticket_row_count") == 0
+    assert context.get("truncated_ticket_row_count") == 0
+    assert context.get("question_like_ticket_count") == 2
+    assert context.get("top_ticket_clusters") == [
+        {"label": "reporting friction", "count": 2}
+    ]
+    assert context.get("customer_wording_examples") == [{
+        "source_id": "ticket-1",
+        "source_title": "Export dashboard",
+        "pain_category": "reporting friction",
+        "text": "How do we export campaign attribution data before renewal?",
+    }]
+    assert "support_ticket_source_summary" not in context
 
     # Pre-fix leakers stay out.
     assert "target_account" not in context

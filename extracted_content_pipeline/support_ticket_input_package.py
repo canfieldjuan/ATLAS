@@ -9,6 +9,7 @@ the existing FAQ, landing-page, and blog planners already understand.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
@@ -128,11 +129,19 @@ def build_support_ticket_input_package(
             "max_rows": max_rows,
             "truncated_row_count": len(raw_rows) - max_rows,
         })
+    skipped_row_count = len(raw_rows[:max_rows]) - len(normalized_rows)
     truncated_row_count = max(0, len(raw_rows) - max_rows)
-
-    source_period = f"Last {window_days} days of support tickets"
+    has_valid_date_window = _all_rows_have_dates(normalized_rows)
+    source_period = (
+        f"Last {window_days} days of support tickets"
+        if has_valid_date_window
+        else "Uploaded support tickets"
+    )
     faq_questions = _ticket_questions(normalized_rows)
     faq_source_types = _source_types(normalized_rows)
+    question_like_ticket_count = _question_like_ticket_count(normalized_rows)
+    top_ticket_clusters = _top_ticket_clusters(normalized_rows)
+    customer_wording_examples = _customer_wording_examples(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
         "reduce repeat support tickets",
@@ -165,11 +174,18 @@ def build_support_ticket_input_package(
         "objections": list(resolved_objections),
         "faq_questions": faq_questions,
         "source_period": source_period,
+        "source_row_count": len(raw_rows),
+        "included_ticket_row_count": len(normalized_rows),
+        "skipped_ticket_row_count": skipped_row_count,
+        "truncated_ticket_row_count": truncated_row_count,
+        "question_like_ticket_count": question_like_ticket_count,
+        "top_ticket_clusters": top_ticket_clusters,
+        "customer_wording_examples": customer_wording_examples,
         "internal_links": list(internal_links or (DEFAULT_FAQ_REPORT_CTA_URL,)),
         "cta_label": cta_label,
         "cta_url": cta_url,
     }
-    if _all_rows_have_dates(normalized_rows):
+    if has_valid_date_window:
         inputs["faq_window_days"] = window_days
 
     return ContentOpsInputPackage(
@@ -182,7 +198,7 @@ def build_support_ticket_input_package(
             "source": "support_ticket_input_package",
             "source_row_count": len(raw_rows),
             "included_row_count": len(normalized_rows),
-            "skipped_row_count": len(raw_rows) - len(normalized_rows),
+            "skipped_row_count": skipped_row_count,
             "truncated_row_count": truncated_row_count,
             "source_period": source_period,
         },
@@ -280,6 +296,92 @@ def _source_types(rows: Sequence[Mapping[str, Any]]) -> list[str]:
         if source_type and source_type not in source_types:
             source_types.append(source_type)
     return source_types or ["support_ticket"]
+
+
+def _question_like_ticket_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    return sum(
+        1
+        for row in rows
+        if _first_question(row.get("text")) or _question_like(row.get("source_title"))
+    )
+
+
+def _top_ticket_clusters(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    counts: Counter[str] = Counter()
+    labels: dict[str, str] = {}
+    uncategorized_count = 0
+    for row in rows:
+        label = _cluster_label(row)
+        if not label:
+            uncategorized_count += 1
+            continue
+        key = label.lower()
+        labels.setdefault(key, label)
+        counts[key] += 1
+    clusters = [
+        {"label": labels[key], "count": count}
+        for key, count in counts.most_common(max(1, limit))
+    ]
+    shown_count = sum(int(item["count"]) for item in clusters)
+    remaining_count = sum(counts.values()) - shown_count
+    if remaining_count > 0:
+        clusters.append({"label": "remaining", "count": remaining_count})
+    if uncategorized_count > 0:
+        clusters.append({"label": "uncategorized", "count": uncategorized_count})
+    return clusters
+
+
+def _cluster_label(row: Mapping[str, Any]) -> str:
+    pain_category = _clean(row.get("pain_category"))
+    if pain_category:
+        return pain_category
+    source_title = _clean(row.get("source_title"))
+    source_id = _clean(row.get("source_id"))
+    if source_title and source_title != source_id:
+        return source_title
+    return ""
+
+
+def _customer_wording_examples(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 6,
+    max_text_chars: int = 220,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        text = _compact(row.get("text"))
+        if not text:
+            continue
+        example = {
+            "source_id": _clean(row.get("source_id")),
+            "text": _clip_text(text, max_chars=max_text_chars),
+        }
+        source_title = _clean(row.get("source_title"))
+        source_id = _clean(row.get("source_id"))
+        if source_title and source_title != source_id:
+            example["source_title"] = source_title
+        pain_category = _clean(row.get("pain_category"))
+        if pain_category:
+            example["pain_category"] = pain_category
+        examples.append(example)
+        if len(examples) >= limit:
+            return examples
+    return examples
+
+
+def _clip_text(value: str, *, max_chars: int) -> str:
+    text = _compact(value)
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[:max_chars].rstrip()
+    if " " in trimmed:
+        trimmed = trimmed.rsplit(" ", 1)[0]
+    return f"{trimmed}..."
 
 
 def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:

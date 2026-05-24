@@ -52,6 +52,25 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     assert request.inputs["cta_label"] == DEFAULT_FAQ_REPORT_CTA_LABEL
     assert request.inputs["topic"] == "Support-ticket questions customers keep asking"
     assert request.inputs["filters"] == {"topic_type": "content_ops_support_ticket_faq"}
+    assert request.inputs["source_row_count"] == 2
+    assert request.inputs["included_ticket_row_count"] == 2
+    assert request.inputs["skipped_ticket_row_count"] == 0
+    assert request.inputs["truncated_ticket_row_count"] == 0
+    assert request.inputs["question_like_ticket_count"] == 2
+    assert request.inputs["top_ticket_clusters"] == [
+        {"label": "profile updates", "count": 1},
+        {"label": "Export dashboard", "count": 1},
+    ]
+    assert request.inputs["customer_wording_examples"][0] == {
+        "source_id": "ticket-1",
+        "source_title": "How do I change my login email?",
+        "pain_category": "profile updates",
+        "text": (
+            "How do I change my login email? I cannot find where to update the "
+            "email on my account."
+        ),
+    }
+    assert "support_ticket_source_summary" not in request.inputs
     assert request.inputs["faq_questions"] == [
         "How do I change my login email?",
         "Where do I export the dashboard before renewal?",
@@ -125,6 +144,43 @@ def test_support_ticket_input_package_derives_faq_source_types_from_rows() -> No
     assert package.inputs["faq_source_types"] == ["ticket", "support_ticket"]
 
 
+def test_support_ticket_clusters_do_not_use_synthetic_ticket_ids() -> None:
+    package = build_support_ticket_input_package([
+        {"description": "How do I export data?"},
+        {"description": "Where is the billing page?"},
+        {"description": "Can I change my plan?"},
+    ])
+
+    assert package.inputs["top_ticket_clusters"] == [
+        {"label": "uncategorized", "count": 3}
+    ]
+    assert package.inputs["customer_wording_examples"][0] == {
+        "source_id": "ticket-1",
+        "text": "How do I export data?",
+    }
+
+
+def test_support_ticket_clusters_include_remaining_bucket() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": f"ticket-{index}",
+            "description": f"How do I fix issue {index}?",
+            "pain_category": f"category-{index}",
+        }
+        for index in range(1, 9)
+    ])
+
+    assert package.inputs["top_ticket_clusters"] == [
+        {"label": "category-1", "count": 1},
+        {"label": "category-2", "count": 1},
+        {"label": "category-3", "count": 1},
+        {"label": "category-4", "count": 1},
+        {"label": "category-5", "count": 1},
+        {"label": "category-6", "count": 1},
+        {"label": "remaining", "count": 2},
+    ]
+
+
 def test_support_ticket_input_package_omits_window_filter_without_row_dates() -> None:
     package = build_support_ticket_input_package([
         {
@@ -135,7 +191,7 @@ def test_support_ticket_input_package_omits_window_filter_without_row_dates() ->
     ])
 
     assert "faq_window_days" not in package.inputs
-    assert package.inputs["source_period"] == "Last 90 days of support tickets"
+    assert package.inputs["source_period"] == "Uploaded support tickets"
 
 
 def test_support_ticket_input_package_omits_window_filter_without_parseable_row_dates() -> None:
@@ -149,6 +205,7 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
     ])
 
     assert "faq_window_days" not in package.inputs
+    assert package.inputs["source_period"] == "Uploaded support tickets"
 
 
 def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() -> None:
@@ -262,8 +319,12 @@ def test_support_ticket_input_package_reports_skipped_and_truncated_rows() -> No
     ]
     assert package.metadata["source_row_count"] == 3
     assert package.metadata["included_row_count"] == 1
-    assert package.metadata["skipped_row_count"] == 2
+    assert package.metadata["skipped_row_count"] == 1
     assert package.metadata["truncated_row_count"] == 1
+    assert package.inputs["source_row_count"] == 3
+    assert package.inputs["included_ticket_row_count"] == 1
+    assert package.inputs["skipped_ticket_row_count"] == 1
+    assert package.inputs["truncated_ticket_row_count"] == 1
     assert package.warnings == (
         {
             "code": "ticket_row_missing_text",
@@ -293,10 +354,16 @@ def test_support_ticket_input_package_reconciles_truncated_valid_row_counts() ->
 
     assert package.metadata["source_row_count"] == 4
     assert package.metadata["included_row_count"] == 2
-    assert package.metadata["skipped_row_count"] == 2
+    assert package.metadata["skipped_row_count"] == 0
     assert package.metadata["truncated_row_count"] == 2
+    assert package.inputs["source_row_count"] == 4
+    assert package.inputs["included_ticket_row_count"] == 2
+    assert package.inputs["skipped_ticket_row_count"] == 0
+    assert package.inputs["truncated_ticket_row_count"] == 2
     assert (
-        package.metadata["included_row_count"] + package.metadata["skipped_row_count"]
+        package.metadata["included_row_count"]
+        + package.metadata["skipped_row_count"]
+        + package.metadata["truncated_row_count"]
         == package.metadata["source_row_count"]
     )
     assert package.warnings == (

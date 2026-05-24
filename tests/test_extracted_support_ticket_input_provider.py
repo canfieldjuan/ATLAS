@@ -58,7 +58,8 @@ def test_support_ticket_input_provider_builds_package_from_direct_source_materia
     assert package.metadata["source_row_count"] == 1
     assert package.metadata["host_request_id"] == "req-1"
     assert request.outputs == ("landing_page",)
-    assert request.inputs["source_period"] == "Last 30 days of support tickets"
+    assert request.inputs["source_period"] == "Uploaded support tickets"
+    assert "faq_window_days" not in request.inputs
     assert request.inputs["faq_questions"] == ["How do I change my login email?"]
     assert preview.can_run is True
 

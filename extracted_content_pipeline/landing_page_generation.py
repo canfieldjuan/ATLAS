@@ -41,6 +41,7 @@ from .landing_page_ports import (
     LandingPageSection,
     MarketingCampaign,
 )
+from .landing_page_input_contract import LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS
 from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     normalize_landing_page_quality_repair_attempts,
@@ -872,6 +873,9 @@ class LandingPageGenerationService:
         if campaign_payload is not None:
             context = normalize_campaign_reasoning_context(campaign_payload)
             metadata.update(campaign_reasoning_context_metadata(context))
+        source_context = _landing_page_source_context(campaign.context)
+        if source_context:
+            metadata["source_context"] = source_context
         return LandingPageDraft(
             campaign_name=campaign.name,
             persona=campaign.persona,
@@ -885,6 +889,14 @@ class LandingPageGenerationService:
             reference_ids=reference_ids,
             metadata=metadata,
         )
+
+
+def _landing_page_source_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: context[key]
+        for key in LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS
+        if key in context and context[key] not in (None, "", [], {})
+    }
 
 
 def _quality_repair_history_row(
