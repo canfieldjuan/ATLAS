@@ -8,6 +8,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import statistics
@@ -71,6 +72,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=30)
     parser.add_argument("--concurrency", type=int, default=8)
     parser.add_argument("--pool-size", type=int, default=4)
+    parser.add_argument("--max-p95-ms", type=float)
+    parser.add_argument("--max-single-request-ms", type=float)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--keep-data", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -89,6 +92,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         "pool_size",
     ):
         if int(getattr(args, name)) < 1:
+            raise SystemExit(f"--{name.replace('_', '-')} must be positive")
+    for name in ("max_p95_ms", "max_single_request_ms"):
+        value = getattr(args, name)
+        if value is not None and float(value) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
 
 
@@ -273,12 +280,46 @@ def _latency_summary(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     values = sorted(float(row.get("elapsed_ms") or 0.0) for row in results)
     if not values:
         return {"count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
-    p95_index = min(len(values) - 1, max(0, int(len(values) * 0.95) - 1))
+    p95_index = min(len(values) - 1, max(0, math.ceil(len(values) * 0.95) - 1))
     return {
         "count": len(values),
         "p50_ms": round(float(statistics.median(values)), 6),
         "p95_ms": round(values[p95_index], 6),
         "max_ms": round(values[-1], 6),
+    }
+
+
+def _latency_budget_summary(
+    latency: dict[str, Any],
+    *,
+    max_p95_ms: float | None,
+    max_single_request_ms: float | None,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    failures: list[str] = []
+    for metric, limit in (
+        ("p95_ms", max_p95_ms),
+        ("max_ms", max_single_request_ms),
+    ):
+        if limit is None:
+            continue
+        actual = float(latency[metric])
+        max_ms = round(float(limit), 6)
+        ok = actual <= max_ms
+        checks.append(
+            {
+                "metric": metric,
+                "actual_ms": actual,
+                "max_ms": max_ms,
+                "ok": ok,
+            }
+        )
+        if not ok:
+            failures.append(f"{metric} exceeded {max_ms} ms")
+    return {
+        "ok": not failures,
+        "checks": checks,
+        "failures": failures,
     }
 
 
@@ -326,8 +367,14 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             await _cleanup(pool, cases)
         await pool.close()
     failure = _failure_summary(results)
+    latency = _latency_summary(results)
+    latency_budget = _latency_budget_summary(
+        latency,
+        max_p95_ms=args.max_p95_ms,
+        max_single_request_ms=args.max_single_request_ms,
+    )
     summary = {
-        "ok": failure["count"] == 0,
+        "ok": failure["count"] == 0 and latency_budget["ok"],
         "run_id": run_id,
         "requests": {
             "total": len(results),
@@ -340,7 +387,8 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "documents_per_corpus": int(args.documents_per_corpus),
             "search_cases": len(cases),
         },
-        "latency": _latency_summary(results),
+        "latency": latency,
+        "latency_budget": latency_budget,
         "isolation": failure,
         "elapsed_seconds": round(time.perf_counter() - started, 6),
     }
@@ -361,7 +409,8 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool) -> None:
         "FAQ search concurrency smoke: "
         f"ok={summary['ok']} requests={summary['requests']['total']} "
         f"p50_ms={latency['p50_ms']} p95_ms={latency['p95_ms']} "
-        f"max_ms={latency['max_ms']} failures={summary['isolation']['count']}"
+        f"max_ms={latency['max_ms']} failures={summary['isolation']['count']} "
+        f"latency_budget_failures={len(summary['latency_budget']['failures'])}"
     )
 
 
