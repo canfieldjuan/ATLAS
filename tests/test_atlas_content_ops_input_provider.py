@@ -23,6 +23,9 @@ from extracted_content_pipeline.control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from extracted_content_pipeline.support_ticket_input_provider import (
+    SupportTicketInputProvider,
+)
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
 
@@ -364,6 +367,78 @@ async def test_api_preview_route_applies_support_ticket_input_provider() -> None
     assert payload["can_run"] is True
     assert payload["outputs"] == ["faq_markdown", "landing_page", "blog_post"]
     assert payload["missing_inputs"] == []
+
+
+@pytest.mark.asyncio
+async def test_preview_route_surfaces_support_ticket_loader_truncation_warning() -> None:
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "subject": "Billing renewal question",
+            "body": "How do I confirm my renewal invoice before payment?",
+        }
+        for index in range(1005)
+    ]
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=SupportTicketInputProvider(source_material_loader=lambda scope, request: rows),
+        scope_provider=lambda: {"account_id": "acct-truncation-proof"},
+    )
+
+    route = _router_route(router, "/content-ops/preview", "POST")
+    payload = await route.endpoint({
+        "outputs": ["landing_page"],
+    })
+
+    assert payload["can_run"] is True
+    assert payload["outputs"] == ["landing_page"]
+    assert payload["input_provider"] == {
+        "provider": "support_ticket_input_provider",
+        "metadata": {
+            "included_row_count": 1000,
+            "skipped_row_count": 0,
+            "source": "support_ticket_input_package",
+            "source_period": "Uploaded support tickets",
+            "source_row_count": 1005,
+            "truncated_row_count": 5,
+        },
+        "warnings": [{
+            "code": "ticket_rows_truncated",
+            "message": "Used first 1000 ticket rows out of 1005.",
+            "row_count": 1005,
+            "max_rows": 1000,
+            "truncated_row_count": 5,
+        }],
+    }
+
+
+@pytest.mark.asyncio
+async def test_atlas_preview_route_rejects_inline_source_material_over_request_cap() -> None:
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "subject": "Billing renewal question",
+            "body": "How do I confirm my renewal invoice before payment?",
+        }
+        for index in range(1005)
+    ]
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(),
+        scope_provider=lambda: {"account_id": "acct-inline-cap-proof"},
+    )
+
+    route = _router_route(router, "/content-ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "outputs": ["landing_page"],
+            "inputs": {
+                "source_material": rows,
+            },
+        })
+
+    assert exc.value.status_code == 422
+    assert "inputs arrays are too large" in str(exc.value.detail)
 
 
 @pytest.mark.skipif(
