@@ -645,6 +645,7 @@ async def test_preview_generation_route_returns_preflight_plan():
     assert payload["outputs"] == ["email_campaign"]
     assert payload["estimated_cost_usd"] == 0.36
     assert payload["missing_inputs"] == []
+    assert "input_provider" not in payload
 
 
 @pytest.mark.asyncio
@@ -692,6 +693,7 @@ async def test_plan_generation_route_returns_execution_plan():
     assert payload["steps"][0]["runner"] == "CampaignGenerationService.generate"
     assert payload["steps"][0]["status"] == "runnable"
     assert payload["preview"]["can_run"] is True
+    assert "input_provider" not in payload
 
 
 @pytest.mark.asyncio
@@ -704,7 +706,11 @@ async def test_preview_generation_route_applies_sync_input_provider():
                 "audience": "10-50 person SaaS teams",
                 "offer": "Provider offer",
             },
-            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            metadata={
+                "source_row_count": 10000,
+                "included_row_count": 1000,
+                "internal_request_id": "req-secret",
+            },
             warnings=({
                 "code": "ticket_rows_truncated",
                 "message": "Used first 1000 ticket rows out of 10000.",
@@ -752,7 +758,11 @@ async def test_plan_generation_route_applies_async_input_provider():
                     "text": "How do I export my dashboard?",
                 }],
             },
-            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            metadata={
+                "source_row_count": 10000,
+                "included_row_count": 1000,
+                "internal_request_id": "req-secret",
+            },
             warnings=({
                 "code": "ticket_rows_truncated",
                 "message": "Used first 1000 ticket rows out of 10000.",
@@ -1620,6 +1630,7 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
+    assert "input_provider" not in payload
 
 
 @pytest.mark.asyncio
@@ -1634,7 +1645,11 @@ async def test_execute_generation_route_applies_input_provider_before_generation
                 "offer": "Provider offer",
                 "filters": {"status": "provider"},
             },
-            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            metadata={
+                "source_row_count": 10000,
+                "included_row_count": 1000,
+                "internal_request_id": "req-secret",
+            },
             warnings=({
                 "code": "ticket_rows_truncated",
                 "message": "Used first 1000 ticket rows out of 10000.",

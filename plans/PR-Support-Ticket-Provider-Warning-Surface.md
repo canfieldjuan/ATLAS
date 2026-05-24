@@ -56,6 +56,9 @@ execute completes.
 
 - No warning text is folded into `inputs`; generators should not consume
   operational warnings as content context.
+- API responses only expose the provider name, warnings, and allowlisted
+  operational metadata fields. Host-injected metadata remains available inside
+  the package but is not echoed wholesale to callers.
 - No hosted upload UI changes. This only makes the diagnostic available to the
   API response layer.
 - No blocking behavior for truncation warnings. The existing package cap stays

@@ -103,6 +103,14 @@ _UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
 _SAFE_EXECUTION_REASONS = {"plan_not_executable", "service_not_configured"}
+_INPUT_PROVIDER_RESPONSE_METADATA_KEYS = frozenset({
+    "source",
+    "source_period",
+    "source_row_count",
+    "included_row_count",
+    "skipped_row_count",
+    "truncated_row_count",
+})
 _SOURCE_MATERIAL_ROW_LIST_KEYS = {
     "sources",
     "opportunities",
@@ -1046,7 +1054,7 @@ def _with_input_provider_diagnostics(
     out = dict(response)
     out["input_provider"] = {
         "provider": _clean(diagnostics.get("provider")),
-        "metadata": dict(diagnostics.get("metadata") or {}),
+        "metadata": _input_provider_response_metadata(diagnostics.get("metadata")),
         "warnings": [
             dict(warning)
             for warning in diagnostics.get("warnings") or ()
@@ -1054,6 +1062,16 @@ def _with_input_provider_diagnostics(
         ],
     }
     return out
+
+
+def _input_provider_response_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        key: value[key]
+        for key in sorted(_INPUT_PROVIDER_RESPONSE_METADATA_KEYS)
+        if key in value
+    }
 
 
 async def _structured_reasoning_contexts(
