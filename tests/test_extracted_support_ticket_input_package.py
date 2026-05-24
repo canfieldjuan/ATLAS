@@ -377,6 +377,36 @@ def test_support_ticket_input_package_reconciles_truncated_valid_row_counts() ->
     )
 
 
+def test_support_ticket_input_package_caps_default_generation_rows_at_1000() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": f"ticket-{index}",
+            "description": f"How do I fix issue {index}?",
+            "pain_category": "setup friction",
+        }
+        for index in range(1, 1006)
+    ])
+
+    assert package.inputs["source_row_count"] == 1005
+    assert package.inputs["included_ticket_row_count"] == 1000
+    assert package.inputs["skipped_ticket_row_count"] == 0
+    assert package.inputs["truncated_ticket_row_count"] == 5
+    assert len(package.inputs["source_material"]) == 1000
+    assert package.metadata["source_row_count"] == 1005
+    assert package.metadata["included_row_count"] == 1000
+    assert package.metadata["skipped_row_count"] == 0
+    assert package.metadata["truncated_row_count"] == 5
+    assert package.warnings == (
+        {
+            "code": "ticket_rows_truncated",
+            "message": "Used first 1000 ticket rows out of 1005.",
+            "row_count": 1005,
+            "max_rows": 1000,
+            "truncated_row_count": 5,
+        },
+    )
+
+
 def test_support_ticket_input_package_reports_non_mapping_rows() -> None:
     package = build_support_ticket_input_package([
         "bare string",
