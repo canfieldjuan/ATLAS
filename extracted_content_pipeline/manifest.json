@@ -85,6 +85,10 @@
       "target": "extracted_content_pipeline/storage/migrations/325_ticket_faq_markdown.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/327_ticket_faq_search_documents.sql",
+      "target": "extracted_content_pipeline/storage/migrations/327_ticket_faq_search_documents.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/066_b2b_campaigns.sql",
       "target": "extracted_content_pipeline/storage/migrations/066_b2b_campaigns.sql"
     },
