@@ -720,6 +720,8 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert "42%" not in serialized
     assert payload["data_context"]["source_row_count"] == 2
     assert payload["data_context"]["question_like_ticket_count"] == 2
+    assert payload["data_context"]["review_period"] == "uploaded tickets"
+    assert payload["data_context"]["source_period"] == "Uploaded support tickets"
     assert payload["data_context"]["top_clusters"] == [
         {"label": "account", "count": 1},
         {"label": "reporting", "count": 1},
@@ -731,6 +733,23 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "cluster_count": 2,
     }
     assert "2 support-ticket rows" in first_section["data_summary"]
+    assert "source_window_days" not in payload["sections"][2]["key_stats"]
+
+
+def test_support_ticket_blog_blueprint_payload_uses_date_window_when_dates_validate() -> None:
+    payload = smoke._support_ticket_blog_blueprint_payload([
+        {
+            "Ticket ID": "ticket-1",
+            "Subject": "How do I change my login email?",
+            "Description": "I cannot find where to update the email on my account.",
+            "Pain Category": "account",
+            "Created At": "2026-05-01",
+        }
+    ])
+
+    assert payload["data_context"]["review_period"] == "last 90 days"
+    assert payload["data_context"]["source_period"] == "Last 90 days of support tickets"
+    assert payload["sections"][2]["key_stats"]["source_window_days"] == 90
 
 
 @pytest.mark.asyncio
