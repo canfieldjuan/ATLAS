@@ -350,6 +350,9 @@
       "target": "extracted_content_pipeline/api/generated_assets.py"
     },
     {
+      "target": "extracted_content_pipeline/api/faq_search.py"
+    },
+    {
       "target": "extracted_content_pipeline/api/reasoning_contexts.py"
     },
     {
