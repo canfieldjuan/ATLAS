@@ -1051,17 +1051,32 @@ def _with_input_provider_diagnostics(
     diagnostics = payload.get("input_provider")
     if not isinstance(diagnostics, Mapping):
         return dict(response)
+    warnings = [
+        dict(warning)
+        for warning in diagnostics.get("warnings") or ()
+        if isinstance(warning, Mapping)
+    ]
+    if _is_noop_input_provider_diagnostics(diagnostics, warnings):
+        return dict(response)
     out = dict(response)
     out["input_provider"] = {
         "provider": _clean(diagnostics.get("provider")),
         "metadata": _input_provider_response_metadata(diagnostics.get("metadata")),
-        "warnings": [
-            dict(warning)
-            for warning in diagnostics.get("warnings") or ()
-            if isinstance(warning, Mapping)
-        ],
+        "warnings": warnings,
     }
     return out
+
+
+def _is_noop_input_provider_diagnostics(
+    diagnostics: Mapping[str, Any],
+    warnings: Sequence[Mapping[str, Any]],
+) -> bool:
+    metadata = diagnostics.get("metadata")
+    return (
+        not warnings
+        and isinstance(metadata, Mapping)
+        and _clean(metadata.get("mode")) == "noop"
+    )
 
 
 def _input_provider_response_metadata(value: Any) -> dict[str, Any]:

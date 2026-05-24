@@ -697,6 +697,40 @@ async def test_plan_generation_route_returns_execution_plan():
 
 
 @pytest.mark.asyncio
+async def test_preview_generation_route_hides_noop_input_provider_diagnostics():
+    provider = _SyncInputProvider(
+        ContentOpsInputPackage(
+            provider="atlas_support_ticket_request",
+            inputs={},
+            outputs=(),
+            target_mode="",
+            ingestion_profile="",
+            metadata={
+                "source": "atlas_content_ops_input_provider",
+                "mode": "noop",
+            },
+        )
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        input_provider=provider,
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint({
+        "outputs": ["email_campaign"],
+        "inputs": {
+            "target_account": "Acme",
+            "offer": "Churn audit",
+        },
+    })
+
+    assert payload["can_run"] is True
+    assert payload["outputs"] == ["email_campaign"]
+    assert "input_provider" not in payload
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_applies_sync_input_provider():
     provider = _SyncInputProvider(
         ContentOpsInputPackage(

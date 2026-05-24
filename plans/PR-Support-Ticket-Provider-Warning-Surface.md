@@ -59,6 +59,8 @@ execute completes.
 - API responses only expose the provider name, warnings, and allowlisted
   operational metadata fields. Host-injected metadata remains available inside
   the package but is not echoed wholesale to callers.
+- No-op provider packages stay hidden so Atlas' globally mounted request-aware
+  provider does not add noisy diagnostics to unrelated Content Ops requests.
 - No hosted upload UI changes. This only makes the diagnostic available to the
   API response layer.
 - No blocking behavior for truncation warnings. The existing package cap stays
@@ -83,7 +85,7 @@ execute completes.
   `extracted_content_pipeline/api/control_surfaces.py`, and focused tests -
   passed.
 - pytest for `tests/test_extracted_content_ops_input_provider.py` plus focused
-  preview/plan/execute API tests - 8 passed.
+  preview/plan/execute API tests - passed.
 - validate_extracted_content_pipeline.sh - passed.
 - forbid_atlas_reasoning_imports.py for `extracted_content_pipeline` - passed.
 - audit_extracted_standalone.py with fail-on-debt - passed.
