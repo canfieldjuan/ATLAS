@@ -351,7 +351,16 @@ The command fails if `landing_page` is not configured, which usually means the
 DB pool did not initialize or the pipeline LLM/OpenRouter credentials are not
 available. Set `OPENROUTER_API_KEY` or
 `ATLAS_B2B_CHURN_OPENROUTER_API_KEY` for the pipeline-routed Claude provider.
-On success it prints the saved `landing_pages` draft id.
+On success it prints the saved `landing_pages` draft id. Export that exact row
+for inspection with:
+
+```bash
+python scripts/export_extracted_content_assets.py \
+  --asset landing_page \
+  --account-id acct_123 \
+  --id <landing-page-id> \
+  --output landing-page-draft.json
+```
 
 To prove the live blog-post path too, run the same smoke with
 `--output blog_post`. The command upserts one account-scoped
@@ -367,9 +376,19 @@ python scripts/smoke_content_ops_live_generation.py \
 ```
 
 On success it prints the saved `blog_posts` draft id and the seeded blueprint
-id. Re-running the command refreshes the same smoke blueprint for that account.
-To seed a specific operator blueprint instead of the default smoke row, pass a
-JSON file that normalizes to one blog blueprint:
+id. Export that exact row for inspection with:
+
+```bash
+python scripts/export_extracted_content_assets.py \
+  --asset blog_post \
+  --account-id acct_123 \
+  --id <blog-post-id> \
+  --output blog-post-draft.json
+```
+
+Re-running the command refreshes the same smoke blueprint for that account. To
+seed a specific operator blueprint instead of the default smoke row, pass a JSON
+file that normalizes to one blog blueprint:
 
 ```bash
 python scripts/smoke_content_ops_live_generation.py \
@@ -1287,8 +1306,8 @@ Several small utility shims provide product-owned local behavior by default so t
 - `sales_brief_export.py`: read-only sales brief export for host review flows
 - `ticket_faq_export.py`: read-only ticket FAQ Markdown export for host review
   flows
-- `scripts/export_extracted_content_assets.py`: host-facing report, landing
-  page, sales brief, and FAQ Markdown export CLI
+- `scripts/export_extracted_content_assets.py`: host-facing report, blog post,
+  landing page, sales brief, and FAQ Markdown export CLI
 - `scripts/review_extracted_content_assets.py`: host-facing report, landing
   page, sales brief, and FAQ Markdown status-update CLI
 - `campaign_postgres_seller_targets.py`: seller target CRUD/list helpers for

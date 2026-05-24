@@ -265,6 +265,7 @@ class PostgresBlogPostRepository:
         scope: TenantScope,
         status: str | None = None,
         topic_type: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> Sequence[BlogPostDraft]:
         clauses: list[str] = ["account_id = $1"]
@@ -275,6 +276,10 @@ class PostgresBlogPostRepository:
         if topic_type is not None:
             params.append(topic_type)
             clauses.append(f"topic_type = ${len(params)}")
+        normalized_ids = [str(item).strip() for item in ids or () if str(item).strip()]
+        if normalized_ids:
+            params.append(normalized_ids)
+            clauses.append(f"id = ANY(${len(params)}::uuid[])")
         sql = (
             "SELECT id, slug, title, description, topic_type, tags, content, "
             "charts, data_context, llm_model, status, "

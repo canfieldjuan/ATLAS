@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import csv
 from dataclasses import dataclass
 from io import StringIO
@@ -96,12 +96,14 @@ async def export_landing_page_drafts(
     status: str | None = "draft",
     campaign_name: str | None = None,
     slug: str | None = None,
+    ids: Sequence[str] | None = None,
     limit: int = 20,
 ) -> LandingPageDraftExportResult:
     """Return generated landing page drafts for host review/export workflows."""
 
     tenant = _tenant_scope(scope)
     normalized_limit = _normalize_limit(limit)
+    normalized_ids = _normalize_ids(ids)
     filters: dict[str, Any] = {}
     if status:
         filters["status"] = status
@@ -111,11 +113,14 @@ async def export_landing_page_drafts(
         filters["campaign_name"] = campaign_name
     if slug:
         filters["slug"] = slug
+    if normalized_ids:
+        filters["ids"] = list(normalized_ids)
     drafts = await repository.list_drafts(
         scope=tenant,
         status=status,
         campaign_name=campaign_name,
         slug=slug,
+        ids=normalized_ids or None,
         limit=normalized_limit,
     )
     return LandingPageDraftExportResult(
@@ -247,6 +252,12 @@ def _normalize_limit(value: Any) -> int:
     if limit < 0:
         raise ValueError("limit must be non-negative")
     return limit
+
+
+def _normalize_ids(value: Sequence[str] | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:

@@ -82,6 +82,7 @@ class BlogPostRepository(Protocol):
         scope: TenantScope,
         status: str | None = None,
         topic_type: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> Sequence[BlogPostDraft]:
         """Return drafts filtered by tenant scope and optional facets."""

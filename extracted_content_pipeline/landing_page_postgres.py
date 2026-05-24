@@ -214,6 +214,7 @@ class PostgresLandingPageRepository:
         status: str | None = None,
         campaign_name: str | None = None,
         slug: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> Sequence[LandingPageDraft]:
         clauses: list[str] = ["account_id = $1"]
@@ -227,6 +228,10 @@ class PostgresLandingPageRepository:
         if slug is not None:
             params.append(slug)
             clauses.append(f"slug = ${len(params)}")
+        normalized_ids = [str(item).strip() for item in ids or () if str(item).strip()]
+        if normalized_ids:
+            params.append(normalized_ids)
+            clauses.append(f"id = ANY(${len(params)}::uuid[])")
         sql = (
             "SELECT id, campaign_name, persona, value_prop, title, slug, "
             "hero, sections, cta, meta, reference_ids, metadata, status "

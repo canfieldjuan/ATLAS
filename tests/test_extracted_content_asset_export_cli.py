@@ -55,6 +55,7 @@ def _report_row():
 
 def _blog_post_row():
     return {
+        "id": "11111111-1111-1111-1111-111111111111",
         "slug": "acme-pricing-pressure",
         "title": "Acme Pricing Pressure",
         "description": "Pricing pressure dominates.",
@@ -74,6 +75,7 @@ def _blog_post_row():
 
 def _landing_page_row():
     return {
+        "id": "22222222-2222-2222-2222-222222222222",
         "campaign_name": "acme-launch",
         "persona": "VP Engineering",
         "value_prop": "Catch pressure early",
@@ -186,6 +188,8 @@ async def test_asset_export_cli_outputs_blog_post_json(monkeypatch, capsys) -> N
             "acct_1",
             "--topic-type",
             "vendor_alternative",
+            "--id",
+            "11111111-1111-1111-1111-111111111111",
             "--limit",
             "4",
         ],
@@ -197,7 +201,14 @@ async def test_asset_export_cli_outputs_blog_post_json(monkeypatch, capsys) -> N
     query, args = pool.fetch_calls[0]
     assert exit_code == 0
     assert "FROM blog_posts" in query
-    assert args == ("acct_1", "draft", "vendor_alternative", 4)
+    assert "id = ANY($4::uuid[])" in query
+    assert args == (
+        "acct_1",
+        "draft",
+        "vendor_alternative",
+        ["11111111-1111-1111-1111-111111111111"],
+        4,
+    )
     assert output["rows"][0]["slug"] == "acme-pricing-pressure"
     assert output["rows"][0]["reasoning_wedge"] == "price_squeeze"
 
@@ -225,6 +236,8 @@ async def test_asset_export_cli_writes_landing_page_csv(monkeypatch, tmp_path) -
             "acme-launch",
             "--slug",
             "acme-launch",
+            "--id",
+            "22222222-2222-2222-2222-222222222222",
             "--format",
             "csv",
             "--output",
@@ -237,7 +250,15 @@ async def test_asset_export_cli_writes_landing_page_csv(monkeypatch, tmp_path) -
     assert exit_code == 0
     query, args = pool.fetch_calls[0]
     assert "FROM landing_pages" in query
-    assert args == ("", "draft", "acme-launch", "acme-launch", 20)
+    assert "id = ANY($5::uuid[])" in query
+    assert args == (
+        "",
+        "draft",
+        "acme-launch",
+        "acme-launch",
+        ["22222222-2222-2222-2222-222222222222"],
+        20,
+    )
     assert "Acme landing page" in output_path.read_text(encoding="utf-8")
 
 
@@ -328,4 +349,25 @@ async def test_asset_export_cli_requires_database_url(monkeypatch) -> None:
     monkeypatch.setattr(cli.sys, "argv", ["export", "--asset", "report"])
 
     with pytest.raises(SystemExit, match="Missing --database-url"):
+        await cli._main()
+
+
+@pytest.mark.asyncio
+async def test_asset_export_cli_rejects_id_for_unsupported_asset(monkeypatch) -> None:
+    cli = _load_cli_module()
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "export",
+            "--database-url",
+            "postgres://example",
+            "--asset",
+            "report",
+            "--id",
+            "11111111-1111-1111-1111-111111111111",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="--id is only supported"):
         await cli._main()
