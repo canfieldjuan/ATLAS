@@ -41,6 +41,7 @@ class _Repository:
         status=None,
         campaign_name=None,
         slug=None,
+        ids=None,
         limit=None,
     ):
         self.list_calls.append({
@@ -48,6 +49,7 @@ class _Repository:
             "status": status,
             "campaign_name": campaign_name,
             "slug": slug,
+            "ids": ids,
             "limit": limit,
         })
         return self.drafts
@@ -355,6 +357,7 @@ async def test_export_landing_page_drafts_passes_filters_to_repository() -> None
         status="approved",
         campaign_name="acme-q3-launch",
         slug="acme-q3-launch",
+        ids=["lp-1", "", "lp-2"],
         limit=7,
     )
 
@@ -365,6 +368,7 @@ async def test_export_landing_page_drafts_passes_filters_to_repository() -> None
     assert call["status"] == "approved"
     assert call["campaign_name"] == "acme-q3-launch"
     assert call["slug"] == "acme-q3-launch"
+    assert call["ids"] == ("lp-1", "lp-2")
     assert call["limit"] == 7
     assert result.limit == 7
     assert result.filters == {
@@ -372,6 +376,7 @@ async def test_export_landing_page_drafts_passes_filters_to_repository() -> None
         "account_id": "acct_1",
         "campaign_name": "acme-q3-launch",
         "slug": "acme-q3-launch",
+        "ids": ["lp-1", "lp-2"],
     }
 
 

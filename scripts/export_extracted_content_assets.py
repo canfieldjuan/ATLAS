@@ -65,6 +65,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--topic-type", default=None, help="Blog post topic_type filter.")
     parser.add_argument("--campaign-name", default=None, help="Landing page campaign_name filter.")
     parser.add_argument("--slug", default=None, help="Landing page slug filter.")
+    parser.add_argument(
+        "--id",
+        action="append",
+        default=[],
+        dest="ids",
+        help=(
+            "Exact draft id to export. May be repeated. Supported for "
+            "blog_post and landing_page."
+        ),
+    )
     parser.add_argument("--brief-type", default=None, help="Sales brief type filter.")
     parser.add_argument("--limit", type=int, default=20, help="Maximum rows to export.")
     parser.add_argument(
@@ -91,6 +101,8 @@ async def _main() -> int:
     args = _parse_args()
     if not args.database_url:
         raise SystemExit("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
+    if args.ids and args.asset not in {"blog_post", "landing_page"}:
+        raise SystemExit("--id is only supported for blog_post and landing_page exports")
     pool = await _create_pool(args.database_url)
     try:
         result = await _export_for_asset(args, pool)
@@ -121,6 +133,7 @@ async def _export_for_asset(args: argparse.Namespace, pool: Any):
             scope=scope,
             status=status,
             topic_type=args.topic_type,
+            ids=args.ids,
             limit=args.limit,
         )
     if args.asset == "report":
@@ -139,6 +152,7 @@ async def _export_for_asset(args: argparse.Namespace, pool: Any):
             status=status,
             campaign_name=args.campaign_name,
             slug=args.slug,
+            ids=args.ids,
             limit=args.limit,
         )
     if args.asset == "sales_brief":

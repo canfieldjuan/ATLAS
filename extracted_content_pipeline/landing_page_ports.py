@@ -197,6 +197,7 @@ class LandingPageRepository(Protocol):
         status: str | None = None,
         campaign_name: str | None = None,
         slug: str | None = None,
+        ids: Sequence[str] | None = None,
         limit: int | None = None,
     ) -> Sequence[LandingPageDraft]:
         """Return drafts filtered by tenant scope and optional facets."""

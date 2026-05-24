@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import csv
 from dataclasses import dataclass
 from io import StringIO
@@ -77,12 +77,14 @@ async def export_blog_post_drafts(
     scope: TenantScope | Mapping[str, Any] | None = None,
     status: str | None = "draft",
     topic_type: str | None = None,
+    ids: Sequence[str] | None = None,
     limit: int = 20,
 ) -> BlogPostDraftExportResult:
     """Return generated blog-post drafts for host review/export workflows."""
 
     tenant = _tenant_scope(scope)
     normalized_limit = _normalize_limit(limit)
+    normalized_ids = _normalize_ids(ids)
     filters: dict[str, Any] = {}
     if status:
         filters["status"] = status
@@ -90,10 +92,13 @@ async def export_blog_post_drafts(
         filters["account_id"] = tenant.account_id
     if topic_type:
         filters["topic_type"] = topic_type
+    if normalized_ids:
+        filters["ids"] = list(normalized_ids)
     drafts = await repository.list_drafts(
         scope=tenant,
         status=status,
         topic_type=topic_type,
+        ids=normalized_ids or None,
         limit=normalized_limit,
     )
     return BlogPostDraftExportResult(
@@ -454,6 +459,12 @@ def _normalize_limit(value: Any) -> int:
     if limit < 0:
         raise ValueError("limit must be non-negative")
     return limit
+
+
+def _normalize_ids(value: Sequence[str] | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:

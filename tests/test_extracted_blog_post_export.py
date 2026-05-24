@@ -24,12 +24,14 @@ class _Repository:
         scope,
         status=None,
         topic_type=None,
+        ids=None,
         limit=None,
     ):
         self.list_calls.append({
             "scope": scope,
             "status": status,
             "topic_type": topic_type,
+            "ids": ids,
             "limit": limit,
         })
         return self.drafts
@@ -103,6 +105,8 @@ def _draft(**overrides) -> BlogPostDraft:
         charts=overrides.get("charts", draft.charts),
         data_context=overrides.get("data_context", draft.data_context),
         metadata=overrides.get("metadata", draft.metadata),
+        id=overrides.get("id", draft.id),
+        status=overrides.get("status", draft.status),
     )
 
 
@@ -115,6 +119,7 @@ async def test_export_blog_post_drafts_passes_filters_to_repository() -> None:
         scope={"account_id": "acct_1", "user_id": "user_1"},
         status="approved",
         topic_type="vendor_alternative",
+        ids=["blog-1", " ", "blog-2"],
         limit=7,
     )
 
@@ -124,11 +129,13 @@ async def test_export_blog_post_drafts_passes_filters_to_repository() -> None:
     assert call["scope"].user_id == "user_1"
     assert call["status"] == "approved"
     assert call["topic_type"] == "vendor_alternative"
+    assert call["ids"] == ("blog-1", "blog-2")
     assert call["limit"] == 7
     assert result.filters == {
         "status": "approved",
         "account_id": "acct_1",
         "topic_type": "vendor_alternative",
+        "ids": ["blog-1", "blog-2"],
     }
 
 
