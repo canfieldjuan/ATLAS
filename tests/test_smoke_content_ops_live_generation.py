@@ -344,9 +344,8 @@ async def test_live_generation_smoke_packages_support_ticket_csv_for_landing_pag
     assert result["ok"] is True
     assert result["errors"] == []
     assert result["payload"]["inputs"]["target_keyword"] == "support ticket FAQ report"
-    assert result["payload"]["inputs"]["source_period"] == (
-        "Last 90 days of support tickets"
-    )
+    assert result["payload"]["inputs"]["source_period"] == "Uploaded support tickets"
+    assert "faq_window_days" not in result["payload"]["inputs"]
     assert result["payload"]["inputs"]["faq_questions"] == [
         "How do I change my login email?",
         "How do we export campaign attribution data before renewal?",

@@ -66,6 +66,7 @@ SEO/GEO/AEO input policy:
 - `objections`: address supplied objections directly in objection, FAQ, pricing, implementation, risk-reversal, or proof sections.
 - `faq_questions`: answer supplied questions with plain-language section titles or FAQ entries. Each answer must start with the direct answer before expanding.
 - `source_period`: use as freshness context when relevant, such as "based on the last 90 days of tickets"; do not imply live or ongoing analysis unless the campaign says so.
+- `source_row_count`, `included_ticket_row_count`, `skipped_ticket_row_count`, `truncated_ticket_row_count`, `question_like_ticket_count`, `top_ticket_clusters`, and `customer_wording_examples`: when supplied, use them as source evidence for the problem, solution, FAQ, and proof sections. Mention the top ticket clusters and preserve customer wording where natural. Do not invent counts, clusters, vendors, customers, or quotes outside the supplied fields.
 - `internal_links`: include only supplied links and only when they fit the page. Do not create fake URLs.
 - `cta_label` and `cta_url`: use these for `hero.cta_label`, `hero.cta_url`, and the page-level `cta` unless the campaign gives a stronger CTA pattern.
 

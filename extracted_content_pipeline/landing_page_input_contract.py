@@ -27,6 +27,16 @@ LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS: tuple[str, ...] = (
     "cta_url",
 )
 
+LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS: tuple[str, ...] = (
+    "source_row_count",
+    "included_ticket_row_count",
+    "skipped_ticket_row_count",
+    "truncated_ticket_row_count",
+    "question_like_ticket_count",
+    "top_ticket_clusters",
+    "customer_wording_examples",
+)
+
 LANDING_PAGE_EXISTING_CONTEXT_KEYS: tuple[str, ...] = (
     "industry",
     "pain_points",
@@ -40,6 +50,7 @@ LANDING_PAGE_EXISTING_CONTEXT_KEYS: tuple[str, ...] = (
 LANDING_PAGE_CONTEXT_INPUT_KEYS: frozenset[str] = frozenset((
     *LANDING_PAGE_EXISTING_CONTEXT_KEYS,
     *LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS,
+    *LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS,
 ))
 
 
@@ -137,5 +148,6 @@ __all__ = [
     "LANDING_PAGE_EXISTING_CONTEXT_KEYS",
     "LANDING_PAGE_INPUT_ASSET",
     "LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS",
+    "LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS",
     "landing_page_seo_geo_aeo_input_contracts",
 ]
