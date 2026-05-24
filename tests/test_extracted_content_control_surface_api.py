@@ -704,6 +704,11 @@ async def test_preview_generation_route_applies_sync_input_provider():
                 "audience": "10-50 person SaaS teams",
                 "offer": "Provider offer",
             },
+            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            warnings=({
+                "code": "ticket_rows_truncated",
+                "message": "Used first 1000 ticket rows out of 10000.",
+            },),
         )
     )
     router = create_content_ops_control_surface_router(
@@ -722,6 +727,14 @@ async def test_preview_generation_route_applies_sync_input_provider():
     assert payload["can_run"] is True
     assert payload["outputs"] == ["landing_page"]
     assert payload["missing_inputs"] == []
+    assert payload["input_provider"] == {
+        "provider": "ticket_upload",
+        "metadata": {"source_row_count": 10000, "included_row_count": 1000},
+        "warnings": [{
+            "code": "ticket_rows_truncated",
+            "message": "Used first 1000 ticket rows out of 10000.",
+        }],
+    }
     assert provider.calls[0]["scope"].account_id == "acct-1"
     assert provider.calls[0]["request"]["inputs"]["offer"] == "Operator offer"
 
@@ -739,6 +752,11 @@ async def test_plan_generation_route_applies_async_input_provider():
                     "text": "How do I export my dashboard?",
                 }],
             },
+            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            warnings=({
+                "code": "ticket_rows_truncated",
+                "message": "Used first 1000 ticket rows out of 10000.",
+            },),
         )
     )
     router = create_content_ops_control_surface_router(
@@ -752,6 +770,14 @@ async def test_plan_generation_route_applies_async_input_provider():
     assert payload["can_execute"] is True
     assert payload["steps"][0]["output"] == "faq_markdown"
     assert payload["steps"][0]["runner"] == "TicketFAQMarkdownService.generate"
+    assert payload["input_provider"] == {
+        "provider": "ticket_upload",
+        "metadata": {"source_row_count": 10000, "included_row_count": 1000},
+        "warnings": [{
+            "code": "ticket_rows_truncated",
+            "message": "Used first 1000 ticket rows out of 10000.",
+        }],
+    }
     assert provider.calls[0]["scope"].account_id is None
 
 
@@ -1608,6 +1634,11 @@ async def test_execute_generation_route_applies_input_provider_before_generation
                 "offer": "Provider offer",
                 "filters": {"status": "provider"},
             },
+            metadata={"source_row_count": 10000, "included_row_count": 1000},
+            warnings=({
+                "code": "ticket_rows_truncated",
+                "message": "Used first 1000 ticket rows out of 10000.",
+            },),
         )
     )
     router = create_content_ops_control_surface_router(
@@ -1631,6 +1662,14 @@ async def test_execute_generation_route_applies_input_provider_before_generation
     assert service.calls[0]["filters"] == {"status": "operator"}
     assert service.calls[0]["target_mode"] == "vendor_retention"
     assert service.calls[0]["limit"] == 1
+    assert payload["input_provider"] == {
+        "provider": "ticket_upload",
+        "metadata": {"source_row_count": 10000, "included_row_count": 1000},
+        "warnings": [{
+            "code": "ticket_rows_truncated",
+            "message": "Used first 1000 ticket rows out of 10000.",
+        }],
+    }
 
 
 @pytest.mark.asyncio

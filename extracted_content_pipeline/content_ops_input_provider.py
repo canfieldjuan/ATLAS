@@ -90,6 +90,7 @@ def content_ops_payload_from_input_package(
         "outputs": [str(output) for output in normalized_package.outputs],
         "inputs": dict(normalized_package.inputs),
         "ingestion_profile": normalized_package.ingestion_profile,
+        "input_provider": _package_diagnostics(normalized_package),
     }
     for key, value in base.items():
         if value is None:
@@ -175,6 +176,14 @@ def _warning_sequence(value: Any) -> tuple[JsonDict, ...]:
             raise TypeError("content ops input package warnings must contain mappings")
         warnings.append({str(key): warning_value for key, warning_value in item.items()})
     return tuple(warnings)
+
+
+def _package_diagnostics(package: ContentOpsInputPackage) -> JsonDict:
+    return {
+        "provider": package.provider,
+        "metadata": dict(package.metadata),
+        "warnings": [dict(warning) for warning in package.warnings],
+    }
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

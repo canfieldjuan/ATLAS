@@ -581,7 +581,10 @@ def create_content_ops_control_surface_router(
             input_provider=input_provider,
             scope_provider=scope_provider,
         )
-        return preview_from_mapping(payload_mapping)
+        return _with_input_provider_diagnostics(
+            preview_from_mapping(payload_mapping),
+            payload_mapping,
+        )
 
     @router.post("/plan")
     async def plan_generation(
@@ -593,7 +596,10 @@ def create_content_ops_control_surface_router(
                 input_provider=input_provider,
                 scope_provider=scope_provider,
             )
-            return build_generation_plan_from_mapping(payload_mapping)
+            return _with_input_provider_diagnostics(
+                build_generation_plan_from_mapping(payload_mapping),
+                payload_mapping,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -807,6 +813,7 @@ def create_content_ops_control_surface_router(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             result = _sanitize_execution_result(result)
+            result = _with_input_provider_diagnostics(result, payload_mapping)
             if result["status"] == "blocked":
                 raise HTTPException(status_code=400, detail=result)
             if result["status"] == "failed":
@@ -1027,6 +1034,26 @@ async def _payload_with_input_provider(
             status_code=503,
             detail="Content Ops input provider is unavailable.",
         ) from exc
+
+
+def _with_input_provider_diagnostics(
+    response: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    diagnostics = payload.get("input_provider")
+    if not isinstance(diagnostics, Mapping):
+        return dict(response)
+    out = dict(response)
+    out["input_provider"] = {
+        "provider": _clean(diagnostics.get("provider")),
+        "metadata": dict(diagnostics.get("metadata") or {}),
+        "warnings": [
+            dict(warning)
+            for warning in diagnostics.get("warnings") or ()
+            if isinstance(warning, Mapping)
+        ],
+    }
+    return out
 
 
 async def _structured_reasoning_contexts(
