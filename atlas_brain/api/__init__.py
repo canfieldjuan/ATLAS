@@ -164,6 +164,9 @@ try:
         create_generated_asset_router,
         create_public_landing_page_router,
     )
+    from extracted_content_pipeline.api.faq_search import (
+        create_faq_deflection_search_router,
+    )
     from .._content_ops_input_provider import build_content_ops_input_provider
     from .._content_ops_infrastructure import (
         build_content_ops_llm_client,
@@ -225,6 +228,12 @@ try:
         dependencies=[Depends(_capture_content_ops_auth_user)],
     )
     router.include_router(content_assets_router)
+    faq_search_router = create_faq_deflection_search_router(
+        pool_provider=get_db_pool,
+        scope_provider=build_content_ops_scope,
+        dependencies=[Depends(_capture_content_ops_auth_user)],
+    )
+    router.include_router(faq_search_router)
     public_landing_page_router = create_public_landing_page_router(
         pool_provider=get_db_pool,
     )
