@@ -483,13 +483,14 @@ def test_generated_asset_router_lists_report_drafts_with_filters() -> None:
 
 def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     pool = _Pool(rows=[_blog_post_row()])
+    draft_id = "11111111-1111-1111-1111-111111111111"
 
     response = _client(
         pool,
         scope=TenantScope(account_id="acct_1"),
     ).get(
         "/content-assets/blog_post/drafts"
-        "?topic_type=vendor_alternative&limit=5"
+        f"?topic_type=vendor_alternative&id={draft_id}&limit=5"
     )
 
     assert response.status_code == 200
@@ -505,18 +506,20 @@ def test_generated_asset_router_lists_blog_post_drafts_with_filters() -> None:
     assert body["rows"][0]["geo_readiness"]["passed"] == 7
     query, args = pool.fetch_calls[0]
     assert "FROM blog_posts" in query
-    assert args == ("acct_1", "draft", "vendor_alternative", 5)
+    assert "id = ANY($4::uuid[])" in query
+    assert args == ("acct_1", "draft", "vendor_alternative", [draft_id], 5)
 
 
 def test_generated_asset_router_lists_landing_page_drafts_with_readiness() -> None:
     pool = _Pool(rows=[_landing_page_row()])
+    draft_id = "22222222-2222-2222-2222-222222222222"
 
     response = _client(
         pool,
         scope=TenantScope(account_id="acct_1"),
     ).get(
         "/content-assets/landing_page/drafts"
-        "?campaign_name=acme-launch&slug=acme-launch&limit=5"
+        f"?campaign_name=acme-launch&slug=acme-launch&id={draft_id}&limit=5"
     )
 
     assert response.status_code == 200
@@ -529,15 +532,17 @@ def test_generated_asset_router_lists_landing_page_drafts_with_readiness() -> No
     assert row["geo_readiness"]["checks"]["trust_signal_visibility"] is True
     query, args = pool.fetch_calls[0]
     assert "FROM landing_pages" in query
-    assert args == ("acct_1", "draft", "acme-launch", "acme-launch", 5)
+    assert "id = ANY($5::uuid[])" in query
+    assert args == ("acct_1", "draft", "acme-launch", "acme-launch", [draft_id], 5)
 
 
 def test_generated_asset_router_exports_landing_page_csv() -> None:
     pool = _Pool(rows=[_landing_page_row()])
+    draft_id = "33333333-3333-3333-3333-333333333333"
 
     response = _client(pool).get(
         "/content-assets/landing_page/drafts/export"
-        "?format=csv&campaign_name=acme-launch&slug=acme-launch"
+        f"?format=csv&campaign_name=acme-launch&slug=acme-launch&id={draft_id}"
     )
 
     assert response.status_code == 200
@@ -547,7 +552,22 @@ def test_generated_asset_router_exports_landing_page_csv() -> None:
     assert "Acme landing page" in response.text
     query, args = pool.fetch_calls[0]
     assert "FROM landing_pages" in query
-    assert args == ("", "draft", "acme-launch", "acme-launch", 20)
+    assert "id = ANY($5::uuid[])" in query
+    assert args == ("", "draft", "acme-launch", "acme-launch", [draft_id], 20)
+
+
+def test_generated_asset_router_rejects_id_filter_for_unsupported_asset() -> None:
+    pool = _Pool(rows=[_report_row()])
+
+    response = _client(pool).get(
+        "/content-assets/report/drafts?id=11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "id filters are only supported for blog_post and landing_page"
+    )
+    assert pool.fetch_calls == []
 
 
 def test_generated_asset_router_updates_landing_page_draft_with_readiness() -> None:
