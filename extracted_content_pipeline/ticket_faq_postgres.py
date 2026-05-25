@@ -168,6 +168,27 @@ class PostgresTicketFAQRepository:
         rows = await self.pool.fetch(sql, *params)
         return tuple(_row_to_draft(row_to_dict(row)) for row in rows)
 
+    async def get_draft(
+        self,
+        faq_id: str,
+        *,
+        scope: TenantScope,
+    ) -> TicketFAQDraft | None:
+        rows = await self.pool.fetch(
+            f"""
+            SELECT {_TICKET_FAQ_COLUMNS}
+              FROM ticket_faq_markdown
+             WHERE id = $1
+               AND account_id = $2
+             LIMIT 1
+            """,
+            faq_id,
+            scope.account_id or "",
+        )
+        if not rows:
+            return None
+        return _row_to_draft(row_to_dict(rows[0]))
+
     async def update_status(
         self,
         faq_id: str,
