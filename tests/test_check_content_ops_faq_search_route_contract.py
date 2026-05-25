@@ -118,6 +118,38 @@ def test_validate_envelope_requires_demo_fields_when_requested():
     ]
 
 
+@pytest.mark.parametrize("field", _MODULE.RESULT_FIELDS)
+def test_validate_envelope_requires_each_demo_field_when_requested(field):
+    result = dict(_valid_payload()["results"][0])
+    result.pop(field)
+    payload = {"query": "reset", "results": [result], "count": 1}
+
+    assert (
+        f"results[0].{field} is required"
+        in _MODULE._validate_envelope(payload, require_results=True)
+    )
+
+
+def test_main_requires_base_url(monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("ATLAS_API_BASE_URL", raising=False)
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "",
+        "--token",
+        "token-123",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 2
+    assert "ATLAS_API_BASE_URL or --base-url is required" in capsys.readouterr().out
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "preflight"
+    assert payload["errors"] == ["ATLAS_API_BASE_URL or --base-url is required"]
+
+
 def test_main_requires_token(monkeypatch, capsys):
     monkeypatch.delenv("ATLAS_B2B_JWT", raising=False)
     monkeypatch.delenv("ATLAS_TOKEN", raising=False)
@@ -125,6 +157,48 @@ def test_main_requires_token(monkeypatch, capsys):
 
     assert _MODULE.main() == 2
     assert "ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required" in capsys.readouterr().out
+
+
+def test_main_requires_query(monkeypatch, capsys, tmp_path):
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--query",
+        "",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 2
+    assert "ATLAS_FAQ_SEARCH_QUERY or --query is required" in capsys.readouterr().out
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "preflight"
+    assert payload["errors"] == ["ATLAS_FAQ_SEARCH_QUERY or --query is required"]
+
+
+def test_main_requires_positive_limit(monkeypatch, capsys, tmp_path):
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--limit",
+        "0",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 2
+    assert "--limit must be positive" in capsys.readouterr().out
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "preflight"
+    assert payload["errors"] == ["--limit must be positive"]
 
 
 def test_main_returns_failure_for_bad_contract(monkeypatch, capsys):
@@ -211,6 +285,68 @@ def test_fetch_json_reports_route_failures(monkeypatch, failure, expected):
 
     with pytest.raises(RuntimeError, match=expected):
         _MODULE._fetch_json("https://atlas.example.com/search", token="tok", timeout=3)
+
+
+def test_main_uses_urlopen_transport_for_success(monkeypatch, capsys):
+    calls = []
+
+    def _urlopen(request, *, timeout):
+        calls.append((request, timeout))
+        return _Response(json.dumps(_valid_payload()).encode("utf-8"))
+
+    monkeypatch.setattr(_MODULE.urllib.request, "urlopen", _urlopen)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--query",
+        "mortgage payment dispute",
+        "--require-results",
+    )
+
+    assert _MODULE.main() == 0
+    assert len(calls) == 1
+    assert calls[0][0].full_url == (
+        "https://atlas.example.com/api/v1/content-ops/faq-deflection-search"
+        "?q=mortgage+payment+dispute&limit=5"
+    )
+    assert calls[0][0].headers["Authorization"] == "Bearer token-123"
+    assert calls[0][1] == 10.0
+    assert "FAQ search route contract passed" in capsys.readouterr().out
+
+
+def test_main_uses_urlopen_transport_for_http_failure(monkeypatch, capsys, tmp_path):
+    def _urlopen(request, *, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            500,
+            "Server Error",
+            {},
+            BytesIO(b"<html>server error</html>"),
+        )
+
+    monkeypatch.setattr(_MODULE.urllib.request, "urlopen", _urlopen)
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "secret-token",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 1
+    output = capsys.readouterr().out
+    assert "route returned HTTP 500: <html>server error</html>" in output
+    assert "secret-token" not in output
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "request"
+    assert payload["errors"] == ["route returned HTTP 500: <html>server error</html>"]
+    assert "secret-token" not in result_path.read_text(encoding="utf-8")
 
 
 def test_main_checks_route_and_prints_summary(monkeypatch, capsys):
