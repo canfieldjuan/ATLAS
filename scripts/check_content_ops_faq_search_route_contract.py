@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -58,11 +60,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--route", default=DEFAULT_ROUTE)
     parser.add_argument("--detail-route", default=os.environ.get("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--timeout", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_TIMEOUT", "10"))
+    parser.add_argument(
+        "--max-search-ms",
+        type=float,
+        default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_SEARCH_MS") or None,
+    )
+    parser.add_argument(
+        "--max-detail-ms",
+        type=float,
+        default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_DETAIL_MS") or None,
+    )
+    parser.add_argument(
+        "--max-total-ms",
+        type=float,
+        default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_TOTAL_MS") or None,
+    )
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--require-detail", action="store_true")
     parser.add_argument("--output-result", type=Path)
     return parser
-
 
 def _clean_url(value: str) -> str:
     return str(value or "").strip().rstrip("/")
@@ -129,6 +145,17 @@ def _fetch_json(url: str, *, token: str, timeout: float) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError("route returned non-object JSON")
     return data
+
+
+def _now_ms() -> float:
+    return time.perf_counter() * 1000
+
+
+def _timed_fetch_json(url: str, *, token: str, timeout: float) -> tuple[dict[str, Any], float]:
+    started_ms = _now_ms()
+    data = _fetch_json(url, token=token, timeout=timeout)
+    elapsed_ms = max(0.0, _now_ms() - started_ms)
+    return data, elapsed_ms
 
 
 def _validate_envelope(data: Mapping[str, Any], *, require_results: bool) -> list[str]:
@@ -202,6 +229,65 @@ def _validate_detail(data: Mapping[str, Any], *, faq_id: str) -> list[str]:
     return errors
 
 
+def _latency_budget_errors(
+    *,
+    search_elapsed_ms: float,
+    detail_elapsed_ms: float | None,
+    total_elapsed_ms: float,
+    max_search_ms: float | None,
+    max_detail_ms: float | None,
+    max_total_ms: float | None,
+) -> list[str]:
+    errors: list[str] = []
+    if max_search_ms is not None and search_elapsed_ms > max_search_ms:
+        errors.append(
+            "search latency "
+            f"{_format_ms(search_elapsed_ms)} ms exceeds --max-search-ms "
+            f"{_format_ms(max_search_ms)} ms"
+        )
+    if (
+        max_detail_ms is not None
+        and detail_elapsed_ms is not None
+        and detail_elapsed_ms > max_detail_ms
+    ):
+        errors.append(
+            "detail latency "
+            f"{_format_ms(detail_elapsed_ms)} ms exceeds --max-detail-ms "
+            f"{_format_ms(max_detail_ms)} ms"
+        )
+    if max_total_ms is not None and total_elapsed_ms > max_total_ms:
+        errors.append(
+            "total latency "
+            f"{_format_ms(total_elapsed_ms)} ms exceeds --max-total-ms "
+            f"{_format_ms(max_total_ms)} ms"
+        )
+    return errors
+
+
+def _budget_preflight_errors(
+    *,
+    require_detail: bool,
+    max_search_ms: float | None,
+    max_detail_ms: float | None,
+    max_total_ms: float | None,
+) -> list[str]:
+    errors: list[str] = []
+    for name, value in (
+        ("--max-search-ms", max_search_ms),
+        ("--max-detail-ms", max_detail_ms),
+        ("--max-total-ms", max_total_ms),
+    ):
+        if value is not None and (not math.isfinite(value) or value <= 0):
+            errors.append(f"{name} must be finite and positive")
+    if max_detail_ms is not None and not require_detail:
+        errors.append("--max-detail-ms requires --require-detail")
+    return errors
+
+
+def _format_ms(value: float) -> str:
+    return f"{value:.3f}"
+
+
 def _result_payload(
     *,
     ok: bool,
@@ -217,6 +303,12 @@ def _result_payload(
     detail_route: str,
     detail_checked: bool = False,
     detail_faq_id: str = "",
+    search_elapsed_ms: float | None = None,
+    detail_elapsed_ms: float | None = None,
+    total_elapsed_ms: float | None = None,
+    max_search_ms: float | None = None,
+    max_detail_ms: float | None = None,
+    max_total_ms: float | None = None,
     count: Any = None,
     errors: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -237,6 +329,16 @@ def _result_payload(
     }
     if detail_faq_id:
         payload["detail_faq_id"] = detail_faq_id
+    for key, value in (
+        ("search_elapsed_ms", search_elapsed_ms),
+        ("detail_elapsed_ms", detail_elapsed_ms),
+        ("total_elapsed_ms", total_elapsed_ms),
+        ("max_search_ms", max_search_ms),
+        ("max_detail_ms", max_detail_ms),
+        ("max_total_ms", max_total_ms),
+    ):
+        if value is not None:
+            payload[key] = round(float(value), 3)
     if type(count) is int:
         payload["count"] = count
     return payload
@@ -262,6 +364,9 @@ def main() -> int:
     route = str(args.route or "").strip()
     detail_route = str(args.detail_route or "").strip()
     limit = int(args.limit)
+    max_search_ms = args.max_search_ms
+    max_detail_ms = args.max_detail_ms
+    max_total_ms = args.max_total_ms
     if not base_url:
         print("ATLAS_API_BASE_URL or --base-url is required.")
         _write_result(
@@ -342,6 +447,37 @@ def main() -> int:
             ),
         )
         return 2
+    budget_preflight_errors = _budget_preflight_errors(
+        require_detail=bool(args.require_detail),
+        max_search_ms=max_search_ms,
+        max_detail_ms=max_detail_ms,
+        max_total_ms=max_total_ms,
+    )
+    if budget_preflight_errors:
+        print("FAQ search route check setup failed:")
+        for error in budget_preflight_errors:
+            print(f"- {error}")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="preflight",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
+                max_search_ms=max_search_ms,
+                max_detail_ms=max_detail_ms,
+                max_total_ms=max_total_ms,
+                errors=budget_preflight_errors,
+            ),
+        )
+        return 2
 
     url = _build_url(
         base_url=base_url,
@@ -352,7 +488,11 @@ def main() -> int:
         limit=limit,
     )
     try:
-        data = _fetch_json(url, token=token, timeout=args.timeout)
+        data, search_elapsed_ms = _timed_fetch_json(
+            url,
+            token=token,
+            timeout=args.timeout,
+        )
     except RuntimeError as exc:
         print(f"FAQ search route check failed: {exc}")
         _write_result(
@@ -369,6 +509,9 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                max_search_ms=max_search_ms,
+                max_detail_ms=max_detail_ms,
+                max_total_ms=max_total_ms,
                 errors=[str(exc)],
             ),
         )
@@ -377,6 +520,7 @@ def main() -> int:
     errors = _validate_envelope(data, require_results=args.require_results)
     detail_checked = False
     detail_faq_id = ""
+    detail_elapsed_ms: float | None = None
     resolved_detail_route = detail_route or f"{route.rstrip('/')}/{{faq_id}}"
     if args.require_detail and not errors:
         detail_faq_id = _first_result_faq_id(data) or ""
@@ -390,12 +534,27 @@ def main() -> int:
                 faq_id=detail_faq_id,
             )
             try:
-                detail_data = _fetch_json(detail_url, token=token, timeout=args.timeout)
+                detail_data, detail_elapsed_ms = _timed_fetch_json(
+                    detail_url,
+                    token=token,
+                    timeout=args.timeout,
+                )
                 detail_checked = True
             except RuntimeError as exc:
                 errors.append(str(exc))
             else:
                 errors.extend(_validate_detail(detail_data, faq_id=detail_faq_id))
+    total_elapsed_ms = search_elapsed_ms + (detail_elapsed_ms or 0.0)
+    errors.extend(
+        _latency_budget_errors(
+            search_elapsed_ms=search_elapsed_ms,
+            detail_elapsed_ms=detail_elapsed_ms,
+            total_elapsed_ms=total_elapsed_ms,
+            max_search_ms=max_search_ms,
+            max_detail_ms=max_detail_ms,
+            max_total_ms=max_total_ms,
+        )
+    )
     payload = _result_payload(
         ok=not errors,
         phase="contract",
@@ -410,6 +569,12 @@ def main() -> int:
         detail_route=resolved_detail_route,
         detail_checked=detail_checked,
         detail_faq_id=detail_faq_id,
+        search_elapsed_ms=search_elapsed_ms,
+        detail_elapsed_ms=detail_elapsed_ms,
+        total_elapsed_ms=total_elapsed_ms,
+        max_search_ms=max_search_ms,
+        max_detail_ms=max_detail_ms,
+        max_total_ms=max_total_ms,
         count=data.get("count"),
         errors=errors,
     )
@@ -422,7 +587,8 @@ def main() -> int:
         print(
             "FAQ search route contract passed: "
             f"query={data.get('query')!r}, count={data.get('count')}, "
-            f"detail_checked={detail_checked}"
+            f"detail_checked={detail_checked}, "
+            f"total_elapsed_ms={_format_ms(total_elapsed_ms)}"
         )
     return 0 if not errors else 1
 
