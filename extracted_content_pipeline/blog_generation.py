@@ -28,6 +28,9 @@ from .services.campaign_reasoning_context import (
     consumed_campaign_reasoning_contexts,
     normalize_campaign_reasoning_context,
 )
+from .support_ticket_generated_content_eval import (
+    evaluate_support_ticket_generated_content,
+)
 from extracted_quality_gate.blog_pack import evaluate_blog_post
 from extracted_quality_gate.types import QualityInput, QualityPolicy
 
@@ -38,6 +41,14 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 # tenant-scope concept.
 _BLOG_REASONING_TARGET_MODE = "blog_blueprint"
 _BLOG_FAILURE_EXCERPT_CHARS = 1500
+_SUPPORT_TICKET_SOURCE_MARKER = "support_ticket"
+_SUPPORT_TICKET_PERIOD_MARKERS = ("support-ticket", "support ticket")
+_SUPPORT_TICKET_CATEGORY_MARKER = "support ticket"
+_SUPPORT_TICKET_COUNT_KEYS = (
+    "included_ticket_row_count",
+    "question_like_ticket_count",
+)
+_SUPPORT_TICKET_CLUSTER_KEYS = ("top_ticket_clusters", "top_clusters")
 
 
 @dataclass(frozen=True)
@@ -196,6 +207,13 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "placeholders, and unsupported claims. Keep only claims grounded in "
                 "the blueprint data, source wording, or visible chart IDs."
             )
+        elif code.startswith("support_ticket_generated_content:"):
+            instructions.append(
+                "- Fix the support-ticket generated-content issue exactly. Use only "
+                "counts, timeframes, clusters, and customer wording present in the "
+                "blueprint. Do not invent calendar windows, ticket-reduction "
+                "percentages, ROI math, or future impact claims."
+            )
     if not instructions:
         instructions.append(
             "- Fix each blocker directly while preserving the required blog JSON "
@@ -318,6 +336,7 @@ class BlogPostGenerationService:
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
         topic: str | None = None,
+        data_context: Mapping[str, Any] | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -358,6 +377,7 @@ class BlogPostGenerationService:
         # PR-Blog-Topic-Per-Call: operator-supplied topic for this run.
         # Empty string when None so prompt substitution is a clean no-op.
         resolved_topic = (topic or "").strip()
+        trusted_data_context = _mapping_dict(data_context)
 
         requested = int(limit or self._config.limit)
         rows = await self._blueprints.read_blog_blueprints(
@@ -377,6 +397,7 @@ class BlogPostGenerationService:
                 scope=scope,
                 blueprint=dict(row),
             )
+            blueprint = _blueprint_with_data_context(blueprint, trusted_data_context)
             blueprint_id = _blueprint_id(blueprint)
             try:
                 parsed = await self._generate_one(
@@ -654,9 +675,13 @@ class BlogPostGenerationService:
             ),
             policy=self._config.quality_policy,
         )
+        support_ticket_blockers = _support_ticket_generated_content_blockers(
+            parsed,
+            blueprint=blueprint,
+        )
         return {
-            "passed": quality.passed,
-            "blockers": tuple(f.message for f in quality.blockers),
+            "passed": quality.passed and not support_ticket_blockers,
+            "blockers": tuple(f.message for f in quality.blockers) + support_ticket_blockers,
         }
 
     def _build_draft(
@@ -672,8 +697,7 @@ class BlogPostGenerationService:
             or blueprint.get("topic_type")
             or "blog_post"
         ).strip() or "blog_post"
-        data_context = _mapping_dict(blueprint.get("data_context"))
-        data_context.update(_mapping_dict(parsed.get("data_context")))
+        data_context = _merged_blog_data_context(parsed, blueprint)
         metadata = {
             "seo_title": parsed.get("seo_title"),
             "seo_description": parsed.get("seo_description"),
@@ -736,6 +760,81 @@ def _quality_context(
         "secondary_keywords": parsed.get("secondary_keywords"),
         "faq": parsed.get("faq"),
     }
+
+
+def _support_ticket_generated_content_blockers(
+    parsed: Mapping[str, Any],
+    *,
+    blueprint: Mapping[str, Any],
+) -> tuple[str, ...]:
+    data_context = _merged_blog_data_context(parsed, blueprint)
+    if not _is_support_ticket_blog_context(data_context):
+        return ()
+    row = {
+        "id": str(parsed.get("slug") or blueprint.get("slug") or blueprint.get("id") or ""),
+        "title": parsed.get("title"),
+        "description": parsed.get("description") or parsed.get("seo_description"),
+        "content": parsed.get("content"),
+        "tags": parsed.get("tags") or parsed.get("secondary_keywords"),
+        "charts": parsed.get("charts") or blueprint.get("available_charts"),
+        "data_context": data_context,
+    }
+    result = evaluate_support_ticket_generated_content(
+        {"count": 1, "rows": [row]},
+        output="blog_post",
+    )
+    errors = tuple(str(error).strip() for error in result.get("errors") or ())
+    if result.get("ok") is False and not errors:
+        errors = ("support-ticket generated-content evaluation failed",)
+    return tuple(
+        f"support_ticket_generated_content:{error}"
+        for error in errors
+        if error
+    )
+
+
+def _merged_blog_data_context(
+    parsed: Mapping[str, Any],
+    blueprint: Mapping[str, Any],
+) -> dict[str, Any]:
+    data_context = _mapping_dict(parsed.get("data_context"))
+    data_context.update(_mapping_dict(blueprint.get("data_context")))
+    return data_context
+
+
+def _blueprint_with_data_context(
+    blueprint: Mapping[str, Any],
+    data_context: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    override = _mapping_dict(data_context)
+    if not override:
+        return blueprint
+    enriched = dict(blueprint)
+    merged = _mapping_dict(enriched.get("data_context"))
+    merged.update(override)
+    enriched["data_context"] = merged
+    return enriched
+
+
+def _is_support_ticket_blog_context(data_context: Mapping[str, Any]) -> bool:
+    source = str(data_context.get("source") or data_context.get("provider") or "").lower()
+    source_period = str(data_context.get("source_period") or "").lower()
+    category = str(data_context.get("category") or data_context.get("topic") or "").lower()
+    return (
+        _SUPPORT_TICKET_SOURCE_MARKER in source
+        or any(marker in source_period for marker in _SUPPORT_TICKET_PERIOD_MARKERS)
+        or _SUPPORT_TICKET_CATEGORY_MARKER in category
+        or any(_positive_int(data_context.get(key)) is not None for key in _SUPPORT_TICKET_COUNT_KEYS)
+        or any(_has_cluster_rows(data_context.get(key)) for key in _SUPPORT_TICKET_CLUSTER_KEYS)
+    )
+
+
+def _has_cluster_rows(value: Any) -> bool:
+    if isinstance(value, (str, bytes, bytearray)):
+        return False
+    if not isinstance(value, Sequence):
+        return False
+    return any(isinstance(item, Mapping) for item in value)
 
 
 def _blog_generation_prompts(
@@ -811,6 +910,14 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _source_quote_tuple(value: Any) -> tuple[str, ...]:

@@ -499,20 +499,26 @@ async def _dispatch_blog_post(
     # PR-Blog-Topic-Per-Call: ``topic`` is now load-bearing too; the plan
     # emits ``step.config["topic"]`` from ``request.inputs.get("topic")``
     # and the service's prompt has a ``{topic}`` placeholder.
+    kwargs = {
+        "temperature": _step_config_float(step.config, "temperature"),
+        "max_tokens": _step_config_int(step.config, "max_tokens"),
+        "parse_retry_attempts": _step_config_int(step.config, "parse_retry_attempts"),
+        "parse_retry_response_excerpt_chars": _step_config_int(
+            step.config, "parse_retry_response_excerpt_chars"
+        ),
+        "quality_gates_enabled": _step_config_bool(step.config, "quality_gates_enabled"),
+        "quality_repair_attempts": _step_config_int(step.config, "quality_repair_attempts"),
+        "topic": _step_config_text(step.config, "topic"),
+    }
+    data_context = _support_ticket_blog_data_context_from_inputs(request.inputs)
+    if data_context:
+        kwargs["data_context"] = data_context
     return await service.generate(
         scope=scope,
         target_mode=request.target_mode,
         limit=request.limit,
         filters=filters,
-        temperature=_step_config_float(step.config, "temperature"),
-        max_tokens=_step_config_int(step.config, "max_tokens"),
-        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
-        parse_retry_response_excerpt_chars=_step_config_int(
-            step.config, "parse_retry_response_excerpt_chars"
-        ),
-        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
-        quality_repair_attempts=_step_config_int(step.config, "quality_repair_attempts"),
-        topic=_step_config_text(step.config, "topic"),
+        **kwargs,
     )
 
 
@@ -699,6 +705,67 @@ def _step_config_nested_sequence(
 def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
     filters = inputs.get("filters")
     return filters if isinstance(filters, Mapping) else None
+
+
+def _support_ticket_blog_data_context_from_inputs(
+    inputs: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    filters = _filters_from_inputs(inputs) or {}
+    if str(filters.get("topic_type") or "").strip() != "content_ops_support_ticket_faq":
+        return None
+    top_clusters = _mapping_list_input(inputs.get("top_ticket_clusters"))
+    included_count = _positive_int_context(inputs.get("included_ticket_row_count"))
+    source_count = _positive_int_context(inputs.get("source_row_count"))
+    question_count = _positive_int_context(inputs.get("question_like_ticket_count"))
+    source_period = _clean(inputs.get("source_period")) or "Uploaded support tickets"
+    review_period = "last 90 days" if inputs.get("faq_window_days") else "uploaded tickets"
+    context: dict[str, Any] = {
+        "source": "support_ticket_provider",
+        "source_period": source_period,
+        "review_period": review_period,
+        "category": "support tickets",
+        "topic": _clean(inputs.get("topic")) or "Support-ticket questions customers keep asking",
+        "source_row_count": source_count or included_count,
+        "included_ticket_row_count": included_count,
+        "question_like_ticket_count": question_count,
+        "top_ticket_clusters": top_clusters,
+        "top_clusters": top_clusters,
+        "faq_questions": _text_list_input(inputs.get("faq_questions")),
+        "customer_wording_examples": _mapping_list_input(
+            inputs.get("customer_wording_examples")
+        ),
+        "total_reviews_analyzed": included_count,
+        "deep_enriched_count": included_count,
+    }
+    return {
+        key: value
+        for key, value in context.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _mapping_list_input(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, (str, bytes, bytearray)):
+        return []
+    if not isinstance(value, Sequence):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _text_list_input(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _positive_int_context(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _opportunity_defaults_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:

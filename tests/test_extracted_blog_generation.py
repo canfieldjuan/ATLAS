@@ -9,6 +9,7 @@ from extracted_content_pipeline.blog_generation import (
     BlogPostGenerationService,
     _blog_failure_candidate_snapshot,
     _blog_quality_repair_guidance,
+    _is_support_ticket_blog_context,
     _normalize_blog_metadata,
     parse_blog_post_response,
 )
@@ -101,6 +102,31 @@ def _blueprint():
     }
 
 
+def _support_ticket_blueprint():
+    return {
+        "id": "support-ticket-bp-1",
+        "slug": "support-ticket-faq-gaps",
+        "topic": "Support-ticket questions customers keep asking",
+        "topic_type": "content_ops_support_ticket_faq",
+        "suggested_title": "Support-ticket FAQ gaps",
+        "data_context": {
+            "review_period": "last 90 days",
+            "source_period": "Last 90 days of support tickets",
+            "source": "support_ticket_provider",
+            "source_row_count": 3,
+            "included_ticket_row_count": 3,
+            "question_like_ticket_count": 3,
+            "top_clusters": [
+                {"label": "account", "count": 2},
+                {"label": "reporting", "count": 1},
+            ],
+            "category": "support tickets",
+            "topic": "Support-ticket questions customers keep asking",
+        },
+        "available_charts": [],
+    }
+
+
 def _valid_content() -> str:
     body = (
         "## How is HubSpot pricing pressure changing buyer shortlists?\n\n"
@@ -117,6 +143,25 @@ def _valid_content() -> str:
         "to justify."
     )
     return body + "\n\n{{chart:pricing}}\n"
+
+
+def _valid_support_ticket_content(extra: str = "") -> str:
+    body = (
+        "## What do repeat support tickets show?\n\n"
+        "In the last 90 days, the uploaded 3 support tickets show account "
+        "and reporting questions that customers keep asking. The clearest "
+        "answer is that these teams need FAQ entries written in customer "
+        "wording before another customer has to email support for the same "
+        "basic answer.\n\n"
+        "## Which FAQ gaps should the team fix first?\n\n"
+        "Account questions appear in 2 support tickets, while reporting "
+        "questions appear in 1 support ticket. That makes account access the "
+        "first FAQ gap to clean up, followed by reporting export instructions "
+        "that customers can find before they open another support ticket."
+    )
+    if extra:
+        body = f"{body}\n\n{extra}"
+    return body
 
 
 def _valid_blog_json(**overrides):
@@ -145,6 +190,37 @@ def _valid_blog_json(**overrides):
         "topic_type": "vendor_alternative",
         "content": _valid_content(),
         "charts": [{"chart_id": "pricing", "title": "Pricing"}],
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+def _valid_support_ticket_blog_json(**overrides):
+    payload = {
+        "title": "Support-ticket FAQ gaps customers keep hitting",
+        "slug": "support-ticket-faq-gaps",
+        "description": "How repeat support tickets point to missing FAQ answers.",
+        "seo_title": "Support-ticket FAQ Gaps",
+        "seo_description": "How small teams can turn support tickets into FAQ answers.",
+        "target_keyword": "support ticket FAQ gaps",
+        "secondary_keywords": ["support ticket FAQ", "customer support answers"],
+        "faq": [
+            {
+                "question": "What do repeat support tickets show?",
+                "answer": "They show which answers customers cannot find.",
+            },
+            {
+                "question": "Which FAQ gaps should the team fix first?",
+                "answer": "Start with the highest-volume repeated questions.",
+            },
+            {
+                "question": "Why use customer wording?",
+                "answer": "Customers search with their own words, not internal labels.",
+            },
+        ],
+        "topic_type": "content_ops_support_ticket_faq",
+        "content": _valid_support_ticket_content(),
+        "charts": [],
     }
     payload.update(overrides)
     return json.dumps(payload)
@@ -268,6 +344,46 @@ def test_blog_failure_candidate_snapshot_is_bounded() -> None:
     assert snapshot["content_excerpt_head"] == ("alpha " * 200)[:25]
     assert snapshot["content_excerpt_tail"] == ("alpha " * 200).strip()[-25:]
     assert snapshot["content_truncated"] is True
+
+
+@pytest.mark.parametrize(
+    "data_context",
+    [
+        {"source": "support_ticket_provider"},
+        {"provider": "support_ticket_upload"},
+        {"source_period": "Last 90 days of support tickets"},
+        {"source_period": "support-ticket upload"},
+        {"category": "support tickets"},
+        {"topic": "support ticket FAQ gaps"},
+        {"included_ticket_row_count": 3},
+        {"question_like_ticket_count": 2},
+        {"top_ticket_clusters": [{"label": "account", "count": 2}]},
+        {"top_clusters": [{"label": "reporting", "count": 1}]},
+    ],
+)
+def test_support_ticket_blog_context_detection_markers_bite(
+    data_context: dict[str, object],
+) -> None:
+    assert _is_support_ticket_blog_context(data_context) is True
+
+
+@pytest.mark.parametrize(
+    "data_context",
+    [
+        {},
+        {"source": "review_provider"},
+        {"top_clusters": "pricing, onboarding"},
+        {"top_ticket_clusters": "account"},
+        {"top_clusters": []},
+        {"top_ticket_clusters": []},
+        {"included_ticket_row_count": 0},
+        {"question_like_ticket_count": ""},
+    ],
+)
+def test_support_ticket_blog_context_detection_rejects_false_positives(
+    data_context: dict[str, object],
+) -> None:
+    assert _is_support_ticket_blog_context(data_context) is False
 
 
 @pytest.mark.asyncio
@@ -436,6 +552,175 @@ async def test_generate_repairs_geo_quality_block_with_retry_budget() -> None:
     assert draft.metadata["generation_usage"] == {"input_tokens": 26, "output_tokens": 34}
     assert draft.metadata["generation_parse_attempts"] == 1
     assert draft.metadata["generation_quality_repair_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_support_ticket_generated_content_failure_without_saving() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(
+                content=_valid_support_ticket_content(
+                    "These answers can reduce repeat tickets by 30-45%."
+                )
+            )
+        ],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert any(
+        blocker.startswith("support_ticket_generated_content:")
+        and "percentage claims not backed" in blocker
+        for blocker in result.errors[0]["blockers"]
+    )
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_repairs_support_ticket_generated_content_failure() -> None:
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(
+                content=_valid_support_ticket_content(
+                    "These answers can reduce repeat tickets by 30-45%."
+                )
+            ),
+            _valid_support_ticket_blog_json(),
+        ],
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=1,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert result.errors == ()
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert "support_ticket_generated_content:" in retry_prompt
+    assert "percentage claims not backed" in retry_prompt
+    assert "Do not invent calendar windows" in retry_prompt
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_quality_repair_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_trusted_support_ticket_context_over_model_context() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(
+                data_context={
+                    "source": "review_provider",
+                    "included_ticket_row_count": 999,
+                    "model_note": "kept",
+                }
+            )
+        ],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.data_context["source"] == "support_ticket_provider"
+    assert draft.data_context["included_ticket_row_count"] == 3
+    assert draft.data_context["model_note"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_support_ticket_draft_after_repair_budget_exhausted() -> None:
+    bad_content = _valid_support_ticket_content(
+        "These answers can reduce repeat tickets by 30-45%."
+    )
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(content=bad_content),
+            _valid_support_ticket_blog_json(content=bad_content),
+        ],
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=1,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert len(llm.calls) == 2
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_run_support_ticket_gate_for_other_blog_contexts() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_blueprint()],
+        responses=[
+            _valid_blog_json(
+                content=_valid_content()
+                + "\n\nThese changes can reduce repeat tickets by 30-45%."
+            )
+        ],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert result.errors == ()
+    assert blog_posts.saved[0]["drafts"][0].slug == "hubspot-pricing-pressure"
 
 
 @pytest.mark.asyncio

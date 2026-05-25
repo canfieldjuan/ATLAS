@@ -276,26 +276,33 @@ async def test_support_ticket_provider_feeds_blog_post_execute_inputs() -> None:
         "topic": "Support-ticket questions customers keep asking",
     }
 
-    assert service.calls == [
-        {
-            "scope": TenantScope(
-                account_id="acct-support-ticket-content",
-                user_id="user-support-ticket-content",
-            ),
-            "target_mode": "vendor_retention",
-            "limit": 2,
-            "filters": {"topic_type": "content_ops_support_ticket_faq"},
-            "kwargs": {
-                "temperature": 0.3,
-                "max_tokens": 4096,
-                "parse_retry_attempts": 1,
-                "parse_retry_response_excerpt_chars": 800,
-                "quality_gates_enabled": False,
-                "quality_repair_attempts": 2,
-                "topic": "Support-ticket questions customers keep asking",
-            },
-        }
+    assert len(service.calls) == 1
+    call = service.calls[0]
+    assert call["scope"] == TenantScope(
+        account_id="acct-support-ticket-content",
+        user_id="user-support-ticket-content",
+    )
+    assert call["target_mode"] == "vendor_retention"
+    assert call["limit"] == 2
+    assert call["filters"] == {"topic_type": "content_ops_support_ticket_faq"}
+    kwargs = dict(call["kwargs"])
+    data_context = kwargs.pop("data_context")
+    assert kwargs == {
+        "temperature": 0.3,
+        "max_tokens": 4096,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800,
+        "quality_gates_enabled": False,
+        "quality_repair_attempts": 2,
+        "topic": "Support-ticket questions customers keep asking",
+    }
+    assert data_context["source"] == "support_ticket_provider"
+    assert data_context["included_ticket_row_count"] == 4
+    assert data_context["top_clusters"] == [
+        {"label": "email and profile updates", "count": 2},
+        {"label": "reporting friction", "count": 2},
     ]
+    assert data_context["customer_wording_examples"][0]["source_id"] == "ticket-acme-1"
 
 
 @pytest.mark.asyncio
