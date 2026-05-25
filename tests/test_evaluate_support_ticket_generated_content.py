@@ -140,6 +140,204 @@ def test_blog_export_passes_with_blog_data_context_shape() -> None:
     assert not result["warnings"]
 
 
+def test_blog_export_fails_unsupported_uploaded_ticket_timeframe() -> None:
+    export = _blog_export(
+        content_override=(
+            "Between May 2026 and the present, we analyzed 2 support tickets. "
+            "The account and reporting clusters show what customers keep asking."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "undated uploaded-ticket source" in error
+        for error in result["errors"]
+    )
+    timeframe_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_timeframe_truthful"
+    )
+    assert timeframe_check["passed"] is False
+    assert timeframe_check["details"] == {
+        "unsupported_timeframes": ["Between May 2026 and"]
+    }
+
+
+def test_landing_export_fails_unsupported_uploaded_ticket_timeframe() -> None:
+    result = evaluator.evaluate_support_ticket_generated_content(
+        _landing_export(
+            text_override=(
+                "Between May 2026 and today, the uploaded 2 support tickets "
+                "show account and reporting questions."
+            )
+        ),
+        output="landing_page",
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "undated uploaded-ticket source" in error
+        for error in result["errors"]
+    )
+    timeframe_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_timeframe_truthful"
+    )
+    assert timeframe_check["passed"] is False
+    assert timeframe_check["details"] == {
+        "unsupported_timeframes": ["Between May 2026 and"]
+    }
+
+
+def test_blog_export_allows_timeframe_when_source_period_supplies_it() -> None:
+    context = _blog_context()
+    context["source_period"] = "Last 90 days of support tickets"
+    context["review_period"] = "last 90 days"
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "In the last 90 days, the 2 support tickets show account and "
+            "reporting questions customers keep asking."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    timeframe_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_timeframe_truthful"
+    )
+    assert timeframe_check["passed"] is True
+    assert timeframe_check["details"] == {"applicable": False}
+
+
+def test_blog_export_fails_unsupported_percentage_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "These FAQ answers can reduce support volume by 20-40%."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "percentage claims not backed" in error
+        for error in result["errors"]
+    )
+    percent_check = next(
+        check for check in result["checks"]
+        if check["name"] == "percentage_claims_source_backed"
+    )
+    assert percent_check["passed"] is False
+    assert percent_check["details"]["unsupported"] == ["20-40%"]
+
+
+def test_blog_export_fails_unsupported_em_dash_percentage_claims() -> None:
+    claim = "20\u201440%"
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            f"These FAQ answers can reduce support volume by {claim}."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    percent_check = next(
+        check for check in result["checks"]
+        if check["name"] == "percentage_claims_source_backed"
+    )
+    assert percent_check["passed"] is False
+    assert percent_check["details"]["unsupported"] == [claim]
+
+
+def test_landing_export_fails_unsupported_percentage_claims() -> None:
+    result = evaluator.evaluate_support_ticket_generated_content(
+        _landing_export(
+            text_override=(
+                "The uploaded 2 support tickets show account and reporting "
+                "questions, and the FAQ can cut repeat tickets by 30-50%."
+            )
+        ),
+        output="landing_page",
+    )
+
+    assert result["ok"] is False
+    percent_check = next(
+        check for check in result["checks"]
+        if check["name"] == "percentage_claims_source_backed"
+    )
+    assert percent_check["passed"] is False
+    assert percent_check["details"]["unsupported"] == ["30-50%"]
+
+
+def test_blog_export_allows_percentage_claim_derived_from_source_counts() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "That means 50% of included tickets mention account issues."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    percent_check = next(
+        check for check in result["checks"]
+        if check["name"] == "percentage_claims_source_backed"
+    )
+    assert percent_check["details"]["unsupported"] == []
+
+
+def test_blog_export_allows_whole_percent_rounding_from_source_counts() -> None:
+    context = _blog_context()
+    context["source_row_count"] = 3
+    context["included_ticket_row_count"] = 3
+    context["question_like_ticket_count"] = 3
+    context["top_clusters"] = [{"label": "account", "count": 1}]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded 3 support tickets show account questions. "
+            "That means 33% of included tickets mention account issues."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    percent_check = next(
+        check for check in result["checks"]
+        if check["name"] == "percentage_claims_source_backed"
+    )
+    assert percent_check["details"]["source_backed_percentages"] == [33, 100, 300]
+    assert percent_check["details"]["unsupported"] == []
+
+
 def test_landing_export_fails_when_source_context_missing() -> None:
     export = _landing_export(source_context=None)
     export["rows"][0]["metadata"] = {}
@@ -153,6 +351,29 @@ def test_landing_export_fails_when_source_context_missing() -> None:
     assert result["errors"] == [
         "export row is missing support-ticket source context"
     ]
+
+
+def test_landing_export_fails_when_generated_text_is_blank() -> None:
+    export = _landing_export()
+    row = export["rows"][0]
+    row["title"] = ""
+    row["hero"] = {"headline": " ", "subheadline": "\n"}
+    row["sections"] = []
+    row["cta"] = {"label": ""}
+    row["meta"] = {"description": ""}
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="landing_page",
+    )
+
+    assert result["ok"] is False
+    assert "export row did not contain generated text fields" in result["errors"]
+    text_check = next(
+        check for check in result["checks"]
+        if check["name"] == "generated_text_present"
+    )
+    assert text_check["passed"] is False
 
 
 def test_landing_export_fails_on_stale_benchmark_numbers() -> None:

@@ -670,23 +670,25 @@ def _support_ticket_blog_blueprint_payload(
     source_period = str(inputs.get("source_period") or "Uploaded support tickets")
     has_valid_date_window = bool(inputs.get("faq_window_days"))
     review_period = "last 90 days" if has_valid_date_window else "uploaded tickets"
+    data_context = {
+        "review_period": review_period,
+        "source_row_count": source_row_count,
+        "included_ticket_row_count": included_row_count,
+        "question_like_ticket_count": question_like_count,
+        "top_clusters": top_clusters,
+        "_known_vendors": [],
+        "total_reviews_analyzed": included_row_count,
+        "deep_enriched_count": included_row_count,
+        "category": "support tickets",
+        "topic": SUPPORT_TICKET_BLOG_TOPIC,
+        "source_period": source_period,
+        "source": "support_ticket_provider",
+    }
+    if has_valid_date_window:
+        data_context["report_date"] = "2026-05-23"
     return {
         "topic": SUPPORT_TICKET_BLOG_TOPIC,
-        "data_context": {
-            "review_period": review_period,
-            "source_row_count": source_row_count,
-            "included_ticket_row_count": included_row_count,
-            "question_like_ticket_count": question_like_count,
-            "top_clusters": top_clusters,
-            "_known_vendors": [],
-            "report_date": "2026-05-23",
-            "total_reviews_analyzed": included_row_count,
-            "deep_enriched_count": included_row_count,
-            "category": "support tickets",
-            "topic": SUPPORT_TICKET_BLOG_TOPIC,
-            "source_period": source_period,
-            "source": "support_ticket_provider",
-        },
+        "data_context": data_context,
         "sections": [
             {
                 "id": "repeat-ticket-patterns",

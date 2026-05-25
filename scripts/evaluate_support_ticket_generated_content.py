@@ -14,6 +14,7 @@ from typing import Any
 
 JsonDict = dict[str, Any]
 
+# From earlier stale smoke benchmark drift; still allowed when source-backed.
 _STALE_BENCHMARK_TOKENS = ("186", "78", "42%")
 _COUNT_CONTEXT_KEYS = (
     "source_row_count",
@@ -23,6 +24,20 @@ _COUNT_CONTEXT_KEYS = (
 _FRAMING_RE = re.compile(
     r"\b(?:support[-\s]?tickets?|tickets?|faq|help[-\s]?center|answers?)\b",
     re.IGNORECASE,
+)
+_UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE = re.compile(
+    r"\b(?:"
+    r"between\s+(?:january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)\s+\d{4}\s+and|"
+    r"(?:over|in|during)\s+the\s+(?:last|past)\s+\d+\s+days|"
+    r"(?:last|past)\s+\d+\s+days|"
+    r"last\s+90\s+days"
+    r")\b",
+    re.IGNORECASE,
+)
+_PERCENT_CLAIM_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<first>\d+(?:\.\d+)?)"
+    r"(?:\s*[-\u2013\u2014]\s*(?P<second>\d+(?:\.\d+)?))?\s*%"
 )
 
 
@@ -91,6 +106,18 @@ def evaluate_support_ticket_generated_content(
     _check_count_visibility(
         checks,
         warnings,
+        text=text,
+        source_context=context,
+    )
+    _check_uploaded_ticket_timeframe_truthfulness(
+        checks,
+        errors,
+        text=text,
+        source_context=context,
+    )
+    _check_unsupported_percentage_claims(
+        checks,
+        errors,
         text=text,
         source_context=context,
     )
@@ -214,6 +241,120 @@ def _check_count_visibility(
         warnings.append(
             "generated text does not visibly mention any support-ticket source counts"
         )
+
+
+def _check_uploaded_ticket_timeframe_truthfulness(
+    checks: list[JsonDict],
+    errors: list[str],
+    *,
+    text: str,
+    source_context: Mapping[str, Any],
+) -> None:
+    source_period = str(source_context.get("source_period") or "").strip().lower()
+    review_period = str(source_context.get("review_period") or "").strip().lower()
+    if source_period != "uploaded support tickets" and review_period != "uploaded tickets":
+        checks.append({
+            "name": "uploaded_ticket_timeframe_truthful",
+            "passed": True,
+            "level": "error",
+            "details": {"applicable": False},
+        })
+        return
+    unsupported_hits = _dedupe(
+        [
+            match.group(0).strip()
+            for match in _UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE.finditer(text)
+        ]
+    )
+    passed = not unsupported_hits
+    checks.append({
+        "name": "uploaded_ticket_timeframe_truthful",
+        "passed": passed,
+        "level": "error",
+        "details": {"unsupported_timeframes": unsupported_hits},
+    })
+    if unsupported_hits:
+        errors.append(
+            "generated text claims a calendar or rolling time window for an "
+            "undated uploaded-ticket source: " + ", ".join(unsupported_hits)
+        )
+
+
+def _check_unsupported_percentage_claims(
+    checks: list[JsonDict],
+    errors: list[str],
+    *,
+    text: str,
+    source_context: Mapping[str, Any],
+) -> None:
+    claims = _percentage_claims(text)
+    if not claims:
+        checks.append({
+            "name": "percentage_claims_source_backed",
+            "passed": True,
+            "level": "error",
+            "details": {"claims": [], "unsupported": []},
+        })
+        return
+    allowed = _source_backed_percentages(source_context)
+    unsupported = [
+        claim["text"]
+        for claim in claims
+        if not all(value in allowed for value in claim["values"])
+    ]
+    checks.append({
+        "name": "percentage_claims_source_backed",
+        "passed": not unsupported,
+        "level": "error",
+        "details": {
+            "claims": [claim["text"] for claim in claims],
+            "source_backed_percentages": sorted(allowed),
+            "unsupported": unsupported,
+        },
+    })
+    if unsupported:
+        errors.append(
+            "generated text contains percentage claims not backed by support-ticket "
+            "source counts: " + ", ".join(unsupported)
+        )
+
+
+def _percentage_claims(text: str) -> list[JsonDict]:
+    claims: list[JsonDict] = []
+    for match in _PERCENT_CLAIM_RE.finditer(text):
+        values = [_whole_percent(match.group("first"))]
+        if match.group("second") is not None:
+            values.append(_whole_percent(match.group("second")))
+        claims.append({"text": match.group(0).strip(), "values": values})
+    return claims
+
+
+def _source_backed_percentages(source_context: Mapping[str, Any]) -> set[int]:
+    counts = [
+        count
+        for count in (
+            _positive_int(source_context.get(key))
+            for key in _COUNT_CONTEXT_KEYS
+        )
+        if count is not None
+    ]
+    clusters = source_context.get("top_ticket_clusters") or source_context.get("top_clusters")
+    if isinstance(clusters, Sequence) and not isinstance(clusters, (str, bytes)):
+        for cluster in clusters:
+            if isinstance(cluster, Mapping):
+                count = _positive_int(cluster.get("count"))
+                if count is not None:
+                    counts.append(count)
+    backed: set[int] = set()
+    for numerator in counts:
+        for denominator in counts:
+            if denominator:
+                backed.add(_whole_percent((numerator / denominator) * 100))
+    return backed
+
+
+def _whole_percent(value: str | float) -> int:
+    return int(round(float(value)))
 
 
 def _check_source_signal_visibility(
