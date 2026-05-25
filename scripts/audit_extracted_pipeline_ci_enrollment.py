@@ -19,9 +19,11 @@ DEFAULT_ENROLLED_TEST_PATTERNS = (
     "tests/test_extracted_ticket_faq*.py",
     "tests/test_extracted_support_ticket*.py",
     "tests/test_smoke_content_ops*.py",
+    "tests/test_check_content_ops*.py",
     "tests/test_atlas_content_ops*.py",
     "tests/test_content_ops*.py",
     "tests/test_support_ticket*.py",
+    "tests/test_evaluate_*.py",
 )
 
 
