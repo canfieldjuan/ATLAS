@@ -1153,6 +1153,7 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert payload["data_context"]["question_like_ticket_count"] == 2
     assert payload["data_context"]["review_period"] == "uploaded tickets"
     assert payload["data_context"]["source_period"] == "Uploaded support tickets"
+    assert "report_date" not in payload["data_context"]
     assert payload["data_context"]["included_ticket_row_count"] == 2
     assert payload["data_context"]["total_reviews_analyzed"] == 2
     assert payload["data_context"]["deep_enriched_count"] == 2
@@ -1217,6 +1218,7 @@ def test_support_ticket_blog_blueprint_payload_uses_date_window_when_dates_valid
 
     assert payload["data_context"]["review_period"] == "last 90 days"
     assert payload["data_context"]["source_period"] == "Last 90 days of support tickets"
+    assert payload["data_context"]["report_date"] == "2026-05-23"
     assert payload["sections"][2]["key_stats"]["source_window_days"] == 90
 
 
