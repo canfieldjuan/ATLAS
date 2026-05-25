@@ -23,6 +23,26 @@ if str(SCRIPT_DIR) not in sys.path:
 import check_content_ops_faq_search_route_contract as contract  # noqa: E402
 
 
+def _case_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "query": str(case["query"]),
+        "corpus_id": str(case.get("corpus_id") or ""),
+        "status": str(case.get("status") or ""),
+        "limit": int(case["limit"]),
+        "require_results": bool(case["require_results"]),
+    }
+
+
+def _default_case(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "query": str(args.query),
+        "corpus_id": str(args.corpus_id or ""),
+        "status": str(args.status or ""),
+        "limit": int(args.limit),
+        "require_results": bool(args.require_results),
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run concurrent hosted FAQ search route reads."
@@ -49,6 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(require_results=True)
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--allow-empty-results", action="store_false", dest="require_results")
+    parser.add_argument("--case-file", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -60,7 +81,7 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("ATLAS_API_BASE_URL or --base-url is required")
     if not str(args.token or "").strip():
         errors.append("ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required")
-    if not str(args.query or "").strip():
+    if args.case_file is None and not str(args.query or "").strip():
         errors.append("ATLAS_FAQ_SEARCH_QUERY or --query is required")
     for name in ("limit", "requests", "concurrency"):
         if int(getattr(args, name)) <= 0:
@@ -80,21 +101,87 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     return errors
 
 
-def _run_one(index: int, args: argparse.Namespace) -> dict[str, Any]:
+def _load_cases(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[str]]:
+    if args.case_file is None:
+        return [_default_case(args)], []
+
+    try:
+        raw = json.loads(args.case_file.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [], [f"--case-file could not be read: {exc}"]
+    except json.JSONDecodeError as exc:
+        return [], [f"--case-file must contain JSON: {exc.msg}"]
+
+    if not isinstance(raw, list) or not raw:
+        return [], ["--case-file must contain a non-empty JSON list"]
+
+    cases: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            errors.append(f"case[{index}] must be an object")
+            continue
+
+        query = item.get("query")
+        if not isinstance(query, str) or not query.strip():
+            errors.append(f"case[{index}].query must be a non-empty string")
+
+        corpus_id = item.get("corpus_id", args.corpus_id or "")
+        if not isinstance(corpus_id, str):
+            errors.append(f"case[{index}].corpus_id must be a string")
+
+        status = item.get("status", args.status or "")
+        if not isinstance(status, str):
+            errors.append(f"case[{index}].status must be a string")
+
+        limit = item.get("limit", int(args.limit))
+        if type(limit) is not int or limit <= 0:
+            errors.append(f"case[{index}].limit must be a positive integer")
+
+        require_results = item.get("require_results", bool(args.require_results))
+        if type(require_results) is not bool:
+            errors.append(f"case[{index}].require_results must be a boolean")
+
+        if errors and any(error.startswith(f"case[{index}].") for error in errors):
+            continue
+
+        cases.append(
+            {
+                "query": query.strip(),
+                "corpus_id": corpus_id.strip(),
+                "status": status.strip(),
+                "limit": limit,
+                "require_results": require_results,
+            }
+        )
+    return cases, errors
+
+
+def _run_one(
+    index: int,
+    args: argparse.Namespace,
+    case: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     started = time.perf_counter()
     errors: list[str] = []
     count: int | None = None
+    active_case = _default_case(args) if case is None else case
     try:
         url = contract._build_url(
             base_url=str(args.base_url),
             route=str(args.route),
-            query=str(args.query),
-            corpus_id=str(args.corpus_id),
-            status=str(args.status),
-            limit=int(args.limit),
+            query=str(active_case["query"]),
+            corpus_id=str(active_case.get("corpus_id") or ""),
+            status=str(active_case.get("status") or ""),
+            limit=int(active_case["limit"]),
         )
         payload = contract._fetch_json(url, token=str(args.token).strip(), timeout=float(args.timeout))
-        errors.extend(contract._validate_envelope(payload, require_results=bool(args.require_results)))
+        errors.extend(
+            contract._validate_envelope(
+                payload,
+                require_results=bool(active_case["require_results"]),
+            )
+        )
         if type(payload.get("count")) is int:
             count = int(payload["count"])
     except (RuntimeError, OSError, TypeError, ValueError) as exc:
@@ -106,13 +193,30 @@ def _run_one(index: int, args: argparse.Namespace) -> dict[str, Any]:
         "count": count,
         "elapsed_ms": round(elapsed_ms, 6),
         "errors": errors,
+        "case_index": int(active_case.get("case_index", 0)),
+        "case": _case_snapshot(active_case),
     }
 
 
-def _run_concurrent(args: argparse.Namespace) -> list[dict[str, Any]]:
+def _run_concurrent(
+    args: argparse.Namespace,
+    cases: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    active_cases = list(cases) if cases is not None else [_default_case(args)]
     workers = min(int(args.concurrency), int(args.requests))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(_run_one, index, args) for index in range(int(args.requests))]
+        futures = [
+            executor.submit(
+                _run_one,
+                index,
+                args,
+                {
+                    **dict(active_cases[index % len(active_cases)]),
+                    "case_index": index % len(active_cases),
+                },
+            )
+            for index in range(int(args.requests))
+        ]
         results = [future.result() for future in concurrent.futures.as_completed(futures)]
     return sorted(results, key=lambda row: int(row["index"]))
 
@@ -134,6 +238,8 @@ def _error_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     failures = [
         {
             "index": row.get("index"),
+            **({"case_index": row.get("case_index")} if "case_index" in row else {}),
+            **({"case": row.get("case")} if "case" in row else {}),
             "errors": row.get("errors"),
         }
         for row in results
@@ -176,10 +282,12 @@ def _budget_summary(
 def _summary_payload(
     *,
     args: argparse.Namespace,
+    cases: Sequence[Mapping[str, Any]] | None = None,
     results: Sequence[Mapping[str, Any]],
     elapsed_seconds: float,
     preflight_errors: Sequence[str] = (),
 ) -> dict[str, Any]:
+    active_cases = list(cases) if cases is not None else [_default_case(args)]
     errors = _error_summary(results)
     latency = _latency_summary(results)
     budgets = _budget_summary(
@@ -199,6 +307,12 @@ def _summary_payload(
         "status": str(args.status or ""),
         "limit": int(args.limit),
         "require_results": bool(args.require_results),
+        "cases": {
+            "total": len(active_cases),
+            "case_file": str(args.case_file or ""),
+            "items": [_case_snapshot(case) for case in active_cases[:20]],
+            "truncated": len(active_cases) > 20,
+        },
         "requests": {
             "total": len(results),
             "configured": int(args.requests),
@@ -236,11 +350,14 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     started = time.perf_counter()
     preflight_errors = _validate_args(args)
+    cases, case_errors = _load_cases(args)
+    preflight_errors.extend(case_errors)
     results: list[dict[str, Any]] = []
     if not preflight_errors:
-        results = _run_concurrent(args)
+        results = _run_concurrent(args, cases)
     summary = _summary_payload(
         args=args,
+        cases=cases,
         results=results,
         elapsed_seconds=time.perf_counter() - started,
         preflight_errors=preflight_errors,
