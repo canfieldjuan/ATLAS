@@ -13,7 +13,10 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
-from extracted_content_pipeline.blog_generation import BlogPostGenerationService
+from extracted_content_pipeline.blog_generation import (
+    BlogPostGenerationConfig,
+    BlogPostGenerationService,
+)
 from extracted_content_pipeline.campaign_ports import LLMMessage, LLMResponse
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
@@ -24,6 +27,7 @@ from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
 )
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
+from extracted_quality_gate.types import QualityPolicy
 from tests.content_ops_live_execute_harness import (
     MemoryDraftRepository,
     MemorySkillStore,
@@ -58,8 +62,9 @@ def _support_ticket_csv_rows() -> list[dict[str, str]]:
 
 
 class _RecordingContentLLM:
-    def __init__(self) -> None:
+    def __init__(self, *, blog_content_suffix: str = "") -> None:
         self.calls: list[dict[str, Any]] = []
+        self.blog_content_suffix = blog_content_suffix
 
     async def complete(
         self,
@@ -76,7 +81,10 @@ class _RecordingContentLLM:
             "metadata": meta,
         })
         content = json.dumps(
-            _real_service_response_for_metadata(meta),
+            _real_service_response_for_metadata(
+                meta,
+                blog_content_suffix=self.blog_content_suffix,
+            ),
             separators=(",", ":"),
         )
         return LLMResponse(
@@ -108,7 +116,11 @@ class _RecordingBlueprintRepository:
         return self.rows[:limit]
 
 
-def _real_service_response_for_metadata(metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+def _real_service_response_for_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    blog_content_suffix: str = "",
+) -> Mapping[str, Any]:
     asset_type = str(metadata.get("asset_type") or "")
     if asset_type == "landing_page":
         return {
@@ -148,9 +160,18 @@ def _real_service_response_for_metadata(metadata: Mapping[str, Any]) -> Mapping[
             "slug": "support-ticket-faq-report",
             "title": "Support Ticket FAQ Report",
             "content": (
+                "## What does a support ticket FAQ report show?\n\n"
                 "A support ticket FAQ report shows small teams the repeat "
-                "questions customers keep asking and turns those questions "
-                "into answers people can find before they email support."
+                "questions customers keep asking across the uploaded support "
+                "tickets. In the uploaded support tickets, 4 included rows show "
+                "account and reporting questions that should become answers "
+                "people can find before they email support.\n\n"
+                "## Which support ticket answers should be written first?\n\n"
+                "The first answers should cover the account and reporting "
+                "questions customers already asked in the support tickets. "
+                "Those support ticket patterns give the team a grounded FAQ "
+                "list to write from customer wording."
+                f"{blog_content_suffix}"
             ),
             "topic_type": "content_ops_support_ticket_faq",
             "description": "How repeat support tickets become FAQ articles.",
@@ -163,6 +184,20 @@ def _real_service_response_for_metadata(metadata: Mapping[str, Any]) -> Mapping[
             "secondary_keywords": [
                 "customer support FAQ",
                 "reduce repeat support tickets",
+            ],
+            "faq": [
+                {
+                    "question": "What does a support ticket FAQ report show?",
+                    "answer": "It shows repeat customer questions from support tickets.",
+                },
+                {
+                    "question": "Which support ticket answers should be written first?",
+                    "answer": "Start with the highest-volume repeated questions.",
+                },
+                {
+                    "question": "Why use customer wording?",
+                    "answer": "Customers search with their own words.",
+                },
             ],
         }
     raise AssertionError(f"unexpected LLM metadata: {metadata!r}")
@@ -357,10 +392,6 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
         "slug": "support-ticket-faq-report",
         "topic": "Support-ticket questions customers keep asking",
         "topic_type": "content_ops_support_ticket_faq",
-        "data_context": {
-            "source": "support_ticket_provider",
-            "source_period": "Last 90 days of support tickets",
-        },
     }])
     llm = _RecordingContentLLM()
     blog_posts = MemoryDraftRepository("blog")
@@ -413,7 +444,10 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
         "customer support FAQ",
         "reduce repeat support tickets",
     ]
-    assert draft.data_context["source_period"] == "Last 90 days of support tickets"
+    assert draft.data_context["source_period"] == "Uploaded support tickets"
+    assert draft.data_context["source"] == "support_ticket_provider"
+    assert draft.data_context["included_ticket_row_count"] == 4
+    assert draft.data_context["top_clusters"]
 
     assert len(llm.calls) == 1
     call = llm.calls[0]
@@ -422,7 +456,70 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
     system_prompt, user_prompt = _message_texts(call)
     assert "Support-ticket questions customers keep asking" in system_prompt
     assert "content_ops_support_ticket_faq" in system_prompt
+    assert "support_ticket_provider" in system_prompt
+    assert "included_ticket_row_count" in system_prompt
     assert "Generate one blog post" in user_prompt
+
+
+async def test_support_ticket_provider_triggers_blog_generated_content_gate() -> None:
+    blueprints = _RecordingBlueprintRepository([{
+        "id": "bp-support-ticket-faq",
+        "slug": "support-ticket-faq-report",
+        "topic": "Support-ticket questions customers keep asking",
+        "topic_type": "content_ops_support_ticket_faq",
+    }])
+    llm = _RecordingContentLLM(
+        blog_content_suffix=(
+            "\n\nThese FAQ answers can reduce repeat tickets by 30-45%."
+        )
+    )
+    blog_posts = MemoryDraftRepository("blog")
+    service = BlogPostGenerationService(
+        blueprints=blueprints,
+        blog_posts=blog_posts,
+        llm=llm,
+        skills=MemorySkillStore(),
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+    scope = TenantScope(
+        account_id="acct-support-ticket-real",
+        user_id="user-support-ticket-real",
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            blog_post=service,
+        ),
+        scope_provider=lambda: scope,
+        input_provider=build_content_ops_input_provider(),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["blog_post"],
+        "limit": 1,
+        "require_quality_gates": True,
+        "inputs": {"source_material": _support_ticket_csv_rows()},
+    })
+
+    assert payload["status"] == "completed"
+    step = payload["steps"][0]
+    assert step["output"] == "blog_post"
+    assert step["status"] == "completed"
+    assert step["result"]["generated"] == 0
+    assert step["result"]["saved_ids"] == []
+    assert blog_posts.saved == []
+    assert any(
+        "support_ticket_generated_content:" in blocker
+        and "percentage claims not backed" in blocker
+        for blocker in step["result"]["errors"][0]["blockers"]
+    )
 
 
 async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
