@@ -337,6 +337,47 @@ The audit script's `main()` is the contract; fixture tests lock the
 parser behavior so a future small regex tweak cannot silently regress
 to false-green output.
 
+### 3i. Checkers prove their failure detection
+
+Validators, contract checkers, evaluators, and gate predicates are only useful
+when their failure branches are proven to fire. When a PR adds or changes code
+whose job is to detect bad input, broken output, unsafe state, or contract
+drift, the tests must prove the detector catches the failure, not only that the
+happy path passes.
+
+This rule applies to surfaces such as:
+
+- `scripts/check_*.py`, `scripts/audit_*.py`, and `scripts/evaluate_*.py`
+- extracted package validators and quality gates
+- route/response contract checkers
+- predicates that decide whether a gate should run
+- helper branches that turn malformed input into errors or blockers
+
+Required coverage shape:
+
+1. **Each detection branch gets a negative fixture.** Feed input that violates
+   exactly that rule and assert the specific error, blocker, non-zero exit, or
+   false result.
+2. **OR predicates get one-marker fixtures.** If a predicate can fire from
+   `source`, `provider`, count fields, cluster fields, or any other marker,
+   each marker gets a focused test where it is the only marker present.
+3. **False-positive surfaces get rejection fixtures.** Broad parsers and type
+   checks need tests for lookalikes: strings that are `Sequence`, empty lists,
+   malformed-but-realistic JSON, unknown headings, missing keys, or unrelated
+   route envelopes.
+4. **I/O checkers mock the transport, not the checker.** For network/file/DB
+   checkers, test the real fetch/read path by mocking `urlopen`, file handles,
+   DB cursors, or equivalent transport boundaries. Replacing the checker’s
+   own fetch helper with a fake is not enough.
+5. **Result-envelope drift fails closed.** If a checker returns `ok`,
+   `errors`, `count`, `results`, or similar contract fields, tests must cover
+   malformed or contradictory envelopes so missing error lists, count
+   mismatches, or non-object payloads do not silently pass.
+
+If a branch is intentionally not covered in the PR, the plan's `Intentional` or
+`Deferred` section must name why it is safe to leave out and what future slice
+will cover it. "Covered by the happy path" is not enough for detection logic.
+
 ---
 
 ## 4. Reviewer workflow
@@ -381,6 +422,10 @@ Before LGTM, the reviewer confirms:
 - [ ] For shared-function PRs, cross-layer caller hints were inspected
       and the verdict names any caller-layer tests or unaffected
       references.
+- [ ] For checker/evaluator/validator/gate PRs, each detection branch
+      has a focused negative fixture, OR predicates have one-marker
+      fixtures, and false-positive surfaces are covered or explicitly
+      deferred with a named future slice.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.
