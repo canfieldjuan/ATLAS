@@ -13,7 +13,10 @@ import sys
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 
 
-ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parents[0]
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -66,6 +69,7 @@ ServicesFactory = Callable[[], Any]
 Executor = Callable[..., Awaitable[dict[str, Any]]]
 BlogBlueprintSeeder = Callable[[argparse.Namespace, Any], Awaitable[Mapping[str, Any]]]
 DraftExporter = Callable[[str, Sequence[str], Any], Awaitable[Mapping[str, Any]]]
+GeneratedContentEvaluator = Callable[..., Mapping[str, Any]]
 
 
 def _load_dotenv_files(extra_env_files: list[Path] | None = None) -> None:
@@ -171,6 +175,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "draft ids produced by this smoke run."
         ),
     )
+    parser.add_argument(
+        "--evaluate-generated-content",
+        action="store_true",
+        help=(
+            "Run deterministic support-ticket generated-content evaluation "
+            "against the saved draft export. Requires --support-ticket-csv "
+            "and --export-saved-draft."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Print machine JSON.")
     return parser.parse_args(argv)
 
@@ -246,6 +259,27 @@ def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 def _uses_support_ticket_csv(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "support_ticket_csv", None))
+
+
+def _evaluates_generated_content(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "evaluate_generated_content", False))
+
+
+def _generated_content_evaluation_preflight_errors(
+    args: argparse.Namespace,
+) -> list[str]:
+    if not _evaluates_generated_content(args):
+        return []
+    errors: list[str] = []
+    if not _uses_support_ticket_csv(args):
+        errors.append(
+            "--evaluate-generated-content requires --support-ticket-csv"
+        )
+    if not getattr(args, "export_saved_draft", None):
+        errors.append(
+            "--evaluate-generated-content requires --export-saved-draft"
+        )
+    return errors
 
 
 def _support_ticket_rows_from_args(args: argparse.Namespace) -> list[dict[str, str]]:
@@ -477,6 +511,21 @@ def _exported_support_ticket_context(
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _evaluate_generated_content_export(
+    saved_draft_export: Mapping[str, Any],
+    *,
+    output: str,
+) -> Mapping[str, Any]:
+    from evaluate_support_ticket_generated_content import (  # noqa: PLC0415
+        evaluate_support_ticket_generated_content,
+    )
+
+    return evaluate_support_ticket_generated_content(
+        saved_draft_export,
+        output=output,
+    )
 
 
 def _smoke_errors(
@@ -873,6 +922,7 @@ async def run_content_ops_live_generation_smoke(
     tenant_scope_cls: Any = None,
     blog_blueprint_seed_fn: BlogBlueprintSeeder | None = None,
     draft_export_fn: DraftExporter | None = None,
+    generated_content_evaluator: GeneratedContentEvaluator | None = None,
 ) -> tuple[int, dict[str, Any]]:
     _load_dotenv_files(list(args.env_file or []))
     if (
@@ -896,7 +946,19 @@ async def run_content_ops_live_generation_smoke(
     execution_result: dict[str, Any] | None = None
     seeded_blog_blueprint: Mapping[str, Any] | None = None
     saved_draft_export: Mapping[str, Any] | None = None
-    errors: list[str] = []
+    generated_content_evaluation: Mapping[str, Any] | None = None
+    errors: list[str] = _generated_content_evaluation_preflight_errors(args)
+    if errors:
+        return 1, {
+            "ok": False,
+            "errors": errors,
+            "configured_outputs": [],
+            "seeded_blog_blueprint": {},
+            "payload": payload,
+            "execution": None,
+            "saved_draft_export": None,
+            "generated_content_evaluation": None,
+        }
     try:
         await init_database_fn()
         services = services_factory()
@@ -947,6 +1009,25 @@ async def run_content_ops_live_generation_smoke(
                                 saved_draft_export=saved_draft_export,
                             )
                         )
+                    if _evaluates_generated_content(args) and not errors:
+                        evaluator = (
+                            generated_content_evaluator
+                            or _evaluate_generated_content_export
+                        )
+                        generated_content_evaluation = evaluator(
+                            saved_draft_export,
+                            output=output,
+                        )
+                        evaluation_errors = [
+                            str(item)
+                            for item in generated_content_evaluation.get("errors", ())
+                        ]
+                        if not generated_content_evaluation.get("ok") and not evaluation_errors:
+                            evaluation_errors = ["unknown generated-content failure"]
+                        errors.extend(
+                            f"generated content evaluation failed: {error}"
+                            for error in evaluation_errors
+                        )
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     finally:
@@ -964,6 +1045,11 @@ async def run_content_ops_live_generation_smoke(
         "execution": execution_result,
         "saved_draft_export": (
             dict(saved_draft_export) if isinstance(saved_draft_export, Mapping) else None
+        ),
+        "generated_content_evaluation": (
+            dict(generated_content_evaluation)
+            if isinstance(generated_content_evaluation, Mapping)
+            else None
         ),
     }
     return (0 if result["ok"] else 1), result
