@@ -63,6 +63,15 @@ class _Pool:
 
     async def fetch(self, query, *args):
         self.fetch_calls.append({"query": str(query), "args": args})
+        if "UPDATE ticket_faq_markdown" in str(query):
+            if not self.update_hits:
+                return []
+            updated_rows = []
+            for row in self.rows:
+                if row["id"] == args[0] and row["account_id"] == args[2]:
+                    row["status"] = args[1]
+                    updated_rows.append(dict(row))
+            return updated_rows
         account_id = args[0] if args else ""
         status = args[1] if "status = $2" in str(query) and len(args) > 1 else None
         target_mode_index = 2 if "target_mode = $3" in str(query) else None

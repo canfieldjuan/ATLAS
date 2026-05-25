@@ -9,10 +9,21 @@ from .campaign_ports import JsonDict, TenantScope
 from .storage._jsonb_helpers import (
     decode_jsonb_field,
     json_dump_jsonb,
-    parse_command_tag,
     row_to_dict,
 )
 from .ticket_faq_ports import TicketFAQDraft
+from .ticket_faq_search import (
+    PostgresTicketFAQSearchRepository,
+    build_ticket_faq_search_documents,
+    build_ticket_faq_search_projection_key,
+)
+
+
+_TICKET_FAQ_COLUMNS = (
+    "id, target_id, target_mode, title, markdown, items, "
+    "source_count, ticket_source_count, output_checks, warnings, "
+    "metadata, status"
+)
 
 
 def _draft_metadata(draft: TicketFAQDraft, scope: TenantScope) -> JsonDict:
@@ -117,9 +128,7 @@ class PostgresTicketFAQRepository:
             params.append(target_mode)
             clauses.append(f"target_mode = ${len(params)}")
         sql = (
-            "SELECT id, target_id, target_mode, title, markdown, items, "
-            "source_count, ticket_source_count, output_checks, warnings, "
-            "metadata, status "
+            f"SELECT {_TICKET_FAQ_COLUMNS} "
             "FROM ticket_faq_markdown WHERE " + " AND ".join(clauses) + " "
             "ORDER BY created_at DESC"
         )
@@ -136,19 +145,27 @@ class PostgresTicketFAQRepository:
         *,
         scope: TenantScope,
     ) -> bool:
-        result = await self.pool.execute(
-            """
-            UPDATE ticket_faq_markdown
-               SET status = $2,
-                   updated_at = NOW()
-             WHERE id = $1
-               AND account_id = $3
-            """,
-            faq_id,
-            status,
-            scope.account_id or "",
-        )
-        return parse_command_tag(result)
+        async def _update(db: Any) -> bool:
+            rows = await db.fetch(
+                f"""
+                UPDATE ticket_faq_markdown
+                   SET status = $2,
+                       updated_at = NOW()
+                 WHERE id = $1
+                   AND account_id = $3
+                RETURNING {_TICKET_FAQ_COLUMNS}
+                """,
+                faq_id,
+                status,
+                scope.account_id or "",
+            )
+            drafts = tuple(_row_to_draft(row_to_dict(row)) for row in rows)
+            if not drafts:
+                return False
+            await self._replace_search_projection(drafts, scope=scope, db=db)
+            return True
+
+        return await _with_write_connection(self.pool, _update)
 
     async def update_statuses(
         self,
@@ -160,20 +177,74 @@ class PostgresTicketFAQRepository:
         ids = [str(item).strip() for item in faq_ids if str(item).strip()]
         if not ids:
             return ()
-        rows = await self.pool.fetch(
-            """
-            UPDATE ticket_faq_markdown
-               SET status = $2,
-                   updated_at = NOW()
-             WHERE id = ANY($1::uuid[])
-               AND account_id = $3
-            RETURNING id
-            """,
-            ids,
-            status,
-            scope.account_id or "",
+        async def _update(db: Any) -> Sequence[str]:
+            rows = await db.fetch(
+                f"""
+                UPDATE ticket_faq_markdown
+                   SET status = $2,
+                       updated_at = NOW()
+                 WHERE id = ANY($1::uuid[])
+                   AND account_id = $3
+                RETURNING {_TICKET_FAQ_COLUMNS}
+                """,
+                ids,
+                status,
+                scope.account_id or "",
+            )
+            drafts = tuple(_row_to_draft(row_to_dict(row)) for row in rows)
+            if not drafts:
+                return ()
+            await self._replace_search_projection(drafts, scope=scope, db=db)
+            return tuple(draft.id for draft in drafts)
+
+        return await _with_write_connection(self.pool, _update)
+
+    async def _replace_search_projection(
+        self,
+        drafts: Sequence[TicketFAQDraft],
+        *,
+        scope: TenantScope,
+        db: Any | None = None,
+    ) -> None:
+        documents = []
+        replace_keys = []
+        for draft in drafts:
+            key = build_ticket_faq_search_projection_key(
+                draft,
+                account_id=scope.account_id,
+            )
+            if not key.account_id or not key.corpus_id or not key.faq_id:
+                continue
+            replace_keys.append(key)
+            documents.extend(
+                build_ticket_faq_search_documents(
+                    draft,
+                    account_id=key.account_id,
+                    corpus_id=key.corpus_id,
+                )
+            )
+        if not replace_keys:
+            return
+        await PostgresTicketFAQSearchRepository(db or self.pool).replace_documents(
+            tuple(documents),
+            replace_keys=tuple(replace_keys),
         )
-        return tuple(str(row_to_dict(row).get("id") or "") for row in rows)
+
+
+async def _with_write_connection(db: Any, callback: Any) -> Any:
+    transaction = getattr(db, "transaction", None)
+    if callable(transaction):
+        async with transaction():
+            return await callback(db)
+    acquire = getattr(db, "acquire", None)
+    if callable(acquire):
+        async with acquire() as connection:
+            connection_transaction = getattr(connection, "transaction", None)
+            if callable(connection_transaction):
+                async with connection_transaction():
+                    return await callback(connection)
+            return await callback(connection)
+    return await callback(db)
 
 
 __all__ = [

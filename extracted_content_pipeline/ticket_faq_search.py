@@ -133,6 +133,23 @@ def build_ticket_faq_search_documents(
     return tuple(documents)
 
 
+def build_ticket_faq_search_projection_key(
+    draft: TicketFAQDraft,
+    *,
+    account_id: str | None = None,
+    corpus_id: str | None = None,
+) -> TicketFAQSearchProjectionKey:
+    """Build the replacement key for a generated FAQ draft projection."""
+
+    resolved_account_id = _clean(account_id) or _metadata_account_id(draft.metadata)
+    resolved_corpus_id = _clean(corpus_id) or _metadata_corpus_id(draft.metadata) or draft.target_id
+    return TicketFAQSearchProjectionKey(
+        account_id=resolved_account_id,
+        corpus_id=resolved_corpus_id,
+        faq_id=draft.id,
+    )
+
+
 def search_ticket_faq_documents(
     documents: Iterable[TicketFAQSearchDocument],
     *,
@@ -466,5 +483,6 @@ __all__ = [
     "TicketFAQSearchResponse",
     "TicketFAQSearchResult",
     "build_ticket_faq_search_documents",
+    "build_ticket_faq_search_projection_key",
     "search_ticket_faq_documents",
 ]

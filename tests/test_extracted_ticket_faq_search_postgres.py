@@ -12,6 +12,8 @@ from extracted_content_pipeline.ticket_faq_search import (
     TicketFAQSearchDocument,
     TicketFAQSearchProjectionKey,
 )
+from extracted_content_pipeline.ticket_faq_postgres import PostgresTicketFAQRepository
+from extracted_content_pipeline.campaign_ports import TenantScope
 
 
 class _Transaction:
@@ -451,6 +453,86 @@ async def test_ticket_faq_search_contract_against_postgres() -> None:
         await pool.close()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ticket_faq_review_status_indexes_search_projection_against_postgres() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    root = Path(__file__).resolve().parents[1]
+    faq_id = str(uuid4())
+    account_a = f"acct-a-{uuid4().hex}"
+    account_b = f"acct-b-{uuid4().hex}"
+    corpus_id = f"corpus-{uuid4().hex}"
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    faq_repo = PostgresTicketFAQRepository(pool)
+    search_repo = PostgresTicketFAQSearchRepository(pool)
+
+    try:
+        await pool.execute((root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text())
+        await pool.execute((root / "atlas_brain/storage/migrations/327_ticket_faq_search_documents.sql").read_text())
+        await _insert_reviewable_faq(
+            pool,
+            faq_id=faq_id,
+            account_id=account_a,
+            corpus_id=corpus_id,
+        )
+
+        approved = await faq_repo.update_status(
+            faq_id,
+            "approved",
+            scope=TenantScope(account_id=account_a),
+        )
+        account_a_hit = await search_repo.search(
+            query="password reset",
+            account_id=account_a,
+            corpus_id=corpus_id,
+        )
+        account_b_miss = await search_repo.search(
+            query="password reset",
+            account_id=account_b,
+            corpus_id=corpus_id,
+        )
+        account_b_update = await faq_repo.update_status(
+            faq_id,
+            "approved",
+            scope=TenantScope(account_id=account_b),
+        )
+        rejected = await faq_repo.update_status(
+            faq_id,
+            "rejected",
+            scope=TenantScope(account_id=account_a),
+        )
+        approved_after_reject = await search_repo.search(
+            query="password reset",
+            account_id=account_a,
+            corpus_id=corpus_id,
+        )
+        rejected_after_reject = await search_repo.search(
+            query="password reset",
+            account_id=account_a,
+            corpus_id=corpus_id,
+            status="rejected",
+        )
+
+        assert approved is True
+        assert account_a_hit.as_dict()["count"] == 1
+        assert account_b_miss.as_dict()["count"] == 0
+        assert account_b_update is False
+        assert rejected is True
+        assert approved_after_reject.as_dict()["count"] == 0
+        assert rejected_after_reject.as_dict()["count"] == 1
+        assert rejected_after_reject.as_dict()["results"][0]["status"] == "rejected"
+    finally:
+        await pool.execute(
+            "DELETE FROM ticket_faq_markdown WHERE account_id = ANY($1::text[])",
+            [account_a, account_b],
+        )
+        await pool.close()
+
+
 async def _insert_parent_faq(pool, *, faq_id: str, account_id: str) -> None:
     await pool.execute(
         """
@@ -467,4 +549,38 @@ async def _insert_parent_faq(pool, *, faq_id: str, account_id: str) -> None:
         """,
         faq_id,
         account_id,
+    )
+
+
+async def _insert_reviewable_faq(
+    pool,
+    *,
+    faq_id: str,
+    account_id: str,
+    corpus_id: str,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO ticket_faq_markdown (
+            id, account_id, target_id, target_mode, title, markdown,
+            items, source_count, ticket_source_count, output_checks,
+            warnings, metadata, status
+        )
+        VALUES (
+            $1::uuid, $2, 'support-account-1', 'support_account',
+            'Support FAQ', '# Support FAQ', $3::jsonb, 1, 1,
+            '{}'::jsonb, '[]'::jsonb, $4::jsonb, 'draft'
+        )
+        """,
+        faq_id,
+        account_id,
+        json.dumps([{
+            "rank": 1,
+            "topic": "password reset",
+            "question": "How do I reset my password?",
+            "answer": "Use the reset link.",
+            "source_ids": ["ticket-1"],
+            "ticket_count": 1,
+        }]),
+        json.dumps({"corpus_id": corpus_id}),
     )

@@ -27,7 +27,34 @@ class _Pool:
     def __init__(self, result: str = "UPDATE 1") -> None:
         self.result = result
         self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
         self.closed = False
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        if "UPDATE ticket_faq_markdown" not in str(query):
+            return []
+        if self.result == "UPDATE 0":
+            return []
+        return [{
+            "id": args[0],
+            "target_id": "support-account-1",
+            "target_mode": "support_account",
+            "title": "Support FAQ",
+            "markdown": "# Support FAQ",
+            "items": json.dumps([{
+                "question": "How do I reset login?",
+                "answer": "Use the reset link.",
+                "source_ids": ["ticket-1"],
+                "ticket_count": 1,
+            }]),
+            "source_count": 1,
+            "ticket_source_count": 1,
+            "output_checks": "{}",
+            "warnings": "[]",
+            "metadata": json.dumps({"corpus_id": "support-account-1"}),
+            "status": args[1],
+        }]
 
     async def execute(self, query, *args):
         self.execute_calls.append((str(query), args))
@@ -234,10 +261,11 @@ async def test_asset_review_cli_updates_ticket_faq_status(monkeypatch, capsys) -
     exit_code = await cli._main()
 
     output = json.loads(capsys.readouterr().out)
-    query, args = pool.execute_calls[0]
+    query, args = pool.fetch_calls[0]
     assert exit_code == 0
     assert "UPDATE ticket_faq_markdown" in query
     assert args == ("faq-uuid-1", "approved", "acct_1")
+    assert "INSERT INTO ticket_faq_search_documents" in pool.execute_calls[1][0]
     assert output == {
         "account_id": "acct_1",
         "asset": "faq_markdown",
