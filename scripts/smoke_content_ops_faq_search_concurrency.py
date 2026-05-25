@@ -67,6 +67,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--database-url", default=_default_database_url())
     parser.add_argument("--account-count", type=int, default=3)
+    parser.add_argument("--account-id", default="")
     parser.add_argument("--corpora-per-account", type=int, default=2)
     parser.add_argument("--documents-per-corpus", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=30)
@@ -75,6 +76,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-p95-ms", type=float)
     parser.add_argument("--max-single-request-ms", type=float)
     parser.add_argument("--output-result", type=Path)
+    parser.add_argument("--route-case-file-output", type=Path)
     parser.add_argument("--keep-data", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -97,6 +99,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if value is not None and float(value) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be positive")
+    if str(args.account_id or "").strip() and int(args.account_count) != 1:
+        raise SystemExit("--account-id requires --account-count 1")
+    if args.route_case_file_output and not bool(args.keep_data):
+        raise SystemExit("--route-case-file-output requires --keep-data")
 
 
 async def _create_pool(database_url: str, *, pool_size: int):
@@ -114,16 +120,17 @@ def _build_cases(
     run_id: str,
     account_count: int,
     corpora_per_account: int,
+    account_id: str = "",
 ) -> tuple[SearchCase, ...]:
     cases: list[SearchCase] = []
     for account_index in range(account_count):
-        account_id = f"faq-search-{run_id}-acct-{account_index}"
+        resolved_account_id = account_id.strip() or f"faq-search-{run_id}-acct-{account_index}"
         for corpus_index in range(corpora_per_account):
             corpus_id = f"faq-search-{run_id}-corpus-{corpus_index}"
             faq_id = str(uuid4())
             cases.append(
                 SearchCase(
-                    account_id=account_id,
+                    account_id=resolved_account_id,
                     corpus_id=corpus_id,
                     faq_id=faq_id,
                     query="password reset",
@@ -132,7 +139,7 @@ def _build_cases(
             )
             cases.append(
                 SearchCase(
-                    account_id=account_id,
+                    account_id=resolved_account_id,
                     corpus_id=corpus_id,
                     faq_id=faq_id,
                     query="escrow shortage",
@@ -140,6 +147,55 @@ def _build_cases(
                 )
             )
     return tuple(cases)
+
+
+def _route_case_payload(
+    cases: Sequence[SearchCase],
+    *,
+    documents_per_corpus: int,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    expected_hit_count = min(documents_per_corpus, limit)
+    payload: list[dict[str, Any]] = []
+    for case in cases:
+        row = {
+            "query": case.query,
+            "corpus_id": case.corpus_id,
+            "status": "approved",
+            "limit": limit,
+            "require_results": case.expected_hit,
+            "expected_count": expected_hit_count if case.expected_hit else 0,
+        }
+        if case.expected_hit:
+            row.update(
+                {
+                    "expected_first_account_id": case.account_id,
+                    "expected_first_corpus_id": case.corpus_id,
+                    "expected_first_faq_id": case.faq_id,
+                }
+            )
+        payload.append(row)
+    return payload
+
+
+def _write_route_case_file(
+    path: Path | None,
+    cases: Sequence[SearchCase],
+    *,
+    documents_per_corpus: int,
+) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            _route_case_payload(cases, documents_per_corpus=documents_per_corpus),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _documents_for_case(case: SearchCase, *, documents_per_corpus: int) -> tuple[TicketFAQSearchDocument, ...]:
@@ -387,6 +443,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         run_id=run_id,
         account_count=int(args.account_count),
         corpora_per_account=int(args.corpora_per_account),
+        account_id=str(args.account_id or ""),
     )
     started = time.perf_counter()
     try:
@@ -414,6 +471,11 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     try:
         await _apply_migrations(pool)
         await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
+        _write_route_case_file(
+            args.route_case_file_output,
+            cases,
+            documents_per_corpus=int(args.documents_per_corpus),
+        )
         results = await _run_concurrent_searches(
             repo,
             cases,

@@ -18,6 +18,16 @@ sys.modules["smoke_content_ops_faq_search_concurrency"] = smoke
 SPEC.loader.exec_module(smoke)
 
 
+def _case(*, query: str = "password reset", expected_hit: bool = True):
+    return smoke.SearchCase(
+        account_id="acct-1",
+        corpus_id="corpus-1",
+        faq_id="11111111-1111-1111-1111-111111111111",
+        query=query,
+        expected_hit=expected_hit,
+    )
+
+
 def test_build_cases_creates_hit_and_miss_for_each_corpus() -> None:
     cases = smoke._build_cases(
         run_id="abc123",
@@ -35,16 +45,20 @@ def test_build_cases_creates_hit_and_miss_for_each_corpus() -> None:
         assert len({case.account_id for case in cases if case.corpus_id == corpus_id}) == 2
 
 
-def test_documents_for_case_are_ranked_and_scoped() -> None:
-    case = smoke.SearchCase(
-        account_id="acct-1",
-        corpus_id="corpus-1",
-        faq_id="11111111-1111-1111-1111-111111111111",
-        query="password reset",
-        expected_hit=True,
+def test_build_cases_accepts_single_account_override() -> None:
+    cases = smoke._build_cases(
+        run_id="abc123",
+        account_count=1,
+        corpora_per_account=2,
+        account_id="hosted-token-account",
     )
 
-    documents = smoke._documents_for_case(case, documents_per_corpus=3)
+    assert {case.account_id for case in cases} == {"hosted-token-account"}
+    assert len(cases) == 4
+
+
+def test_documents_for_case_are_ranked_and_scoped() -> None:
+    documents = smoke._documents_for_case(_case(), documents_per_corpus=3)
 
     assert [document.rank for document in documents] == [1, 2, 3]
     assert {document.account_id for document in documents} == {"acct-1"}
@@ -52,6 +66,36 @@ def test_documents_for_case_are_ranked_and_scoped() -> None:
     assert {document.status for document in documents} == {"approved"}
     assert {document.target_mode for document in documents} == {"support_account"}
     assert all("password reset" in document.search_text for document in documents)
+
+
+def test_route_case_payload_carries_seeded_hit_and_miss_expectations() -> None:
+    payload = smoke._route_case_payload(
+        [_case(), _case(query="escrow shortage", expected_hit=False)],
+        documents_per_corpus=7,
+        limit=5,
+    )
+
+    assert payload[0]["expected_count"] == 5
+    assert payload[0]["expected_first_account_id"] == "acct-1"
+    assert payload[0]["expected_first_corpus_id"] == "corpus-1"
+    assert payload[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload[1] == {
+        "query": "escrow shortage",
+        "corpus_id": "corpus-1",
+        "status": "approved",
+        "limit": 5,
+        "require_results": False,
+        "expected_count": 0,
+    }
+
+
+def test_write_route_case_file_writes_deterministic_json(tmp_path) -> None:
+    path = tmp_path / "route-cases.json"
+    smoke._write_route_case_file(path, [_case()], documents_per_corpus=1)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload[0]["expected_count"] == 1
+    assert payload[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
 
 
 @pytest.mark.asyncio
@@ -177,6 +221,46 @@ def test_validate_args_rejects_nonpositive_latency_budgets() -> None:
     )
 
     with pytest.raises(SystemExit, match="--max-p95-ms must be positive"):
+        smoke._validate_args(args)
+
+
+def test_validate_args_rejects_route_case_output_without_kept_data() -> None:
+    args = SimpleNamespace(
+        database_url="postgresql://example",
+        account_count=1,
+        account_id="acct-1",
+        corpora_per_account=1,
+        documents_per_corpus=1,
+        iterations=1,
+        concurrency=1,
+        pool_size=1,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        route_case_file_output=Path("cases.json"),
+        keep_data=False,
+    )
+
+    with pytest.raises(SystemExit, match="--route-case-file-output requires --keep-data"):
+        smoke._validate_args(args)
+
+
+def test_validate_args_rejects_account_override_for_multiple_accounts() -> None:
+    args = SimpleNamespace(
+        database_url="postgresql://example",
+        account_count=2,
+        account_id="acct-1",
+        corpora_per_account=1,
+        documents_per_corpus=1,
+        iterations=1,
+        concurrency=1,
+        pool_size=1,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        route_case_file_output=None,
+        keep_data=True,
+    )
+
+    with pytest.raises(SystemExit, match="--account-id requires --account-count 1"):
         smoke._validate_args(args)
 
 

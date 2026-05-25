@@ -24,13 +24,22 @@ import check_content_ops_faq_search_route_contract as contract  # noqa: E402
 
 
 def _case_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    snapshot = {
         "query": str(case["query"]),
         "corpus_id": str(case.get("corpus_id") or ""),
         "status": str(case.get("status") or ""),
         "limit": int(case["limit"]),
         "require_results": bool(case["require_results"]),
     }
+    for key in (
+        "expected_count",
+        "expected_first_account_id",
+        "expected_first_corpus_id",
+        "expected_first_faq_id",
+    ):
+        if key in case:
+            snapshot[key] = case[key]
+    return snapshot
 
 
 def _default_case(args: argparse.Namespace) -> dict[str, Any]:
@@ -142,19 +151,68 @@ def _load_cases(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[st
         if type(require_results) is not bool:
             errors.append(f"case[{index}].require_results must be a boolean")
 
+        expected_count = item.get("expected_count")
+        if "expected_count" in item and (type(expected_count) is not int or expected_count < 0):
+            errors.append(f"case[{index}].expected_count must be a non-negative integer")
+
+        expected_first: dict[str, str] = {}
+        for key in (
+            "expected_first_account_id",
+            "expected_first_corpus_id",
+            "expected_first_faq_id",
+        ):
+            if key not in item:
+                continue
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"case[{index}].{key} must be a non-empty string")
+            else:
+                expected_first[key] = value.strip()
+
         if errors and any(error.startswith(f"case[{index}].") for error in errors):
             continue
 
-        cases.append(
-            {
-                "query": query.strip(),
-                "corpus_id": corpus_id.strip(),
-                "status": status.strip(),
-                "limit": limit,
-                "require_results": require_results,
-            }
-        )
+        case = {
+            "query": query.strip(),
+            "corpus_id": corpus_id.strip(),
+            "status": status.strip(),
+            "limit": limit,
+            "require_results": require_results,
+        }
+        if "expected_count" in item:
+            case["expected_count"] = expected_count
+        case.update(expected_first)
+        cases.append(case)
     return cases, errors
+
+
+def _expected_case_errors(payload: Mapping[str, Any], case: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    count = payload.get("count")
+    if "expected_count" in case and count != case["expected_count"]:
+        errors.append(f"expected count {case['expected_count']} but got {count}")
+
+    first_expectations = {
+        "expected_first_account_id": "account_id",
+        "expected_first_corpus_id": "corpus_id",
+        "expected_first_faq_id": "faq_id",
+    }
+    expected_keys = [key for key in first_expectations if key in case]
+    if not expected_keys:
+        return errors
+
+    results = payload.get("results")
+    first = results[0] if isinstance(results, list) and results else None
+    if not isinstance(first, Mapping):
+        errors.append("expected first result but none was returned")
+        return errors
+    for expected_key in expected_keys:
+        field = first_expectations[expected_key]
+        expected = case[expected_key]
+        actual = first.get(field)
+        if actual != expected:
+            errors.append(f"expected first {field} {expected!r} but got {actual!r}")
+    return errors
 
 
 def _run_one(
@@ -182,6 +240,7 @@ def _run_one(
                 require_results=bool(active_case["require_results"]),
             )
         )
+        errors.extend(_expected_case_errors(payload, active_case))
         if type(payload.get("count")) is int:
             count = int(payload["count"])
     except (RuntimeError, OSError, TypeError, ValueError) as exc:
