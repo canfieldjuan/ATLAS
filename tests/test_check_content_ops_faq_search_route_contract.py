@@ -26,6 +26,11 @@ def _set_argv(monkeypatch, *args):
     monkeypatch.setattr(sys, "argv", ["check_content_ops_faq_search_route_contract.py", *args])
 
 
+def _set_clock(monkeypatch, *values):
+    readings = iter(values)
+    monkeypatch.setattr(_MODULE, "_now_ms", lambda: next(readings))
+
+
 def _valid_payload():
     return {
         "query": "mortgage payment dispute",
@@ -296,6 +301,18 @@ def test_main_reports_invalid_env_limit_through_argparse(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_main_reports_invalid_env_latency_budget_through_argparse(monkeypatch):
+    monkeypatch.setenv("ATLAS_API_BASE_URL", "https://atlas.example.com")
+    monkeypatch.setenv("ATLAS_B2B_JWT", "token-123")
+    monkeypatch.setenv("ATLAS_FAQ_SEARCH_MAX_SEARCH_MS", "bad")
+    _set_argv(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        _MODULE.main()
+
+    assert exc.value.code == 2
+
+
 class _Response:
     def __init__(self, payload):
         self.payload = payload
@@ -451,6 +468,54 @@ def test_main_checks_route_and_prints_summary(monkeypatch, capsys):
     assert "FAQ search route contract passed" in capsys.readouterr().out
 
 
+def test_main_passes_when_latency_budgets_are_met(monkeypatch, capsys):
+    _set_clock(monkeypatch, 100.0, 112.5)
+    monkeypatch.setattr(
+        _MODULE,
+        "_fetch_json",
+        lambda url, *, token, timeout: _valid_payload(),
+    )
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-search-ms",
+        "20",
+        "--max-total-ms",
+        "25",
+    )
+
+    assert _MODULE.main() == 0
+    output = capsys.readouterr().out
+    assert "total_elapsed_ms=12.500" in output
+
+
+def test_main_fails_when_search_latency_budget_is_exceeded(monkeypatch, capsys):
+    _set_clock(monkeypatch, 100.0, 140.0)
+    monkeypatch.setattr(
+        _MODULE,
+        "_fetch_json",
+        lambda url, *, token, timeout: _valid_payload(),
+    )
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-search-ms",
+        "25",
+    )
+
+    assert _MODULE.main() == 1
+    assert (
+        "search latency 40.000 ms exceeds --max-search-ms 25.000 ms"
+        in capsys.readouterr().out
+    )
+
+
 def test_main_checks_detail_when_requested(monkeypatch, capsys):
     calls = []
 
@@ -489,6 +554,70 @@ def test_main_checks_detail_when_requested(monkeypatch, capsys):
         ),
     ]
     assert "detail_checked=True" in capsys.readouterr().out
+
+
+def test_main_fails_when_detail_or_total_latency_budget_is_exceeded(monkeypatch, capsys):
+    _set_clock(monkeypatch, 0.0, 10.0, 10.0, 45.0)
+
+    def _fake_fetch_json(url, *, token, timeout):
+        if url.endswith("/11111111-1111-1111-1111-111111111111"):
+            return _valid_detail_payload()
+        return _valid_payload()
+
+    monkeypatch.setattr(_MODULE, "_fetch_json", _fake_fetch_json)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-results",
+        "--require-detail",
+        "--max-detail-ms",
+        "30",
+        "--max-total-ms",
+        "40",
+    )
+
+    assert _MODULE.main() == 1
+    output = capsys.readouterr().out
+    assert "detail latency 35.000 ms exceeds --max-detail-ms 30.000 ms" in output
+    assert "total latency 45.000 ms exceeds --max-total-ms 40.000 ms" in output
+
+
+def test_main_rejects_detail_latency_budget_without_detail_check(monkeypatch, capsys):
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-detail-ms",
+        "10",
+    )
+
+    assert _MODULE.main() == 2
+    assert "--max-detail-ms requires --require-detail" in capsys.readouterr().out
+
+
+def test_main_rejects_non_finite_latency_budget(monkeypatch, capsys):
+    monkeypatch.setattr(
+        _MODULE,
+        "_fetch_json",
+        lambda url, *, token, timeout: pytest.fail("preflight should stop before fetch"),
+    )
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-search-ms",
+        "nan",
+    )
+
+    assert _MODULE.main() == 2
+    assert "--max-search-ms must be finite and positive" in capsys.readouterr().out
 
 
 def test_main_requires_faq_id_for_detail_check(monkeypatch, capsys):
@@ -531,6 +660,7 @@ def test_main_reports_detail_contract_failure(monkeypatch, capsys):
 
 
 def test_main_writes_success_result_without_token(monkeypatch, tmp_path):
+    _set_clock(monkeypatch, 100.0, 112.5)
     monkeypatch.setattr(
         _MODULE,
         "_fetch_json",
@@ -568,7 +698,9 @@ def test_main_writes_success_result_without_token(monkeypatch, tmp_path):
         "require_detail": False,
         "require_results": True,
         "route": "/api/v1/content-ops/faq-deflection-search",
+        "search_elapsed_ms": 12.5,
         "status": "",
+        "total_elapsed_ms": 12.5,
     }
     assert "secret-token" not in result_path.read_text(encoding="utf-8")
 
