@@ -220,6 +220,78 @@ def test_blog_export_allows_timeframe_when_source_period_supplies_it() -> None:
     assert timeframe_check["details"] == {"applicable": False}
 
 
+def test_blog_export_fails_unsupported_uploaded_ticket_cadence() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Publishing both FAQ answers could eliminate 2 tickets per week."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "recurring cadence for an undated uploaded-ticket source" in error
+        for error in result["errors"]
+    )
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is False
+    assert cadence_check["details"] == {"unsupported_cadences": ["per week"]}
+
+
+def test_landing_export_fails_unsupported_uploaded_ticket_cadence() -> None:
+    result = evaluator.evaluate_support_ticket_generated_content(
+        _landing_export(
+            text_override=(
+                "The uploaded 2 support tickets show account and reporting "
+                "questions your team answers weekly."
+            )
+        ),
+        output="landing_page",
+    )
+
+    assert result["ok"] is False
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is False
+    assert cadence_check["details"] == {"unsupported_cadences": ["weekly"]}
+
+
+def test_blog_export_allows_cadence_when_source_period_supplies_it() -> None:
+    context = _blog_context()
+    context["source_period"] = "Last 90 days of support tickets"
+    context["review_period"] = "last 90 days"
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "In the last 90 days, the 2 support tickets show account and "
+            "reporting questions your team sees weekly."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is True
+    assert cadence_check["details"] == {"applicable": False}
+
+
 def test_blog_export_fails_unsupported_percentage_claims() -> None:
     export = _blog_export(
         content_override=(
