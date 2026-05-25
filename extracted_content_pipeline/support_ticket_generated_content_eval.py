@@ -35,6 +35,11 @@ _UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE = re.compile(
+    r"\b(?:per|each|every)\s+(?:day|week|month|quarter|year)\b|"
+    r"\b(?:daily|weekly|monthly|quarterly|yearly|annually)\b",
+    re.IGNORECASE,
+)
 _PERCENT_CLAIM_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<first>\d+(?:\.\d+)?)"
     r"(?:\s*[-\u2013\u2014]\s*(?P<second>\d+(?:\.\d+)?))?\s*%"
@@ -110,6 +115,12 @@ def evaluate_support_ticket_generated_content(
         source_context=context,
     )
     _check_uploaded_ticket_timeframe_truthfulness(
+        checks,
+        errors,
+        text=text,
+        source_context=context,
+    )
+    _check_uploaded_ticket_cadence_truthfulness(
         checks,
         errors,
         text=text,
@@ -277,6 +288,42 @@ def _check_uploaded_ticket_timeframe_truthfulness(
         errors.append(
             "generated text claims a calendar or rolling time window for an "
             "undated uploaded-ticket source: " + ", ".join(unsupported_hits)
+        )
+
+
+def _check_uploaded_ticket_cadence_truthfulness(
+    checks: list[JsonDict],
+    errors: list[str],
+    *,
+    text: str,
+    source_context: Mapping[str, Any],
+) -> None:
+    source_period = str(source_context.get("source_period") or "").strip().lower()
+    review_period = str(source_context.get("review_period") or "").strip().lower()
+    if source_period != "uploaded support tickets" and review_period != "uploaded tickets":
+        checks.append({
+            "name": "uploaded_ticket_cadence_truthful",
+            "passed": True,
+            "level": "error",
+            "details": {"applicable": False},
+        })
+        return
+    unsupported_hits = _dedupe(
+        [
+            match.group(0).strip()
+            for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(text)
+        ]
+    )
+    checks.append({
+        "name": "uploaded_ticket_cadence_truthful",
+        "passed": not unsupported_hits,
+        "level": "error",
+        "details": {"unsupported_cadences": unsupported_hits},
+    })
+    if unsupported_hits:
+        errors.append(
+            "generated text claims a recurring cadence for an undated "
+            "uploaded-ticket source: " + ", ".join(unsupported_hits)
         )
 
 
