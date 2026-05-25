@@ -120,6 +120,41 @@ def test_audit_fixture_test_is_a_candidate(tmp_path: Path) -> None:
     assert audit.candidates == ("tests/test_audit_extracted_pipeline_ci_enrollment.py",)
 
 
+def test_audit_checker_and_evaluator_tests_are_candidates(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path,
+        runner_paths=(
+            "tests/test_check_content_ops_faq_search_route_contract.py",
+            "tests/test_evaluate_support_ticket_generated_content.py",
+        ),
+        pull_request_filters=(
+            "tests/test_check_content_ops_*.py",
+            "tests/test_evaluate_support_ticket_*.py",
+        ),
+        push_filters=(
+            "tests/test_check_content_ops_*.py",
+            "tests/test_evaluate_support_ticket_*.py",
+        ),
+        include_candidate=False,
+    )
+    (root / "tests/test_check_content_ops_faq_search_route_contract.py").write_text(
+        "def test_checker():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (root / "tests/test_evaluate_support_ticket_generated_content.py").write_text(
+        "def test_evaluator():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(root)
+
+    assert audit.ok
+    assert audit.candidates == (
+        "tests/test_check_content_ops_faq_search_route_contract.py",
+        "tests/test_evaluate_support_ticket_generated_content.py",
+    )
+
+
 def test_audit_reports_missing_runner_entry(tmp_path: Path) -> None:
     audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
         _repo(tmp_path, runner_paths=())
