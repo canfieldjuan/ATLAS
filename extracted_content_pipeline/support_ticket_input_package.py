@@ -16,6 +16,11 @@ from typing import Any
 
 from .campaign_source_adapters import source_material_to_source_rows
 from .content_ops_input_provider import ContentOpsInputPackage
+from .support_ticket_context_contract import (
+    SUPPORT_TICKET_DEFAULT_TOPIC,
+    UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
+    support_ticket_topic_filter,
+)
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -135,7 +140,7 @@ def build_support_ticket_input_package(
     source_period = (
         f"Last {window_days} days of support tickets"
         if has_valid_date_window
-        else "Uploaded support tickets"
+        else UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
     )
     faq_questions = _ticket_questions(normalized_rows)
     faq_source_types = _source_types(normalized_rows)
@@ -157,8 +162,8 @@ def build_support_ticket_input_package(
         "source_material": normalized_rows,
         "faq_source_types": faq_source_types,
         "faq_title": campaign_name,
-        "topic": "Support-ticket questions customers keep asking",
-        "filters": {"topic_type": "content_ops_support_ticket_faq"},
+        "topic": SUPPORT_TICKET_DEFAULT_TOPIC,
+        "filters": support_ticket_topic_filter(),
         "campaign_name": campaign_name,
         "offer": offer,
         "audience": audience,
