@@ -255,6 +255,93 @@ async def test_live_generation_smoke_exports_exact_saved_landing_page_draft(
 
 
 @pytest.mark.asyncio
+async def test_live_generation_smoke_validates_support_ticket_landing_export_context(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "rows": [{
+                "id": saved_ids[0],
+                "metadata": {
+                    "source_context": {
+                        "source_row_count": 2,
+                        "included_ticket_row_count": 2,
+                        "skipped_ticket_row_count": 0,
+                        "truncated_ticket_row_count": 0,
+                        "question_like_ticket_count": 2,
+                        "top_ticket_clusters": [
+                            {"label": "account", "count": 1},
+                            {"label": "reporting", "count": 1},
+                        ],
+                    },
+                },
+            }],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "landing-page-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["saved_draft_export"]["rows"][0]["metadata"]["source_context"][
+        "source_row_count"
+    ] == 2
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_fails_when_support_ticket_landing_export_context_missing(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {"count": 1, "rows": [{"id": saved_ids[0], "metadata": {}}]}
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "landing-page-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["errors"] == [
+        "exported landing_page draft missing support-ticket source context"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_live_generation_smoke_fails_export_when_no_saved_ids(
     tmp_path: Path,
 ) -> None:
@@ -544,6 +631,123 @@ async def test_live_generation_smoke_exports_exact_saved_blog_post_draft(
         "output": "blog_post",
         "saved_ids": ("blog-live-smoke-1",),
     }]
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_validates_support_ticket_blog_export_context(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        return {
+            "saved_ids": ["bp-support-ticket-smoke-1"],
+            "slug": "content-ops-support-ticket-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "content_ops_support_ticket_faq",
+            "topic": "Support-ticket questions customers keep asking",
+        }
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "rows": [{
+                "id": saved_ids[0],
+                "data_context": {
+                    "source_row_count": 2,
+                    "included_ticket_row_count": 2,
+                    "question_like_ticket_count": 2,
+                    "source_period": "Uploaded support tickets",
+                    "top_clusters": [
+                        {"label": "account", "count": 1},
+                        {"label": "reporting", "count": 1},
+                    ],
+                },
+            }],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "blog-post-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["saved_draft_export"]["rows"][0]["data_context"][
+        "source_period"
+    ] == "Uploaded support tickets"
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_fails_when_support_ticket_blog_export_context_drifts(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _BlogPostService()
+
+    async def _seed_blog_blueprint(args: argparse.Namespace, scope: TenantScope) -> dict[str, Any]:
+        return {
+            "saved_ids": ["bp-support-ticket-smoke-1"],
+            "slug": "content-ops-support-ticket-live-smoke-acct-live-smoke",
+            "target_mode": args.target_mode,
+            "topic_type": "content_ops_support_ticket_faq",
+            "topic": "Support-ticket questions customers keep asking",
+        }
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "rows": [{
+                "id": saved_ids[0],
+                "data_context": {
+                    "source_row_count": 1,
+                    "included_ticket_row_count": 1,
+                    "question_like_ticket_count": 1,
+                },
+            }],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="blog_post",
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "blog-post-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(blog_post=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        blog_blueprint_seed_fn=_seed_blog_blueprint,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert (
+        "exported blog_post draft support-ticket context mismatch for "
+        "source_row_count: expected 2, got 1"
+    ) in result["errors"]
 
 
 def test_blog_blueprint_json_loader_accepts_one_custom_blueprint(tmp_path: Path) -> None:

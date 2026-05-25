@@ -386,6 +386,99 @@ async def _export_saved_drafts(
         ).as_dict()
 
 
+_LANDING_PAGE_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS = (
+    "source_row_count",
+    "included_ticket_row_count",
+    "skipped_ticket_row_count",
+    "truncated_ticket_row_count",
+    "question_like_ticket_count",
+)
+_BLOG_POST_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS = (
+    "source_row_count",
+    "included_ticket_row_count",
+    "question_like_ticket_count",
+)
+
+
+def _support_ticket_export_context_errors(
+    *,
+    output: str,
+    payload: Mapping[str, Any],
+    saved_draft_export: Mapping[str, Any] | None,
+) -> list[str]:
+    expected = _expected_support_ticket_export_context(output=output, payload=payload)
+    if not expected:
+        return []
+    rows = _export_rows(saved_draft_export)
+    if not rows:
+        return [f"exported {output} draft did not include rows"]
+    context = _exported_support_ticket_context(output=output, row=rows[0])
+    if not context:
+        return [f"exported {output} draft missing support-ticket source context"]
+    errors: list[str] = []
+    for key, expected_value in expected.items():
+        actual_value = context.get(key)
+        if actual_value != expected_value:
+            errors.append(
+                f"exported {output} draft support-ticket context mismatch for "
+                f"{key}: expected {expected_value!r}, got {actual_value!r}"
+            )
+    return errors
+
+
+def _expected_support_ticket_export_context(
+    *,
+    output: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    inputs = _as_mapping(payload.get("inputs"))
+    context_keys = (
+        _BLOG_POST_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS
+        if output == "blog_post"
+        else _LANDING_PAGE_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS
+    )
+    expected = {
+        key: inputs[key]
+        for key in context_keys
+        if key in inputs
+    }
+    clusters = inputs.get("top_ticket_clusters")
+    if clusters:
+        expected[
+            "top_clusters" if output == "blog_post" else "top_ticket_clusters"
+        ] = clusters
+    if output == "blog_post" and inputs.get("source_period"):
+        expected["source_period"] = inputs["source_period"]
+    return expected
+
+
+def _export_rows(
+    saved_draft_export: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], ...]:
+    export = _as_mapping(saved_draft_export)
+    rows = export.get("rows") or ()
+    if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
+
+
+def _exported_support_ticket_context(
+    *,
+    output: str,
+    row: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if output == "landing_page":
+        metadata = _as_mapping(row.get("metadata"))
+        return _as_mapping(metadata.get("source_context"))
+    if output == "blog_post":
+        return _as_mapping(row.get("data_context"))
+    return {}
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _smoke_errors(
     *,
     output: str,
@@ -846,6 +939,14 @@ async def run_content_ops_live_generation_smoke(
                 else:
                     exporter = draft_export_fn or _export_saved_drafts
                     saved_draft_export = await exporter(output, saved_ids, scope)
+                    if _uses_support_ticket_csv(args):
+                        errors.extend(
+                            _support_ticket_export_context_errors(
+                                output=output,
+                                payload=payload,
+                                saved_draft_export=saved_draft_export,
+                            )
+                        )
     except Exception as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     finally:
