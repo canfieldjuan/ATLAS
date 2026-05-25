@@ -63,6 +63,14 @@ class TicketFAQRepository(Protocol):
     ) -> Sequence[TicketFAQDraft]:
         """Return drafts filtered by tenant scope and optional facets."""
 
+    async def get_draft(
+        self,
+        faq_id: str,
+        *,
+        scope: TenantScope,
+    ) -> TicketFAQDraft | None:
+        """Return one draft by id and tenant scope."""
+
     async def update_status(
         self,
         faq_id: str,

@@ -185,6 +185,44 @@ async def test_list_drafts_filters_by_status_target_mode_and_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_draft_filters_by_id_and_scope() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row(draft_id="11111111-1111-1111-1111-111111111111")]
+    repo = PostgresTicketFAQRepository(pool)
+
+    draft = await repo.get_draft(
+        "11111111-1111-1111-1111-111111111111",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert draft is not None
+    assert draft.id == "11111111-1111-1111-1111-111111111111"
+    assert draft.metadata == {"corpus_id": "corpus-1"}
+    query = pool.fetch_calls[0]["query"]
+    assert "FROM ticket_faq_markdown" in query
+    assert "id = $1" in query
+    assert "account_id = $2" in query
+    assert pool.fetch_calls[0]["args"] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_draft_returns_none_on_miss() -> None:
+    pool = _Pool()
+    pool.fetch_rows = []
+    repo = PostgresTicketFAQRepository(pool)
+
+    draft = await repo.get_draft(
+        "11111111-1111-1111-1111-111111111111",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert draft is None
+
+
+@pytest.mark.asyncio
 async def test_update_status_returns_false_on_miss() -> None:
     pool = _Pool()
     pool.fetch_rows = []

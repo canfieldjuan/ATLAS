@@ -58,6 +58,30 @@ def _row() -> dict[str, object]:
     }
 
 
+def _faq_row() -> dict[str, object]:
+    return {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "target_id": "support-account-1",
+        "target_mode": "support_account",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ\n\nUse the reset email.",
+        "items": json.dumps([{
+            "rank": 1,
+            "topic": "password reset",
+            "question": "How do I reset my password?",
+            "answer": "Use the reset email.",
+            "source_ids": ["ticket-1"],
+            "ticket_count": 1,
+        }]),
+        "source_count": 1,
+        "ticket_source_count": 1,
+        "output_checks": json.dumps({"has_action_steps": True}),
+        "warnings": json.dumps([]),
+        "metadata": json.dumps({"corpus_id": "corpus-1"}),
+        "status": "approved",
+    }
+
+
 def _client(
     pool: _Pool,
     *,
@@ -181,8 +205,79 @@ def test_faq_deflection_search_route_reports_unavailable_database() -> None:
     assert pool.fetch_calls == []
 
 
+def test_faq_deflection_detail_route_returns_full_generated_faq() -> None:
+    pool = _Pool(rows=[_faq_row()])
+
+    response = _client(pool, scope={"account_id": "acct-1"}).get(
+        "/content-ops/faq-deflection-search/11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "acct-1",
+        "id": "11111111-1111-1111-1111-111111111111",
+        "target_id": "support-account-1",
+        "target_mode": "support_account",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ\n\nUse the reset email.",
+        "items": [{
+            "rank": 1,
+            "topic": "password reset",
+            "question": "How do I reset my password?",
+            "answer": "Use the reset email.",
+            "source_ids": ["ticket-1"],
+            "ticket_count": 1,
+        }],
+        "source_count": 1,
+        "ticket_source_count": 1,
+        "output_checks": {"has_action_steps": True},
+        "warnings": [],
+        "metadata": {"corpus_id": "corpus-1"},
+        "status": "approved",
+    }
+    sql, args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in sql
+    assert "account_id = $2" in sql
+    assert args == ("11111111-1111-1111-1111-111111111111", "acct-1")
+
+
+def test_faq_deflection_detail_route_requires_tenant_scope_before_database() -> None:
+    pool = _Pool(rows=[_faq_row()])
+
+    response = _client(pool, scope=None).get(
+        "/content-ops/faq-deflection-search/11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "account_id is required"
+    assert pool.fetch_calls == []
+
+
+def test_faq_deflection_detail_route_rejects_malformed_faq_id_before_database() -> None:
+    pool = _Pool(rows=[_faq_row()])
+
+    response = _client(pool, scope={"account_id": "acct-1"}).get(
+        "/content-ops/faq-deflection-search/not-a-uuid"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "faq_id must be a valid UUID"
+    assert pool.fetch_calls == []
+
+
+def test_faq_deflection_detail_route_returns_404_on_scoped_miss() -> None:
+    pool = _Pool(rows=[])
+
+    response = _client(pool, scope={"account_id": "acct-2"}).get(
+        "/content-ops/faq-deflection-search/11111111-1111-1111-1111-111111111111"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "FAQ not found"
+
+
 @pytest.mark.integration
-def test_faq_deflection_search_route_queries_real_postgres_projection() -> None:
+def test_faq_deflection_search_route_queries_real_postgres_projection_and_detail() -> None:
     asyncpg = pytest.importorskip("asyncpg")
     database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not database_url:
@@ -220,10 +315,16 @@ def test_faq_deflection_search_route_queries_real_postgres_projection() -> None:
                 "/content-ops/faq-deflection-search"
                 f"?q=password%20reset&corpus_id={corpus_id}&limit=5"
             )
+            detail_response = client.get(
+                f"/content-ops/faq-deflection-search/{faq_id}"
+            )
             scope_account["value"] = account_b
             cross_tenant_response = client.get(
                 "/content-ops/faq-deflection-search"
                 f"?q=password%20reset&corpus_id={corpus_id}&limit=5"
+            )
+            cross_tenant_detail_response = client.get(
+                f"/content-ops/faq-deflection-search/{faq_id}"
             )
 
         assert response.status_code == 200
@@ -254,6 +355,24 @@ def test_faq_deflection_search_route_queries_real_postgres_projection() -> None:
             "results": [],
             "count": 0,
         }
+        assert detail_response.status_code == 200
+        assert detail_response.json() == {
+            "account_id": account_a,
+            "target_id": "support-account-1",
+            "target_mode": "support_account",
+            "title": "Support FAQ",
+            "markdown": "# Support FAQ",
+            "items": [],
+            "source_count": 1,
+            "ticket_source_count": 1,
+            "output_checks": {},
+            "warnings": [],
+            "metadata": {"corpus_id": corpus_id},
+            "id": faq_id,
+            "status": "approved",
+        }
+        assert cross_tenant_detail_response.status_code == 404
+        assert cross_tenant_detail_response.json()["detail"] == "FAQ not found"
     finally:
         _run_async(
             _cleanup_faq_search_route_projection(

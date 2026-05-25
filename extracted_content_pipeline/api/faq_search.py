@@ -7,6 +7,7 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from typing import Any
+from uuid import UUID
 
 try:
     from fastapi import APIRouter, HTTPException, Query
@@ -19,12 +20,15 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import TenantScope
+from ..ticket_faq_ports import TicketFAQDraft
+from ..ticket_faq_postgres import PostgresTicketFAQRepository
 from ..ticket_faq_search import PostgresTicketFAQSearchRepository
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
-RepositoryFactory = Callable[[Any], PostgresTicketFAQSearchRepository]
+SearchRepositoryFactory = Callable[[Any], PostgresTicketFAQSearchRepository]
+FAQRepositoryFactory = Callable[[Any], PostgresTicketFAQRepository]
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +70,8 @@ def create_faq_deflection_search_router(
     *,
     pool_provider: PoolProvider,
     scope_provider: ScopeProvider | None = None,
-    repository_factory: RepositoryFactory = PostgresTicketFAQSearchRepository,
+    repository_factory: SearchRepositoryFactory = PostgresTicketFAQSearchRepository,
+    faq_repository_factory: FAQRepositoryFactory = PostgresTicketFAQRepository,
     config: FAQDeflectionSearchApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -108,6 +113,33 @@ def create_faq_deflection_search_router(
             logger.exception("FAQ deflection search failed")
             raise HTTPException(status_code=503, detail="FAQ search unavailable") from exc
         return response.as_dict()
+
+    @router.get("/{faq_id}")
+    async def get_faq_deflection_detail(faq_id: str) -> dict[str, Any]:
+        normalized_faq_id = _required_uuid_path_id(faq_id, name="faq_id")
+        scope = await _resolve_scope(scope_provider)
+        scoped_account_id = _required_account_id(scope)
+        pool = await _resolve_pool(pool_provider)
+        repository = faq_repository_factory(pool)
+        try:
+            draft = await _with_timeout(
+                repository.get_draft(
+                    normalized_faq_id,
+                    scope=TenantScope(
+                        account_id=scoped_account_id,
+                        user_id=scope.user_id,
+                    ),
+                ),
+                resolved_config,
+            )
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="FAQ detail timed out") from exc
+        except Exception as exc:
+            logger.exception("FAQ deflection detail failed")
+            raise HTTPException(status_code=503, detail="FAQ detail unavailable") from exc
+        if draft is None:
+            raise HTTPException(status_code=404, detail="FAQ not found")
+        return _faq_detail_payload(draft, account_id=scoped_account_id)
 
     return router
 
@@ -185,6 +217,29 @@ def _status_filter(value: str | None, config: FAQDeflectionSearchApiConfig) -> s
 def _optional_filter(value: str | None) -> str | None:
     cleaned = _clean(value)
     return cleaned or None
+
+
+def _required_path_id(value: str, *, name: str) -> str:
+    cleaned = _clean(value)
+    if not cleaned:
+        raise HTTPException(status_code=400, detail=f"{name} is required")
+    return cleaned
+
+
+def _required_uuid_path_id(value: str, *, name: str) -> str:
+    cleaned = _required_path_id(value, name=name)
+    try:
+        UUID(cleaned)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be a valid UUID") from exc
+    return cleaned
+
+
+def _faq_detail_payload(draft: TicketFAQDraft, *, account_id: str) -> dict[str, Any]:
+    return {
+        "account_id": account_id,
+        **draft.as_dict(),
+    }
 
 
 def _clean(value: Any) -> str:
