@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -14,6 +17,10 @@ from extracted_content_pipeline.api.faq_search import (
     create_faq_deflection_search_router,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.ticket_faq_search import (
+    PostgresTicketFAQSearchRepository,
+    TicketFAQSearchDocument,
+)
 
 
 class _Pool:
@@ -172,3 +179,176 @@ def test_faq_deflection_search_route_reports_unavailable_database() -> None:
     assert response.status_code == 503
     assert response.json()["detail"] == "Database unavailable"
     assert pool.fetch_calls == []
+
+
+@pytest.mark.integration
+def test_faq_deflection_search_route_queries_real_postgres_projection() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    account_a = f"acct-a-{uuid4().hex}"
+    account_b = f"acct-b-{uuid4().hex}"
+    corpus_id = f"corpus-{uuid4().hex}"
+    faq_id = str(uuid4())
+    scope_account = {"value": account_a}
+    pool_provider = _RoutePoolProvider(asyncpg, database_url)
+
+    _run_async(
+        _seed_faq_search_route_projection(
+            asyncpg,
+            database_url,
+            account_id=account_a,
+            corpus_id=corpus_id,
+            faq_id=faq_id,
+        )
+    )
+
+    app = FastAPI()
+    app.add_event_handler("shutdown", pool_provider.close)
+    app.include_router(
+        create_faq_deflection_search_router(
+            pool_provider=pool_provider,
+            scope_provider=lambda: TenantScope(account_id=scope_account["value"]),
+        )
+    )
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/content-ops/faq-deflection-search"
+                f"?q=password%20reset&corpus_id={corpus_id}&limit=5"
+            )
+            scope_account["value"] = account_b
+            cross_tenant_response = client.get(
+                "/content-ops/faq-deflection-search"
+                f"?q=password%20reset&corpus_id={corpus_id}&limit=5"
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "query": "password reset",
+            "count": 1,
+            "results": [{
+                "account_id": account_a,
+                "corpus_id": corpus_id,
+                "faq_id": faq_id,
+                "target_id": "support-account-1",
+                "target_mode": "support_account",
+                "status": "approved",
+                "rank": 1,
+                "topic": "password reset",
+                "question": "How do I reset my password?",
+                "answer_summary": "Use the password reset email.",
+                "source_ids": ["ticket-1"],
+                "ticket_count": 1,
+                "score": response.json()["results"][0]["score"],
+            }],
+        }
+        assert isinstance(response.json()["results"][0]["score"], int)
+        assert response.json()["results"][0]["score"] > 0
+        assert cross_tenant_response.status_code == 200
+        assert cross_tenant_response.json() == {
+            "query": "password reset",
+            "results": [],
+            "count": 0,
+        }
+    finally:
+        _run_async(
+            _cleanup_faq_search_route_projection(
+                asyncpg,
+                database_url,
+                account_ids=(account_a, account_b),
+            )
+        )
+
+
+class _RoutePoolProvider:
+    def __init__(self, asyncpg, database_url: str) -> None:
+        self.asyncpg = asyncpg
+        self.database_url = database_url
+        self.pool = None
+
+    async def __call__(self):
+        if self.pool is None:
+            self.pool = await self.asyncpg.create_pool(self.database_url, min_size=1, max_size=2)
+        return self.pool
+
+    async def close(self) -> None:
+        if self.pool is not None:
+            await self.pool.close()
+            self.pool = None
+
+
+def _run_async(awaitable):
+    import asyncio
+
+    return asyncio.run(awaitable)
+
+
+async def _seed_faq_search_route_projection(
+    asyncpg,
+    database_url: str,
+    *,
+    account_id: str,
+    corpus_id: str,
+    faq_id: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    try:
+        await pool.execute((root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text())
+        await pool.execute((root / "atlas_brain/storage/migrations/327_ticket_faq_search_documents.sql").read_text())
+        await pool.execute(
+            """
+            INSERT INTO ticket_faq_markdown (
+                id, account_id, target_id, target_mode, title, markdown,
+                items, source_count, ticket_source_count, output_checks,
+                warnings, metadata, status
+            )
+            VALUES (
+                $1::uuid, $2, 'support-account-1', 'support_account',
+                'Support FAQ', '# Support FAQ', '[]'::jsonb, 1, 1,
+                '{}'::jsonb, '[]'::jsonb, $3::jsonb, 'approved'
+            )
+            """,
+            faq_id,
+            account_id,
+            json.dumps({"corpus_id": corpus_id}),
+        )
+        await PostgresTicketFAQSearchRepository(pool).replace_documents([
+            TicketFAQSearchDocument(
+                account_id=account_id,
+                corpus_id=corpus_id,
+                faq_id=faq_id,
+                target_id="support-account-1",
+                target_mode="support_account",
+                status="approved",
+                rank=1,
+                topic="password reset",
+                question="How do I reset my password?",
+                answer_summary="Use the password reset email.",
+                source_ids=("ticket-1",),
+                ticket_count=1,
+                search_text="password reset email login support",
+            )
+        ])
+    finally:
+        await pool.close()
+
+
+async def _cleanup_faq_search_route_projection(
+    asyncpg,
+    database_url: str,
+    *,
+    account_ids: tuple[str, ...],
+) -> None:
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    try:
+        await pool.execute(
+            "DELETE FROM ticket_faq_markdown WHERE account_id = ANY($1::text[])",
+            list(account_ids),
+        )
+    finally:
+        await pool.close()
