@@ -31,6 +31,7 @@ def _valid_payload():
         "query": "mortgage payment dispute",
         "results": [
             {
+                "faq_id": "11111111-1111-1111-1111-111111111111",
                 "question": "How do I dispute a mortgage payment error?",
                 "answer_summary": "Check the statement, gather records, then contact support.",
                 "topic": "Mortgage servicing issues",
@@ -40,6 +41,24 @@ def _valid_payload():
             }
         ],
         "count": 1,
+    }
+
+
+def _valid_detail_payload():
+    return {
+        "account_id": "acct-1",
+        "id": "11111111-1111-1111-1111-111111111111",
+        "target_id": "support-account-1",
+        "target_mode": "support_account",
+        "title": "Support FAQ",
+        "markdown": "# Support FAQ",
+        "items": [],
+        "source_count": 1,
+        "ticket_source_count": 1,
+        "output_checks": {},
+        "warnings": [],
+        "metadata": {"corpus_id": "corpus-1"},
+        "status": "approved",
     }
 
 
@@ -57,6 +76,31 @@ def test_build_url_encodes_query_and_optional_filters():
         "https://atlas.example.com/api/v1/content-ops/faq-deflection-search"
         "?q=mortgage+payment+dispute&limit=5&corpus_id=corpus+1&status=approved"
     )
+
+
+def test_build_detail_url_defaults_to_search_route_child():
+    url = _MODULE._build_detail_url(
+        base_url="https://atlas.example.com/",
+        route="/api/v1/content-ops/faq-deflection-search",
+        detail_route="",
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    assert url == (
+        "https://atlas.example.com/api/v1/content-ops/faq-deflection-search/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+
+def test_build_detail_url_allows_template_override():
+    url = _MODULE._build_detail_url(
+        base_url="https://atlas.example.com",
+        route="/ignored",
+        detail_route="/api/v2/faqs/{faq_id}/full",
+        faq_id="id with space",
+    )
+
+    assert url == "https://atlas.example.com/api/v2/faqs/id%20with%20space/full"
 
 
 def test_validate_envelope_rejects_bool_count():
@@ -148,6 +192,33 @@ def test_main_requires_base_url(monkeypatch, capsys, tmp_path):
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert payload["phase"] == "preflight"
     assert payload["errors"] == ["ATLAS_API_BASE_URL or --base-url is required"]
+
+
+def test_validate_detail_accepts_full_generated_faq_payload():
+    assert _MODULE._validate_detail(
+        _valid_detail_payload(),
+        faq_id="11111111-1111-1111-1111-111111111111",
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("patch", "expected"),
+    [
+        ({"id": "22222222-2222-2222-2222-222222222222"}, "detail.id must match results[0].faq_id"),
+        ({"markdown": 1}, "detail.markdown must be a string"),
+        ({"items": {}}, "detail.items must be a list"),
+        ({"source_count": True}, "detail.source_count must be an integer"),
+        ({"output_checks": []}, "detail.output_checks must be an object"),
+    ],
+)
+def test_validate_detail_rejects_contract_drift(patch, expected):
+    payload = _valid_detail_payload()
+    payload.update(patch)
+
+    assert expected in _MODULE._validate_detail(
+        payload,
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
 
 
 def test_main_requires_token(monkeypatch, capsys):
@@ -380,6 +451,85 @@ def test_main_checks_route_and_prints_summary(monkeypatch, capsys):
     assert "FAQ search route contract passed" in capsys.readouterr().out
 
 
+def test_main_checks_detail_when_requested(monkeypatch, capsys):
+    calls = []
+
+    def _fake_fetch_json(url, *, token, timeout):
+        calls.append((url, token, timeout))
+        if url.endswith("/11111111-1111-1111-1111-111111111111"):
+            return _valid_detail_payload()
+        return _valid_payload()
+
+    monkeypatch.setattr(_MODULE, "_fetch_json", _fake_fetch_json)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--query",
+        "mortgage payment dispute",
+        "--require-results",
+        "--require-detail",
+    )
+
+    assert _MODULE.main() == 0
+    assert calls == [
+        (
+            "https://atlas.example.com/api/v1/content-ops/faq-deflection-search"
+            "?q=mortgage+payment+dispute&limit=5",
+            "token-123",
+            10.0,
+        ),
+        (
+            "https://atlas.example.com/api/v1/content-ops/faq-deflection-search/"
+            "11111111-1111-1111-1111-111111111111",
+            "token-123",
+            10.0,
+        ),
+    ]
+    assert "detail_checked=True" in capsys.readouterr().out
+
+
+def test_main_requires_faq_id_for_detail_check(monkeypatch, capsys):
+    payload = _valid_payload()
+    del payload["results"][0]["faq_id"]
+    monkeypatch.setattr(_MODULE, "_fetch_json", lambda url, *, token, timeout: payload)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-results",
+        "--require-detail",
+    )
+
+    assert _MODULE.main() == 1
+    assert "results[0].faq_id is required for detail check" in capsys.readouterr().out
+
+
+def test_main_reports_detail_contract_failure(monkeypatch, capsys):
+    def _fake_fetch_json(url, *, token, timeout):
+        if url.endswith("/11111111-1111-1111-1111-111111111111"):
+            return {**_valid_detail_payload(), "items": {}}
+        return _valid_payload()
+
+    monkeypatch.setattr(_MODULE, "_fetch_json", _fake_fetch_json)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-results",
+        "--require-detail",
+    )
+
+    assert _MODULE.main() == 1
+    assert "detail.items must be a list" in capsys.readouterr().out
+
+
 def test_main_writes_success_result_without_token(monkeypatch, tmp_path):
     monkeypatch.setattr(
         _MODULE,
@@ -408,11 +558,14 @@ def test_main_writes_success_result_without_token(monkeypatch, tmp_path):
         "base_url": "https://atlas.example.com",
         "corpus_id": "corpus-1",
         "count": 1,
+        "detail_checked": False,
+        "detail_route": "/api/v1/content-ops/faq-deflection-search/{faq_id}",
         "errors": [],
         "limit": 5,
         "ok": True,
         "phase": "contract",
         "query": "mortgage payment dispute",
+        "require_detail": False,
         "require_results": True,
         "route": "/api/v1/content-ops/faq-deflection-search",
         "status": "",
@@ -442,6 +595,7 @@ def test_main_writes_contract_failure_result(monkeypatch, tmp_path):
     assert payload["ok"] is False
     assert payload["phase"] == "contract"
     assert payload["errors"] == ["count must match len(results)"]
+    assert payload["detail_checked"] is False
     assert "secret-token" not in result_path.read_text(encoding="utf-8")
 
 

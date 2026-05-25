@@ -25,6 +25,21 @@ RESULT_FIELDS = (
     "ticket_count",
     "score",
 )
+DETAIL_FIELDS = (
+    "account_id",
+    "id",
+    "target_id",
+    "target_mode",
+    "title",
+    "markdown",
+    "items",
+    "source_count",
+    "ticket_source_count",
+    "output_checks",
+    "warnings",
+    "metadata",
+    "status",
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,8 +56,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--status", default=os.environ.get("ATLAS_FAQ_SEARCH_STATUS", ""))
     parser.add_argument("--limit", type=int, default=os.environ.get("ATLAS_FAQ_SEARCH_LIMIT", "5"))
     parser.add_argument("--route", default=DEFAULT_ROUTE)
+    parser.add_argument("--detail-route", default=os.environ.get("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--timeout", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_TIMEOUT", "10"))
     parser.add_argument("--require-results", action="store_true")
+    parser.add_argument("--require-detail", action="store_true")
     parser.add_argument("--output-result", type=Path)
     return parser
 
@@ -70,6 +87,21 @@ def _build_url(
     if status.strip():
         params["status"] = status.strip()
     return f"{_clean_url(base_url)}{path}?{urllib.parse.urlencode(params)}"
+
+
+def _build_detail_url(
+    *,
+    base_url: str,
+    route: str,
+    detail_route: str,
+    faq_id: str,
+) -> str:
+    route_template = detail_route.strip() or f"{route.rstrip('/')}/{{faq_id}}"
+    if "{faq_id}" in route_template:
+        path = route_template.replace("{faq_id}", urllib.parse.quote(faq_id, safe=""))
+    else:
+        path = f"{route_template.rstrip('/')}/{urllib.parse.quote(faq_id, safe='')}"
+    return f"{_clean_url(base_url)}/" + path.strip("/")
 
 
 def _fetch_json(url: str, *, token: str, timeout: float) -> dict[str, Any]:
@@ -140,6 +172,36 @@ def _validate_first_result(result: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _first_result_faq_id(data: Mapping[str, Any]) -> str | None:
+    results = data.get("results")
+    if not isinstance(results, list) or not results or not isinstance(results[0], Mapping):
+        return None
+    faq_id = results[0].get("faq_id")
+    return faq_id if isinstance(faq_id, str) and faq_id.strip() else None
+
+
+def _validate_detail(data: Mapping[str, Any], *, faq_id: str) -> list[str]:
+    errors: list[str] = []
+    for field in DETAIL_FIELDS:
+        if field not in data:
+            errors.append(f"detail.{field} is required")
+    if data.get("id") != faq_id:
+        errors.append("detail.id must match results[0].faq_id")
+    for field in ("account_id", "id", "target_id", "target_mode", "title", "markdown", "status"):
+        if field in data and not isinstance(data[field], str):
+            errors.append(f"detail.{field} must be a string")
+    for field in ("source_count", "ticket_source_count"):
+        if field in data and type(data[field]) is not int:
+            errors.append(f"detail.{field} must be an integer")
+    for field in ("items", "warnings"):
+        if field in data and not isinstance(data[field], list):
+            errors.append(f"detail.{field} must be a list")
+    for field in ("output_checks", "metadata"):
+        if field in data and not isinstance(data[field], Mapping):
+            errors.append(f"detail.{field} must be an object")
+    return errors
+
+
 def _result_payload(
     *,
     ok: bool,
@@ -151,6 +213,10 @@ def _result_payload(
     status: str,
     limit: int,
     require_results: bool,
+    require_detail: bool,
+    detail_route: str,
+    detail_checked: bool = False,
+    detail_faq_id: str = "",
     count: Any = None,
     errors: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -164,8 +230,13 @@ def _result_payload(
         "status": status,
         "limit": limit,
         "require_results": require_results,
+        "require_detail": require_detail,
+        "detail_route": detail_route,
+        "detail_checked": detail_checked,
         "errors": list(errors or ()),
     }
+    if detail_faq_id:
+        payload["detail_faq_id"] = detail_faq_id
     if type(count) is int:
         payload["count"] = count
     return payload
@@ -189,6 +260,7 @@ def main() -> int:
     corpus_id = str(args.corpus_id or "").strip()
     status = str(args.status or "").strip()
     route = str(args.route or "").strip()
+    detail_route = str(args.detail_route or "").strip()
     limit = int(args.limit)
     if not base_url:
         print("ATLAS_API_BASE_URL or --base-url is required.")
@@ -204,6 +276,8 @@ def main() -> int:
                 status=status,
                 limit=limit,
                 require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
                 errors=["ATLAS_API_BASE_URL or --base-url is required"],
             ),
         )
@@ -222,6 +296,8 @@ def main() -> int:
                 status=status,
                 limit=limit,
                 require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
                 errors=["ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required"],
             ),
         )
@@ -240,6 +316,8 @@ def main() -> int:
                 status=status,
                 limit=limit,
                 require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
                 errors=["ATLAS_FAQ_SEARCH_QUERY or --query is required"],
             ),
         )
@@ -258,6 +336,8 @@ def main() -> int:
                 status=status,
                 limit=limit,
                 require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
                 errors=["--limit must be positive"],
             ),
         )
@@ -287,12 +367,35 @@ def main() -> int:
                 status=status,
                 limit=limit,
                 require_results=bool(args.require_results),
+                require_detail=bool(args.require_detail),
+                detail_route=detail_route,
                 errors=[str(exc)],
             ),
         )
         return 1
 
     errors = _validate_envelope(data, require_results=args.require_results)
+    detail_checked = False
+    detail_faq_id = ""
+    resolved_detail_route = detail_route or f"{route.rstrip('/')}/{{faq_id}}"
+    if args.require_detail and not errors:
+        detail_faq_id = _first_result_faq_id(data) or ""
+        if not detail_faq_id:
+            errors.append("results[0].faq_id is required for detail check")
+        else:
+            detail_url = _build_detail_url(
+                base_url=base_url,
+                route=route,
+                detail_route=detail_route,
+                faq_id=detail_faq_id,
+            )
+            try:
+                detail_data = _fetch_json(detail_url, token=token, timeout=args.timeout)
+                detail_checked = True
+            except RuntimeError as exc:
+                errors.append(str(exc))
+            else:
+                errors.extend(_validate_detail(detail_data, faq_id=detail_faq_id))
     payload = _result_payload(
         ok=not errors,
         phase="contract",
@@ -303,6 +406,10 @@ def main() -> int:
         status=status,
         limit=limit,
         require_results=bool(args.require_results),
+        require_detail=bool(args.require_detail),
+        detail_route=resolved_detail_route,
+        detail_checked=detail_checked,
+        detail_faq_id=detail_faq_id,
         count=data.get("count"),
         errors=errors,
     )
@@ -314,7 +421,8 @@ def main() -> int:
     else:
         print(
             "FAQ search route contract passed: "
-            f"query={data.get('query')!r}, count={data.get('count')}"
+            f"query={data.get('query')!r}, count={data.get('count')}, "
+            f"detail_checked={detail_checked}"
         )
     return 0 if not errors else 1
 
