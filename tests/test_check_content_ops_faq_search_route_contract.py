@@ -1,5 +1,6 @@
 import importlib.util
 from io import BytesIO
+import json
 import sys
 import urllib.error
 from pathlib import Path
@@ -241,6 +242,117 @@ def test_main_checks_route_and_prints_summary(monkeypatch, capsys):
         )
     ]
     assert "FAQ search route contract passed" in capsys.readouterr().out
+
+
+def test_main_writes_success_result_without_token(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        _MODULE,
+        "_fetch_json",
+        lambda url, *, token, timeout: _valid_payload(),
+    )
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "secret-token",
+        "--query",
+        "mortgage payment dispute",
+        "--corpus-id",
+        "corpus-1",
+        "--require-results",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 0
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "base_url": "https://atlas.example.com",
+        "corpus_id": "corpus-1",
+        "count": 1,
+        "errors": [],
+        "limit": 5,
+        "ok": True,
+        "phase": "contract",
+        "query": "mortgage payment dispute",
+        "require_results": True,
+        "route": "/api/v1/content-ops/faq-deflection-search",
+        "status": "",
+    }
+    assert "secret-token" not in result_path.read_text(encoding="utf-8")
+
+
+def test_main_writes_contract_failure_result(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        _MODULE,
+        "_fetch_json",
+        lambda url, *, token, timeout: {"query": "reset", "results": [], "count": 1},
+    )
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "secret-token",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 1
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["phase"] == "contract"
+    assert payload["errors"] == ["count must match len(results)"]
+    assert "secret-token" not in result_path.read_text(encoding="utf-8")
+
+
+def test_main_writes_preflight_failure_result(monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("ATLAS_B2B_JWT", raising=False)
+    monkeypatch.delenv("ATLAS_TOKEN", raising=False)
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 2
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["phase"] == "preflight"
+    assert payload["errors"] == ["ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required"]
+    assert "token is required" in capsys.readouterr().out
+
+
+def test_main_writes_request_failure_result_without_token(monkeypatch, tmp_path):
+    def _fake_fetch_json(url, *, token, timeout):
+        raise RuntimeError("route returned HTTP 401: unauthorized")
+
+    monkeypatch.setattr(_MODULE, "_fetch_json", _fake_fetch_json)
+    result_path = tmp_path / "faq-search-route-result.json"
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "secret-token",
+        "--output-result",
+        str(result_path),
+    )
+
+    assert _MODULE.main() == 1
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is False
+    assert payload["phase"] == "request"
+    assert payload["errors"] == ["route returned HTTP 401: unauthorized"]
+    assert "secret-token" not in result_path.read_text(encoding="utf-8")
 
 
 def test_main_does_not_print_token_on_http_failure(monkeypatch, capsys):

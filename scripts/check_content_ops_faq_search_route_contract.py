@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 import urllib.error
 import urllib.parse
@@ -42,6 +43,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--route", default=DEFAULT_ROUTE)
     parser.add_argument("--timeout", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_TIMEOUT", "10"))
     parser.add_argument("--require-results", action="store_true")
+    parser.add_argument("--output-result", type=Path)
     return parser
 
 
@@ -138,39 +140,173 @@ def _validate_first_result(result: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _result_payload(
+    *,
+    ok: bool,
+    phase: str,
+    base_url: str,
+    route: str,
+    query: str,
+    corpus_id: str,
+    status: str,
+    limit: int,
+    require_results: bool,
+    count: Any = None,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": ok,
+        "phase": phase,
+        "route": route,
+        "base_url": base_url,
+        "query": query,
+        "corpus_id": corpus_id,
+        "status": status,
+        "limit": limit,
+        "require_results": require_results,
+        "errors": list(errors or ()),
+    }
+    if type(count) is int:
+        payload["count"] = count
+    return payload
+
+
+def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     args = _build_parser().parse_args()
     base_url = _clean_url(args.base_url)
     token = str(args.token or "").strip()
     query = str(args.query or "").strip()
+    corpus_id = str(args.corpus_id or "").strip()
+    status = str(args.status or "").strip()
+    route = str(args.route or "").strip()
+    limit = int(args.limit)
     if not base_url:
         print("ATLAS_API_BASE_URL or --base-url is required.")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="preflight",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                errors=["ATLAS_API_BASE_URL or --base-url is required"],
+            ),
+        )
         return 2
     if not token:
         print("ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required.")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="preflight",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                errors=["ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required"],
+            ),
+        )
         return 2
     if not query:
         print("ATLAS_FAQ_SEARCH_QUERY or --query is required.")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="preflight",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                errors=["ATLAS_FAQ_SEARCH_QUERY or --query is required"],
+            ),
+        )
         return 2
-    if args.limit <= 0:
+    if limit <= 0:
         print("--limit must be positive.")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="preflight",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                errors=["--limit must be positive"],
+            ),
+        )
         return 2
 
     url = _build_url(
         base_url=base_url,
-        route=args.route,
+        route=route,
         query=query,
-        corpus_id=args.corpus_id,
-        status=args.status,
-        limit=args.limit,
+        corpus_id=corpus_id,
+        status=status,
+        limit=limit,
     )
     try:
         data = _fetch_json(url, token=token, timeout=args.timeout)
     except RuntimeError as exc:
         print(f"FAQ search route check failed: {exc}")
+        _write_result(
+            args.output_result,
+            _result_payload(
+                ok=False,
+                phase="request",
+                base_url=base_url,
+                route=route,
+                query=query,
+                corpus_id=corpus_id,
+                status=status,
+                limit=limit,
+                require_results=bool(args.require_results),
+                errors=[str(exc)],
+            ),
+        )
         return 1
 
     errors = _validate_envelope(data, require_results=args.require_results)
+    payload = _result_payload(
+        ok=not errors,
+        phase="contract",
+        base_url=base_url,
+        route=route,
+        query=query,
+        corpus_id=corpus_id,
+        status=status,
+        limit=limit,
+        require_results=bool(args.require_results),
+        count=data.get("count"),
+        errors=errors,
+    )
+    _write_result(args.output_result, payload)
     if errors:
         print("FAQ search route contract failed:")
         for error in errors:
