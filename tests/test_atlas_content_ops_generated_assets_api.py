@@ -10,6 +10,10 @@ from __future__ import annotations
 import importlib
 import sys
 
+import pytest
+
+pytest.importorskip("asyncpg")
+
 
 def _fresh_api_package():
     original = sys.modules.pop("atlas_brain.api", None)

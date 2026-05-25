@@ -31,10 +31,12 @@ pytest \
   tests/test_check_content_ops_faq_search_route_contract.py \
   tests/test_smoke_content_ops_faq_scale_run.py \
   tests/test_smoke_content_ops_faq_lifecycle.py \
+  tests/test_smoke_content_ops_faq_lifecycle_run.py \
   tests/test_smoke_content_ops_ingestion_file_route.py \
   tests/test_smoke_content_ops_ingestion_file_route_inprocess_load.py \
   tests/test_smoke_content_ops_ingestion_file_route_multiprocess_load.py \
   tests/test_smoke_content_ops_live_generation.py \
+  tests/test_smoke_content_ops_review_source_generation.py \
   tests/test_export_content_ops_review_sources.py \
   tests/test_export_content_ops_cfpb_sources.py \
   tests/test_smoke_content_ops_cfpb_faq_markdown.py \
@@ -45,6 +47,7 @@ pytest \
   tests/test_extracted_content_ingestion_diagnostics.py \
   tests/test_extracted_blog_generation.py \
   tests/test_extracted_blog_blueprint_ingest.py \
+  tests/test_extracted_blog_blueprint_postgres.py \
   tests/test_extracted_blog_post_postgres.py \
   tests/test_extracted_campaign_reasoning_postgres.py \
   tests/test_extracted_campaign_reasoning_cleanup_cli.py \
@@ -53,6 +56,7 @@ pytest \
   tests/test_extracted_campaign_reasoning_postgres_check.py \
   tests/test_extracted_content_control_surfaces.py \
   tests/test_extracted_content_generation_plan.py \
+  tests/test_extracted_content_reasoning_policy.py \
   tests/test_extracted_content_ops_input_provider.py \
   tests/test_extracted_support_ticket_input_package.py \
   tests/test_extracted_support_ticket_input_provider.py \
@@ -61,7 +65,11 @@ pytest \
   tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_content_ops_execution_smoke.py \
   tests/test_atlas_content_ops_infrastructure.py \
+  tests/test_atlas_content_ops_generated_assets_api.py \
+  tests/test_atlas_content_ops_import_admission.py \
   tests/test_atlas_content_ops_input_provider.py \
+  tests/test_atlas_content_ops_reasoning.py \
+  tests/test_atlas_content_ops_scope.py \
   tests/test_support_ticket_provider_landing_blog_execute.py \
   tests/test_atlas_content_ops_execution_services.py \
   tests/test_extracted_content_ops_live_execute_harness.py \
@@ -86,6 +94,10 @@ pytest \
   tests/test_extracted_landing_page_export.py \
   tests/test_extracted_sales_brief_export.py \
   tests/test_extracted_ticket_faq_export.py \
+  tests/test_extracted_ticket_faq_postgres.py \
+  tests/test_extracted_ticket_faq_search.py \
+  tests/test_extracted_ticket_faq_search_api.py \
+  tests/test_extracted_ticket_faq_search_postgres.py \
   tests/test_extracted_campaign_postgres_review.py \
   tests/test_extracted_campaign_postgres_seller_targets.py \
   tests/test_extracted_campaign_postgres_seller_opportunities.py \
@@ -101,6 +113,8 @@ pytest \
   tests/test_extracted_campaign_api_seller_campaigns.py \
   tests/test_extracted_campaign_postgres_sequence_progression.py \
   tests/test_extracted_campaign_postgres_import.py \
+  tests/test_extracted_campaign_port_taxonomy.py \
+  tests/test_extracted_campaign_reasoning_context_api.py \
   tests/test_extracted_campaign_single_pass_reasoning.py \
   tests/test_extracted_campaign_multi_pass_reasoning_provider.py \
   tests/test_extracted_content_pipeline_migration_runner.py \

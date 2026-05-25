@@ -4,6 +4,8 @@ import asyncio
 
 import pytest
 
+pytest.importorskip("asyncpg")
+
 from atlas_brain._content_ops_import_admission import (
     CONTENT_OPS_IMPORT_ADVISORY_LOCK_NAMESPACE,
     ContentOpsPostgresImportAdmissionGate,
