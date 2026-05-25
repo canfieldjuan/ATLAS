@@ -6,7 +6,10 @@ import pytest
 
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
-from extracted_content_pipeline.ticket_faq_postgres import PostgresTicketFAQRepository
+from extracted_content_pipeline.ticket_faq_postgres import (
+    PostgresTicketFAQRepository,
+    backfill_ticket_faq_search_documents,
+)
 
 
 class _Pool:
@@ -86,9 +89,15 @@ def _draft() -> TicketFAQDraft:
     )
 
 
-def _draft_row(*, draft_id: str = "11111111-1111-1111-1111-111111111111") -> dict:
+def _draft_row(
+    *,
+    draft_id: str = "11111111-1111-1111-1111-111111111111",
+    account_id: str = "acct-1",
+    status: str = "approved",
+) -> dict:
     return {
         "id": draft_id,
+        "account_id": account_id,
         "target_id": "ticket-1",
         "target_mode": "vendor_retention",
         "title": "Support FAQ",
@@ -106,7 +115,7 @@ def _draft_row(*, draft_id: str = "11111111-1111-1111-1111-111111111111") -> dic
         "output_checks": json.dumps({"condensed": True}),
         "warnings": json.dumps([]),
         "metadata": json.dumps({"corpus_id": "corpus-1"}),
-        "status": "approved",
+        "status": status,
     }
 
 
@@ -321,4 +330,156 @@ async def test_update_statuses_skips_projection_when_no_rows_match() -> None:
     )
 
     assert updated == ()
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_dry_run_reports_without_writing() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row()]
+
+    result = await backfill_ticket_faq_search_documents(pool)
+
+    assert result.as_dict() == {
+        "account_id": None,
+        "applied_documents": 0,
+        "applied_rows": 0,
+        "apply": False,
+        "eligible_rows": 1,
+        "limit": None,
+        "projected_documents": 1,
+        "scanned": 1,
+        "skipped_missing_key": 0,
+        "status": "approved",
+    }
+    assert "FROM ticket_faq_markdown" in pool.fetch_calls[0]["query"]
+    assert pool.fetch_calls[0]["args"] == ("approved",)
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_applies_projection() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row()]
+
+    result = await backfill_ticket_faq_search_documents(pool, apply=True)
+
+    assert result.applied_rows == 1
+    assert result.applied_documents == 1
+    assert "DELETE FROM ticket_faq_search_documents" in pool.execute_calls[0]["query"]
+    assert pool.execute_calls[0]["args"] == (
+        "acct-1",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+    )
+    assert "INSERT INTO ticket_faq_search_documents" in pool.execute_calls[1]["query"]
+    assert pool.execute_calls[1]["args"][:6] == (
+        "acct-1",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+        "ticket-1",
+        "vendor_retention",
+        "approved",
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_uses_each_rows_account_id() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        _draft_row(
+            draft_id="11111111-1111-1111-1111-111111111111",
+            account_id="acct-a",
+        ),
+        _draft_row(
+            draft_id="22222222-2222-2222-2222-222222222222",
+            account_id="acct-b",
+        ),
+    ]
+
+    result = await backfill_ticket_faq_search_documents(pool, apply=True)
+
+    assert result.scanned == 2
+    assert result.applied_rows == 2
+    assert pool.execute_calls[0]["args"][:3] == (
+        "acct-a",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+    )
+    assert pool.execute_calls[1]["args"][:3] == (
+        "acct-a",
+        "corpus-1",
+        "11111111-1111-1111-1111-111111111111",
+    )
+    assert pool.execute_calls[2]["args"][:3] == (
+        "acct-b",
+        "corpus-1",
+        "22222222-2222-2222-2222-222222222222",
+    )
+    assert pool.execute_calls[3]["args"][:3] == (
+        "acct-b",
+        "corpus-1",
+        "22222222-2222-2222-2222-222222222222",
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_clears_empty_items() -> None:
+    pool = _Pool()
+    row = _draft_row()
+    row["items"] = json.dumps([])
+    pool.fetch_rows = [row]
+
+    result = await backfill_ticket_faq_search_documents(pool, apply=True)
+
+    assert result.eligible_rows == 1
+    assert result.projected_documents == 0
+    assert result.applied_rows == 1
+    assert result.applied_documents == 0
+    assert len(pool.execute_calls) == 1
+    assert "DELETE FROM ticket_faq_search_documents" in pool.execute_calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_rejects_blank_status() -> None:
+    pool = _Pool()
+
+    with pytest.raises(ValueError, match="requires status"):
+        await backfill_ticket_faq_search_documents(pool, status="  ")
+
+    assert pool.fetch_calls == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_filters_account_and_limit() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row(account_id="acct-2", status="rejected")]
+
+    result = await backfill_ticket_faq_search_documents(
+        pool,
+        status="rejected",
+        account_id="acct-2",
+        limit=5,
+    )
+
+    assert result.status == "rejected"
+    assert result.account_id == "acct-2"
+    assert result.limit == 5
+    assert "account_id = $2" in pool.fetch_calls[0]["query"]
+    assert "LIMIT $3" in pool.fetch_calls[0]["query"]
+    assert pool.fetch_calls[0]["args"] == ("rejected", "acct-2", 5)
+
+
+@pytest.mark.asyncio
+async def test_backfill_ticket_faq_search_documents_skips_incomplete_projection_key() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_draft_row(account_id="")]
+
+    result = await backfill_ticket_faq_search_documents(pool, apply=True)
+
+    assert result.scanned == 1
+    assert result.eligible_rows == 0
+    assert result.skipped_missing_key == 1
+    assert result.applied_rows == 0
     assert pool.execute_calls == []
