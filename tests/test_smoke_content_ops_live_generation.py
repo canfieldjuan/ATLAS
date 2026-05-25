@@ -722,6 +722,9 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert payload["data_context"]["question_like_ticket_count"] == 2
     assert payload["data_context"]["review_period"] == "uploaded tickets"
     assert payload["data_context"]["source_period"] == "Uploaded support tickets"
+    assert payload["data_context"]["included_ticket_row_count"] == 2
+    assert payload["data_context"]["total_reviews_analyzed"] == 2
+    assert payload["data_context"]["deep_enriched_count"] == 2
     assert payload["data_context"]["top_clusters"] == [
         {"label": "account", "count": 1},
         {"label": "reporting", "count": 1},
@@ -729,11 +732,45 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     first_section = payload["sections"][0]
     assert first_section["key_stats"] == {
         "support_ticket_rows": 2,
+        "included_ticket_rows": 2,
         "question_like_rows": 2,
         "cluster_count": 2,
     }
     assert "2 support-ticket rows" in first_section["data_summary"]
+    assert "2 rows were included for generation" in first_section["data_summary"]
     assert "source_window_days" not in payload["sections"][2]["key_stats"]
+
+
+def test_support_ticket_blog_blueprint_payload_uses_package_included_counts() -> None:
+    payload = smoke._support_ticket_blog_blueprint_payload([
+        {
+            "Ticket ID": "ticket-1",
+            "Subject": "How do I change my login email?",
+            "Description": "I cannot find where to update the email on my account.",
+            "Pain Category": "account",
+        },
+        {
+            "Ticket ID": "ticket-empty",
+            "Subject": "",
+            "Description": "",
+            "Pain Category": "ignored",
+        },
+    ])
+
+    assert payload["data_context"]["source_row_count"] == 2
+    assert payload["data_context"]["included_ticket_row_count"] == 1
+    assert payload["data_context"]["total_reviews_analyzed"] == 1
+    assert payload["data_context"]["deep_enriched_count"] == 1
+    assert payload["data_context"]["top_clusters"] == [
+        {"label": "account", "count": 1},
+    ]
+    assert payload["sections"][0]["key_stats"] == {
+        "support_ticket_rows": 2,
+        "included_ticket_rows": 1,
+        "question_like_rows": 1,
+        "cluster_count": 1,
+    }
+    assert payload["sections"][2]["key_stats"]["included_rows"] == 1
 
 
 def test_support_ticket_blog_blueprint_payload_uses_date_window_when_dates_validate() -> None:

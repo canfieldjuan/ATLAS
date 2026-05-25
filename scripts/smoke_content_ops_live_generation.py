@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
-from datetime import date, datetime
 import json
 from pathlib import Path
 import re
@@ -513,30 +512,34 @@ def _default_blog_blueprint_payload() -> dict[str, Any]:
 def _support_ticket_blog_blueprint_payload(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    source_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
-    row_count = len(source_rows)
-    question_like_count = sum(1 for row in source_rows if "?" in _ticket_row_text(row))
-    top_clusters = _top_ticket_clusters(source_rows)
-    cluster_summary = _cluster_summary(top_clusters)
-    draft_faq_entries = min(12, max(1, row_count))
-    has_valid_date_window = _support_ticket_rows_have_dates(source_rows)
-    review_period = "last 90 days" if has_valid_date_window else "uploaded tickets"
-    source_period = (
-        "Last 90 days of support tickets"
-        if has_valid_date_window
-        else "Uploaded support tickets"
+    from extracted_content_pipeline.support_ticket_input_package import (  # noqa: PLC0415
+        build_support_ticket_input_package,
     )
+
+    package = build_support_ticket_input_package(rows)
+    inputs = dict(package.inputs)
+    source_row_count = int(inputs.get("source_row_count") or 0)
+    included_row_count = int(inputs.get("included_ticket_row_count") or 0)
+    question_like_count = int(inputs.get("question_like_ticket_count") or 0)
+    top_clusters = list(inputs.get("top_ticket_clusters") or [])
+    cluster_summary = _cluster_summary(top_clusters)
+    faq_questions = list(inputs.get("faq_questions") or [])
+    draft_faq_entries = min(12, max(1, len(faq_questions) or included_row_count))
+    source_period = str(inputs.get("source_period") or "Uploaded support tickets")
+    has_valid_date_window = bool(inputs.get("faq_window_days"))
+    review_period = "last 90 days" if has_valid_date_window else "uploaded tickets"
     return {
         "topic": SUPPORT_TICKET_BLOG_TOPIC,
         "data_context": {
             "review_period": review_period,
-            "source_row_count": row_count,
+            "source_row_count": source_row_count,
+            "included_ticket_row_count": included_row_count,
             "question_like_ticket_count": question_like_count,
             "top_clusters": top_clusters,
             "_known_vendors": [],
             "report_date": "2026-05-23",
-            "total_reviews_analyzed": row_count,
-            "deep_enriched_count": row_count,
+            "total_reviews_analyzed": included_row_count,
+            "deep_enriched_count": included_row_count,
             "category": "support tickets",
             "topic": SUPPORT_TICKET_BLOG_TOPIC,
             "source_period": source_period,
@@ -551,15 +554,17 @@ def _support_ticket_blog_blueprint_payload(
                     "customer questions and missing customer-facing answers."
                 ),
                 "key_stats": {
-                    "support_ticket_rows": row_count,
+                    "support_ticket_rows": source_row_count,
+                    "included_ticket_rows": included_row_count,
                     "question_like_rows": question_like_count,
                     "cluster_count": len(top_clusters),
                 },
                 "chart_ids": [],
                 "data_summary": (
-                    f"The uploaded CSV contains {row_count} support-ticket "
-                    f"rows. {question_like_count} rows include direct customer "
-                    f"questions. Top observed clusters: {cluster_summary}."
+                    f"The uploaded CSV contains {source_row_count} support-ticket "
+                    f"rows; {included_row_count} rows were included for generation. "
+                    f"{question_like_count} rows include direct customer questions. "
+                    f"Top observed clusters: {cluster_summary}."
                 ),
             },
             {
@@ -586,7 +591,8 @@ def _support_ticket_blog_blueprint_payload(
                     "questions, customer wording, draft answers, and review."
                 ),
                 "key_stats": {
-                    "source_rows": row_count,
+                    "source_rows": source_row_count,
+                    "included_rows": included_row_count,
                     "draft_faq_entries": draft_faq_entries,
                     "review_steps": 3,
                     **({"source_window_days": 90} if has_valid_date_window else {}),
@@ -612,79 +618,6 @@ def _support_ticket_blog_blueprint_payload(
         ],
         "required_vendors": [],
     }
-
-
-def _ticket_row_text(row: Mapping[str, Any]) -> str:
-    return " ".join(
-        str(row.get(key) or "").strip()
-        for key in (
-            "Description",
-            "description",
-            "Message",
-            "message",
-            "Text",
-            "text",
-            "Subject",
-            "subject",
-            "Title",
-            "title",
-        )
-        if str(row.get(key) or "").strip()
-    )
-
-
-def _support_ticket_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
-    return bool(rows) and all(_ticket_row_date(row) is not None for row in rows)
-
-
-def _ticket_row_date(row: Mapping[str, Any]) -> date | None:
-    for key in (
-        "Created At",
-        "created_at",
-        "Submitted At",
-        "submitted_at",
-        "Date",
-        "date",
-    ):
-        value = row.get(key)
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        text = str(value or "").strip()
-        if not text:
-            continue
-        try:
-            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-        except ValueError:
-            pass
-        try:
-            return date.fromisoformat(text[:10])
-        except ValueError:
-            continue
-    return None
-
-
-def _ticket_cluster_label(row: Mapping[str, Any]) -> str:
-    for key in ("Pain Category", "pain_category", "Category", "category", "intent"):
-        value = str(row.get(key) or "").strip()
-        if value:
-            return value
-    return "uncategorized"
-
-
-def _top_ticket_clusters(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        label = _ticket_cluster_label(row)
-        counts[label] = counts.get(label, 0) + 1
-    return [
-        {"label": label, "count": count}
-        for label, count in sorted(
-            counts.items(),
-            key=lambda item: (-item[1], item[0].lower()),
-        )[:5]
-    ]
 
 
 def _cluster_summary(clusters: Sequence[Mapping[str, Any]]) -> str:
