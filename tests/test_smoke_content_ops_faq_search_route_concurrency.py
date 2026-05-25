@@ -60,6 +60,9 @@ def _valid_payload():
         "query": "mortgage dispute",
         "results": [
             {
+                "account_id": "acct-1",
+                "corpus_id": "corpus-1",
+                "faq_id": "11111111-1111-1111-1111-111111111111",
                 "question": "How do I dispute a mortgage payment error?",
                 "answer_summary": "Gather records and contact support.",
                 "topic": "Mortgage servicing issues",
@@ -187,6 +190,21 @@ def test_load_cases_inherits_optional_cli_defaults(tmp_path):
         ([{"query": "x", "limit": True}], "case[0].limit must be a positive integer"),
         ([{"query": "x", "limit": 0}], "case[0].limit must be a positive integer"),
         ([{"query": "x", "require_results": "yes"}], "case[0].require_results must be a boolean"),
+        ([{"query": "x", "expected_count": "1"}], "case[0].expected_count must be a non-negative integer"),
+        ([{"query": "x", "expected_count": True}], "case[0].expected_count must be a non-negative integer"),
+        ([{"query": "x", "expected_count": -1}], "case[0].expected_count must be a non-negative integer"),
+        (
+            [{"query": "x", "expected_first_account_id": ""}],
+            "case[0].expected_first_account_id must be a non-empty string",
+        ),
+        (
+            [{"query": "x", "expected_first_corpus_id": 1}],
+            "case[0].expected_first_corpus_id must be a non-empty string",
+        ),
+        (
+            [{"query": "x", "expected_first_faq_id": []}],
+            "case[0].expected_first_faq_id must be a non-empty string",
+        ),
     ],
 )
 def test_load_cases_rejects_bad_case_file_shapes(tmp_path, payload, expected_error):
@@ -204,6 +222,27 @@ def test_load_cases_reports_unreadable_case_file():
     assert cases == []
     assert errors
     assert errors[0].startswith("--case-file could not be read:")
+
+
+def test_load_cases_accepts_seeded_expectations(tmp_path):
+    case_file = _write_case_file(
+        tmp_path,
+        [{
+            "query": "reset password",
+            "expected_count": 1,
+            "expected_first_account_id": "acct-1",
+            "expected_first_corpus_id": "corpus-1",
+            "expected_first_faq_id": "11111111-1111-1111-1111-111111111111",
+        }],
+    )
+
+    cases, errors = smoke._load_cases(_args(case_file=case_file))
+
+    assert errors == []
+    assert cases[0]["expected_count"] == 1
+    assert cases[0]["expected_first_account_id"] == "acct-1"
+    assert cases[0]["expected_first_corpus_id"] == "corpus-1"
+    assert cases[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
 
 
 def test_latency_and_error_summaries_are_compact():
@@ -358,6 +397,70 @@ def test_run_one_rejects_result_envelope_drift_at_transport_boundary(monkeypatch
         "count must be an integer",
         "results must include at least one item",
     ]
+
+
+def test_run_one_rejects_seeded_expectation_drift(monkeypatch):
+    monkeypatch.setattr(smoke.time, "perf_counter", iter([1.0, 1.001]).__next__)
+    monkeypatch.setattr(
+        smoke.contract.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _json_response(_valid_payload()),
+    )
+
+    result = smoke._run_one(
+        0,
+        _args(),
+        {
+            "query": "mortgage dispute",
+            "corpus_id": "corpus-1",
+            "status": "",
+            "limit": 5,
+            "require_results": True,
+            "expected_count": 2,
+            "expected_first_account_id": "acct-2",
+            "expected_first_corpus_id": "corpus-2",
+            "expected_first_faq_id": "22222222-2222-2222-2222-222222222222",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["errors"] == [
+        "expected count 2 but got 1",
+        "expected first account_id 'acct-2' but got 'acct-1'",
+        "expected first corpus_id 'corpus-2' but got 'corpus-1'",
+        (
+            "expected first faq_id '22222222-2222-2222-2222-222222222222' "
+            "but got '11111111-1111-1111-1111-111111111111'"
+        ),
+    ]
+
+
+def test_run_one_rejects_missing_expected_first_result(monkeypatch):
+    monkeypatch.setattr(smoke.time, "perf_counter", iter([1.0, 1.001]).__next__)
+    monkeypatch.setattr(
+        smoke.contract.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _json_response(
+            {"query": "mortgage dispute", "results": [], "count": 0}
+        ),
+    )
+
+    result = smoke._run_one(
+        0,
+        _args(require_results=False),
+        {
+            "query": "mortgage dispute",
+            "corpus_id": "corpus-1",
+            "status": "",
+            "limit": 5,
+            "require_results": False,
+            "expected_count": 0,
+            "expected_first_faq_id": "11111111-1111-1111-1111-111111111111",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["errors"] == ["expected first result but none was returned"]
 
 
 def test_run_concurrent_sorts_results(monkeypatch):
