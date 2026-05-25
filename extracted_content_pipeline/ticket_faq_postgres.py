@@ -68,6 +68,36 @@ def _row_to_draft(row: Mapping[str, Any]) -> TicketFAQDraft:
 
 
 @dataclass(frozen=True)
+class TicketFAQSearchBackfillResult:
+    """Summary for a ticket FAQ search projection backfill run."""
+
+    apply: bool
+    status: str
+    account_id: str | None
+    limit: int | None
+    scanned: int
+    eligible_rows: int
+    skipped_missing_key: int
+    projected_documents: int
+    applied_rows: int
+    applied_documents: int
+
+    def as_dict(self) -> JsonDict:
+        return {
+            "apply": self.apply,
+            "status": self.status,
+            "account_id": self.account_id,
+            "limit": self.limit,
+            "scanned": self.scanned,
+            "eligible_rows": self.eligible_rows,
+            "skipped_missing_key": self.skipped_missing_key,
+            "projected_documents": self.projected_documents,
+            "applied_rows": self.applied_rows,
+            "applied_documents": self.applied_documents,
+        }
+
+
+@dataclass(frozen=True)
 class PostgresTicketFAQRepository:
     """Async Postgres adapter for generated ticket FAQ Markdown."""
 
@@ -231,6 +261,84 @@ class PostgresTicketFAQRepository:
         )
 
 
+async def backfill_ticket_faq_search_documents(
+    pool: Any,
+    *,
+    status: str = "approved",
+    account_id: str | None = None,
+    limit: int | None = None,
+    apply: bool = False,
+) -> TicketFAQSearchBackfillResult:
+    """Backfill persisted FAQ drafts into the search projection table."""
+
+    normalized_status = str(status or "").strip()
+    if not normalized_status:
+        raise ValueError("ticket FAQ search backfill requires status")
+
+    normalized_account_id = str(account_id or "").strip() or None
+    normalized_limit = None if limit is None else max(0, int(limit))
+    clauses = ["status = $1"]
+    params: list[Any] = [normalized_status]
+    if normalized_account_id is not None:
+        params.append(normalized_account_id)
+        clauses.append(f"account_id = ${len(params)}")
+    sql = (
+        f"SELECT account_id, {_TICKET_FAQ_COLUMNS} "
+        "FROM ticket_faq_markdown WHERE " + " AND ".join(clauses) + " "
+        "ORDER BY updated_at DESC, created_at DESC"
+    )
+    if normalized_limit is not None:
+        params.append(normalized_limit)
+        sql += f" LIMIT ${len(params)}"
+
+    rows = await pool.fetch(sql, *params)
+    search_repo = PostgresTicketFAQSearchRepository(pool)
+    scanned = 0
+    eligible_rows = 0
+    skipped_missing_key = 0
+    projected_documents = 0
+    applied_rows = 0
+    applied_documents = 0
+
+    for row in rows:
+        scanned += 1
+        row_dict = row_to_dict(row)
+        draft = _row_to_draft(row_dict)
+        key = build_ticket_faq_search_projection_key(
+            draft,
+            account_id=str(row_dict.get("account_id") or "").strip(),
+        )
+        if not key.account_id or not key.corpus_id or not key.faq_id:
+            skipped_missing_key += 1
+            continue
+        documents = build_ticket_faq_search_documents(
+            draft,
+            account_id=key.account_id,
+            corpus_id=key.corpus_id,
+        )
+        eligible_rows += 1
+        projected_documents += len(documents)
+        if apply:
+            applied_documents += await search_repo.replace_documents(
+                documents,
+                replace_keys=(key,),
+            )
+            applied_rows += 1
+
+    return TicketFAQSearchBackfillResult(
+        apply=apply,
+        status=normalized_status,
+        account_id=normalized_account_id,
+        limit=normalized_limit,
+        scanned=scanned,
+        eligible_rows=eligible_rows,
+        skipped_missing_key=skipped_missing_key,
+        projected_documents=projected_documents,
+        applied_rows=applied_rows,
+        applied_documents=applied_documents,
+    )
+
+
 async def _with_write_connection(db: Any, callback: Any) -> Any:
     transaction = getattr(db, "transaction", None)
     if callable(transaction):
@@ -249,4 +357,6 @@ async def _with_write_connection(db: Any, callback: Any) -> Any:
 
 __all__ = [
     "PostgresTicketFAQRepository",
+    "TicketFAQSearchBackfillResult",
+    "backfill_ticket_faq_search_documents",
 ]

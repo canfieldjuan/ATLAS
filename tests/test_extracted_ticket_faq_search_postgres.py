@@ -12,7 +12,10 @@ from extracted_content_pipeline.ticket_faq_search import (
     TicketFAQSearchDocument,
     TicketFAQSearchProjectionKey,
 )
-from extracted_content_pipeline.ticket_faq_postgres import PostgresTicketFAQRepository
+from extracted_content_pipeline.ticket_faq_postgres import (
+    PostgresTicketFAQRepository,
+    backfill_ticket_faq_search_documents,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
 
 
@@ -533,6 +536,88 @@ async def test_ticket_faq_review_status_indexes_search_projection_against_postgr
         await pool.close()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ticket_faq_search_backfill_projects_each_account_against_postgres() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    root = Path(__file__).resolve().parents[1]
+    run_id = uuid4().hex
+    status = f"approved_backfill_{run_id}"
+    account_a = f"acct-a-{run_id}"
+    account_b = f"acct-b-{run_id}"
+    corpus_a = f"corpus-a-{run_id}"
+    corpus_b = f"corpus-b-{run_id}"
+    faq_a = str(uuid4())
+    faq_b = str(uuid4())
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    search_repo = PostgresTicketFAQSearchRepository(pool)
+
+    try:
+        await pool.execute((root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text())
+        await pool.execute((root / "atlas_brain/storage/migrations/327_ticket_faq_search_documents.sql").read_text())
+        await _insert_reviewable_faq(
+            pool,
+            faq_id=faq_a,
+            account_id=account_a,
+            corpus_id=corpus_a,
+            status=status,
+        )
+        await _insert_reviewable_faq(
+            pool,
+            faq_id=faq_b,
+            account_id=account_b,
+            corpus_id=corpus_b,
+            status=status,
+        )
+
+        dry_run = await backfill_ticket_faq_search_documents(pool, status=status)
+        dry_run_count = await pool.fetchval(
+            "SELECT COUNT(*) FROM ticket_faq_search_documents WHERE status = $1",
+            status,
+        )
+        applied = await backfill_ticket_faq_search_documents(pool, status=status, apply=True)
+        account_a_hit = await search_repo.search(
+            query="password reset",
+            account_id=account_a,
+            corpus_id=corpus_a,
+            status=status,
+        )
+        account_a_cross_miss = await search_repo.search(
+            query="password reset",
+            account_id=account_a,
+            corpus_id=corpus_b,
+            status=status,
+        )
+        account_b_hit = await search_repo.search(
+            query="password reset",
+            account_id=account_b,
+            corpus_id=corpus_b,
+            status=status,
+        )
+
+        assert dry_run.scanned == 2
+        assert dry_run.applied_rows == 0
+        assert dry_run_count == 0
+        assert applied.scanned == 2
+        assert applied.applied_rows == 2
+        assert applied.applied_documents == 2
+        assert account_a_hit.as_dict()["count"] == 1
+        assert account_a_cross_miss.as_dict()["count"] == 0
+        assert account_b_hit.as_dict()["count"] == 1
+        assert account_a_hit.as_dict()["results"][0]["account_id"] == account_a
+        assert account_b_hit.as_dict()["results"][0]["account_id"] == account_b
+    finally:
+        await pool.execute(
+            "DELETE FROM ticket_faq_markdown WHERE account_id = ANY($1::text[])",
+            [account_a, account_b],
+        )
+        await pool.close()
+
+
 async def _insert_parent_faq(pool, *, faq_id: str, account_id: str) -> None:
     await pool.execute(
         """
@@ -558,6 +643,7 @@ async def _insert_reviewable_faq(
     faq_id: str,
     account_id: str,
     corpus_id: str,
+    status: str = "draft",
 ) -> None:
     await pool.execute(
         """
@@ -569,7 +655,7 @@ async def _insert_reviewable_faq(
         VALUES (
             $1::uuid, $2, 'support-account-1', 'support_account',
             'Support FAQ', '# Support FAQ', $3::jsonb, 1, 1,
-            '{}'::jsonb, '[]'::jsonb, $4::jsonb, 'draft'
+            '{}'::jsonb, '[]'::jsonb, $4::jsonb, $5
         )
         """,
         faq_id,
@@ -583,4 +669,5 @@ async def _insert_reviewable_faq(
             "ticket_count": 1,
         }]),
         json.dumps({"corpus_id": corpus_id}),
+        status,
     )
