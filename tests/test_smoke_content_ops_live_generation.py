@@ -93,6 +93,7 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "no_quality_gates": False,
         "output_result": None,
         "export_saved_draft": None,
+        "evaluate_generated_content": False,
         "json": True,
     }
     values.update(overrides)
@@ -305,6 +306,232 @@ async def test_live_generation_smoke_validates_support_ticket_landing_export_con
     assert result["saved_draft_export"]["rows"][0]["metadata"]["source_context"][
         "source_row_count"
     ] == 2
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_evaluates_support_ticket_landing_export_content(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+    evaluations: list[dict[str, Any]] = []
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "rows": [{
+                "id": saved_ids[0],
+                "title": "Support-ticket FAQ report",
+                "hero": {
+                    "headline": (
+                        "Turn 2 support-ticket rows about account questions "
+                        "into FAQ answers."
+                    )
+                },
+                "sections": [{"body": "Reporting questions need clearer answers."}],
+                "metadata": {
+                    "source_context": {
+                        "source_row_count": 2,
+                        "included_ticket_row_count": 2,
+                        "skipped_ticket_row_count": 0,
+                        "truncated_ticket_row_count": 0,
+                        "question_like_ticket_count": 2,
+                        "top_ticket_clusters": [
+                            {"label": "account", "count": 1},
+                            {"label": "reporting", "count": 1},
+                        ],
+                    },
+                },
+            }],
+        }
+
+    def _evaluate(export: dict[str, Any], *, output: str) -> dict[str, Any]:
+        evaluations.append({"export": export, "output": output})
+        return {"ok": True, "errors": [], "checks": [{"name": "ok"}]}
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "landing-page-draft.json",
+            evaluate_generated_content=True,
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+        generated_content_evaluator=_evaluate,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["generated_content_evaluation"] == {
+        "ok": True,
+        "errors": [],
+        "checks": [{"name": "ok"}],
+    }
+    assert evaluations == [{
+        "export": result["saved_draft_export"],
+        "output": "landing_page",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_fails_when_generated_content_evaluation_fails(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        return {
+            "count": 1,
+            "rows": [{
+                "id": saved_ids[0],
+                "metadata": {
+                    "source_context": {
+                        "source_row_count": 2,
+                        "included_ticket_row_count": 2,
+                        "skipped_ticket_row_count": 0,
+                        "truncated_ticket_row_count": 0,
+                        "question_like_ticket_count": 2,
+                        "top_ticket_clusters": [
+                            {"label": "account", "count": 1},
+                            {"label": "reporting", "count": 1},
+                        ],
+                    },
+                },
+            }],
+        }
+
+    def _evaluate(export: dict[str, Any], *, output: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "errors": ["generated text ignored account cluster"],
+            "checks": [],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            export_saved_draft=tmp_path / "landing-page-draft.json",
+            evaluate_generated_content=True,
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+        generated_content_evaluator=_evaluate,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["generated_content_evaluation"]["ok"] is False
+    assert result["errors"] == [
+        "generated content evaluation failed: generated text ignored account cluster"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_requires_export_for_generated_content_evaluation(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _LandingPageService()
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            support_ticket_csv=_support_ticket_csv(tmp_path),
+            evaluate_generated_content=True,
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(landing_page=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["execution"] is None
+    assert result["errors"] == [
+        "--evaluate-generated-content requires --export-saved-draft"
+    ]
+    assert lifecycle.initialized is False
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_requires_support_ticket_csv_for_content_evaluation(
+) -> None:
+    lifecycle = _Lifecycle()
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            export_saved_draft=Path("landing-page-draft.json"),
+            evaluate_generated_content=True,
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(
+            landing_page=_LandingPageService()
+        ),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 1
+    assert result["ok"] is False
+    assert result["execution"] is None
+    assert result["errors"] == [
+        "--evaluate-generated-content requires --support-ticket-csv"
+    ]
+    assert lifecycle.initialized is False
+
+
+def test_live_generation_smoke_real_generated_content_evaluator_imports() -> None:
+    result = smoke._evaluate_generated_content_export(
+        {
+            "count": 1,
+            "rows": [{
+                "id": "lp-live-smoke-1",
+                "title": "Support-ticket FAQ report",
+                "hero": {
+                    "headline": (
+                        "Turn 2 support-ticket rows about account questions "
+                        "into FAQ answers."
+                    )
+                },
+                "sections": [{"body": "Reporting questions need clearer answers."}],
+                "metadata": {
+                    "source_context": {
+                        "source_row_count": 2,
+                        "included_ticket_row_count": 2,
+                        "question_like_ticket_count": 2,
+                        "top_ticket_clusters": [
+                            {"label": "account", "count": 1},
+                            {"label": "reporting", "count": 1},
+                        ],
+                    },
+                },
+            }],
+        },
+        output="landing_page",
+    )
+
+    assert result["ok"] is True
+    assert result["errors"] == []
 
 
 @pytest.mark.asyncio
