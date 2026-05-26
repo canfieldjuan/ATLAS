@@ -22,7 +22,8 @@ Slice phase: Production hardening
 2. Set that context around each Content Ops execution step from the resolved
    TenantScope.
 3. Preserve explicit per-call metadata precedence for existing generator
-   metadata such as asset_type, request_id, and run_id.
+   labels such as asset_type, request_id, and run_id, while keeping scoped
+   account_id and user_id authoritative.
 4. Add focused tests proving account_id and user_id reach successful and failed
    LLM traces without leaking across calls.
 
@@ -45,9 +46,10 @@ a finally block after the step finishes, so concurrent steps do not leave stale
 scope behind for later calls.
 
 Trace metadata merge order is base Content Ops metadata, scoped execution
-metadata, then explicit generator metadata. That lets the execution boundary add
-account_id while preserving existing per-call labels such as asset_type,
-request_id, run_id, skill_name, and attempt_no.
+metadata, then explicit generator metadata after stripping account_id and
+user_id from the per-call mapping. That lets the execution boundary add trusted
+account_id and user_id while preserving existing per-call labels such as
+asset_type, request_id, run_id, skill_name, and attempt_no.
 
 ## Intentional
 
@@ -57,6 +59,8 @@ request_id, run_id, skill_name, and attempt_no.
   slice.
 - This does not modify every generator. The executor and tracing client are the
   shared source of truth for execution-scope metadata.
+- Per-call metadata cannot override scoped account_id or user_id. Those fields
+  are the tenant attribution anchor for future tenant-facing usage filters.
 - This does not add UI, budget gates, or cache controls.
 
 ## Deferred
@@ -72,14 +76,14 @@ request_id, run_id, skill_name, and attempt_no.
 
 ## Verification
 
-- python -m pytest tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_execution.py -q — 68 passed.
+- python -m pytest tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_execution.py -q — 69 passed, 1 warning.
 - python -m compileall -q extracted_content_pipeline/campaign_llm_client.py extracted_content_pipeline/content_ops_execution.py tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_execution.py — passed.
 - git diff --check — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
 - bash scripts/check_ascii_python.sh — passed.
-- bash scripts/local_pr_review.sh --current-pr-body-file <body> — passed.
+- bash scripts/local_pr_review.sh --current-pr-body-file <body> — pending final rerun before push.
 
 ## Estimated diff size
 

@@ -222,8 +222,12 @@ class PipelineLLMClient:
             "workload": self.workload or "default",
             "llm_adapter": "pipeline",
         }
-        trace_metadata.update(current_content_ops_llm_trace_context())
-        trace_metadata.update(dict(metadata or {}))
+        scoped_metadata = current_content_ops_llm_trace_context()
+        call_metadata = dict(metadata or {})
+        call_metadata.pop("account_id", None)
+        call_metadata.pop("user_id", None)
+        trace_metadata.update(scoped_metadata)
+        trace_metadata.update(call_metadata)
         try:
             self.tracer(
                 "content_ops.llm.complete",

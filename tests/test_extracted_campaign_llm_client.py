@@ -293,7 +293,12 @@ async def test_pipeline_llm_client_merges_scoped_trace_metadata_and_resets():
             [LLMMessage(role="user", content="customer ticket text")],
             max_tokens=200,
             temperature=0.2,
-            metadata={"asset_type": "blog_post", "request_id": "req_123"},
+            metadata={
+                "account_id": "spoofed-account",
+                "user_id": "spoofed-user",
+                "asset_type": "blog_post",
+                "request_id": "req_123",
+            },
         )
     finally:
         reset_content_ops_llm_trace_context(token)
