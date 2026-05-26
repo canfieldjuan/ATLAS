@@ -18,7 +18,7 @@ sys.modules["smoke_content_ops_faq_search_concurrency"] = smoke
 SPEC.loader.exec_module(smoke)
 
 
-def _case(*, query: str = "password reset", expected_hit: bool = True):
+def _case(*, query: str = "export attribution report", expected_hit: bool = True):
     return smoke.SearchCase(
         account_id="acct-1",
         corpus_id="corpus-1",
@@ -41,6 +41,11 @@ def test_build_cases_creates_hit_and_miss_for_each_corpus() -> None:
     assert len({case.account_id for case in cases}) == 2
     assert len({case.corpus_id for case in cases}) == 3
     assert all(case.account_id.startswith("faq-search-abc123-acct-") for case in cases)
+    assert {case.query for case in cases} == {
+        "export attribution report",
+        "saml domain verification",
+    }
+    assert not any("escrow" in case.query for case in cases)
     for corpus_id in {case.corpus_id for case in cases}:
         assert len({case.account_id for case in cases if case.corpus_id == corpus_id}) == 2
 
@@ -65,12 +70,12 @@ def test_documents_for_case_are_ranked_and_scoped() -> None:
     assert {document.corpus_id for document in documents} == {"corpus-1"}
     assert {document.status for document in documents} == {"approved"}
     assert {document.target_mode for document in documents} == {"support_account"}
-    assert all("password reset" in document.search_text for document in documents)
+    assert all("export attribution report" in document.search_text for document in documents)
 
 
 def test_route_case_payload_carries_seeded_hit_and_miss_expectations() -> None:
     payload = smoke._route_case_payload(
-        [_case(), _case(query="escrow shortage", expected_hit=False)],
+        [_case(), _case(query="saml domain verification", expected_hit=False)],
         documents_per_corpus=7,
         limit=5,
     )
@@ -85,7 +90,7 @@ def test_route_case_payload_carries_seeded_hit_and_miss_expectations() -> None:
     assert payload[0]["expected_detail_title"] == "FAQ Search Smoke"
     assert payload[0]["expected_detail_status"] == "approved"
     assert payload[1] == {
-        "query": "escrow shortage",
+        "query": "saml domain verification",
         "corpus_id": "corpus-1",
         "status": "approved",
         "limit": 5,
@@ -106,12 +111,12 @@ def test_write_route_case_file_writes_deterministic_json(tmp_path) -> None:
 def test_cleanup_manifest_payload_carries_all_seeded_ids() -> None:
     cases = [
         _case(),
-        _case(query="escrow shortage", expected_hit=False),
+        _case(query="saml domain verification", expected_hit=False),
         smoke.SearchCase(
             account_id="acct-1",
             corpus_id="corpus-2",
             faq_id="22222222-2222-2222-2222-222222222222",
-            query="password reset",
+            query="export attribution report",
             expected_hit=True,
         ),
     ]
@@ -160,14 +165,14 @@ async def test_run_case_records_failures_for_leaked_rows_and_hit_miss_mismatches
         account_id="acct-1",
         corpus_id="shared-corpus",
         faq_id="faq-1",
-        query="password reset",
+        query="export attribution report",
         expected_hit=True,
     )
     miss_case = smoke.SearchCase(
         account_id="acct-1",
         corpus_id="shared-corpus",
         faq_id="faq-1",
-        query="escrow shortage",
+        query="saml domain verification",
         expected_hit=False,
     )
 
@@ -381,7 +386,7 @@ def test_failure_summary_limits_output() -> None:
         {
             "account_id": f"acct-{index}",
             "corpus_id": "corpus",
-            "query": "password",
+            "query": "export",
             "failures": ["wrong account_id returned"],
         }
         for index in range(25)

@@ -114,9 +114,9 @@ def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
     _write_cases(
         case_file,
         [
-            {"query": "escrow shortage", "limit": 5, "require_results": False},
+            {"query": "saml domain verification", "limit": 5, "require_results": False},
             {
-                "query": "password reset",
+                "query": "export attribution report",
                 "corpus_id": "corp-1",
                 "status": "approved",
                 "limit": 3,
@@ -135,7 +135,7 @@ def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
 
     assert errors == []
     assert detail_case == {
-        "query": "password reset",
+        "query": "export attribution report",
         "corpus_id": "corp-1",
         "status": "approved",
         "limit": 3,
@@ -154,17 +154,17 @@ def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
         ({}, "route case file must contain a non-empty JSON list"),
         ([], "route case file must contain a non-empty JSON list"),
         ([[]], "route case[0] must be an object"),
-        ([{"query": "reset", "limit": 5, "require_results": "yes"}], "route case[0].require_results must be a boolean"),
-        ([{"query": "escrow", "limit": 5, "require_results": False}], "route case file must include a require_results case for detail check"),
+        ([{"query": "export", "limit": 5, "require_results": "yes"}], "route case[0].require_results must be a boolean"),
+        ([{"query": "workspace ownership", "limit": 5, "require_results": False}], "route case file must include a require_results case for detail check"),
         ([{"query": "", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].query must be a non-empty string"),
-        ([{"query": "reset", "limit": 5, "require_results": True}], "route case[0].expected_first_account_id must be a non-empty string"),
-        ([{"query": "reset", "limit": 5, "require_results": True, "expected_first_account_id": ""}], "route case[0].expected_first_account_id must be a non-empty string"),
-        ([{"query": "reset", "corpus_id": 1, "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].corpus_id must be a string"),
-        ([{"query": "reset", "status": 1, "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].status must be a string"),
-        ([{"query": "reset", "limit": "5", "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
-        ([{"query": "reset", "limit": True, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
-        ([{"query": "reset", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": ""}], "route case[0].expected_detail_account_id must be a non-empty string"),
-        ([{"query": "reset", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": "acct-1", "expected_detail_target_id": 1}], "route case[0].expected_detail_target_id must be a non-empty string"),
+        ([{"query": "export", "limit": 5, "require_results": True}], "route case[0].expected_first_account_id must be a non-empty string"),
+        ([{"query": "export", "limit": 5, "require_results": True, "expected_first_account_id": ""}], "route case[0].expected_first_account_id must be a non-empty string"),
+        ([{"query": "export", "corpus_id": 1, "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].corpus_id must be a string"),
+        ([{"query": "export", "status": 1, "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].status must be a string"),
+        ([{"query": "export", "limit": "5", "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
+        ([{"query": "export", "limit": True, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
+        ([{"query": "export", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": ""}], "route case[0].expected_detail_account_id must be a non-empty string"),
+        ([{"query": "export", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": "acct-1", "expected_detail_target_id": 1}], "route case[0].expected_detail_target_id must be a non-empty string"),
     ],
 )
 def test_detail_case_from_route_cases_rejects_bad_shapes(tmp_path, payload, expected_error):
@@ -195,7 +195,7 @@ def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
     command = smoke._detail_command(
         args,
         detail_case={
-            "query": "password reset",
+            "query": "export attribution report",
             "corpus_id": "corp-1",
             "status": "approved",
             "limit": 3,
@@ -209,7 +209,7 @@ def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
     )
 
     assert str(smoke.CONTRACT_SCRIPT) in command
-    assert command[command.index("--query") + 1] == "password reset"
+    assert command[command.index("--query") + 1] == "export attribution report"
     assert command[command.index("--corpus-id") + 1] == "corp-1"
     assert command[command.index("--status") + 1] == "approved"
     assert command[command.index("--limit") + 1] == "3"
@@ -451,7 +451,7 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
             _write_cases(
                 route_cases,
                 [{
-                    "query": "password reset",
+                    "query": "export attribution report",
                     "corpus_id": "corp-1",
                     "status": "approved",
                     "limit": 5,
@@ -519,7 +519,7 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
             _write_cases(
                 route_cases,
                 [{
-                    "query": "password reset",
+                    "query": "export attribution report",
                     "corpus_id": "corp-1",
                     "status": "approved",
                     "limit": 5,
@@ -626,7 +626,7 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
             _write_cases(
                 route_cases,
                 [{
-                    "query": "password reset",
+                    "query": "export attribution report",
                     "corpus_id": "corp-1",
                     "status": "approved",
                     "limit": 5,
