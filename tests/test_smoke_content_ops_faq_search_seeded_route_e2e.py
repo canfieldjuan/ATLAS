@@ -122,6 +122,11 @@ def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
                 "limit": 3,
                 "require_results": True,
                 "expected_first_account_id": "acct-1",
+                "expected_detail_account_id": "acct-1",
+                "expected_detail_target_id": "support-corp-1",
+                "expected_detail_target_mode": "support_account",
+                "expected_detail_title": "FAQ Search Smoke",
+                "expected_detail_status": "approved",
             },
         ],
     )
@@ -158,6 +163,8 @@ def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
         ([{"query": "reset", "status": 1, "limit": 5, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].status must be a string"),
         ([{"query": "reset", "limit": "5", "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
         ([{"query": "reset", "limit": True, "require_results": True, "expected_first_account_id": "acct-1"}], "route case[0].limit must be a positive integer"),
+        ([{"query": "reset", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": ""}], "route case[0].expected_detail_account_id must be a non-empty string"),
+        ([{"query": "reset", "limit": 5, "require_results": True, "expected_first_account_id": "acct-1", "expected_detail_account_id": "acct-1", "expected_detail_target_id": 1}], "route case[0].expected_detail_target_id must be a non-empty string"),
     ],
 )
 def test_detail_case_from_route_cases_rejects_bad_shapes(tmp_path, payload, expected_error):
@@ -419,6 +426,11 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
                     "limit": 5,
                     "require_results": True,
                     "expected_first_account_id": "acct-1",
+                    "expected_detail_account_id": "acct-1",
+                    "expected_detail_target_id": "support-corp-1",
+                    "expected_detail_target_mode": "support_account",
+                    "expected_detail_title": "FAQ Search Smoke",
+                    "expected_detail_status": "approved",
                 }],
             )
             _write_cases(
@@ -482,6 +494,11 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
                     "limit": 5,
                     "require_results": True,
                     "expected_first_account_id": "acct-1",
+                    "expected_detail_account_id": "acct-1",
+                    "expected_detail_target_id": "support-corp-1",
+                    "expected_detail_target_mode": "support_account",
+                    "expected_detail_title": "FAQ Search Smoke",
+                    "expected_detail_status": "approved",
                 }],
             )
             _write_cases(
@@ -584,6 +601,11 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
                     "limit": 5,
                     "require_results": True,
                     "expected_first_account_id": "acct-1",
+                    "expected_detail_account_id": "acct-1",
+                    "expected_detail_target_id": "support-corp-1",
+                    "expected_detail_target_mode": "support_account",
+                    "expected_detail_title": "FAQ Search Smoke",
+                    "expected_detail_status": "approved",
                 }],
             )
             _write_cases(
