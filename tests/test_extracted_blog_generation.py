@@ -451,6 +451,55 @@ def test_small_support_ticket_blog_policy_does_not_apply_with_outcome_evidence()
     assert policy is base
 
 
+def test_small_support_ticket_blog_policy_does_not_apply_to_large_uploads() -> None:
+    base = QualityPolicy(name="custom", thresholds={"pass_score": 0})
+
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 250,
+                "included_ticket_row_count": 75,
+                "has_measured_outcomes": False,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=base,
+    )
+
+    assert policy is base
+
+
+@pytest.mark.parametrize(
+    "data_context",
+    [
+        {
+            "source": "support_ticket_provider",
+            "has_measured_outcomes": False,
+            "support_ticket_resolution_evidence_present": False,
+        },
+        {
+            "source": "support_ticket_provider",
+            "source_row_count": 0,
+            "included_ticket_row_count": "",
+            "has_measured_outcomes": False,
+            "support_ticket_resolution_evidence_present": False,
+        },
+    ],
+)
+def test_small_support_ticket_blog_policy_requires_positive_row_count(
+    data_context: dict[str, object],
+) -> None:
+    base = QualityPolicy(name="custom", thresholds={"pass_score": 0})
+
+    policy = _quality_policy_for_context(
+        {"data_context": data_context},
+        base_policy=base,
+    )
+
+    assert policy is base
+
+
 @pytest.mark.asyncio
 async def test_generate_persists_blog_drafts_via_ports() -> None:
     service, blueprints, blog_posts, llm, skills = _service()
