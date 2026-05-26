@@ -305,6 +305,9 @@
       "target": "extracted_content_pipeline/content_ops_execution.py"
     },
     {
+      "target": "extracted_content_pipeline/content_ops_usage_summary.py"
+    },
+    {
       "target": "extracted_content_pipeline/control_surfaces.py"
     },
     {

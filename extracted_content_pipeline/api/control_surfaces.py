@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any
 
 try:
-    from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+    from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
     from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
@@ -22,6 +22,7 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency-light C
     HTTPException = None
     File = None
     Form = None
+    Query = None
     UploadFile = None
     BaseModel = None
     ConfigDict = None
@@ -38,6 +39,7 @@ from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from ..content_ops_usage_summary import summarize_content_ops_llm_usage
 from ..content_ops_input_provider import (
     ContentOpsInputProvider,
     merge_content_ops_input_package,
@@ -541,6 +543,7 @@ def create_content_ops_control_surface_router(
     llm_provider: LLMProvider | None = None,
     input_provider: InputProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
+    usage_pool_provider: PoolProvider | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -591,6 +594,22 @@ def create_content_ops_control_surface_router(
                 resolved_config.faq_execute_max_source_material_rows
             ),
             reasoning_status=reasoning_status,
+        )
+
+    @router.get("/usage/summary")
+    async def usage_summary(
+        days: int = Query(default=7, ge=1, le=90),
+        asset_type: str | None = Query(default=None, max_length=80),
+        run_id: str | None = Query(default=None, max_length=200),
+        request_id: str | None = Query(default=None, max_length=200),
+    ) -> dict[str, Any]:
+        pool = await _resolve_usage_pool(usage_pool_provider)
+        return await summarize_content_ops_llm_usage(
+            pool,
+            days=days,
+            asset_type=asset_type,
+            run_id=run_id,
+            request_id=request_id,
         )
 
     @router.post("/preview")
@@ -1428,6 +1447,31 @@ async def _resolve_import_pool(provider: PoolProvider | None) -> Any:
         raise HTTPException(
             status_code=503,
             detail="Content Ops ingestion import database is unavailable.",
+        )
+    return pool
+
+
+async def _resolve_usage_pool(pool_provider: PoolProvider | None) -> Any:
+    if pool_provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops usage database is unavailable.",
+        )
+    try:
+        pool = await _resolve_provider(pool_provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops usage pool provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops usage database is unavailable.",
+        ) from exc
+    if pool is None or getattr(pool, "is_initialized", True) is False:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops usage database is unavailable.",
         )
     return pool
 
