@@ -89,7 +89,7 @@ the call through the same tracing path.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
 - bash scripts/check_ascii_python.sh — passed.
 - git diff --check — passed.
-- bash scripts/local_pr_review.sh --current-pr-body-file <body> — pending final rerun before push.
+- bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-1000-body.md — passed.
 
 ## Estimated diff size
 
