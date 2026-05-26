@@ -425,7 +425,7 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
         "phase": "preflight",
         "artifacts": {},
         "seed": {"ok": False, "returncode": None},
-        "route": {"ok": False, "returncode": None},
+        "route": _route_not_run("preflight_failed", ok=False),
         "detail": _detail_not_run(
             "skip_detail_check" if args.skip_detail_check else "preflight_failed",
             ok=bool(args.skip_detail_check),
@@ -482,10 +482,12 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 seed_result=seed_result,
             )
         )
-        route = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": ""}
+        route = _route_not_run("waiting_for_seed", ok=False)
         if seed["ok"]:
             route = _run_command(_route_command(args, case_file=case_file, route_result=route_result))
-        elif not bool(args.skip_detail_check):
+        else:
+            route = _route_not_run("seed_failed", ok=False)
+        if not bool(seed["ok"]) and not bool(args.skip_detail_check):
             detail = _detail_not_run("seed_failed", ok=False)
         if bool(seed["ok"]) and not bool(route["ok"]) and not bool(args.skip_detail_check):
             detail = _detail_not_run("route_failed", ok=False)
@@ -548,6 +550,17 @@ def _detail_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
     return {
         "ok": ok,
         "returncode": None,
+        "skipped": True,
+        "not_run_reason": reason,
+    }
+
+
+def _route_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "returncode": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
         "skipped": True,
         "not_run_reason": reason,
     }

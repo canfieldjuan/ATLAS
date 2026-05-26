@@ -437,6 +437,14 @@ def test_main_writes_preflight_result(tmp_path, capsys):
     assert payload["preflight_errors"] == [
         "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
     ]
+    assert payload["route"] == {
+        "ok": False,
+        "returncode": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "skipped": True,
+        "not_run_reason": "preflight_failed",
+    }
     assert payload["detail"] == {
         "ok": False,
         "returncode": None,
@@ -514,6 +522,63 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     assert str(smoke.CONTRACT_SCRIPT) in calls[2]
 
 
+def test_main_seed_failure_marks_route_not_run_and_still_cleans_up(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run_command(command):
+        calls.append(command)
+        if str(smoke.SEED_SCRIPT) in command:
+            cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+            _write_cases(
+                cleanup_manifest,
+                {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
+            )
+            return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "bad seed"}
+        return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
+
+    async def _fake_cleanup(_database_url, faq_ids):
+        return {
+            "ok": True,
+            "requested_faq_ids": len(faq_ids),
+            "deleted_faq_ids": len(faq_ids),
+            "delete_status": f"DELETE {len(faq_ids)}",
+            "errors": [],
+        }
+
+    monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
+    monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
+    result_path = tmp_path / "result.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--artifact-dir",
+        str(tmp_path / "artifacts"),
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["route"] == {
+        "ok": False,
+        "returncode": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "skipped": True,
+        "not_run_reason": "seed_failed",
+    }
+    assert payload["detail"]["not_run_reason"] == "seed_failed"
+    assert payload["cleanup"]["ok"] is True
+    assert len(calls) == 1
+
+
 def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
     calls = []
 
@@ -575,6 +640,12 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
+    assert payload["route"] == {
+        "ok": False,
+        "returncode": 1,
+        "stdout_tail": "",
+        "stderr_tail": "bad route",
+    }
     assert payload["detail"] == {
         "ok": False,
         "returncode": None,
