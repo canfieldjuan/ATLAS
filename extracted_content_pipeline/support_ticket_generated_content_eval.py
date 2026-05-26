@@ -53,6 +53,38 @@ _PERCENT_CLAIM_RE = re.compile(
     r"(?<![A-Za-z0-9])(?P<first>\d+(?:\.\d+)?)"
     r"(?:\s*[-\u2013\u2014]\s*(?P<second>\d+(?:\.\d+)?))?\s*%"
 )
+_UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
+    re.compile(
+        r"\bsupport\s+tickets(?:\s+for\s+[^.!?\n]{1,80})?\s+drop\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:will|would)\s+(?:reduce|prevent|cut|drop|shrink|eliminate)\b"
+        r"[^.!?\n]{0,120}\b(?:support|ticket|queue|churn|retention|customer)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:prevent|prevents|preventing|reduce|reduces|reducing|cut|cuts|"
+        r"cutting|eliminate|eliminates|shrinks?|drops?)\b[^.!?\n]{0,120}"
+        r"\b(?:support\s+(?:tickets|interactions|volume)|ticket\s+volume|"
+        r"support\s+queue)\s+(?:immediately|fastest)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:prevent|prevents|preventing)\s+(?:future\s+)?support\s+"
+        r"(?:tickets|interactions)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsupport\s+queue\s+will\s+(?:shrink|drop|fall)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+who\s+find\s+answers\b[^.!?\n]{0,160}"
+        r"\b(?:stay\s+longer|churn\s+less)\b",
+        re.IGNORECASE,
+    ),
+)
 
 
 def evaluate_support_ticket_generated_content(
@@ -140,6 +172,11 @@ def evaluate_support_ticket_generated_content(
         errors,
         text=text,
         source_context=context,
+    )
+    _check_unsupported_support_outcome_claims(
+        checks,
+        errors,
+        text=text,
     )
     _check_source_signal_visibility(
         checks,
@@ -407,6 +444,42 @@ def _source_backed_percentages(source_context: Mapping[str, Any]) -> set[int]:
 
 def _whole_percent(value: str | float) -> int:
     return int(round(float(value)))
+
+
+def _check_unsupported_support_outcome_claims(
+    checks: list[JsonDict],
+    errors: list[str],
+    *,
+    text: str,
+) -> None:
+    unsupported = _unsupported_support_outcome_claims(text)
+    checks.append({
+        "name": "support_ticket_outcome_claims_grounded",
+        "passed": not unsupported,
+        "level": "error",
+        "details": {"unsupported_claims": unsupported},
+    })
+    if unsupported:
+        errors.append(
+            "generated text guarantees support-ticket or customer outcomes not "
+            "backed by uploaded-ticket evidence: " + "; ".join(unsupported)
+        )
+
+
+def _unsupported_support_outcome_claims(text: str) -> list[str]:
+    claims: list[str] = []
+    for sentence in _sentences(text):
+        if any(
+            pattern.search(sentence)
+            for pattern in _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS
+        ):
+            claims.append(sentence)
+    return _dedupe(claims)
+
+
+def _sentences(text: str) -> list[str]:
+    chunks = re.split(r"(?<=[.!?])\s+|\n+", text)
+    return [chunk.strip(" -*_`") for chunk in chunks if chunk.strip()]
 
 
 def _check_source_signal_visibility(

@@ -382,6 +382,111 @@ def test_blog_export_allows_percentage_claim_derived_from_source_counts() -> Non
     assert percent_check["details"]["unsupported"] == []
 
 
+def test_landing_export_fails_guaranteed_support_outcome_claims() -> None:
+    result = evaluator.evaluate_support_ticket_generated_content(
+        _landing_export(
+            text_override=(
+                "The uploaded 2 support tickets show account and reporting "
+                "questions. Support tickets for those questions drop after "
+                "publishing. Answering these two questions will reduce incoming "
+                "support tickets immediately."
+            )
+        ),
+        output="landing_page",
+    )
+
+    assert result["ok"] is False
+    assert any(
+        "guarantees support-ticket or customer outcomes" in error
+        for error in result["errors"]
+    )
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Support tickets for those questions drop after publishing.",
+        (
+            "Answering these two questions will reduce incoming support tickets "
+            "immediately."
+        ),
+    ]
+
+
+def test_blog_export_fails_future_support_prevention_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Writing one clear FAQ entry now prevents future support tickets. "
+            "The support queue will shrink after publishing."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Writing one clear FAQ entry now prevents future support tickets.",
+        "The support queue will shrink after publishing.",
+    ]
+
+
+def test_blog_export_fails_customer_retention_outcome_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Customers who find answers in your FAQ stay longer and churn less."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Customers who find answers in your FAQ stay longer and churn less."
+    ]
+
+
+def test_blog_export_allows_cautious_support_outcome_language() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Publishing FAQ answers can help reduce repeat support tickets. "
+            "Track whether ticket volume for that topic drops after publication."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is True
+    assert outcome_check["details"] == {"unsupported_claims": []}
+
+
 def test_blog_export_allows_whole_percent_rounding_from_source_counts() -> None:
     context = _blog_context()
     context["source_row_count"] = 3
