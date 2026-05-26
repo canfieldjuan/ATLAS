@@ -6,6 +6,7 @@ import inspect
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +20,10 @@ class LLMUnavailableError(RuntimeError):
 
 LLMResolver = Callable[..., Any]
 LLMTraceCallable = Callable[..., None]
+_TRACE_CONTEXT: ContextVar[Mapping[str, Any]] = ContextVar(
+    "content_ops_llm_trace_context",
+    default={},
+)
 
 
 def _default_resolver(**kwargs: Any) -> Any:
@@ -44,6 +49,33 @@ def _to_bool(value: Any, default: bool) -> bool:
 def _optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def set_content_ops_llm_trace_context(
+    metadata: Mapping[str, Any] | None,
+) -> Token[Mapping[str, Any]]:
+    """Set request/tenant metadata that all Content Ops LLM traces should carry."""
+
+    return _TRACE_CONTEXT.set(_clean_trace_context(metadata))
+
+
+def reset_content_ops_llm_trace_context(token: Token[Mapping[str, Any]]) -> None:
+    _TRACE_CONTEXT.reset(token)
+
+
+def current_content_ops_llm_trace_context() -> dict[str, Any]:
+    return dict(_TRACE_CONTEXT.get({}))
+
+
+def _clean_trace_context(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        return {}
+    cleaned: dict[str, Any] = {}
+    for key, value in metadata.items():
+        text = _optional_text(value)
+        if text:
+            cleaned[str(key)] = text
+    return cleaned
 
 
 @dataclass(frozen=True)
@@ -185,6 +217,7 @@ class PipelineLLMClient:
             "workload": self.workload or "default",
             "llm_adapter": "pipeline",
         }
+        trace_metadata.update(current_content_ops_llm_trace_context())
         trace_metadata.update(dict(metadata or {}))
         try:
             self.tracer(

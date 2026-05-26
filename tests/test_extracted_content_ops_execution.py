@@ -8,6 +8,9 @@ from typing import Any, Mapping
 import pytest
 
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_llm_client import (
+    current_content_ops_llm_trace_context,
+)
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -134,6 +137,13 @@ class _StrictCampaignService:
         del quality_prompt_proof_term_limit
         del parse_retry_response_excerpt_chars
         self.calls += 1
+        return _Result()
+
+
+class _TraceContextCaptureService(_OpportunityService):
+    async def generate(self, **kwargs: Any) -> _Result:
+        await super().generate(**kwargs)
+        self.calls[-1]["trace_context"] = current_content_ops_llm_trace_context()
         return _Result()
 
 
@@ -360,6 +370,30 @@ async def test_execute_runs_email_and_report_services_with_scope_and_filters() -
     assert report_call["channels"] is None
     assert report_call["opportunity_defaults"] == {}
     assert report_call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_sets_content_ops_llm_trace_context_from_scope() -> None:
+    campaign = _TraceContextCaptureService()
+    scope = TenantScope(account_id="acct-1", user_id="user-1")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "target_mode": "vendor_retention",
+            "limit": 1,
+            "inputs": {"target_account": "Acme", "offer": "Churn audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+        scope=scope,
+    )
+
+    assert result["status"] == "completed"
+    assert campaign.calls[0]["trace_context"] == {
+        "account_id": "acct-1",
+        "user_id": "user-1",
+    }
+    assert current_content_ops_llm_trace_context() == {}
 
 
 @pytest.mark.asyncio

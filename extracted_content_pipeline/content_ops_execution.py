@@ -10,6 +10,10 @@ from types import MappingProxyType
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .campaign_llm_client import (
+    reset_content_ops_llm_trace_context,
+    set_content_ops_llm_trace_context,
+)
 from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_mapping
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
@@ -310,6 +314,9 @@ async def _execute_step(
             ),
             error,
         )
+    trace_context_token = set_content_ops_llm_trace_context(
+        _scope_trace_metadata(scope)
+    )
     try:
         result = await _run_step(
             step,
@@ -329,6 +336,8 @@ async def _execute_step(
             ),
             error,
         )
+    finally:
+        reset_content_ops_llm_trace_context(trace_context_token)
     result_dict = _result_dict(result)
     return (
         ContentOpsStepExecution(
@@ -345,6 +354,17 @@ async def _execute_step(
         ),
         None,
     )
+
+
+def _scope_trace_metadata(scope: TenantScope) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    account_id = str(scope.account_id or "").strip()
+    user_id = str(scope.user_id or "").strip()
+    if account_id:
+        metadata["account_id"] = account_id
+    if user_id:
+        metadata["user_id"] = user_id
+    return metadata
 
 
 async def execute_content_ops_from_mapping(
