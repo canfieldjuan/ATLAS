@@ -9,6 +9,7 @@ from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_mark
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv"
+DEMO_FAQ_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_faq.md"
 
 EXPECTED_LABEL = "synthetic_b2b_saas_demo"
 MIN_ROWS = 36
@@ -44,6 +45,22 @@ def _haystack(rows: list[dict[str, str]]) -> str:
     return "\n".join(" ".join(row.values()) for row in rows).lower()
 
 
+def _generated_demo_faq():
+    rows = _rows()
+    normalized = source_rows_to_campaign_opportunities(
+        rows,
+        target_mode="support_account",
+    )
+    result = build_ticket_faq_markdown(
+        normalized.opportunities,
+        title="Synthetic B2B SaaS Support FAQ Demo",
+        max_items=12,
+        max_evidence_per_item=3,
+        support_contact="https://example.com/support",
+    )
+    return rows, normalized, result
+
+
 def test_saas_demo_corpus_is_labeled_and_domain_clean() -> None:
     rows = _rows()
 
@@ -63,22 +80,10 @@ def test_saas_demo_corpus_is_labeled_and_domain_clean() -> None:
 
 
 def test_saas_demo_corpus_generates_valid_faq_output() -> None:
-    rows = _rows()
-    normalized = source_rows_to_campaign_opportunities(
-        rows,
-        target_mode="support_account",
-    )
+    rows, normalized, result = _generated_demo_faq()
 
     assert normalized.warnings == ()
     assert len(normalized.opportunities) == len(rows)
-
-    result = build_ticket_faq_markdown(
-        normalized.opportunities,
-        title="Synthetic B2B SaaS Support FAQ Demo",
-        max_items=12,
-        max_evidence_per_item=3,
-        support_contact="https://example.com/support",
-    )
 
     assert result.source_count == len(rows)
     assert result.ticket_source_count == len(rows)
@@ -101,3 +106,9 @@ def test_saas_demo_corpus_generates_valid_faq_output() -> None:
         if term in markdown
     ]
     assert leaked_terms == []
+
+
+def test_saas_demo_faq_artifact_matches_real_generator() -> None:
+    _rows, _normalized, result = _generated_demo_faq()
+
+    assert DEMO_FAQ_PATH.read_text(encoding="utf-8") == result.markdown
