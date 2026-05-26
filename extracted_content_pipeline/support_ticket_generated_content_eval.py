@@ -59,6 +59,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bsupport\s+tickets(?:\s+for\s+[^.!?\n]{1,80})?\s+will\s+drop\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\b(?:will|would)\s+(?:reduce|prevent|cut|drop|shrink|eliminate)\b"
         r"[^.!?\n]{0,120}\b(?:support|ticket|queue|churn|retention|customer)",
         re.IGNORECASE,
@@ -76,12 +80,131 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bdeflect\s+future\s+(?:support\s+)?tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bsupport\s+queue\s+will\s+(?:shrink|drop|fall)\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\bcustomers\s+who\s+find\s+answers\b[^.!?\n]{0,160}"
-        r"\b(?:stay\s+longer|churn\s+less)\b",
+        r"\b(?:more\s+likely\s+to\s+stay|stay\s+longer|churn\s+less)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:reduce|reduces|reducing)\s+support\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+find\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfind\s+help\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfind\s+(?:the\s+)?solution\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfind\s+(?:the\s+)?answer\b[^.!?\n]{0,80}\bwithout\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\banswers?\s+a\s+question\s+before\s+a\s+customer\s+opens\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bscale\b[^.!?\n]{0,120}\breducing\s+the\s+number\s+of\s+tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:help\s+)?free\s+the\s+support\s+team\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduces?\s+support\s+load\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduces?\s+the\s+volume\s+of\s+repeat\s+support\s+interactions\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfrees?\s+up\s+support\s+capacity\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcould\s+resolve\b[^.!?\n]{0,80}\bmultiple\s+users\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcould\s+have\s+provided\s+an?\s+immediate\s+answer\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:typically\s+)?takes\s+\d+\s*(?:[-\u2013\u2014]\s*\d+)?\s+minutes?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\btakes\s+effect\s+immediately\b|\breveals?\b[^.!?\n]{0,80}\binstantly\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brequires\s+no\s+support\s+intervention\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:countless\s+hours|(?:hundreds|thousands)\s+of\s+hours)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\byou(?:'|\u2019)ll\s+see\s+fewer\s+(?:support\s+)?tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:free|frees|freeing)\s+up\s+capacity\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\b[^.!?\n]{0,120}\bresolve\b[^.!?\n]{0,120}\bfaster\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfuture\s+customers\b[^.!?\n]{0,120}\bfind\s+answers\s+faster\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bin\s+\d+\s+seconds?\s+instead\s+of\s+waiting\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\btrigger\s+churn\b|\bchurn\s+at\s+renewal\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:improve|improves|improving|increase|increases|increasing)\s+"
+        r"(?:account\s+)?retention\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:account\s+)?retention\b[^.!?\n]{0,80}"
+        r"\b(?:will|would|can|could|should)\s+"
+        r"(?:improve|increase|rise)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bmore\s+likely\s+to\s+(?:stay|upgrade|recommend)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:most|more)\s+efficient\s+way\s+to\s+reduce\s+repeat\s+support\s+tickets\b",
         re.IGNORECASE,
     ),
 )
@@ -469,12 +592,32 @@ def _check_unsupported_support_outcome_claims(
 def _unsupported_support_outcome_claims(text: str) -> list[str]:
     claims: list[str] = []
     for sentence in _sentences(text):
+        if _is_support_outcome_disclaimer(sentence):
+            continue
         if any(
             pattern.search(sentence)
             for pattern in _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS
         ):
             claims.append(sentence)
     return _dedupe(claims)
+
+
+_SUPPORT_OUTCOME_DISCLAIMER_RE = re.compile(
+    r"\b(?:"
+    r"(?:can(?:not|'t)|cannot|do\s+not|don't|does\s+not|doesn't)\s+"
+    r"(?:promise|prove|guarantee|show|demonstrate)|"
+    r"not\s+(?:a\s+)?(?:promise|guarantee|proof)|"
+    r"no\s+evidence\s+that|"
+    r"without\s+(?:claiming|promising|guaranteeing)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _is_support_outcome_disclaimer(sentence: str) -> bool:
+    if not _SUPPORT_OUTCOME_DISCLAIMER_RE.search(sentence):
+        return False
+    return not re.search(r"\b(?:but|however|though|although)\b|;", sentence, re.IGNORECASE)
 
 
 def _sentences(text: str) -> list[str]:
