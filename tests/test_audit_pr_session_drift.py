@@ -207,6 +207,91 @@ def test_cli_fails_when_current_pr_body_slice_phase_mismatches_plan(tmp_path: Pa
     assert "does not match branch plan phase(s) workflow/process" in result.stdout
 
 
+def test_cli_fails_when_required_pr_body_was_not_checked_before_pr_exists(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--require-current-pr-body",
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "current PR body slice phase contract failed" in result.stdout
+    assert "current PR body: not checked" in result.stdout
+    assert "--current-pr-body-file" in result.stdout
+
+
+def test_cli_accepts_current_pr_body_file_before_pr_exists(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text(
+        "Plan: plans/PR-Current.md\n\nSlice phase: Workflow/process\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--require-current-pr-body",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK: no blocking drift detected" in result.stdout
+
+
+def test_cli_rejects_current_pr_body_file_missing_slice_phase(tmp_path: Path) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    _commit(
+        repo,
+        "plans/PR-Current.md",
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text("Plan: plans/PR-Current.md\n", encoding="utf-8")
+
+    result = _run(
+        repo,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--skip-github",
+            "--require-current-pr-body",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 1
+    assert "current PR body slice phase contract failed" in result.stdout
+    assert "current PR body: missing Slice phase" in result.stdout
+
+
 def test_cli_accepts_current_pr_body_matching_plan_slice_phase(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path, branch="claude/current")
     path = "plans/PR-Current.md"

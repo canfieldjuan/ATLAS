@@ -8,6 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 base_ref="origin/main"
 base_ref_set=0
 allow_dirty=0
+current_pr_body_file="${ATLAS_CURRENT_PR_BODY_FILE:-}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -15,13 +16,26 @@ while [ "$#" -gt 0 ]; do
             allow_dirty=1
             shift
             ;;
+        --current-pr-body-file|--pr-body-file)
+            if [ "$#" -lt 2 ]; then
+                echo "local_pr_review.sh: $1 requires a path" >&2
+                exit 2
+            fi
+            current_pr_body_file="$2"
+            shift 2
+            ;;
         --help|-h)
             cat <<'EOF'
-Usage: bash scripts/local_pr_review.sh [--allow-dirty] [base-ref]
+Usage: bash scripts/local_pr_review.sh [--allow-dirty] [--current-pr-body-file PATH] [base-ref]
 
 Run the local mechanical review bundle before opening or updating a PR.
 By default, the worktree must be clean so committed-diff checks cannot
 silently ignore uncommitted edits.
+
+When running before the GitHub PR exists, pass --current-pr-body-file
+with the PR description you plan to use. The drift audit validates that
+body's Slice phase against the branch plan. Installed pre-push hooks can
+use ATLAS_CURRENT_PR_BODY_FILE=PATH for the same check.
 EOF
             exit 0
             ;;
@@ -81,8 +95,21 @@ git diff --name-status "$base"...HEAD || true
 
 run_check "Pre-push audit wrapper" bash scripts/pre_push_audit.sh
 
+if [ -f scripts/audit_extracted_pipeline_ci_enrollment.py ]; then
+    run_check "Extracted pipeline CI enrollment" \
+        python scripts/audit_extracted_pipeline_ci_enrollment.py
+else
+    echo
+    echo "==> Extracted pipeline CI enrollment"
+    echo "    SKIP (scripts/audit_extracted_pipeline_ci_enrollment.py not found)"
+fi
+
 if [ -f scripts/audit_pr_session_drift.py ]; then
-    run_check "Cross-session PR drift" python scripts/audit_pr_session_drift.py "$base_ref"
+    drift_args=(scripts/audit_pr_session_drift.py "$base_ref" --require-current-pr-body)
+    if [ -n "$current_pr_body_file" ]; then
+        drift_args+=(--current-pr-body-file "$current_pr_body_file")
+    fi
+    run_check "Cross-session PR drift" python "${drift_args[@]}"
 else
     echo
     echo "==> Cross-session PR drift"

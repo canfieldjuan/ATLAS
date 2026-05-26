@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterable, Sequence
 
@@ -78,10 +79,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="skip GitHub open-PR overlap checks",
     )
+    parser.add_argument(
+        "--current-pr-body-file",
+        help="validate this local PR body file as the current PR body",
+    )
+    parser.add_argument(
+        "--require-current-pr-body",
+        action="store_true",
+        help="fail when a branch plan has a Slice phase but no current PR body was checked",
+    )
     args = parser.parse_args(argv)
 
     try:
-        report = build_report(args.base_ref, skip_github=args.skip_github)
+        report = build_report(
+            args.base_ref,
+            skip_github=args.skip_github,
+            current_pr_body_file=args.current_pr_body_file,
+            require_current_pr_body=args.require_current_pr_body,
+        )
     except AuditError as exc:
         print(f"DRIFT audit error: {exc}", file=sys.stderr)
         return 2
@@ -99,7 +114,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
+def build_report(
+    base_ref: str,
+    *,
+    skip_github: bool = False,
+    current_pr_body_file: str | None = None,
+    require_current_pr_body: bool = False,
+) -> DriftReport:
     ensure_git_ref(base_ref)
     base = git_stdout(["merge-base", "HEAD", base_ref])
     branch_files = changed_files([base, "HEAD"], triple_dot=True)
@@ -116,8 +137,19 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
     open_pr_overlaps: list[tuple[OpenPullRequest, frozenset[str]]] = []
     open_pr_lane_overlaps: list[tuple[OpenPullRequest, frozenset[str]]] = []
     current_pr_phase_errors: list[str] = []
+    current_pr_body_checked = False
     github_status = "skipped (--skip-github)"
     github_warnings: list[str] = []
+
+    if current_pr_body_file:
+        current_pr_body_checked = True
+        current_pr_phase_errors.extend(
+            current_pr_body_errors(
+                read_text_file(current_pr_body_file),
+                branch_slice_phases=branch_slice_phases,
+                source="current PR body",
+            )
+        )
 
     if not skip_github and os.environ.get("ATLAS_SKIP_PR_SESSION_DRIFT_GITHUB") != "1":
         github_status, prs, loaded_github_warnings = load_open_pull_requests(base_ref)
@@ -127,19 +159,15 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
         for pr in prs:
             is_current_pr = pr.head_ref == current_branch or (pr.head_oid and pr.head_oid == current_oid)
             if is_current_pr:
+                current_pr_body_checked = True
                 current_pr_phase_errors.extend(pr.slice_phase_errors)
-                if branch_slice_phases and not pr.slice_phases:
-                    current_pr_phase_errors.append("current PR body: missing Slice phase")
-                elif (
-                    branch_slice_phases
-                    and pr.slice_phases
-                    and branch_slice_phases.isdisjoint(pr.slice_phases)
-                ):
-                    current_pr_phase_errors.append(
-                        "current PR body Slice phase "
-                        f"{format_values(pr.slice_phases)} does not match branch plan phase(s) "
-                        f"{format_values(branch_slice_phases)}"
+                current_pr_phase_errors.extend(
+                    compare_current_pr_body_slice_phases(
+                        pr.slice_phases,
+                        branch_slice_phases=branch_slice_phases,
+                        source="current PR body",
                     )
+                )
                 continue
             overlap = frozenset(branch_files & pr.files)
             if overlap:
@@ -147,6 +175,12 @@ def build_report(base_ref: str, *, skip_github: bool = False) -> DriftReport:
             lane_overlap = frozenset(branch_ownership_lanes & pr.ownership_lanes)
             if lane_overlap:
                 open_pr_lane_overlaps.append((pr, lane_overlap))
+
+    if require_current_pr_body and branch_slice_phases and not current_pr_body_checked:
+        current_pr_phase_errors.append(
+            "current PR body: not checked; pass --current-pr-body-file before "
+            "opening the PR, or run after the GitHub PR exists"
+        )
 
     return DriftReport(
         branch_files=frozenset(branch_files),
@@ -267,6 +301,36 @@ def extract_slice_phases(text: str, *, source: str) -> tuple[frozenset[str], tup
     return frozenset(phases), tuple(errors)
 
 
+def current_pr_body_errors(
+    text: str,
+    *,
+    branch_slice_phases: frozenset[str],
+    source: str,
+) -> tuple[str, ...]:
+    phases, phase_errors = extract_slice_phases(text, source=source)
+    return tuple(phase_errors) + compare_current_pr_body_slice_phases(
+        phases,
+        branch_slice_phases=branch_slice_phases,
+        source=source,
+    )
+
+
+def compare_current_pr_body_slice_phases(
+    phases: frozenset[str],
+    *,
+    branch_slice_phases: frozenset[str],
+    source: str,
+) -> tuple[str, ...]:
+    if branch_slice_phases and not phases:
+        return (f"{source}: missing Slice phase",)
+    if branch_slice_phases and phases and branch_slice_phases.isdisjoint(phases):
+        return (
+            f"{source} Slice phase {format_values(phases)} "
+            f"does not match branch plan phase(s) {format_values(branch_slice_phases)}",
+        )
+    return ()
+
+
 def normalize_slice_phase(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().rstrip(".").lower())
 
@@ -322,6 +386,13 @@ def load_open_pull_requests(base_ref: str) -> tuple[str, tuple[OpenPullRequest, 
             warnings.append(error)
 
     return f"checked {len(prs)} open PR(s)", tuple(prs), tuple(warnings)
+
+
+def read_text_file(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise AuditError(f"could not read current PR body file {path!r}: {exc}") from exc
 
 
 def load_open_pull_request_files(number: int, row: dict[str, Any]) -> tuple[OpenPullRequest, tuple[str, ...]]:
