@@ -251,6 +251,8 @@ async def test_support_ticket_provider_feeds_landing_page_execute_context() -> N
         "How do I change my login email?",
         "How do we export campaign attribution data before renewal?",
     ]
+    assert context["support_ticket_resolution_evidence_present"] is False
+    assert context["support_ticket_resolution_evidence_count"] == 0
     assert "source_material" not in context
 
 
@@ -303,6 +305,41 @@ async def test_support_ticket_provider_feeds_blog_post_execute_inputs() -> None:
         {"label": "reporting friction", "count": 2},
     ]
     assert data_context["customer_wording_examples"][0]["source_id"] == "ticket-acme-1"
+    assert data_context["support_ticket_resolution_evidence_present"] is False
+    assert data_context["support_ticket_resolution_evidence_count"] == 0
+    assert "support_ticket_resolution_examples" not in data_context
+
+
+@pytest.mark.asyncio
+async def test_support_ticket_provider_threads_resolution_evidence_into_blog_context() -> None:
+    service = _BlogPostCaptureService()
+    router = _execute_router(service=service, output="blog_post")
+
+    await _route(router, "/content-ops/execute", "POST").endpoint({
+        "outputs": ["blog_post"],
+        "require_quality_gates": False,
+        "inputs": {
+            "source_material": [
+                {
+                    "ticket_id": "ticket-1",
+                    "subject": "How do I export reports?",
+                    "description": "Where do I export the dashboard?",
+                    "resolution_text": "Open Reports, choose Export, then select CSV.",
+                }
+            ],
+        },
+    })
+
+    data_context = service.calls[0]["kwargs"]["data_context"]
+    assert data_context["support_ticket_resolution_evidence_present"] is True
+    assert data_context["support_ticket_resolution_evidence_count"] == 1
+    assert data_context["support_ticket_resolution_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "How do I export reports?",
+            "text": "Open Reports, choose Export, then select CSV.",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -374,6 +411,8 @@ async def test_loader_backed_support_ticket_provider_bounds_large_execute_inputs
         assert context["source_row_count"] == 50_000
         assert context["included_ticket_row_count"] == 1_000
         assert context["truncated_ticket_row_count"] == 49_000
+        assert context["support_ticket_resolution_evidence_present"] is False
+        assert context["support_ticket_resolution_evidence_count"] == 0
         assert len(context["customer_wording_examples"]) <= 6
         assert len(context["top_ticket_clusters"]) <= 6
     else:

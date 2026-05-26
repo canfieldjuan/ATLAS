@@ -749,6 +749,15 @@ def _support_ticket_blog_data_context_from_inputs(
         "customer_wording_examples": _mapping_list_input(
             inputs.get("customer_wording_examples")
         ),
+        "support_ticket_resolution_evidence_present": _bool_context(
+            inputs.get("support_ticket_resolution_evidence_present")
+        ),
+        "support_ticket_resolution_evidence_count": _nonnegative_int_context(
+            inputs.get("support_ticket_resolution_evidence_count")
+        ),
+        "support_ticket_resolution_examples": _mapping_list_input(
+            inputs.get("support_ticket_resolution_examples")
+        ),
         "total_reviews_analyzed": included_count,
         "deep_enriched_count": included_count,
     }
@@ -781,6 +790,21 @@ def _positive_int_context(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _nonnegative_int_context(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _bool_context(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
 
 
 def _opportunity_defaults_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:

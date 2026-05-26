@@ -35,6 +35,9 @@ LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS: tuple[str, ...] = (
     "question_like_ticket_count",
     "top_ticket_clusters",
     "customer_wording_examples",
+    "support_ticket_resolution_evidence_present",
+    "support_ticket_resolution_evidence_count",
+    "support_ticket_resolution_examples",
 )
 
 LANDING_PAGE_EXISTING_CONTEXT_KEYS: tuple[str, ...] = (

@@ -27,17 +27,6 @@ parked and note in the plan's Deferred.
 
 ## Parked Items
 
-## 2026-05-25
-
-### Support-ticket FAQ drafts can invent procedural answer steps when tickets lack resolutions
-- File/location: `atlas_brain/skills/digest/blog_post_generation.md`, `extracted_content_pipeline/skills/digest/landing_page_generation.md`, support-ticket generated-content evaluator.
-- Description: Live support-ticket blog validation showed the model drafting concrete FAQ answers such as account-setting navigation, export menu paths, and verification steps even though the synthetic uploaded tickets only contained subjects/descriptions and no support-resolution fields. This slice tightened outcome/time claims inline, but a broader guard should distinguish "tickets include support resolution text" from "tickets only include customer questions" and require placeholder/review-needed answers when resolution evidence is absent.
-- Why it matters: Customer wording can safely drive FAQ questions and prioritization, but final answer steps must come from real support resolutions or product docs. Otherwise the system can create polished but fabricated help-center instructions.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/support-ticket-outcome-live-validation
-- Found during: PR-Support-Ticket-Outcome-Live-Validation live Haiku blog smoke.
-
 ## 2026-05-22
 
 ### Some posts DECLARE excluded sources (Capterra/Trustpilot) in their methodology/corpus list

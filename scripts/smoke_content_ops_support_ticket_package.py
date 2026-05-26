@@ -46,6 +46,7 @@ def build_support_ticket_package_smoke_summary(
     if require_included_rows and included_row_count < 1:
         raise ValueError("No usable support-ticket rows survived packaging.")
     customer_wording_examples = list(inputs.get("customer_wording_examples") or [])
+    resolution_examples = list(inputs.get("support_ticket_resolution_examples") or [])
     faq_questions = list(inputs.get("faq_questions") or [])
     return {
         "path": str(Path(path)),
@@ -64,6 +65,14 @@ def build_support_ticket_package_smoke_summary(
         "top_ticket_clusters": list(inputs.get("top_ticket_clusters") or []),
         "customer_wording_example_count": len(customer_wording_examples),
         "customer_wording_examples": customer_wording_examples,
+        "support_ticket_resolution_evidence_present": bool(
+            inputs.get("support_ticket_resolution_evidence_present")
+        ),
+        "support_ticket_resolution_evidence_count": int(
+            inputs.get("support_ticket_resolution_evidence_count") or 0
+        ),
+        "support_ticket_resolution_example_count": len(resolution_examples),
+        "support_ticket_resolution_examples": resolution_examples,
         "warning_count": len(package.warnings),
         "warnings": list(package.warnings),
         "metadata": dict(package.metadata),

@@ -84,6 +84,9 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
             "email on my account."
         ),
     }
+    assert summary["support_ticket_resolution_evidence_present"] is False
+    assert summary["support_ticket_resolution_evidence_count"] == 0
+    assert summary["support_ticket_resolution_examples"] == []
     assert summary["warnings"] == [
         {
             "code": "ticket_row_missing_text",
@@ -115,6 +118,33 @@ def test_support_ticket_package_smoke_keeps_date_window_for_dated_rows(
     assert summary["source_period"] == "Last 45 days of support tickets"
     assert summary["has_window_filter"] is True
     assert summary["faq_window_days"] == 45
+
+
+def test_support_ticket_package_smoke_reports_resolution_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I export reports?",
+            "description": "Where do I export the dashboard?",
+            "resolution_text": "Open Reports, choose Export, then select CSV.",
+        },
+    ])
+
+    summary = build_support_ticket_package_smoke_summary(path)
+
+    assert summary["support_ticket_resolution_evidence_present"] is True
+    assert summary["support_ticket_resolution_evidence_count"] == 1
+    assert summary["support_ticket_resolution_example_count"] == 1
+    assert summary["support_ticket_resolution_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "How do I export reports?",
+            "text": "Open Reports, choose Export, then select CSV.",
+        }
+    ]
 
 
 def test_support_ticket_package_smoke_reports_cluster_rollup_and_truncation(
