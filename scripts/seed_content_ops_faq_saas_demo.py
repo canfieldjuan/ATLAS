@@ -84,6 +84,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--status", default=DEFAULT_STATUS)
     parser.add_argument("--query", default=DEFAULT_QUERY)
     parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument(
+        "--cleanup-faq-id",
+        default=None,
+        help="Delete one seeded FAQ id for this account instead of seeding.",
+    )
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -95,6 +100,10 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL")
     if not str(args.account_id or "").strip():
         errors.append("ATLAS_FAQ_SEARCH_ACCOUNT_ID, ATLAS_ACCOUNT_ID, or --account-id is required")
+    if getattr(args, "cleanup_faq_id", None) is not None:
+        if not str(args.cleanup_faq_id or "").strip():
+            errors.append("--cleanup-faq-id must be a non-empty FAQ id")
+        return errors
     if not str(args.corpus_id or "").strip():
         errors.append("--corpus-id is required")
     if not str(args.target_id or "").strip():
@@ -214,6 +223,7 @@ async def seed_saas_demo_faq(
     if not matched_seeded_faq:
         errors.append("Seeded SaaS FAQ id was not present in verification search results")
     return {
+        "phase": "seed",
         "ok": not errors,
         "errors": errors,
         "account_id": account_id,
@@ -237,9 +247,57 @@ async def seed_saas_demo_faq(
     }
 
 
+def _deleted_row_count(delete_status: Any) -> int | None:
+    parts = str(delete_status or "").split()
+    if len(parts) != 2 or parts[0] != "DELETE":
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+async def cleanup_saas_demo_faq(
+    pool: Any,
+    *,
+    account_id: str,
+    faq_id: str,
+) -> dict[str, Any]:
+    delete_status = await pool.execute(
+        """
+        DELETE FROM ticket_faq_markdown
+         WHERE id = $1::uuid
+           AND account_id = $2
+        """,
+        faq_id,
+        account_id,
+    )
+    deleted_faq_ids = _deleted_row_count(delete_status)
+    error = None
+    if deleted_faq_ids is None:
+        error = f"cleanup delete status is not parseable: {delete_status!r}"
+    elif deleted_faq_ids != 1:
+        error = f"cleanup deleted {deleted_faq_ids} FAQ rows but expected 1"
+    return {
+        "phase": "cleanup",
+        "ok": error is None,
+        "account_id": account_id,
+        "faq_id": faq_id,
+        "deleted_faq_ids": deleted_faq_ids,
+        "delete_status": delete_status,
+        "error": error,
+    }
+
+
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     pool = await _create_pool(str(args.database_url))
     try:
+        if args.cleanup_faq_id is not None:
+            return await cleanup_saas_demo_faq(
+                pool,
+                account_id=str(args.account_id),
+                faq_id=str(args.cleanup_faq_id),
+            )
         return await seed_saas_demo_faq(
             pool,
             account_id=str(args.account_id),
@@ -264,6 +322,14 @@ def _write_result(path: Path | None, payload: dict[str, Any]) -> None:
 def _print_result(payload: dict[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if payload.get("phase") == "cleanup":
+        print(
+            "SaaS FAQ demo cleanup: "
+            f"ok={payload['ok']} faq_id={payload['faq_id']} "
+            f"deleted_faq_ids={payload['deleted_faq_ids']} "
+            f"error={payload['error'] or ''}"
+        )
         return
     print(
         "SaaS FAQ demo seed: "
