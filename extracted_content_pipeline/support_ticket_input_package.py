@@ -185,7 +185,7 @@ def build_support_ticket_input_package(
     measured_outcome_examples = _measured_outcome_examples(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
-        "reduce repeat support tickets",
+        "repeat support questions",
         "help center answers from support tickets",
     ))
     resolved_objections = tuple(objections or (

@@ -237,7 +237,7 @@ async def test_support_ticket_provider_feeds_landing_page_execute_context() -> N
     assert context["target_keyword"] == "support ticket FAQ report"
     assert context["secondary_keywords"] == [
         "customer support FAQ",
-        "reduce repeat support tickets",
+        "repeat support questions",
         "help center answers from support tickets",
     ]
     assert context["search_intent"] == (
