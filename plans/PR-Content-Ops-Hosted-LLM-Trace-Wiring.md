@@ -27,6 +27,8 @@ Slice phase: Production hardening
    production factory return.
 4. Add a hosted-factory test proving Content Ops metadata reaches the
    content_ops.llm.complete trace instead of being dropped.
+5. Preserve the existing event-loop safety for synchronous hosted providers by
+   offloading sync LLM calls before tracing normalizes the response.
 
 ### Files touched
 
@@ -34,7 +36,9 @@ Slice phase: Production hardening
 |---|---|
 | `plans/PR-Content-Ops-Hosted-LLM-Trace-Wiring.md` | Plan doc for closing the hosted LLM trace wiring gap. |
 | `atlas_brain/_content_ops_infrastructure.py` | Return PipelineLLMClient from the hosted Content Ops LLM factory. |
+| `extracted_content_pipeline/campaign_llm_client.py` | Offload synchronous provider calls inside the shared tracing client. |
 | `tests/test_atlas_content_ops_infrastructure.py` | Update factory tests and pin metadata-preserving trace behavior. |
+| `tests/test_extracted_campaign_llm_client.py` | Pin sync-provider offload behavior for the shared tracing client. |
 
 ## Mechanism
 
@@ -42,9 +46,10 @@ build_content_ops_llm_client() keeps the current preflight behavior by asking
 the host resolver whether an LLM is routable. When the resolver returns a
 provider, the factory returns PipelineLLMClient configured with the same
 resolver and the same OpenRouter-oriented routing kwargs already used today.
-`PipelineLLMClient.complete()` then resolves the provider per call and emits the
-existing content_ops.llm.complete trace with the metadata supplied by the
-generation services.
+PipelineLLMClient.complete() then resolves the provider per call, offloads
+synchronous chat/generate methods with asyncio.to_thread, awaits native async
+providers directly, and emits the existing content_ops.llm.complete trace with
+the metadata supplied by the generation services.
 
 For the active-registry fallback, the factory still checks get_active() first.
 If a provider exists, it returns a PipelineLLMClient with a small resolver that
@@ -60,6 +65,9 @@ the call through the same tracing path.
   OpenRouter workload and auto_activate_ollama=False routing shape.
 - _HostLLMClient remains in place because its direct adapter behavior is still
   tested, but it is no longer the production Content Ops factory path.
+- The sync-provider offload lives in PipelineLLMClient instead of the hosted
+  factory so the shared tracing path stays non-blocking for every sync
+  provider, not just this factory.
 - This does not add UI, budget gates, or cache controls.
 
 ## Deferred
@@ -74,10 +82,14 @@ the call through the same tracing path.
 
 ## Verification
 
-- python -m pytest tests/test_atlas_content_ops_infrastructure.py tests/test_extracted_campaign_llm_client.py -q — 27 passed.
-- python -m compileall -q atlas_brain/_content_ops_infrastructure.py tests/test_atlas_content_ops_infrastructure.py — passed.
+- python -m pytest tests/test_atlas_content_ops_infrastructure.py tests/test_extracted_campaign_llm_client.py -q — 28 passed, 1 warning.
+- python -m compileall -q atlas_brain/_content_ops_infrastructure.py extracted_content_pipeline/campaign_llm_client.py tests/test_atlas_content_ops_infrastructure.py tests/test_extracted_campaign_llm_client.py — passed.
+- bash scripts/validate_extracted_content_pipeline.sh — passed.
+- python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
+- python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
+- bash scripts/check_ascii_python.sh — passed.
 - git diff --check — passed.
-- bash scripts/local_pr_review.sh --current-pr-body-file <body> — passed.
+- bash scripts/local_pr_review.sh --current-pr-body-file <body> — pending final rerun before push.
 
 ## Estimated diff size
 
@@ -85,7 +97,8 @@ the call through the same tracing path.
 |---|---:|
 | Plan doc | ~80 |
 | Hosted LLM factory | ~35 |
-| Tests | ~70 |
-| **Total** | **~185** |
+| Shared LLM client | ~25 |
+| Tests | ~110 |
+| **Total** | **~250** |
 
 Under the 400 LOC soft cap.
