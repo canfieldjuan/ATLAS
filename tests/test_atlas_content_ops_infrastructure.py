@@ -38,6 +38,7 @@ chain.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,6 +51,8 @@ from atlas_brain._content_ops_infrastructure import (
     build_content_ops_skill_store,
 )
 from extracted_content_pipeline.campaign_ports import LLMMessage
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_host_skill_store_returns_existing_skill_content() -> None:
@@ -72,6 +75,26 @@ def test_blog_generation_prompt_requires_early_entity_clarity() -> None:
     assert "repeat it naturally in the first answer paragraph" in prompt
     assert "At least two H2 sections must start with a 40-120 word answer paragraph" in prompt
     assert "opening 40-60 words" in prompt
+
+
+def test_blog_generation_prompt_trims_small_support_ticket_uploads() -> None:
+    """Host and extracted prompts keep the small-upload support-ticket
+    article shape compact."""
+
+    prompt_paths = (
+        _ROOT / "atlas_brain/skills/digest/blog_post_generation.md",
+        _ROOT / "extracted_content_pipeline/skills/digest/blog_post_generation.md",
+    )
+
+    for path in prompt_paths:
+        prompt = path.read_text(encoding="utf-8")
+        assert "data_context.source_row_count" in prompt
+        assert "data_context.included_ticket_row_count" in prompt
+        assert "25 or fewer" in prompt
+        assert "700-1100 words" in prompt
+        assert "at most 5 H2 sections" in prompt
+        assert "no repeated sections that explain the same cluster" in prompt
+        assert "Draft FAQ shells to verify" in prompt
 
 
 def test_host_skill_store_falls_back_to_packaged_skills() -> None:
