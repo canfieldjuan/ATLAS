@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -17,12 +18,19 @@ class LLMUnavailableError(RuntimeError):
 
 
 LLMResolver = Callable[..., Any]
+LLMTraceCallable = Callable[..., None]
 
 
 def _default_resolver(**kwargs: Any) -> Any:
     from .pipelines.llm import get_pipeline_llm
 
     return get_pipeline_llm(**kwargs)
+
+
+def _default_trace_llm_call(*args: Any, **kwargs: Any) -> None:
+    from .pipelines.llm import trace_llm_call
+
+    trace_llm_call(*args, **kwargs)
 
 
 def _to_bool(value: Any, default: bool) -> bool:
@@ -103,6 +111,7 @@ class PipelineLLMClient:
     auto_activate_ollama: bool = True
     openrouter_model: str | None = None
     resolver: LLMResolver = _default_resolver
+    tracer: LLMTraceCallable | None = _default_trace_llm_call
 
     async def complete(
         self,
@@ -122,15 +131,88 @@ class PipelineLLMClient:
         if llm is None:
             raise LLMUnavailableError("No LLM route configured for campaign generation")
 
-        result = self._call_llm(
-            llm,
-            list(messages),
-            max_tokens=max_tokens,
-            temperature=temperature,
+        started = time.monotonic()
+        try:
+            result = self._call_llm(
+                llm,
+                list(messages),
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            response = _to_response(result, llm=llm)
+        except Exception as exc:
+            self._trace_call(
+                llm=llm,
+                response=None,
+                duration_ms=_duration_ms(started),
+                metadata=metadata,
+                status="failed",
+                error_message=str(exc)[:500],
+                error_type=type(exc).__name__,
+            )
+            raise
+        self._trace_call(
+            llm=llm,
+            response=response,
+            duration_ms=_duration_ms(started),
+            metadata=metadata,
         )
-        if inspect.isawaitable(result):
-            result = await result
-        return _to_response(result, llm=llm)
+        return response
+
+    def _trace_call(
+        self,
+        *,
+        llm: Any,
+        response: LLMResponse | None,
+        duration_ms: float,
+        metadata: Mapping[str, Any] | None,
+        status: str = "completed",
+        error_message: str | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        if self.tracer is None:
+            return
+        usage = dict(getattr(response, "usage", {}) or {}) if response else {}
+        trace_meta = _trace_meta_from_response(response)
+        cached_tokens, cache_write_tokens, billable_input_tokens = _trace_cache_metrics(
+            usage,
+            trace_meta,
+        )
+        trace_metadata = {
+            "product": "content_ops",
+            "workload": self.workload or "default",
+            "llm_adapter": "pipeline",
+        }
+        trace_metadata.update(dict(metadata or {}))
+        try:
+            self.tracer(
+                "content_ops.llm.complete",
+                input_tokens=_usage_int(usage.get("input_tokens")),
+                output_tokens=_usage_int(usage.get("output_tokens")),
+                cached_tokens=cached_tokens,
+                cache_write_tokens=cache_write_tokens,
+                billable_input_tokens=billable_input_tokens,
+                model=_trace_model_name(llm=llm, response=response),
+                provider=_provider_name(llm),
+                duration_ms=duration_ms,
+                status=status,
+                metadata=trace_metadata,
+                api_endpoint=_optional_trace_text(trace_meta.get("api_endpoint")),
+                provider_request_id=_optional_trace_text(
+                    trace_meta.get("provider_request_id"),
+                ),
+                ttft_ms=_optional_trace_float(trace_meta.get("ttft_ms")),
+                inference_time_ms=_optional_trace_float(
+                    trace_meta.get("inference_time_ms"),
+                ),
+                queue_time_ms=_optional_trace_float(trace_meta.get("queue_time_ms")),
+                error_message=error_message,
+                error_type=error_type,
+            )
+        except Exception:
+            return
 
     def _call_llm(
         self,
@@ -228,6 +310,73 @@ def _to_response(result: Any, *, llm: Any) -> LLMResponse:
         usage=dict(usage),
         raw=result,
     )
+
+
+def _duration_ms(started: float) -> float:
+    return max((time.monotonic() - started) * 1000, 0.0)
+
+
+def _usage_int(value: Any) -> int:
+    try:
+        return max(int(value or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _trace_cache_metrics(
+    usage: Mapping[str, Any],
+    trace_meta: Mapping[str, Any],
+) -> tuple[int, int, int | None]:
+    cached_tokens = _usage_int(
+        usage.get("cached_tokens")
+        or usage.get("cache_read_tokens")
+        or usage.get("cache_read_input_tokens")
+        or trace_meta.get("cached_tokens")
+        or trace_meta.get("cache_read_tokens")
+    )
+    cache_write_tokens = _usage_int(
+        usage.get("cache_write_tokens")
+        or usage.get("cache_creation_tokens")
+        or usage.get("cache_creation_input_tokens")
+        or trace_meta.get("cache_write_tokens")
+        or trace_meta.get("cache_creation_tokens")
+    )
+    raw_billable = usage.get("billable_input_tokens")
+    if raw_billable is None:
+        raw_billable = trace_meta.get("billable_input_tokens")
+    billable_input_tokens = _usage_int(raw_billable) if raw_billable is not None else None
+    return cached_tokens, cache_write_tokens, billable_input_tokens
+
+
+def _trace_meta_from_response(response: LLMResponse | None) -> Mapping[str, Any]:
+    raw = getattr(response, "raw", None) if response is not None else None
+    if isinstance(raw, Mapping) and isinstance(raw.get("_trace_meta"), Mapping):
+        return raw["_trace_meta"]
+    return {}
+
+
+def _optional_trace_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _optional_trace_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_name(llm: Any) -> str:
+    return str(getattr(llm, "name", "") or llm.__class__.__name__)
+
+
+def _trace_model_name(*, llm: Any, response: LLMResponse | None) -> str:
+    if response is not None and response.model:
+        return str(response.model)
+    return _model_name(llm) or ""
 
 
 def _model_name(llm: Any) -> str | None:
