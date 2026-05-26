@@ -1099,6 +1099,7 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
                 "skipped_ticket_row_count": 0,
                 "truncated_ticket_row_count": 0,
                 "question_like_ticket_count": 2,
+                "has_dated_window": True,
                 "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
                 "customer_wording_examples": [{
                     "source_id": "ticket-1",
@@ -1112,6 +1113,13 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
                     "source_id": "ticket-1",
                     "source_title": "Export dashboard",
                     "text": "Open Reports, choose Export, then select CSV.",
+                }],
+                "has_measured_outcomes": True,
+                "measured_outcome_count": 1,
+                "measured_outcome_examples": [{
+                    "source_id": "ticket-1",
+                    "source_title": "Export dashboard",
+                    "text": "Repeat reporting tickets fell from 9 to 4.",
                 }],
                 "support_ticket_source_summary": {"unsafe": "should not pass through"},
             },
@@ -1140,6 +1148,7 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
     assert context.get("skipped_ticket_row_count") == 0
     assert context.get("truncated_ticket_row_count") == 0
     assert context.get("question_like_ticket_count") == 2
+    assert context.get("has_dated_window") is True
     assert context.get("top_ticket_clusters") == [
         {"label": "reporting friction", "count": 2}
     ]
@@ -1155,6 +1164,13 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
         "source_id": "ticket-1",
         "source_title": "Export dashboard",
         "text": "Open Reports, choose Export, then select CSV.",
+    }]
+    assert context.get("has_measured_outcomes") is True
+    assert context.get("measured_outcome_count") == 1
+    assert context.get("measured_outcome_examples") == [{
+        "source_id": "ticket-1",
+        "source_title": "Export dashboard",
+        "text": "Repeat reporting tickets fell from 9 to 4.",
     }]
     assert "support_ticket_source_summary" not in context
 

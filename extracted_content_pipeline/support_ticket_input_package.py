@@ -86,6 +86,21 @@ _RESOLUTION_TEXT_KEYS = (
     "fix_summary",
     "workaround",
 )
+_MEASURED_OUTCOME_KEYS = (
+    "measured_outcome",
+    "measured_outcomes",
+    "outcome_value",
+    "impact_value",
+    "result_value",
+    "deflection_rate",
+    "ticket_reduction",
+    "time_saved",
+    "hours_saved",
+    "resolution_rate",
+    "outcome_metric",
+    "impact_metric",
+    "result_metric",
+)
 _DATE_KEYS = ("created_at", "submitted_at", "updated_at", "date")
 _URL_KEYS = ("source_url", "ticket_url", "url", "link")
 _COMPANY_KEYS = ("company_name", "account_name", "company", "account")
@@ -166,6 +181,8 @@ def build_support_ticket_input_package(
     customer_wording_examples = _customer_wording_examples(normalized_rows)
     resolution_evidence_count = _resolution_evidence_count(normalized_rows)
     resolution_evidence_examples = _resolution_evidence_examples(normalized_rows)
+    measured_outcome_count = _measured_outcome_count(normalized_rows)
+    measured_outcome_examples = _measured_outcome_examples(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
         "reduce repeat support tickets",
@@ -198,6 +215,7 @@ def build_support_ticket_input_package(
         "objections": list(resolved_objections),
         "faq_questions": faq_questions,
         "source_period": source_period,
+        "has_dated_window": has_valid_date_window,
         "source_row_count": len(raw_rows),
         "included_ticket_row_count": len(normalized_rows),
         "skipped_ticket_row_count": skipped_row_count,
@@ -208,6 +226,9 @@ def build_support_ticket_input_package(
         "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
         "support_ticket_resolution_evidence_count": resolution_evidence_count,
         "support_ticket_resolution_examples": resolution_evidence_examples,
+        "has_measured_outcomes": measured_outcome_count > 0,
+        "measured_outcome_count": measured_outcome_count,
+        "measured_outcome_examples": measured_outcome_examples,
         "internal_links": list(internal_links or (DEFAULT_FAQ_REPORT_CTA_URL,)),
         "cta_label": cta_label,
         "cta_url": cta_url,
@@ -228,8 +249,11 @@ def build_support_ticket_input_package(
             "skipped_row_count": skipped_row_count,
             "truncated_row_count": truncated_row_count,
             "source_period": source_period,
+            "has_dated_window": has_valid_date_window,
             "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
             "support_ticket_resolution_evidence_count": resolution_evidence_count,
+            "has_measured_outcomes": measured_outcome_count > 0,
+            "measured_outcome_count": measured_outcome_count,
         },
         warnings=tuple(warnings),
     )
@@ -259,6 +283,9 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)
     if resolution_text:
         normalized["resolution_text"] = _clip_text(resolution_text, max_chars=500)
+    measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
+    if measured_outcome:
+        normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
@@ -433,6 +460,43 @@ def _resolution_evidence_examples(
         if len(examples) >= limit:
             return examples
     return examples
+
+
+def _measured_outcome_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    return sum(1 for row in rows if _evidence_text(row.get("measured_outcome")))
+
+
+def _measured_outcome_examples(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 4,
+    max_text_chars: int = 240,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        measured_outcome = _evidence_text(row.get("measured_outcome"))
+        if not measured_outcome:
+            continue
+        example = {
+            "source_id": _clean(row.get("source_id")),
+            "text": _clip_text(measured_outcome, max_chars=max_text_chars),
+        }
+        source_title = _clean(row.get("source_title"))
+        source_id = _clean(row.get("source_id"))
+        if source_title and source_title != source_id:
+            example["source_title"] = source_title
+        examples.append(example)
+        if len(examples) >= limit:
+            return examples
+    return examples
+
+
+def _evidence_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return ""
+    if value in (None, "", [], {}):
+        return ""
+    return _WHITESPACE_RE.sub(" ", str(value)).strip()
 
 
 def _clip_text(value: str, *, max_chars: int) -> str:

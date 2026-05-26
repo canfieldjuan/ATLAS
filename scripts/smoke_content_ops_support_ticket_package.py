@@ -47,6 +47,7 @@ def build_support_ticket_package_smoke_summary(
         raise ValueError("No usable support-ticket rows survived packaging.")
     customer_wording_examples = list(inputs.get("customer_wording_examples") or [])
     resolution_examples = list(inputs.get("support_ticket_resolution_examples") or [])
+    measured_outcome_examples = list(inputs.get("measured_outcome_examples") or [])
     faq_questions = list(inputs.get("faq_questions") or [])
     return {
         "path": str(Path(path)),
@@ -57,6 +58,7 @@ def build_support_ticket_package_smoke_summary(
         "skipped_ticket_row_count": int(inputs.get("skipped_ticket_row_count") or 0),
         "truncated_ticket_row_count": int(inputs.get("truncated_ticket_row_count") or 0),
         "source_period": inputs.get("source_period"),
+        "has_dated_window": bool(inputs.get("has_dated_window")),
         "has_window_filter": "faq_window_days" in inputs,
         "faq_window_days": inputs.get("faq_window_days"),
         "faq_question_count": len(faq_questions),
@@ -73,6 +75,10 @@ def build_support_ticket_package_smoke_summary(
         ),
         "support_ticket_resolution_example_count": len(resolution_examples),
         "support_ticket_resolution_examples": resolution_examples,
+        "has_measured_outcomes": bool(inputs.get("has_measured_outcomes")),
+        "measured_outcome_count": int(inputs.get("measured_outcome_count") or 0),
+        "measured_outcome_example_count": len(measured_outcome_examples),
+        "measured_outcome_examples": measured_outcome_examples,
         "warning_count": len(package.warnings),
         "warnings": list(package.warnings),
         "metadata": dict(package.metadata),

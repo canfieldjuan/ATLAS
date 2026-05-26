@@ -1153,6 +1153,10 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert payload["data_context"]["question_like_ticket_count"] == 2
     assert payload["data_context"]["review_period"] == "uploaded tickets"
     assert payload["data_context"]["source_period"] == "Uploaded support tickets"
+    assert payload["data_context"]["has_dated_window"] is False
+    assert payload["data_context"]["has_measured_outcomes"] is False
+    assert payload["data_context"]["measured_outcome_count"] == 0
+    assert payload["data_context"]["measured_outcome_examples"] == []
     assert "report_date" not in payload["data_context"]
     assert payload["data_context"]["included_ticket_row_count"] == 2
     assert payload["data_context"]["total_reviews_analyzed"] == 2
@@ -1218,8 +1222,41 @@ def test_support_ticket_blog_blueprint_payload_uses_date_window_when_dates_valid
 
     assert payload["data_context"]["review_period"] == "last 90 days"
     assert payload["data_context"]["source_period"] == "Last 90 days of support tickets"
+    assert payload["data_context"]["has_dated_window"] is True
     assert payload["data_context"]["report_date"] == "2026-05-23"
     assert payload["sections"][2]["key_stats"]["source_window_days"] == 90
+
+
+def test_support_ticket_blog_blueprint_payload_threads_measured_outcomes() -> None:
+    payload = smoke._support_ticket_blog_blueprint_payload([
+        {
+            "Ticket ID": "ticket-1",
+            "Subject": "Do FAQs reduce repeat tickets?",
+            "Description": "Can we tell if the billing FAQ helped?",
+            "Measured Outcome": "Repeat billing tickets fell from 18 to 11.",
+        },
+        {
+            "Ticket ID": "ticket-2",
+            "Subject": "Zero deflections",
+            "Description": "What happened after the trial FAQ update?",
+            "Deflection Rate": 0,
+        },
+    ])
+
+    assert payload["data_context"]["has_measured_outcomes"] is True
+    assert payload["data_context"]["measured_outcome_count"] == 2
+    assert payload["data_context"]["measured_outcome_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "Do FAQs reduce repeat tickets?",
+            "text": "Repeat billing tickets fell from 18 to 11.",
+        },
+        {
+            "source_id": "ticket-2",
+            "source_title": "Zero deflections",
+            "text": "0",
+        },
+    ]
 
 
 @pytest.mark.asyncio
