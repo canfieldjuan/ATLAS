@@ -10,6 +10,8 @@ from extracted_content_pipeline.campaign_llm_client import (
     PipelineLLMClient,
     PipelineLLMClientConfig,
     create_pipeline_llm_client,
+    reset_content_ops_llm_trace_context,
+    set_content_ops_llm_trace_context,
 )
 from extracted_content_pipeline.campaign_ports import LLMMessage
 from extracted_content_pipeline.settings import build_settings
@@ -273,6 +275,59 @@ async def test_pipeline_llm_client_traces_successful_provider_usage_without_io_c
 
 
 @pytest.mark.asyncio
+async def test_pipeline_llm_client_merges_scoped_trace_metadata_and_resets():
+    trace_calls = []
+    client = PipelineLLMClient(
+        workload="draft",
+        resolver=lambda **_: _TraceLLM(),
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+    )
+
+    token = set_content_ops_llm_trace_context({
+        "account_id": "acct-1",
+        "user_id": "user-1",
+        "asset_type": "scope-default",
+    })
+    try:
+        await client.complete(
+            [LLMMessage(role="user", content="customer ticket text")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={
+                "account_id": "spoofed-account",
+                "user_id": "spoofed-user",
+                "asset_type": "blog_post",
+                "request_id": "req_123",
+            },
+        )
+    finally:
+        reset_content_ops_llm_trace_context(token)
+
+    await client.complete(
+        [LLMMessage(role="user", content="customer ticket text")],
+        max_tokens=200,
+        temperature=0.2,
+        metadata={"asset_type": "landing_page"},
+    )
+
+    assert trace_calls[0][1]["metadata"] == {
+        "product": "content_ops",
+        "workload": "draft",
+        "llm_adapter": "pipeline",
+        "account_id": "acct-1",
+        "user_id": "user-1",
+        "asset_type": "blog_post",
+        "request_id": "req_123",
+    }
+    assert trace_calls[1][1]["metadata"] == {
+        "product": "content_ops",
+        "workload": "draft",
+        "llm_adapter": "pipeline",
+        "asset_type": "landing_page",
+    }
+
+
+@pytest.mark.asyncio
 async def test_pipeline_llm_client_traces_failed_provider_calls_without_io_capture():
     trace_calls = []
     client = PipelineLLMClient(
@@ -280,13 +335,17 @@ async def test_pipeline_llm_client_traces_failed_provider_calls_without_io_captu
         tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
     )
 
-    with pytest.raises(RuntimeError, match="provider timeout"):
-        await client.complete(
-            [LLMMessage(role="user", content="customer ticket text")],
-            max_tokens=200,
-            temperature=0.2,
-            metadata={"asset_type": "landing_page"},
-        )
+    token = set_content_ops_llm_trace_context({"account_id": "acct-failed"})
+    try:
+        with pytest.raises(RuntimeError, match="provider timeout"):
+            await client.complete(
+                [LLMMessage(role="user", content="customer ticket text")],
+                max_tokens=200,
+                temperature=0.2,
+                metadata={"asset_type": "landing_page"},
+            )
+    finally:
+        reset_content_ops_llm_trace_context(token)
 
     assert len(trace_calls) == 1
     span_name, trace = trace_calls[0]
@@ -299,6 +358,7 @@ async def test_pipeline_llm_client_traces_failed_provider_calls_without_io_captu
     assert trace["error_type"] == "RuntimeError"
     assert trace["error_message"] == "provider timeout"
     assert trace["metadata"]["product"] == "content_ops"
+    assert trace["metadata"]["account_id"] == "acct-failed"
     assert trace["metadata"]["asset_type"] == "landing_page"
     assert "input_data" not in trace
     assert "output_data" not in trace
