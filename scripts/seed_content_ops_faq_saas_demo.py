@@ -273,19 +273,19 @@ async def cleanup_saas_demo_faq(
         account_id,
     )
     deleted_faq_ids = _deleted_row_count(delete_status)
-    error = None
+    errors: list[str] = []
     if deleted_faq_ids is None:
-        error = f"cleanup delete status is not parseable: {delete_status!r}"
+        errors.append(f"cleanup delete status is not parseable: {delete_status!r}")
     elif deleted_faq_ids != 1:
-        error = f"cleanup deleted {deleted_faq_ids} FAQ rows but expected 1"
+        errors.append(f"cleanup deleted {deleted_faq_ids} FAQ rows but expected 1")
     return {
         "phase": "cleanup",
-        "ok": error is None,
+        "ok": not errors,
+        "errors": errors,
         "account_id": account_id,
         "faq_id": faq_id,
         "deleted_faq_ids": deleted_faq_ids,
         "delete_status": delete_status,
-        "error": error,
     }
 
 
@@ -328,7 +328,7 @@ def _print_result(payload: dict[str, Any], *, as_json: bool) -> None:
             "SaaS FAQ demo cleanup: "
             f"ok={payload['ok']} faq_id={payload['faq_id']} "
             f"deleted_faq_ids={payload['deleted_faq_ids']} "
-            f"error={payload['error'] or ''}"
+            f"errors={len(payload['errors'])}"
         )
         return
     print(
