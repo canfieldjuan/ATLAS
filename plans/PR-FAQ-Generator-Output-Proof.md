@@ -79,6 +79,9 @@ the CLI fails or when required proof predicates are missing.
   not persistence/retrieval.
 - The generated Markdown artifact is local to the run artifact directory, not
   checked into the repo.
+- No custom source-file override. The proof has fixture-specific predicates, so
+  accepting arbitrary CSV input would create false negatives instead of proving
+  this artifact contract.
 
 ## Deferred
 
@@ -92,7 +95,7 @@ the CLI fails or when required proof predicates are missing.
 
 ## Verification
 
-- `python -m pytest tests/test_smoke_content_ops_faq_output_proof.py -q` - 3 passed.
+- `python -m pytest tests/test_smoke_content_ops_faq_output_proof.py -q` - 4 passed.
 - `python scripts/smoke_content_ops_faq_output_proof.py --artifact-dir /tmp/atlas-faq-output-proof` - passed.
 - `python scripts/audit_extracted_pipeline_ci_enrollment.py` - passed, 118 matching tests enrolled.
 - `python -m py_compile scripts/smoke_content_ops_faq_output_proof.py tests/test_smoke_content_ops_faq_output_proof.py` - passed.
@@ -103,12 +106,12 @@ the CLI fails or when required proof predicates are missing.
 
 | Area | Estimated LOC |
 |---|---:|
-| Proof smoke runner | ~352 |
-| Fixture tests | ~116 |
-| Hardening note | ~12 |
+| Proof smoke runner | ~346 |
+| Fixture tests | ~130 |
+| Hardening note | ~11 |
 | CI enrollment | ~3 |
-| Plan doc | ~115 |
-| **Total** | **~598** |
+| Plan doc | ~118 |
+| **Total** | **~608** |
 
 The estimate is above the usual target because the slice intentionally ships the
 proof runner, negative checker fixtures, CI enrollment, and plan together. The

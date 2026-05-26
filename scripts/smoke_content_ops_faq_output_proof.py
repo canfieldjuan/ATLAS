@@ -82,11 +82,6 @@ def main(argv: list[str] | None = None) -> int:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact-dir", type=Path, required=True)
-    parser.add_argument(
-        "--source",
-        type=Path,
-        help="Optional CSV source. Defaults to a generated representative fixture.",
-    )
     parser.add_argument("--support-contact", default=DEFAULT_SUPPORT_CONTACT)
     return parser.parse_args(argv)
 
@@ -94,9 +89,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def run_output_proof(args: argparse.Namespace) -> dict[str, Any]:
     artifact_dir = Path(args.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    source_path = Path(args.source) if args.source else artifact_dir / "faq_source_rows.csv"
-    if args.source is None:
-        _write_source_csv(source_path, DEFAULT_ROWS)
+    source_path = artifact_dir / "faq_source_rows.csv"
+    _write_source_csv(source_path, DEFAULT_ROWS)
 
     markdown_path = artifact_dir / "faq_output.md"
     result_path = artifact_dir / "faq_result.json"

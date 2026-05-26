@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "smoke_content_ops_faq_output_proof.py"
@@ -51,6 +53,18 @@ def test_faq_output_proof_writes_artifacts_and_passes(tmp_path: Path) -> None:
     assert "ticket-export-1" in markdown
     assert "search-export-1" in markdown
     assert "support@example.com" in markdown
+
+
+def test_faq_output_proof_rejects_custom_source_override(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit) as exc:
+        MODULE.main([
+            "--artifact-dir",
+            str(tmp_path / "artifacts"),
+            "--source",
+            str(tmp_path / "custom.csv"),
+        ])
+
+    assert exc.value.code == 2
 
 
 def test_faq_output_proof_reports_missing_result_json() -> None:
