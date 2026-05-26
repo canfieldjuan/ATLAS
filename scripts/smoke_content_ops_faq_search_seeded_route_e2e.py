@@ -211,16 +211,25 @@ def _detail_case_from_route_cases(path: Path) -> tuple[dict[str, Any] | None, li
         limit = item.get("limit", 5)
         if type(limit) is not int or limit <= 0:
             return None, [f"route case[{index}].limit must be a positive integer"]
+        expected_detail: dict[str, str] = {}
+        for key in (
+            "expected_detail_account_id",
+            "expected_detail_target_id",
+            "expected_detail_target_mode",
+            "expected_detail_title",
+            "expected_detail_status",
+        ):
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                return None, [f"route case[{index}].{key} must be a non-empty string"]
+            expected_detail[key] = value.strip()
         return {
             "query": query.strip(),
             "corpus_id": corpus_id.strip(),
             "status": status.strip(),
             "limit": limit,
             "expected_detail_account_id": account_id.strip(),
-            "expected_detail_target_id": f"support-{corpus_id.strip()}",
-            "expected_detail_target_mode": "support_account",
-            "expected_detail_title": "FAQ Search Smoke",
-            "expected_detail_status": "approved",
+            **expected_detail,
         }, []
     return None, ["route case file must include a require_results case for detail check"]
 

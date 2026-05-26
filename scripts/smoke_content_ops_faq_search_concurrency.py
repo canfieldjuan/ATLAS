@@ -27,6 +27,11 @@ from extracted_content_pipeline.ticket_faq_search import (  # noqa: E402
     TicketFAQSearchDocument,
 )
 
+SEEDED_FAQ_TARGET_MODE = "support_account"
+SEEDED_FAQ_TITLE = "FAQ Search Smoke"
+SEEDED_FAQ_MARKDOWN = "# FAQ Search Smoke"
+SEEDED_FAQ_STATUS = "approved"
+
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - host dependency
@@ -152,6 +157,10 @@ def _build_cases(
     return tuple(cases)
 
 
+def _seeded_faq_target_id(case: SearchCase) -> str:
+    return f"support-{case.corpus_id}"
+
+
 def _route_case_payload(
     cases: Sequence[SearchCase],
     *,
@@ -164,7 +173,7 @@ def _route_case_payload(
         row = {
             "query": case.query,
             "corpus_id": case.corpus_id,
-            "status": "approved",
+            "status": SEEDED_FAQ_STATUS,
             "limit": limit,
             "require_results": case.expected_hit,
             "expected_count": expected_hit_count if case.expected_hit else 0,
@@ -175,6 +184,11 @@ def _route_case_payload(
                     "expected_first_account_id": case.account_id,
                     "expected_first_corpus_id": case.corpus_id,
                     "expected_first_faq_id": case.faq_id,
+                    "expected_detail_account_id": case.account_id,
+                    "expected_detail_target_id": _seeded_faq_target_id(case),
+                    "expected_detail_target_mode": SEEDED_FAQ_TARGET_MODE,
+                    "expected_detail_title": SEEDED_FAQ_TITLE,
+                    "expected_detail_status": SEEDED_FAQ_STATUS,
                 }
             )
         payload.append(row)
@@ -265,15 +279,18 @@ async def _seed(pool: Any, repo: PostgresTicketFAQSearchRepository, cases: Seque
                 warnings, metadata, status
             )
             VALUES (
-                $1::uuid, $2, $3, 'support_account', 'FAQ Search Smoke',
-                '# FAQ Search Smoke', '[]'::jsonb, $4, $4,
-                '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, 'approved'
+                $1::uuid, $2, $3, $4, $5, $6, '[]'::jsonb, $7, $7,
+                '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $8
             )
             """,
             case.faq_id,
             case.account_id,
-            f"support-{case.corpus_id}",
+            _seeded_faq_target_id(case),
+            SEEDED_FAQ_TARGET_MODE,
+            SEEDED_FAQ_TITLE,
+            SEEDED_FAQ_MARKDOWN,
             documents_per_corpus,
+            SEEDED_FAQ_STATUS,
         )
         await repo.replace_documents(
             _documents_for_case(case, documents_per_corpus=documents_per_corpus)

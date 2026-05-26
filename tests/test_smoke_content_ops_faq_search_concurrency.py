@@ -79,6 +79,11 @@ def test_route_case_payload_carries_seeded_hit_and_miss_expectations() -> None:
     assert payload[0]["expected_first_account_id"] == "acct-1"
     assert payload[0]["expected_first_corpus_id"] == "corpus-1"
     assert payload[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload[0]["expected_detail_account_id"] == "acct-1"
+    assert payload[0]["expected_detail_target_id"] == "support-corpus-1"
+    assert payload[0]["expected_detail_target_mode"] == "support_account"
+    assert payload[0]["expected_detail_title"] == "FAQ Search Smoke"
+    assert payload[0]["expected_detail_status"] == "approved"
     assert payload[1] == {
         "query": "escrow shortage",
         "corpus_id": "corpus-1",
