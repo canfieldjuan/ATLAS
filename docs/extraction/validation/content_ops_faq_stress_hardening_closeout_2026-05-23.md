@@ -45,6 +45,14 @@ for lifecycle failure artifact visibility. A cross-process/global admission
 controller remains a future deployment-topology decision if production runs
 multiple workers against one database pool.
 
+## Ledger Reconciliation
+
+PR-FAQ-Scale-Hardening-Ledger-Closeout removes the stale root `HARDENING.md`
+FAQSCALE-1 entry because the synchronous hosted path is now bounded by the
+source-material row caps and execute concurrency gate documented above. Large
+hosted FAQ uploads above those caps remain a future background-job product
+slice, not a supported synchronous request path.
+
 ## Regression Coverage
 
 Relevant existing tests:
