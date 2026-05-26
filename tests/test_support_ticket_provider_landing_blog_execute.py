@@ -445,6 +445,18 @@ async def test_loader_backed_support_ticket_provider_bounds_large_execute_inputs
         assert service.calls[0]["kwargs"]["topic"] == (
             "Support-ticket questions customers keep asking"
         )
+        data_context = service.calls[0]["kwargs"]["data_context"]
+        assert data_context["source"] == "support_ticket_provider"
+        assert data_context["source_row_count"] == 50_000
+        assert data_context["included_ticket_row_count"] == 1_000
+        assert data_context["question_like_ticket_count"] == 1_000
+        assert data_context["has_dated_window"] is False
+        assert data_context["support_ticket_resolution_evidence_present"] is False
+        assert data_context["support_ticket_resolution_evidence_count"] == 0
+        assert data_context["has_measured_outcomes"] is False
+        assert data_context["measured_outcome_count"] == 0
+        assert len(data_context["customer_wording_examples"]) <= 6
+        assert len(data_context["top_ticket_clusters"]) <= 6
 
 
 @pytest.mark.asyncio

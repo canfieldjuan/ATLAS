@@ -165,6 +165,22 @@ def _valid_support_ticket_content(extra: str = "") -> str:
     return body
 
 
+def _large_support_ticket_descriptive_content(word_count: int = 1_000) -> str:
+    sentence = (
+        "Customers asked support about account email changes, billing exports, "
+        "and report access in the uploaded ticket rows. "
+    )
+    words = sentence.split()
+    repeated = (words * ((word_count // len(words)) + 1))[:word_count]
+    midpoint = max(1, len(repeated) // 2)
+    return (
+        "## What do the uploaded support tickets show?\n\n"
+        + " ".join(repeated[:midpoint])
+        + "\n\n## Which repeated questions need clearer answers?\n\n"
+        + " ".join(repeated[midpoint:])
+    )
+
+
 def _valid_blog_json(**overrides):
     payload = {
         "title": "HubSpot Pricing Pressure Is Changing Buyer Shortlists",
@@ -780,6 +796,47 @@ async def test_generate_saves_descriptive_support_ticket_blog_without_outcome_or
     draft = blog_posts.saved[0]["drafts"][0]
     assert not draft.data_context.get("support_ticket_resolution_evidence_present")
     assert not draft.data_context.get("has_measured_outcomes")
+
+
+@pytest.mark.asyncio
+async def test_generate_large_support_ticket_context_keeps_default_word_floor() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(
+                content=_large_support_ticket_descriptive_content(),
+            )
+        ],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_repair_attempts=0,
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+        data_context={
+            "source": "support_ticket_provider",
+            "source_row_count": 250,
+            "included_ticket_row_count": 75,
+            "question_like_ticket_count": 75,
+            "has_measured_outcomes": False,
+            "support_ticket_resolution_evidence_present": False,
+            "support_ticket_resolution_evidence_count": 0,
+        },
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert any(
+        blocker.startswith("content_too_short:")
+        and blocker.endswith("_words_need_1500")
+        for blocker in result.errors[0]["blockers"]
+    )
+    assert blog_posts.saved == []
 
 
 @pytest.mark.asyncio
