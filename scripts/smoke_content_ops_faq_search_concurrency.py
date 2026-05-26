@@ -31,6 +31,8 @@ SEEDED_FAQ_TARGET_MODE = "support_account"
 SEEDED_FAQ_TITLE = "FAQ Search Smoke"
 SEEDED_FAQ_MARKDOWN = "# FAQ Search Smoke"
 SEEDED_FAQ_STATUS = "approved"
+SEEDED_HIT_QUERY = "export attribution report"
+SEEDED_MISS_QUERY = "saml domain verification"
 
 try:
     from dotenv import load_dotenv
@@ -141,7 +143,7 @@ def _build_cases(
                     account_id=resolved_account_id,
                     corpus_id=corpus_id,
                     faq_id=faq_id,
-                    query="password reset",
+                    query=SEEDED_HIT_QUERY,
                     expected_hit=True,
                 )
             )
@@ -150,7 +152,7 @@ def _build_cases(
                     account_id=resolved_account_id,
                     corpus_id=corpus_id,
                     faq_id=faq_id,
-                    query="escrow shortage",
+                    query=SEEDED_MISS_QUERY,
                     expected_hit=False,
                 )
             )
@@ -246,12 +248,12 @@ def _documents_for_case(case: SearchCase, *, documents_per_corpus: int) -> tuple
                 target_mode="support_account",
                 status="approved",
                 rank=rank,
-                topic="password reset",
-                question=f"How do I reset my password for corpus {case.corpus_id}?",
-                answer_summary="Use the password reset email and contact support if it expires.",
+                topic="reporting export",
+                question=f"How do I export attribution reports for corpus {case.corpus_id}?",
+                answer_summary="Use the reporting export workflow and contact support if the CSV is missing.",
                 source_ids=(f"{case.corpus_id}-ticket-{rank}",),
                 ticket_count=rank,
-                search_text="password reset email login support account",
+                search_text="export attribution report dashboard csv support account",
             )
         )
     return tuple(documents)
