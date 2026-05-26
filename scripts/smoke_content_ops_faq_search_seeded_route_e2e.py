@@ -19,6 +19,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SEED_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_concurrency.py"
 ROUTE_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
+CONTRACT_SCRIPT = ROOT / "scripts/check_content_ops_faq_search_route_contract.py"
 
 try:
     from dotenv import load_dotenv
@@ -66,9 +67,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-error-rate", type=float, default=0.0)
     parser.add_argument("--max-p95-ms", type=float)
     parser.add_argument("--max-single-request-ms", type=float)
+    parser.add_argument("--detail-route", default=os.getenv("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--keep-data", action="store_true")
+    parser.add_argument("--skip-detail-check", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -172,6 +175,78 @@ def _route_command(args: argparse.Namespace, *, case_file: Path, route_result: P
         value = getattr(args, arg_name)
         if value is not None:
             command.extend([flag, str(value)])
+    return command
+
+
+def _detail_case_from_route_cases(path: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return None, [f"route case file could not be read: {exc}"]
+    except json.JSONDecodeError as exc:
+        return None, [f"route case file must contain JSON: {exc.msg}"]
+    if not isinstance(data, list) or not data:
+        return None, ["route case file must contain a non-empty JSON list"]
+
+    for index, item in enumerate(data):
+        if not isinstance(item, Mapping):
+            return None, [f"route case[{index}] must be an object"]
+        require_results = item.get("require_results")
+        if "require_results" in item and type(require_results) is not bool:
+            return None, [f"route case[{index}].require_results must be a boolean"]
+        if require_results is not True:
+            continue
+        query = item.get("query")
+        if not isinstance(query, str) or not query.strip():
+            return None, [f"route case[{index}].query must be a non-empty string"]
+        corpus_id = item.get("corpus_id", "")
+        if not isinstance(corpus_id, str):
+            return None, [f"route case[{index}].corpus_id must be a string"]
+        status = item.get("status", "")
+        if not isinstance(status, str):
+            return None, [f"route case[{index}].status must be a string"]
+        limit = item.get("limit", 5)
+        if type(limit) is not int or limit <= 0:
+            return None, [f"route case[{index}].limit must be a positive integer"]
+        return {
+            "query": query.strip(),
+            "corpus_id": corpus_id.strip(),
+            "status": status.strip(),
+            "limit": limit,
+        }, []
+    return None, ["route case file must include a require_results case for detail check"]
+
+
+def _detail_command(
+    args: argparse.Namespace,
+    *,
+    detail_case: Mapping[str, Any],
+    detail_result: Path,
+) -> list[str]:
+    command = [
+        sys.executable,
+        str(CONTRACT_SCRIPT),
+        "--base-url",
+        str(args.base_url),
+        "--token",
+        str(args.token),
+        "--route",
+        str(args.route),
+        "--query",
+        str(detail_case["query"]),
+        "--limit",
+        str(detail_case["limit"]),
+        "--require-results",
+        "--require-detail",
+        "--output-result",
+        str(detail_result),
+    ]
+    if str(detail_case.get("corpus_id") or "").strip():
+        command.extend(["--corpus-id", str(detail_case["corpus_id"])])
+    if str(detail_case.get("status") or "").strip():
+        command.extend(["--status", str(detail_case["status"])])
+    if str(args.detail_route or "").strip():
+        command.extend(["--detail-route", str(args.detail_route)])
     return command
 
 
@@ -284,7 +359,8 @@ def _print_summary(summary: Mapping[str, Any], *, as_json: bool) -> None:
     print(
         "FAQ search seeded route e2e: "
         f"ok={summary['ok']} seed={summary['seed']['ok']} "
-        f"route={summary['route']['ok']} cleanup={summary['cleanup']['ok']}"
+        f"route={summary['route']['ok']} detail={summary['detail']['ok']} "
+        f"cleanup={summary['cleanup']['ok']}"
     )
 
 
@@ -295,6 +371,11 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
         "artifacts": {},
         "seed": {"ok": False, "returncode": None},
         "route": {"ok": False, "returncode": None},
+        "detail": {
+            "ok": bool(args.skip_detail_check),
+            "returncode": None,
+            "skipped": bool(args.skip_detail_check),
+        },
         "cleanup": {
             "ok": False,
             "requested_faq_ids": 0,
@@ -325,7 +406,13 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     cleanup_manifest = artifact_dir / "cleanup-manifest.json"
     seed_result = artifact_dir / "seed-result.json"
     route_result = artifact_dir / "route-result.json"
+    detail_result = artifact_dir / "detail-result.json"
 
+    detail = {
+        "ok": bool(args.skip_detail_check),
+        "returncode": None,
+        "skipped": bool(args.skip_detail_check),
+    }
     cleanup = {
         "ok": True,
         "requested_faq_ids": 0,
@@ -345,6 +432,21 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         route = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": ""}
         if seed["ok"]:
             route = _run_command(_route_command(args, case_file=case_file, route_result=route_result))
+        if bool(seed["ok"] and route["ok"]) and not bool(args.skip_detail_check):
+            detail_case, detail_errors = _detail_case_from_route_cases(case_file)
+            if detail_errors:
+                detail = {
+                    "ok": False,
+                    "returncode": None,
+                    "stdout_tail": "",
+                    "stderr_tail": "; ".join(detail_errors),
+                    "skipped": False,
+                }
+            elif detail_case is not None:
+                detail = _run_command(
+                    _detail_command(args, detail_case=detail_case, detail_result=detail_result)
+                )
+                detail["skipped"] = False
         faq_ids, manifest_errors = (
             _faq_ids_from_cleanup_manifest(cleanup_manifest)
             if cleanup_manifest.exists()
@@ -360,7 +462,7 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             }
         elif not bool(args.keep_data):
             cleanup = await _cleanup_seeded_faqs(str(args.database_url), faq_ids)
-        ok = bool(seed["ok"] and route["ok"] and cleanup["ok"])
+        ok = bool(seed["ok"] and route["ok"] and detail["ok"] and cleanup["ok"])
         summary = {
             "ok": ok,
             "phase": "complete",
@@ -370,9 +472,11 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 "cleanup_manifest": str(cleanup_manifest),
                 "seed_result": str(seed_result),
                 "route_result": str(route_result),
+                "detail_result": str(detail_result),
             },
             "seed": seed,
             "route": route,
+            "detail": detail,
             "cleanup": cleanup,
             "preflight_errors": [],
             "keep_data": bool(args.keep_data),

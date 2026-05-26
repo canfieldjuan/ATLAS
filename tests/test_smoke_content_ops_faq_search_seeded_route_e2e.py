@@ -34,9 +34,11 @@ def _args(**overrides):
         "max_error_rate": 0.0,
         "max_p95_ms": None,
         "max_single_request_ms": None,
+        "detail_route": "",
         "artifact_dir": None,
         "output_result": None,
         "keep_data": False,
+        "skip_detail_check": False,
         "json": False,
     }
     values.update(overrides)
@@ -105,6 +107,96 @@ def test_route_command_uses_seeded_case_file_and_budgets(tmp_path):
     assert command[command.index("--case-file") + 1] == str(case_file)
     assert command[command.index("--max-p95-ms") + 1] == "50"
     assert command[command.index("--max-single-request-ms") + 1] == "80"
+
+
+def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
+    case_file = tmp_path / "route-cases.json"
+    _write_cases(
+        case_file,
+        [
+            {"query": "escrow shortage", "limit": 5, "require_results": False},
+            {
+                "query": "password reset",
+                "corpus_id": "corp-1",
+                "status": "approved",
+                "limit": 3,
+                "require_results": True,
+            },
+        ],
+    )
+
+    detail_case, errors = smoke._detail_case_from_route_cases(case_file)
+
+    assert errors == []
+    assert detail_case == {
+        "query": "password reset",
+        "corpus_id": "corp-1",
+        "status": "approved",
+        "limit": 3,
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        ("{bad json", "route case file must contain JSON: Expecting property name enclosed in double quotes"),
+        ({}, "route case file must contain a non-empty JSON list"),
+        ([], "route case file must contain a non-empty JSON list"),
+        ([[]], "route case[0] must be an object"),
+        ([{"query": "reset", "limit": 5, "require_results": "yes"}], "route case[0].require_results must be a boolean"),
+        ([{"query": "escrow", "limit": 5, "require_results": False}], "route case file must include a require_results case for detail check"),
+        ([{"query": "", "limit": 5, "require_results": True}], "route case[0].query must be a non-empty string"),
+        ([{"query": "reset", "corpus_id": 1, "limit": 5, "require_results": True}], "route case[0].corpus_id must be a string"),
+        ([{"query": "reset", "status": 1, "limit": 5, "require_results": True}], "route case[0].status must be a string"),
+        ([{"query": "reset", "limit": "5", "require_results": True}], "route case[0].limit must be a positive integer"),
+        ([{"query": "reset", "limit": True, "require_results": True}], "route case[0].limit must be a positive integer"),
+    ],
+)
+def test_detail_case_from_route_cases_rejects_bad_shapes(tmp_path, payload, expected_error):
+    case_file = tmp_path / "route-cases.json"
+    if isinstance(payload, str):
+        case_file.write_text(payload, encoding="utf-8")
+    else:
+        _write_cases(case_file, payload)
+
+    detail_case, errors = smoke._detail_case_from_route_cases(case_file)
+
+    assert detail_case is None
+    assert expected_error in errors
+
+
+def test_detail_case_from_route_cases_reports_unreadable_file():
+    detail_case, errors = smoke._detail_case_from_route_cases(Path("/tmp/atlas-missing-route-cases.json"))
+
+    assert detail_case is None
+    assert errors
+    assert errors[0].startswith("route case file could not be read:")
+
+
+def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
+    args = _args(detail_route="/api/v2/faqs/{faq_id}/full")
+    detail_result = tmp_path / "detail.json"
+
+    command = smoke._detail_command(
+        args,
+        detail_case={
+            "query": "password reset",
+            "corpus_id": "corp-1",
+            "status": "approved",
+            "limit": 3,
+        },
+        detail_result=detail_result,
+    )
+
+    assert str(smoke.CONTRACT_SCRIPT) in command
+    assert command[command.index("--query") + 1] == "password reset"
+    assert command[command.index("--corpus-id") + 1] == "corp-1"
+    assert command[command.index("--status") + 1] == "approved"
+    assert command[command.index("--limit") + 1] == "3"
+    assert "--require-results" in command
+    assert "--require-detail" in command
+    assert command[command.index("--detail-route") + 1] == "/api/v2/faqs/{faq_id}/full"
+    assert command[command.index("--output-result") + 1] == str(detail_result)
 
 
 def test_faq_ids_from_cleanup_manifest_deduplicates_expected_ids(tmp_path):
@@ -299,6 +391,17 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+            route_cases = Path(command[command.index("--route-case-file-output") + 1])
+            _write_cases(
+                route_cases,
+                [{
+                    "query": "password reset",
+                    "corpus_id": "corp-1",
+                    "status": "approved",
+                    "limit": 5,
+                    "require_results": True,
+                }],
+            )
             _write_cases(
                 cleanup_manifest,
                 {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
@@ -336,8 +439,11 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 0
     assert payload["ok"] is True
+    assert payload["detail"]["ok"] is True
+    assert payload["artifacts"]["detail_result"].endswith("detail-result.json")
     assert payload["cleanup"]["deleted_faq_ids"] == 1
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert str(smoke.CONTRACT_SCRIPT) in calls[2]
 
 
 def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
@@ -347,6 +453,17 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+            route_cases = Path(command[command.index("--route-case-file-output") + 1])
+            _write_cases(
+                route_cases,
+                [{
+                    "query": "password reset",
+                    "corpus_id": "corp-1",
+                    "status": "approved",
+                    "limit": 5,
+                    "require_results": True,
+                }],
+            )
             _write_cases(
                 cleanup_manifest,
                 {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
@@ -381,12 +498,73 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
 
     assert code == 1
     assert len(calls) == 2
+    assert all(str(smoke.CONTRACT_SCRIPT) not in command for command in calls)
+
+
+def test_main_can_skip_detail_check_for_liveness_runs(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run_command(command):
+        calls.append(command)
+        if str(smoke.SEED_SCRIPT) in command:
+            cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+            _write_cases(
+                cleanup_manifest,
+                {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
+            )
+        return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
+
+    async def _fake_cleanup(_database_url, faq_ids):
+        return {
+            "ok": True,
+            "requested_faq_ids": len(faq_ids),
+            "deleted_faq_ids": len(faq_ids),
+            "delete_status": f"DELETE {len(faq_ids)}",
+            "error": None,
+        }
+
+    monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
+    monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
+    result_path = tmp_path / "result.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--artifact-dir",
+        str(tmp_path / "artifacts"),
+        "--output-result",
+        str(result_path),
+        "--skip-detail-check",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 0
+    assert payload["detail"] == {"ok": True, "returncode": None, "skipped": True}
+    assert len(calls) == 2
+    assert all(str(smoke.CONTRACT_SCRIPT) not in command for command in calls)
 
 
 def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
     def _fake_run_command(command):
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+            route_cases = Path(command[command.index("--route-case-file-output") + 1])
+            _write_cases(
+                route_cases,
+                [{
+                    "query": "password reset",
+                    "corpus_id": "corp-1",
+                    "status": "approved",
+                    "limit": 5,
+                    "require_results": True,
+                }],
+            )
             _write_cases(
                 cleanup_manifest,
                 {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
