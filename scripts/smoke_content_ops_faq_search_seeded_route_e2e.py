@@ -199,6 +199,9 @@ def _detail_case_from_route_cases(path: Path) -> tuple[dict[str, Any] | None, li
         query = item.get("query")
         if not isinstance(query, str) or not query.strip():
             return None, [f"route case[{index}].query must be a non-empty string"]
+        account_id = item.get("expected_first_account_id")
+        if not isinstance(account_id, str) or not account_id.strip():
+            return None, [f"route case[{index}].expected_first_account_id must be a non-empty string"]
         corpus_id = item.get("corpus_id", "")
         if not isinstance(corpus_id, str):
             return None, [f"route case[{index}].corpus_id must be a string"]
@@ -213,6 +216,11 @@ def _detail_case_from_route_cases(path: Path) -> tuple[dict[str, Any] | None, li
             "corpus_id": corpus_id.strip(),
             "status": status.strip(),
             "limit": limit,
+            "expected_detail_account_id": account_id.strip(),
+            "expected_detail_target_id": f"support-{corpus_id.strip()}",
+            "expected_detail_target_mode": "support_account",
+            "expected_detail_title": "FAQ Search Smoke",
+            "expected_detail_status": "approved",
         }, []
     return None, ["route case file must include a require_results case for detail check"]
 
@@ -247,6 +255,16 @@ def _detail_command(
         command.extend(["--status", str(detail_case["status"])])
     if str(args.detail_route or "").strip():
         command.extend(["--detail-route", str(args.detail_route)])
+    for key, flag in (
+        ("expected_detail_account_id", "--expected-detail-account-id"),
+        ("expected_detail_target_id", "--expected-detail-target-id"),
+        ("expected_detail_target_mode", "--expected-detail-target-mode"),
+        ("expected_detail_title", "--expected-detail-title"),
+        ("expected_detail_status", "--expected-detail-status"),
+    ):
+        value = str(detail_case.get(key) or "").strip()
+        if value:
+            command.extend([flag, value])
     return command
 
 

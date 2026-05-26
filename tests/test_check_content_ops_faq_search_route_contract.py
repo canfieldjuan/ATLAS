@@ -206,6 +206,20 @@ def test_validate_detail_accepts_full_generated_faq_payload():
     ) == []
 
 
+def test_validate_detail_accepts_expected_seed_fields():
+    assert _MODULE._validate_detail(
+        _valid_detail_payload(),
+        faq_id="11111111-1111-1111-1111-111111111111",
+        expected={
+            "account_id": "acct-1",
+            "target_id": "support-account-1",
+            "target_mode": "support_account",
+            "title": "Support FAQ",
+            "status": "approved",
+        },
+    ) == []
+
+
 @pytest.mark.parametrize(
     ("patch", "expected"),
     [
@@ -223,6 +237,30 @@ def test_validate_detail_rejects_contract_drift(patch, expected):
     assert expected in _MODULE._validate_detail(
         payload,
         faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "message"),
+    [
+        ({"account_id": "acct-2"}, "detail.account_id expected 'acct-2' but got 'acct-1'"),
+        (
+            {"target_id": "support-account-2"},
+            "detail.target_id expected 'support-account-2' but got 'support-account-1'",
+        ),
+        (
+            {"target_mode": "org"},
+            "detail.target_mode expected 'org' but got 'support_account'",
+        ),
+        ({"title": "Seed FAQ"}, "detail.title expected 'Seed FAQ' but got 'Support FAQ'"),
+        ({"status": "draft"}, "detail.status expected 'draft' but got 'approved'"),
+    ],
+)
+def test_validate_detail_rejects_expected_seed_field_mismatches(expected, message):
+    assert message in _MODULE._validate_detail(
+        _valid_detail_payload(),
+        faq_id="11111111-1111-1111-1111-111111111111",
+        expected=expected,
     )
 
 
@@ -600,6 +638,21 @@ def test_main_rejects_detail_latency_budget_without_detail_check(monkeypatch, ca
     assert "--max-detail-ms requires --require-detail" in capsys.readouterr().out
 
 
+def test_main_rejects_expected_detail_without_detail_check(monkeypatch, capsys):
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--expected-detail-account-id",
+        "acct-1",
+    )
+
+    assert _MODULE.main() == 2
+    assert "expected detail checks require --require-detail" in capsys.readouterr().out
+
+
 def test_main_rejects_non_finite_latency_budget(monkeypatch, capsys):
     monkeypatch.setattr(
         _MODULE,
@@ -657,6 +710,29 @@ def test_main_reports_detail_contract_failure(monkeypatch, capsys):
 
     assert _MODULE.main() == 1
     assert "detail.items must be a list" in capsys.readouterr().out
+
+
+def test_main_reports_expected_detail_mismatch(monkeypatch, capsys):
+    def _fake_fetch_json(url, *, token, timeout):
+        if url.endswith("/11111111-1111-1111-1111-111111111111"):
+            return _valid_detail_payload()
+        return _valid_payload()
+
+    monkeypatch.setattr(_MODULE, "_fetch_json", _fake_fetch_json)
+    _set_argv(
+        monkeypatch,
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-results",
+        "--require-detail",
+        "--expected-detail-account-id",
+        "acct-2",
+    )
+
+    assert _MODULE.main() == 1
+    assert "detail.account_id expected 'acct-2' but got 'acct-1'" in capsys.readouterr().out
 
 
 def test_main_writes_success_result_without_token(monkeypatch, tmp_path):

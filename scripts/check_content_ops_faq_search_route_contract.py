@@ -59,6 +59,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=os.environ.get("ATLAS_FAQ_SEARCH_LIMIT", "5"))
     parser.add_argument("--route", default=DEFAULT_ROUTE)
     parser.add_argument("--detail-route", default=os.environ.get("ATLAS_FAQ_DETAIL_ROUTE", ""))
+    parser.add_argument("--expected-detail-account-id", default="")
+    parser.add_argument("--expected-detail-target-id", default="")
+    parser.add_argument("--expected-detail-target-mode", default="")
+    parser.add_argument("--expected-detail-title", default="")
+    parser.add_argument("--expected-detail-status", default="")
     parser.add_argument("--timeout", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_TIMEOUT", "10"))
     parser.add_argument(
         "--max-search-ms",
@@ -207,7 +212,23 @@ def _first_result_faq_id(data: Mapping[str, Any]) -> str | None:
     return faq_id if isinstance(faq_id, str) and faq_id.strip() else None
 
 
-def _validate_detail(data: Mapping[str, Any], *, faq_id: str) -> list[str]:
+def _expected_detail_values(args: argparse.Namespace) -> dict[str, str]:
+    values = {
+        "account_id": str(getattr(args, "expected_detail_account_id", "") or "").strip(),
+        "target_id": str(getattr(args, "expected_detail_target_id", "") or "").strip(),
+        "target_mode": str(getattr(args, "expected_detail_target_mode", "") or "").strip(),
+        "title": str(getattr(args, "expected_detail_title", "") or "").strip(),
+        "status": str(getattr(args, "expected_detail_status", "") or "").strip(),
+    }
+    return {key: value for key, value in values.items() if value}
+
+
+def _validate_detail(
+    data: Mapping[str, Any],
+    *,
+    faq_id: str,
+    expected: Mapping[str, str] | None = None,
+) -> list[str]:
     errors: list[str] = []
     for field in DETAIL_FIELDS:
         if field not in data:
@@ -226,6 +247,12 @@ def _validate_detail(data: Mapping[str, Any], *, faq_id: str) -> list[str]:
     for field in ("output_checks", "metadata"):
         if field in data and not isinstance(data[field], Mapping):
             errors.append(f"detail.{field} must be an object")
+    for field, expected_value in (expected or {}).items():
+        actual = data.get(field)
+        if actual != expected_value:
+            errors.append(
+                f"detail.{field} expected {expected_value!r} but got {actual!r}"
+            )
     return errors
 
 
@@ -267,6 +294,7 @@ def _latency_budget_errors(
 def _budget_preflight_errors(
     *,
     require_detail: bool,
+    expected_detail: Mapping[str, str],
     max_search_ms: float | None,
     max_detail_ms: float | None,
     max_total_ms: float | None,
@@ -281,6 +309,8 @@ def _budget_preflight_errors(
             errors.append(f"{name} must be finite and positive")
     if max_detail_ms is not None and not require_detail:
         errors.append("--max-detail-ms requires --require-detail")
+    if expected_detail and not require_detail:
+        errors.append("expected detail checks require --require-detail")
     return errors
 
 
@@ -301,6 +331,7 @@ def _result_payload(
     require_results: bool,
     require_detail: bool,
     detail_route: str,
+    expected_detail: Mapping[str, str] | None = None,
     detail_checked: bool = False,
     detail_faq_id: str = "",
     search_elapsed_ms: float | None = None,
@@ -327,6 +358,8 @@ def _result_payload(
         "detail_checked": detail_checked,
         "errors": list(errors or ()),
     }
+    if expected_detail:
+        payload["expected_detail"] = dict(expected_detail)
     if detail_faq_id:
         payload["detail_faq_id"] = detail_faq_id
     for key, value in (
@@ -367,6 +400,7 @@ def main() -> int:
     max_search_ms = args.max_search_ms
     max_detail_ms = args.max_detail_ms
     max_total_ms = args.max_total_ms
+    expected_detail = _expected_detail_values(args)
     if not base_url:
         print("ATLAS_API_BASE_URL or --base-url is required.")
         _write_result(
@@ -383,6 +417,7 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 errors=["ATLAS_API_BASE_URL or --base-url is required"],
             ),
         )
@@ -403,6 +438,7 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 errors=["ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required"],
             ),
         )
@@ -423,6 +459,7 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 errors=["ATLAS_FAQ_SEARCH_QUERY or --query is required"],
             ),
         )
@@ -443,12 +480,14 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 errors=["--limit must be positive"],
             ),
         )
         return 2
     budget_preflight_errors = _budget_preflight_errors(
         require_detail=bool(args.require_detail),
+        expected_detail=expected_detail,
         max_search_ms=max_search_ms,
         max_detail_ms=max_detail_ms,
         max_total_ms=max_total_ms,
@@ -471,6 +510,7 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 max_search_ms=max_search_ms,
                 max_detail_ms=max_detail_ms,
                 max_total_ms=max_total_ms,
@@ -509,6 +549,7 @@ def main() -> int:
                 require_results=bool(args.require_results),
                 require_detail=bool(args.require_detail),
                 detail_route=detail_route,
+                expected_detail=expected_detail,
                 max_search_ms=max_search_ms,
                 max_detail_ms=max_detail_ms,
                 max_total_ms=max_total_ms,
@@ -543,7 +584,13 @@ def main() -> int:
             except RuntimeError as exc:
                 errors.append(str(exc))
             else:
-                errors.extend(_validate_detail(detail_data, faq_id=detail_faq_id))
+                errors.extend(
+                    _validate_detail(
+                        detail_data,
+                        faq_id=detail_faq_id,
+                        expected=expected_detail,
+                    )
+                )
     total_elapsed_ms = search_elapsed_ms + (detail_elapsed_ms or 0.0)
     errors.extend(
         _latency_budget_errors(
@@ -567,6 +614,7 @@ def main() -> int:
         require_results=bool(args.require_results),
         require_detail=bool(args.require_detail),
         detail_route=resolved_detail_route,
+        expected_detail=expected_detail,
         detail_checked=detail_checked,
         detail_faq_id=detail_faq_id,
         search_elapsed_ms=search_elapsed_ms,
