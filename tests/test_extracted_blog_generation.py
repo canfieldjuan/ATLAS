@@ -11,6 +11,7 @@ from extracted_content_pipeline.blog_generation import (
     _blog_quality_repair_guidance,
     _is_support_ticket_blog_context,
     _normalize_blog_metadata,
+    _quality_policy_for_context,
     parse_blog_post_response,
 )
 from extracted_content_pipeline.blog_ports import BlogPostDraft
@@ -384,6 +385,70 @@ def test_support_ticket_blog_context_detection_rejects_false_positives(
     data_context: dict[str, object],
 ) -> None:
     assert _is_support_ticket_blog_context(data_context) is False
+
+
+def test_small_support_ticket_blog_context_uses_compact_quality_policy() -> None:
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 4,
+                "included_ticket_row_count": 4,
+                "has_measured_outcomes": False,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=None,
+    )
+
+    assert policy is not None
+    assert policy.thresholds["min_words"] == 700
+    assert policy.thresholds["target_words"] == 1100
+    assert policy.metadata["support_ticket_small_upload"] is True
+
+
+def test_small_support_ticket_blog_policy_preserves_explicit_thresholds() -> None:
+    base = QualityPolicy(
+        name="custom",
+        thresholds={"min_words": 20, "target_words": 30, "pass_score": 0},
+    )
+
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 4,
+                "included_ticket_row_count": 4,
+                "has_measured_outcomes": False,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=base,
+    )
+
+    assert policy is not None
+    assert policy.thresholds["min_words"] == 20
+    assert policy.thresholds["target_words"] == 30
+    assert policy.thresholds["pass_score"] == 0
+
+
+def test_small_support_ticket_blog_policy_does_not_apply_with_outcome_evidence() -> None:
+    base = QualityPolicy(name="custom", thresholds={"pass_score": 0})
+
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 4,
+                "included_ticket_row_count": 4,
+                "has_measured_outcomes": True,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=base,
+    )
+
+    assert policy is base
 
 
 @pytest.mark.asyncio
@@ -793,6 +858,14 @@ async def test_generate_quality_repair_prompt_explains_known_blockers() -> None:
     assert "include the exact current `target_keyword` string" in retry_prompt
     assert "repeat that exact phrase naturally" in retry_prompt
     assert "Make at least two H2 sections independently citable" in retry_prompt
+
+
+def test_blog_quality_repair_guidance_uses_compact_support_ticket_word_floor() -> None:
+    guidance = _blog_quality_repair_guidance(("content_too_short:512_words_need_700",))
+
+    assert "at least 700 words" in guidance
+    assert "compact support-ticket brief shape" in guidance
+    assert "1500-2200" not in guidance
 
 
 @pytest.mark.asyncio
