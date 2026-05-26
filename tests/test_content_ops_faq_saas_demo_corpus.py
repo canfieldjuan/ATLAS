@@ -323,11 +323,11 @@ async def test_saas_demo_cleanup_deletes_single_faq_for_account() -> None:
     assert payload == {
         "phase": "cleanup",
         "ok": True,
+        "errors": [],
         "account_id": "acct-demo",
         "faq_id": "11111111-1111-1111-1111-111111111111",
         "deleted_faq_ids": 1,
         "delete_status": "DELETE 1",
-        "error": None,
     }
     assert "WHERE id = $1::uuid" in pool.calls[0]["query"]
     assert "AND account_id = $2" in pool.calls[0]["query"]
@@ -345,14 +345,14 @@ async def test_saas_demo_cleanup_deletes_single_faq_for_account() -> None:
             "DELETE 0",
             {
                 "deleted_faq_ids": 0,
-                "error": "cleanup deleted 0 FAQ rows but expected 1",
+                "errors": ["cleanup deleted 0 FAQ rows but expected 1"],
             },
         ),
         (
             "UPDATE 1",
             {
                 "deleted_faq_ids": None,
-                "error": "cleanup delete status is not parseable: 'UPDATE 1'",
+                "errors": ["cleanup delete status is not parseable: 'UPDATE 1'"],
             },
         ),
     ],
@@ -370,4 +370,4 @@ async def test_saas_demo_cleanup_fails_on_bad_delete_result(delete_status, expec
 
     assert payload["ok"] is False
     assert payload["deleted_faq_ids"] == expected["deleted_faq_ids"]
-    assert payload["error"] == expected["error"]
+    assert payload["errors"] == expected["errors"]
