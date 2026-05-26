@@ -1,15 +1,35 @@
 import csv
+from dataclasses import replace
+import importlib.util
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
+import pytest
+
+from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.campaign_source_adapters import (
     source_rows_to_campaign_opportunities,
 )
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
+from extracted_content_pipeline.ticket_faq_search import (
+    build_ticket_faq_search_documents,
+    search_ticket_faq_documents,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv"
 DEMO_FAQ_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_faq.md"
+SEED_SCRIPT = ROOT / "scripts/seed_content_ops_faq_saas_demo.py"
+SEED_SPEC = importlib.util.spec_from_file_location(
+    "seed_content_ops_faq_saas_demo",
+    SEED_SCRIPT,
+)
+assert SEED_SPEC is not None and SEED_SPEC.loader is not None
+seeder = importlib.util.module_from_spec(SEED_SPEC)
+sys.modules["seed_content_ops_faq_saas_demo"] = seeder
+SEED_SPEC.loader.exec_module(seeder)
 
 EXPECTED_LABEL = "synthetic_b2b_saas_demo"
 MIN_ROWS = 36
@@ -112,3 +132,146 @@ def test_saas_demo_faq_artifact_matches_real_generator() -> None:
     _rows, _normalized, result = _generated_demo_faq()
 
     assert DEMO_FAQ_PATH.read_text(encoding="utf-8") == result.markdown
+
+
+def test_saas_demo_faq_draft_projects_to_search_documents() -> None:
+    draft = seeder.build_saas_demo_faq_draft()
+    searchable = replace(draft, id="faq-demo-1", status="approved")
+
+    documents = build_ticket_faq_search_documents(
+        searchable,
+        account_id="acct-demo",
+        corpus_id="synthetic-b2b-saas-demo",
+    )
+    response = search_ticket_faq_documents(
+        documents,
+        query="export attribution reports",
+        account_id="acct-demo",
+        corpus_id="synthetic-b2b-saas-demo",
+        status="approved",
+    )
+
+    assert len(documents) == len(draft.items)
+    assert response.as_dict()["count"] >= 1
+    first = response.as_dict()["results"][0]
+    assert first["account_id"] == "acct-demo"
+    assert first["corpus_id"] == "synthetic-b2b-saas-demo"
+    assert "export" in first["question"].lower()
+
+
+def test_saas_demo_seed_args_fail_closed_for_missing_required_values() -> None:
+    errors = seeder._validate_args(
+        SimpleNamespace(
+            database_url="",
+            account_id="",
+            corpus_id="",
+            target_id="",
+            status="",
+            query="",
+            limit=0,
+        )
+    )
+
+    assert errors == [
+        "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL",
+        "ATLAS_FAQ_SEARCH_ACCOUNT_ID, ATLAS_ACCOUNT_ID, or --account-id is required",
+        "--corpus-id is required",
+        "--target-id is required",
+        "--status is required",
+        "--query is required",
+        "--limit must be positive",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_saas_demo_seeder_saves_approves_projects_and_searches(monkeypatch) -> None:
+    class _Pool:
+        draft = None
+        scope = None
+        documents = ()
+
+    class _FAQRepo:
+        def __init__(self, pool):
+            self.pool = pool
+
+        async def save_drafts(self, drafts, *, scope: TenantScope):
+            self.pool.draft = drafts[0]
+            self.pool.scope = scope
+            return ("11111111-1111-1111-1111-111111111111",)
+
+        async def update_status(self, faq_id, status, *, scope: TenantScope):
+            assert faq_id == "11111111-1111-1111-1111-111111111111"
+            assert status == "approved"
+            assert scope.account_id == "acct-demo"
+            self.pool.documents = build_ticket_faq_search_documents(
+                replace(self.pool.draft, id=faq_id, status=status),
+                account_id=scope.account_id,
+                corpus_id=self.pool.draft.metadata["corpus_id"],
+            )
+            return True
+
+    class _SearchRepo:
+        def __init__(self, pool):
+            self.pool = pool
+
+        async def search(self, **kwargs):
+            return search_ticket_faq_documents(self.pool.documents, **kwargs)
+
+    monkeypatch.setattr(seeder, "PostgresTicketFAQRepository", _FAQRepo)
+    monkeypatch.setattr(seeder, "PostgresTicketFAQSearchRepository", _SearchRepo)
+
+    payload = await seeder.seed_saas_demo_faq(
+        _Pool(),
+        account_id="acct-demo",
+        corpus_id="synthetic-b2b-saas-demo",
+    )
+
+    assert payload["ok"] is True
+    assert payload["errors"] == []
+    assert payload["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["source_count"] >= MIN_ROWS
+    assert payload["projected_documents"] == payload["generated_items"]
+    assert payload["search"]["count"] >= 1
+    assert payload["search"]["matched_seeded_faq"] is True
+    assert payload["search"]["first_result"]["faq_id"] == payload["faq_id"]
+
+
+@pytest.mark.asyncio
+async def test_saas_demo_seeder_rejects_search_results_for_different_faq(monkeypatch) -> None:
+    class _Response:
+        def as_dict(self):
+            return {
+                "query": "export attribution reports",
+                "count": 1,
+                "results": [{"faq_id": "different-faq-id"}],
+            }
+
+    class _FAQRepo:
+        def __init__(self, _pool):
+            pass
+
+        async def save_drafts(self, _drafts, *, scope: TenantScope):
+            assert scope.account_id == "acct-demo"
+            return ("11111111-1111-1111-1111-111111111111",)
+
+        async def update_status(self, _faq_id, _status, *, scope: TenantScope):
+            assert scope.account_id == "acct-demo"
+            return True
+
+    class _SearchRepo:
+        def __init__(self, _pool):
+            pass
+
+        async def search(self, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(seeder, "PostgresTicketFAQRepository", _FAQRepo)
+    monkeypatch.setattr(seeder, "PostgresTicketFAQSearchRepository", _SearchRepo)
+
+    payload = await seeder.seed_saas_demo_faq(object(), account_id="acct-demo")
+
+    assert payload["ok"] is False
+    assert payload["errors"] == [
+        "Seeded SaaS FAQ id was not present in verification search results"
+    ]
+    assert payload["search"]["matched_seeded_faq"] is False
