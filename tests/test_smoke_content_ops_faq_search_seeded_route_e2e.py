@@ -308,7 +308,7 @@ async def test_cleanup_seeded_faqs_noops_without_ids():
         "requested_faq_ids": 0,
         "deleted_faq_ids": 0,
         "delete_status": None,
-        "error": None,
+        "errors": [],
     }
 
 
@@ -346,7 +346,7 @@ async def test_cleanup_seeded_faqs_reports_actual_delete_rowcount(monkeypatch):
         "requested_faq_ids": 2,
         "deleted_faq_ids": 2,
         "delete_status": "DELETE 2",
-        "error": None,
+        "errors": [],
     }
     assert fake_pool.deleted_ids == [
         "11111111-1111-1111-1111-111111111111",
@@ -382,7 +382,7 @@ async def test_cleanup_seeded_faqs_fails_when_delete_rowcount_mismatches(monkeyp
         "requested_faq_ids": 2,
         "deleted_faq_ids": 1,
         "delete_status": "DELETE 1",
-        "error": "cleanup deleted 1 FAQ rows but requested 2",
+        "errors": ["cleanup deleted 1 FAQ rows but requested 2"],
     }
 
 
@@ -410,7 +410,7 @@ async def test_cleanup_seeded_faqs_surfaces_malformed_delete_status(monkeypatch)
         "requested_faq_ids": 1,
         "deleted_faq_ids": None,
         "delete_status": "UPDATE 1",
-        "error": "cleanup delete status is not parseable: 'UPDATE 1'",
+        "errors": ["cleanup delete status is not parseable: 'UPDATE 1'"],
     }
 
 
@@ -482,7 +482,7 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
             "requested_faq_ids": len(faq_ids),
             "deleted_faq_ids": len(faq_ids),
             "delete_status": f"DELETE {len(faq_ids)}",
-            "error": None,
+            "errors": [],
         }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
@@ -551,7 +551,7 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
             "requested_faq_ids": len(faq_ids),
             "deleted_faq_ids": len(faq_ids),
             "delete_status": f"DELETE {len(faq_ids)}",
-            "error": None,
+            "errors": [],
         }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
@@ -604,7 +604,7 @@ def test_main_can_skip_detail_check_for_liveness_runs(tmp_path, monkeypatch):
             "requested_faq_ids": len(faq_ids),
             "deleted_faq_ids": len(faq_ids),
             "delete_status": f"DELETE {len(faq_ids)}",
-            "error": None,
+            "errors": [],
         }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
@@ -672,7 +672,7 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
             "requested_faq_ids": 1,
             "deleted_faq_ids": 0,
             "delete_status": None,
-            "error": "cleanup failed",
+            "errors": ["cleanup failed"],
         }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
@@ -701,5 +701,5 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
         "requested_faq_ids": 1,
         "deleted_faq_ids": 0,
         "delete_status": None,
-        "error": "cleanup failed",
+        "errors": ["cleanup failed"],
     }
