@@ -418,11 +418,10 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
         "artifacts": {},
         "seed": {"ok": False, "returncode": None},
         "route": {"ok": False, "returncode": None},
-        "detail": {
-            "ok": bool(args.skip_detail_check),
-            "returncode": None,
-            "skipped": bool(args.skip_detail_check),
-        },
+        "detail": _detail_not_run(
+            "skip_detail_check" if args.skip_detail_check else "preflight_failed",
+            ok=bool(args.skip_detail_check),
+        ),
         "cleanup": {
             "ok": False,
             "requested_faq_ids": 0,
@@ -455,11 +454,10 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     route_result = artifact_dir / "route-result.json"
     detail_result = artifact_dir / "detail-result.json"
 
-    detail = {
-        "ok": bool(args.skip_detail_check),
-        "returncode": None,
-        "skipped": bool(args.skip_detail_check),
-    }
+    detail = _detail_not_run(
+        "skip_detail_check" if args.skip_detail_check else "waiting_for_seed_and_route",
+        ok=bool(args.skip_detail_check),
+    )
     cleanup = {
         "ok": True,
         "requested_faq_ids": 0,
@@ -479,6 +477,10 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         route = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": ""}
         if seed["ok"]:
             route = _run_command(_route_command(args, case_file=case_file, route_result=route_result))
+        elif not bool(args.skip_detail_check):
+            detail = _detail_not_run("seed_failed", ok=False)
+        if bool(seed["ok"]) and not bool(route["ok"]) and not bool(args.skip_detail_check):
+            detail = _detail_not_run("route_failed", ok=False)
         if bool(seed["ok"] and route["ok"]) and not bool(args.skip_detail_check):
             detail_case, detail_errors = _detail_case_from_route_cases(case_file)
             if detail_errors:
@@ -533,6 +535,15 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     finally:
         if temp_context is not None:
             temp_context.cleanup()
+
+
+def _detail_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "returncode": None,
+        "skipped": True,
+        "not_run_reason": reason,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

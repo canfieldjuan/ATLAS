@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import time
@@ -165,12 +166,16 @@ class PipelineLLMClient:
 
         started = time.monotonic()
         try:
-            result = self._call_llm(
-                llm,
-                list(messages),
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            call_args = {
+                "llm": llm,
+                "messages": list(messages),
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if _llm_call_is_async(llm):
+                result = self._call_llm(**call_args)
+            else:
+                result = await asyncio.to_thread(self._call_llm, **call_args)
             if inspect.isawaitable(result):
                 result = await result
             response = _to_response(result, llm=llm)
@@ -319,6 +324,14 @@ def _to_chat_messages(messages: Sequence[LLMMessage]) -> list[Any]:
         )
         for message in messages
     ]
+
+
+def _llm_call_is_async(llm: Any) -> bool:
+    if hasattr(llm, "chat"):
+        return inspect.iscoroutinefunction(getattr(llm, "chat"))
+    if hasattr(llm, "generate"):
+        return inspect.iscoroutinefunction(getattr(llm, "generate"))
+    return False
 
 
 def _to_response(result: Any, *, llm: Any) -> LLMResponse:
