@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import pytest
 
 from extracted_content_pipeline.campaign_llm_client import (
@@ -118,6 +121,43 @@ async def test_pipeline_llm_client_resolves_and_normalizes_chat_response():
     assert response.usage == {"input_tokens": 10, "output_tokens": 4}
     assert llm.calls[0]["max_tokens"] == 200
     assert resolver_calls[0]["workload"] == "draft"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_offloads_sync_chat_without_blocking_event_loop():
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingChatLLM:
+        model = "blocking-chat-model"
+
+        def chat(self, messages, *, max_tokens, temperature):
+            del messages, max_tokens, temperature
+            started.set()
+            release.wait(timeout=0.25)
+            return {"response": "released"}
+
+    client = PipelineLLMClient(resolver=lambda **_: _BlockingChatLLM())
+    task = asyncio.create_task(
+        client.complete(
+            [LLMMessage(role="user", content="Write the email")],
+            max_tokens=200,
+            temperature=0.2,
+        )
+    )
+
+    for _ in range(50):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+
+    assert started.is_set()
+    await asyncio.wait_for(asyncio.sleep(0), timeout=0.1)
+    assert task.done() is False
+    release.set()
+    response = await asyncio.wait_for(task, timeout=1)
+
+    assert response.content == "released"
 
 
 @pytest.mark.asyncio

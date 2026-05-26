@@ -50,7 +50,9 @@ from atlas_brain._content_ops_infrastructure import (
     build_content_ops_llm_client,
     build_content_ops_skill_store,
 )
+from extracted_content_pipeline.campaign_llm_client import PipelineLLMClient
 from extracted_content_pipeline.campaign_ports import LLMMessage
+import extracted_content_pipeline.pipelines.llm as pipeline_llm_module
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -260,32 +262,92 @@ def test_build_content_ops_llm_client_returns_none_when_no_llm_routable() -> Non
     )
 
 
-def test_build_content_ops_llm_client_wraps_pipeline_routed_service() -> None:
+@pytest.mark.asyncio
+async def test_build_content_ops_llm_client_uses_pipeline_tracing_client(
+    monkeypatch,
+) -> None:
     """Factory resolves through Atlas pipeline routing before
     looking at the active registry slot. This is the production
     path for configured OpenRouter Claude models that are not
     pre-activated globally."""
 
     calls: list[dict[str, Any]] = []
-    fake_service = SimpleNamespace(model_info=None, chat=lambda *a, **k: {})
+    trace_calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _TracingFakeService:
+        model = "anthropic/claude-haiku-4-5"
+        name = "openrouter"
+
+        def chat(self, messages, *, max_tokens, temperature):
+            del messages, max_tokens, temperature
+            return {
+                "response": "ok",
+                "model": "anthropic/claude-haiku-4-5",
+                "usage": {"input_tokens": 11, "output_tokens": 7},
+            }
+
+    fake_service = _TracingFakeService()
 
     def _resolver(**kwargs: Any) -> Any:
         calls.append(dict(kwargs))
         return fake_service
+
+    monkeypatch.setattr(
+        pipeline_llm_module,
+        "trace_llm_call",
+        lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+    )
 
     client = build_content_ops_llm_client(
         llm_registry=SimpleNamespace(get_active=lambda: None),
         pipeline_llm_resolver=_resolver,
     )
 
-    assert isinstance(client, _HostLLMClient)
-    # The wrapped service is the one we patched.
-    assert client._host is fake_service  # type: ignore[attr-defined]
+    assert isinstance(client, PipelineLLMClient)
     assert calls == [{
         "workload": "openrouter",
+        "prefer_cloud": True,
         "try_openrouter": True,
         "auto_activate_ollama": False,
+        "openrouter_model": None,
     }]
+
+    response = await client.complete(
+        [LLMMessage(role="user", content="Draft")],
+        max_tokens=32,
+        temperature=0.2,
+        metadata={"asset_type": "blog_post", "request_id": "req-hosted"},
+    )
+
+    assert response.content == "ok"
+    assert calls == [
+        {
+            "workload": "openrouter",
+            "prefer_cloud": True,
+            "try_openrouter": True,
+            "auto_activate_ollama": False,
+            "openrouter_model": None,
+        },
+        {
+            "workload": "openrouter",
+            "prefer_cloud": True,
+            "try_openrouter": True,
+            "auto_activate_ollama": False,
+            "openrouter_model": None,
+        },
+    ]
+    assert len(trace_calls) == 1
+    span_name, trace = trace_calls[0]
+    assert span_name == "content_ops.llm.complete"
+    assert trace["input_tokens"] == 11
+    assert trace["output_tokens"] == 7
+    assert trace["metadata"] == {
+        "product": "content_ops",
+        "workload": "openrouter",
+        "llm_adapter": "pipeline",
+        "asset_type": "blog_post",
+        "request_id": "req-hosted",
+    }
 
 
 def test_build_content_ops_llm_client_falls_back_to_active_registry_service() -> None:
@@ -298,8 +360,8 @@ def test_build_content_ops_llm_client_falls_back_to_active_registry_service() ->
         llm_registry=stub_registry,
         pipeline_llm_resolver=lambda **_kwargs: None,
     )
-    assert isinstance(client, _HostLLMClient)
-    assert client._host is fake_service  # type: ignore[attr-defined]
+    assert isinstance(client, PipelineLLMClient)
+    assert client.resolver() is fake_service
 
 
 def test_build_content_ops_skill_store_uses_injected_registry() -> None:
