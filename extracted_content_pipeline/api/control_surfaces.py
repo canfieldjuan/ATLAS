@@ -200,6 +200,7 @@ def _compose_describe_response(
     configured_outputs: frozenset[str],
     execution_configured: bool,
     execute_max_concurrency: int,
+    faq_execute_max_source_material_rows: int,
     reasoning_status: Mapping[str, Any],
 ) -> dict[str, Any]:
     # Re-project the cached static template into a fresh dict tree so
@@ -229,6 +230,7 @@ def _compose_describe_response(
                 "max_source_material_rows": static["execute_limits"][
                     "max_source_material_rows"
                 ],
+                "faq_max_source_material_rows": faq_execute_max_source_material_rows,
                 "large_upload_strategy": static["execute_limits"][
                     "large_upload_strategy"
                 ],
@@ -292,6 +294,7 @@ class ContentOpsControlSurfaceApiConfig:
     structured_reasoning_drop_falsified: bool = False
     ingestion_opportunity_table: str = "campaign_opportunities"
     execute_max_concurrency: int = 8
+    faq_execute_max_source_material_rows: int = _MAX_INGESTION_ROWS
     ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
@@ -332,6 +335,13 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError("structured_reasoning_max_continuations must be non-negative")
         if self.execute_max_concurrency <= 0:
             raise ValueError("execute_max_concurrency must be positive")
+        if self.faq_execute_max_source_material_rows <= 0:
+            raise ValueError("faq_execute_max_source_material_rows must be positive")
+        if self.faq_execute_max_source_material_rows > _MAX_INGESTION_ROWS:
+            raise ValueError(
+                "faq_execute_max_source_material_rows cannot exceed "
+                f"{_MAX_INGESTION_ROWS}"
+            )
         if self.ingestion_import_max_concurrency <= 0:
             raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
@@ -577,6 +587,9 @@ def create_content_ops_control_surface_router(
             configured_outputs=configured_outputs,
             execution_configured=execution_services is not None,
             execute_max_concurrency=execute_gate.max_concurrency,
+            faq_execute_max_source_material_rows=(
+                resolved_config.faq_execute_max_source_material_rows
+            ),
             reasoning_status=reasoning_status,
         )
 
@@ -778,6 +791,10 @@ def create_content_ops_control_surface_router(
                 payload_mapping,
                 input_provider=input_provider,
                 scope=scope,
+            )
+            _enforce_faq_execute_source_material_limit(
+                payload_mapping,
+                max_rows=resolved_config.faq_execute_max_source_material_rows,
             )
             # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
             # per-request reasoning provider and derive a reasoning-aware
@@ -1087,6 +1104,48 @@ def _input_provider_response_metadata(value: Any) -> dict[str, Any]:
         for key in sorted(_INPUT_PROVIDER_RESPONSE_METADATA_KEYS)
         if key in value
     }
+
+
+def _enforce_faq_execute_source_material_limit(
+    payload: Mapping[str, Any],
+    *,
+    max_rows: int,
+) -> None:
+    try:
+        request = request_from_mapping(payload)
+        outputs = resolve_outputs(request)
+    except ValueError:
+        return
+    if "faq_markdown" not in outputs:
+        return
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return
+    row_count = _source_material_row_count(inputs.get("source_material"))
+    if row_count <= max_rows:
+        return
+    raise HTTPException(
+        status_code=413,
+        detail={
+            "reason": "faq_source_material_too_large_for_sync_execute",
+            "max_source_material_rows": max_rows,
+            "source_material_rows": row_count,
+            "large_upload_strategy": "background_or_offline",
+        },
+    )
+
+
+def _source_material_row_count(source_material: Any) -> int:
+    if isinstance(source_material, (list, tuple)):
+        return len(source_material)
+    if not isinstance(source_material, Mapping):
+        return 0
+    total = 0
+    for key in _SOURCE_MATERIAL_ROW_LIST_KEYS:
+        rows = source_material.get(key)
+        if isinstance(rows, (list, tuple)):
+            total += len(rows)
+    return total
 
 
 async def _structured_reasoning_contexts(

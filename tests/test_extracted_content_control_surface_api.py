@@ -21,6 +21,7 @@ pytestmark = pytest.mark.skipif(
 _DEFAULT_EXECUTION_LIMITS = {
     "max_concurrency": 8,
     "max_source_material_rows": 1000,
+    "faq_max_source_material_rows": 1000,
     "large_upload_strategy": "background_or_offline",
 }
 
@@ -360,6 +361,23 @@ async def test_describe_control_surfaces_reports_configured_execute_concurrency(
     assert payload["execution"]["limits"] == {
         **_DEFAULT_EXECUTION_LIMITS,
         "max_concurrency": 3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_describe_control_surfaces_reports_configured_faq_execute_row_limit():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            faq_execute_max_source_material_rows=250
+        )
+    )
+
+    route = _route(router, "/content-ops/control-surfaces", "GET")
+    payload = await route.endpoint()
+
+    assert payload["execution"]["limits"] == {
+        **_DEFAULT_EXECUTION_LIMITS,
+        "faq_max_source_material_rows": 250,
     }
 
 
@@ -1821,6 +1839,160 @@ async def test_execute_generation_route_rejects_invalid_faq_vocabulary_rules_as_
 
 
 @pytest.mark.asyncio
+async def test_execute_generation_route_accepts_faq_source_material_at_configured_limit():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=service
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": {
+                    "support_tickets": [
+                        {
+                            "source_type": "ticket",
+                            "text": f"Ticket row {index}",
+                        }
+                        for index in range(2)
+                    ],
+                },
+            },
+        }
+    )
+
+    assert payload["status"] == "completed"
+    assert len(service.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_rejects_faq_source_material_over_configured_limit():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=service
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_markdown"],
+                "inputs": {
+                    "source_material": {
+                        "support_tickets": [
+                            {
+                                "source_type": "ticket",
+                                "text": f"Ticket row {index}",
+                            }
+                            for index in range(3)
+                        ],
+                    },
+                },
+            }
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "reason": "faq_source_material_too_large_for_sync_execute",
+        "max_source_material_rows": 2,
+        "source_material_rows": 3,
+        "large_upload_strategy": "background_or_offline",
+    }
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_checks_input_provider_faq_rows_after_merge():
+    service = _CampaignService()
+    provider = _SyncInputProvider(
+        ContentOpsInputPackage(
+            provider="ticket_upload",
+            outputs=("faq_markdown",),
+            inputs={
+                "source_material": {
+                    "support_tickets": [
+                        {
+                            "source_type": "ticket",
+                            "text": f"Ticket row {index}",
+                        }
+                        for index in range(3)
+                    ],
+                },
+            },
+        )
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=service
+        ),
+        input_provider=provider,
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({})
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail["source_material_rows"] == 3
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_does_not_apply_faq_row_limit_to_non_faq_outputs():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            signal_extraction=service
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["signal_extraction"],
+            "inputs": {
+                "source_material": [
+                    {
+                        "source_type": "ticket",
+                        "text": f"Ticket row {index}",
+                    }
+                    for index in range(3)
+                ],
+            },
+        }
+    )
+
+    assert payload["status"] == "completed"
+    assert len(service.calls[0]["kwargs"]["source_material"]) == 3
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_rejects_source_material_over_1000_as_422():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
@@ -2863,6 +3035,19 @@ def test_content_ops_config_stores_output_pack_names_immutably():
 def test_content_ops_config_rejects_invalid_execute_concurrency():
     with pytest.raises(ValueError, match="execute_max_concurrency must be positive"):
         ContentOpsControlSurfaceApiConfig(execute_max_concurrency=0)
+
+
+def test_content_ops_config_rejects_invalid_faq_execute_row_limit():
+    with pytest.raises(
+        ValueError,
+        match="faq_execute_max_source_material_rows must be positive",
+    ):
+        ContentOpsControlSurfaceApiConfig(faq_execute_max_source_material_rows=0)
+    with pytest.raises(
+        ValueError,
+        match="faq_execute_max_source_material_rows cannot exceed 1000",
+    ):
+        ContentOpsControlSurfaceApiConfig(faq_execute_max_source_material_rows=1001)
 
 
 def test_content_ops_config_rejects_invalid_ingestion_import_concurrency():
