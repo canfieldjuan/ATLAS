@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-05-26
+
+### FAQ action steps are intent-template based, not resolution-evidence gated
+- File/location: `extracted_content_pipeline/ticket_faq_markdown.py` (`_ACTION_RULES`, `_article_steps`).
+- Description: The deterministic FAQ generator emits action steps from intent templates. The steps are grounded to the detected topic and source IDs, but they are not gated on explicit support-resolution evidence from the uploaded rows.
+- Why it matters: This is acceptable for draft/review FAQ output, but publish-ready support answers should not imply verified product-specific resolution steps unless the upload includes resolution evidence or the output labels the steps as draft guidance.
+- Effort: M
+- Category: correctness
+- Owner/session: content-ops/faq-generator
+- Found during: PR-FAQ-Generator-Output-Proof.
+
 ## 2026-05-23
 
 ### FAQSCALE-1 - Large synchronous FAQ generation needs hosted limits / backpressure / background execution
