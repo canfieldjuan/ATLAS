@@ -12,6 +12,8 @@ import sys
 
 import pytest
 
+from atlas_brain.auth.dependencies import AuthUser
+
 pytest.importorskip("asyncpg")
 
 
@@ -78,6 +80,63 @@ def test_faq_deflection_search_route_uses_shared_content_ops_auth_scope_and_pool
     assert closure["pool_provider"].__name__ == "get_db_pool"
     assert closure["scope_provider"].__name__ == "build_content_ops_scope"
     assert "_capture_content_ops_auth_user" in dependency_names
+
+
+def test_content_ops_usage_summary_route_uses_shared_auth_and_pool() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/usage/summary")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+    dependency_names = [
+        getattr(dependency.call, "__name__", "")
+        for dependency in route.dependant.dependencies
+    ]
+
+    assert closure["usage_pool_provider"].__name__ == "get_db_pool"
+    assert "_capture_content_ops_auth_user" in dependency_names
+    assert "_require_content_ops_usage_operator" in dependency_names
+
+
+@pytest.mark.asyncio
+async def test_content_ops_usage_summary_operator_gate_rejects_account_admin() -> None:
+    api_pkg = _fresh_api_package()
+    user = AuthUser(
+        user_id="user-1",
+        account_id="account-1",
+        plan="b2b_growth",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+        is_platform_admin=False,
+    )
+
+    with pytest.raises(api_pkg.HTTPException) as exc:
+        await api_pkg._require_content_ops_usage_operator(user=user)
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Platform admin access required"
+
+
+@pytest.mark.asyncio
+async def test_content_ops_usage_summary_operator_gate_allows_platform_admin() -> None:
+    api_pkg = _fresh_api_package()
+    user = AuthUser(
+        user_id="user-1",
+        account_id="account-1",
+        plan="b2b_growth",
+        plan_status="active",
+        role="member",
+        product="b2b_retention",
+        is_admin=True,
+        is_platform_admin=True,
+    )
+
+    assert await api_pkg._require_content_ops_usage_operator(user=user) is user
 
 
 def test_public_landing_page_route_uses_pool_without_content_ops_auth_dependency() -> None:

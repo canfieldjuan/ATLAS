@@ -4,7 +4,7 @@ API routers for Atlas Brain.
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from .alerts import router as alerts_router
 from .comms import router as comms_router
@@ -201,6 +201,13 @@ try:
         set_current_auth_user(user)
         return user
 
+    async def _require_content_ops_usage_operator(
+        user: AuthUser = Depends(_capture_content_ops_auth_user),
+    ) -> AuthUser:
+        if bool(getattr(user, "is_platform_admin", False)):
+            return user
+        raise HTTPException(status_code=403, detail="Platform admin access required")
+
     content_ops_config = ContentOpsControlSurfaceApiConfig()
     content_ops_router = create_content_ops_control_surface_router(
         config=content_ops_config,
@@ -213,6 +220,8 @@ try:
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
         input_provider=build_content_ops_input_provider(),
         opportunity_import_pool_provider=get_db_pool,
+        usage_pool_provider=get_db_pool,
+        usage_dependencies=[Depends(_require_content_ops_usage_operator)],
         ingestion_import_admission_provider=lambda: (
             build_content_ops_import_admission_gate(
                 max_concurrency=content_ops_config.ingestion_import_max_concurrency

@@ -1,6 +1,7 @@
 import pytest
 
 from atlas_brain.auth.dependencies import (
+    AuthUser,
     B2B_PLAN_ORDER,
     PLAN_ORDER,
     _effective_is_admin,
@@ -23,6 +24,22 @@ def test_effective_is_admin_true_from_admin_role():
 
 def test_effective_is_admin_false_for_member_without_flag():
     assert _effective_is_admin("member", False) is False
+
+
+def test_auth_user_keeps_platform_admin_separate_from_account_admin():
+    user = AuthUser(
+        user_id="user-1",
+        account_id="account-1",
+        plan="b2b_growth",
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        is_admin=True,
+        is_platform_admin=False,
+    )
+
+    assert user.is_admin is True
+    assert user.is_platform_admin is False
 
 
 def test_require_plan_rejects_unknown_consumer_tier():

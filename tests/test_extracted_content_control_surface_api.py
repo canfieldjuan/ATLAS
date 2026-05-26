@@ -1,5 +1,7 @@
 import asyncio
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -137,6 +139,54 @@ class _Pool:
     async def execute(self, query, *args):
         self.executed.append((str(query), args))
         return "EXECUTE"
+
+
+class _UsagePool:
+    is_initialized = True
+
+    def __init__(self):
+        self.fetchrow_calls = []
+        self.fetch_calls = []
+
+    async def fetchrow(self, query, *args):
+        self.fetchrow_calls.append((str(query), args))
+        return {
+            "total_cost_usd": Decimal("1.234567"),
+            "input_tokens": 1200,
+            "billable_input_tokens": 1100,
+            "output_tokens": 300,
+            "total_tokens": 1500,
+            "cached_tokens": 100,
+            "cache_write_tokens": 25,
+            "total_calls": 4,
+            "failed_calls": 1,
+            "cache_hit_calls": 2,
+            "avg_duration_ms": Decimal("234.56"),
+            "latest_call_at": datetime(2026, 5, 26, 17, 0, tzinfo=timezone.utc),
+        }
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        if "GROUP BY provider, model" in str(query):
+            return [
+                {
+                    "provider": "openrouter",
+                    "model": "anthropic/claude-haiku-4-5",
+                    "cost_usd": Decimal("1.000000"),
+                    "calls": 3,
+                    "input_tokens": 900,
+                    "output_tokens": 200,
+                }
+            ]
+        return [
+            {
+                "asset_type": "blog_post",
+                "cost_usd": Decimal("0.750000"),
+                "calls": 2,
+                "input_tokens": 600,
+                "output_tokens": 150,
+            }
+        ]
 
 
 class _Transaction:
@@ -309,6 +359,83 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
         "max_source_text_chars": 10000,
         "max_sample_limit": 25,
     }
+
+
+@pytest.mark.asyncio
+async def test_usage_summary_route_requires_configured_pool_provider():
+    router = create_content_ops_control_surface_router()
+
+    route = _route(router, "/content-ops/usage/summary", "GET")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint()
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content Ops usage database is unavailable."
+
+
+@pytest.mark.asyncio
+async def test_usage_summary_route_returns_content_ops_llm_rollup_with_filters():
+    pool = _UsagePool()
+    router = create_content_ops_control_surface_router(
+        usage_pool_provider=lambda: pool,
+    )
+
+    route = _route(router, "/content-ops/usage/summary", "GET")
+    payload = await route.endpoint(
+        days=14,
+        asset_type="blog_post",
+        run_id="run-123",
+        request_id="req-456",
+    )
+
+    assert payload["period_days"] == 14
+    assert payload["filters"] == {
+        "asset_type": "blog_post",
+        "run_id": "run-123",
+        "request_id": "req-456",
+    }
+    assert payload["summary"] == {
+        "total_cost_usd": 1.234567,
+        "total_calls": 4,
+        "failed_calls": 1,
+        "input_tokens": 1200,
+        "billable_input_tokens": 1100,
+        "output_tokens": 300,
+        "total_tokens": 1500,
+        "cached_tokens": 100,
+        "cache_write_tokens": 25,
+        "cache_hit_calls": 2,
+        "avg_duration_ms": 234.6,
+        "latest_call_at": "2026-05-26T17:00:00+00:00",
+    }
+    assert payload["by_model"] == [
+        {
+            "provider": "openrouter",
+            "model": "anthropic/claude-haiku-4-5",
+            "cost_usd": 1.0,
+            "calls": 3,
+            "input_tokens": 900,
+            "output_tokens": 200,
+        }
+    ]
+    assert payload["by_asset_type"] == [
+        {
+            "asset_type": "blog_post",
+            "cost_usd": 0.75,
+            "calls": 2,
+            "input_tokens": 600,
+            "output_tokens": 150,
+        }
+    ]
+    summary_query, summary_args = pool.fetchrow_calls[0]
+    assert "span_name = 'content_ops.llm.complete'" in summary_query
+    assert "metadata ->> 'product' = 'content_ops'" in summary_query
+    assert "metadata ->> 'asset_type' = $2" in summary_query
+    assert "(run_id = $3 OR metadata ->> 'run_id' = $3)" in summary_query
+    assert "metadata ->> 'request_id' = $4" in summary_query
+    assert summary_args == (14, "blog_post", "run-123", "req-456")
+    assert len(pool.fetch_calls) == 2
 
 
 @pytest.mark.asyncio
