@@ -143,10 +143,12 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "Customers are asking about reporting friction across 2 ticket sources."
     )
     assert result.items[0]["steps"] == (
-        "Open the reporting or analytics area and choose the date range you need.",
-        "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
+        "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
+        "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
         "If it still does not work, contact support at 1-800-555-0100 and include the cited ticket details.",
     )
+    assert result.items[0]["answer_evidence_status"] == "draft_needs_review"
+    assert result.items[0]["resolution_source_count"] == 0
     assert result.items[0]["failure_risk_score"] == 1
     assert result.items[0]["failure_risk_signals"] == ("blocked_access",)
     assert result.items[0]["opportunity_score"] == 4
@@ -175,6 +177,129 @@ def test_build_ticket_faq_markdown_does_not_invent_support_contact() -> None:
 
     assert "contact support at" not in result.markdown.lower()
     assert "If it still does not work, contact support and include the cited ticket details." in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "evidence": [{
+                "text": "How do I export the attribution dashboard before renewal?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Analytics, choose the attribution dashboard, and select "
+                    "Export CSV. Ask an admin to enable Report Downloads if the "
+                    "button is hidden."
+                ),
+            }],
+        }],
+        support_contact="support@example.com",
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Use the uploaded resolution evidence: Open Analytics, choose the "
+        "attribution dashboard, and select Export CSV"
+    )
+    assert item["steps"][1] == (
+        "Confirm the answer matches the customer's account, plan, policy, or "
+        "support record before publishing it."
+    )
+    assert "Draft the customer-facing steps" not in result.markdown
+    assert "support@example.com" in result.markdown
+
+
+def test_build_ticket_faq_markdown_ignores_disposition_resolution_aliases() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "resolution": "Closed",
+            "answer": "Yes",
+            "solution": "Escalated",
+            "evidence": [{
+                "text": "The reporting dashboard export is missing for my analyst role.",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert "Use the uploaded resolution evidence: Closed" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_uses_resolution_evidence_beyond_display_rows() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Export issue",
+                "evidence": [{
+                    "text": "How do I export the attribution dashboard?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Export issue",
+                "evidence": [{
+                    "text": "The dashboard export is missing for analysts.",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Enable Report Downloads for the analyst role.",
+                }],
+            },
+        ],
+        max_evidence_per_item=1,
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Use the uploaded resolution evidence: Enable Report Downloads for the analyst role"
+    )
+
+
+def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Login reset",
+                "evidence": [{
+                    "text": "I cannot reset my password.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Send the reset email from Account Settings.",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Login reset",
+                "evidence": [{
+                    "text": "How do I reset my password?",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Send the reset email from Account Settings.",
+                }],
+            },
+        ]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_source_count"] == 2
+    assert len([step for step in item["steps"] if step.startswith("Use the uploaded")]) == 1
 
 
 def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
@@ -773,7 +898,8 @@ def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -
         "condensed": True,
         "has_action_items": True,
     }
-    assert "Open the bill, statement, payment history, or dispute record" in result.markdown
+    assert "Review the cited ticket evidence and confirm the policy-approved answer" in result.markdown
+    assert result.items[0]["answer_evidence_status"] == "draft_needs_review"
     assert "contact support at https://example.com/support" in result.markdown
 
 
@@ -1275,12 +1401,13 @@ def test_build_ticket_faq_markdown_handles_1000_cfpb_style_rows_without_archive(
     assert all(item["question_source"] != "topic_fallback" for item in result.items)
     assert all("XX/XX/2019" not in question for question in questions)
     assert all("allowed ''" not in question for question in questions)
-    assert opening["steps"][0].startswith("Gather the application")
+    assert opening["steps"][0].startswith("Review the cited ticket evidence")
+    assert opening["answer_evidence_status"] == "draft_needs_review"
     assert "Export or Download" not in " ".join(opening["steps"])
     assert "export is missing" not in opening["when_to_contact_support"]
 
 
-def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_account_topics() -> None:
+def test_build_ticket_faq_markdown_uses_financial_contact_guidance_for_cfpb_account_topics() -> None:
     result = build_ticket_faq_markdown(
         [
             {
@@ -1307,7 +1434,8 @@ def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_account_topics(
     )
 
     assert result.items[0]["topic"] == "opening an account"
-    assert result.items[0]["steps"][0].startswith("Gather the application")
+    assert result.items[0]["steps"][0].startswith("Review the cited ticket evidence")
+    assert result.items[0]["answer_evidence_status"] == "draft_needs_review"
     assert "Export or Download" not in result.markdown
     assert "export is missing" not in result.markdown
 
@@ -1373,7 +1501,7 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
     )
     assert any("the field is locked" in paragraph for paragraph in rendered.paragraphs)
     assert any(
-        "Open the reporting or analytics area and choose the date range you need."
+        "Draft the customer-facing steps from a verified help article"
         in item
         for item in rendered.list_items
     )
@@ -1824,7 +1952,7 @@ def test_build_ticket_faq_markdown_accepts_ticket_source_type_alias() -> None:
     assert "I need help with billing." in result.markdown
 
 
-def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_shaped_rows() -> None:
+def test_build_ticket_faq_markdown_uses_financial_support_guidance_for_cfpb_shaped_rows() -> None:
     result = build_ticket_faq_markdown(
         [
             {
@@ -1860,14 +1988,14 @@ def test_build_ticket_faq_markdown_uses_financial_steps_for_cfpb_shaped_rows() -
     )
 
     markdown = result.markdown
-    assert "Open the bill, statement, payment history, or dispute record connected to the issue." in markdown
-    assert "Compare the charge, fee, payment, or balance against your receipt, contract, or written confirmation." in markdown
+    assert "Review the cited ticket evidence and confirm the policy-approved answer" in markdown
+    assert "Draft the customer-facing steps from a verified help article" in markdown
     assert "charge, fee, payment, balance, or dispute still looks wrong" in markdown
     assert "Open your profile, account settings, or login settings" not in markdown
     assert "https://www.consumerfinance.gov/complaint/" in markdown
 
 
-def test_build_ticket_faq_markdown_uses_debt_collection_steps_before_account_steps() -> None:
+def test_build_ticket_faq_markdown_uses_debt_collection_guidance_before_account_guidance() -> None:
     result = build_ticket_faq_markdown(
         [{
             "source_type": "complaint",
@@ -1883,13 +2011,13 @@ def test_build_ticket_faq_markdown_uses_debt_collection_steps_before_account_ste
 
     markdown = result.markdown
     assert result.items[0]["topic"] == "debt collection disputes"
-    assert "Ask the collector in writing to identify the original creditor" in markdown
-    assert "Compare the notice with your payment, settlement, insurance, or provider records" in markdown
+    assert "collector will not validate the debt" in markdown
+    assert "Draft the customer-facing steps from a verified help article" in markdown
     assert "Open your profile, account settings, or login settings" not in markdown
     assert "Open the reporting or analytics area" not in markdown
 
 
-def test_build_ticket_faq_markdown_uses_credit_report_steps_before_reporting_steps() -> None:
+def test_build_ticket_faq_markdown_uses_credit_report_guidance_before_reporting_guidance() -> None:
     result = build_ticket_faq_markdown(
         [{
             "source_type": "complaint",
@@ -1905,8 +2033,8 @@ def test_build_ticket_faq_markdown_uses_credit_report_steps_before_reporting_ste
 
     markdown = result.markdown
     assert result.items[0]["topic"] == "credit report disputes"
-    assert "Get your latest credit reports and mark the account" in markdown
-    assert "File a dispute with the credit bureau and the company that supplied the information" in markdown
+    assert "incorrect after you dispute it" in markdown
+    assert "Draft the customer-facing steps from a verified help article" in markdown
     assert "Open the reporting or analytics area" not in markdown
 
 
@@ -1957,7 +2085,7 @@ def test_build_ticket_faq_markdown_does_not_classify_generic_investigation_as_cr
 
     assert result.items[0]["topic"] == "reporting friction"
     assert result.items[0]["question"] == "How do I export the investigation dashboard report?"
-    assert "Open the reporting or analytics area" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "credit bureau" not in result.markdown
 
 
@@ -1978,7 +2106,7 @@ def test_build_ticket_faq_markdown_does_not_treat_cfpb_report_as_saas_reporting(
     assert result.items[0]["topic"] == "opening an account"
     assert result.items[0]["question_source"] == "customer_wording"
     assert "Open the reporting or analytics area" not in result.markdown
-    assert "Gather the application, account-opening notice" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
 
 
 def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_credit_report_rows(tmp_path: Path) -> None:
@@ -2006,7 +2134,7 @@ def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_credit_report_r
         "condensed": True,
         "has_action_items": True,
     }
-    assert "Get your latest credit reports and mark the account" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "Open the reporting or analytics area" not in result.markdown
 
 
@@ -2030,7 +2158,7 @@ def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_debt_collection
 
     assert result.items[0]["topic"] == "debt collection disputes"
     assert result.output_checks["uses_user_vocabulary"] is True
-    assert "Ask the collector in writing to identify the original creditor" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "Open your profile, account settings, or login settings" not in result.markdown
 
 
@@ -2062,7 +2190,7 @@ def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_mortgage_rows(t
         "condensed": True,
         "has_action_items": True,
     }
-    assert "Gather the mortgage statement, payment history, escrow record" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "Open the bill, statement, payment history, or dispute record" not in result.markdown
 
 
@@ -2089,7 +2217,7 @@ def test_build_ticket_faq_markdown_does_not_treat_generic_loan_modification_as_m
     assert result.items[0]["topic"] == "billing and payments"
     assert "mortgage servicer" not in result.markdown
     assert "Gather the mortgage statement" not in result.markdown
-    assert "Open the bill, statement, payment history, or dispute record" in result.markdown
+    assert "Draft the customer-facing steps from a verified help article" in result.markdown
 
 
 def test_build_ticket_faq_markdown_rejects_complaint_process_boilerplate_question() -> None:
@@ -2230,7 +2358,8 @@ def test_build_ticket_faq_markdown_separates_contact_complaints_from_billing_dis
     ]
     assert result.items[0]["source_ids"] == ("cfpb:3442136",)
     assert result.items[1]["source_ids"] == ("cfpb:3584679",)
-    assert "Save the call log" in result.items[1]["steps"][0]
+    assert "Review the cited ticket evidence" in result.items[1]["steps"][0]
+    assert result.items[1]["answer_evidence_status"] == "draft_needs_review"
     assert "keeps contacting you" in result.items[1]["when_to_contact_support"]
 
 

@@ -107,7 +107,7 @@ def test_cfpb_faq_smoke_builds_grounded_markdown(monkeypatch, tmp_path: Path) ->
     assert payload["source_profile"]["missing_narrative_count"] == 2
     markdown = (tmp_path / "cfpb_faq.md").read_text(encoding="utf-8")
     assert "What should I do if I was charged overdraft fees" in markdown
-    assert "Open the bill, statement, payment history, or dispute record" in markdown
+    assert "Review the cited ticket evidence and confirm the policy-approved answer" in markdown
 
 
 def test_cfpb_faq_smoke_fails_when_fetch_returns_too_few_rows(monkeypatch, tmp_path: Path) -> None:

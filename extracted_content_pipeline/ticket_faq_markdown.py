@@ -73,10 +73,6 @@ _MORTGAGE_INTENT_TERMS = (
     "reverse mortgage",
     "mortgage servicer",
 )
-_MORTGAGE_ACTION_STEPS = (
-    "Gather the mortgage statement, payment history, escrow record, payoff quote, or loss-mitigation notice tied to the issue.",
-    "Send the servicer a written request or dispute with the dates, amounts, account number, and copies of the records you want reviewed.",
-)
 _FAILURE_RISK_RULES = (
     ("blocked_access", ("cannot", "can't", "can not", "unable", "locked", "blocked", "denied")),
     ("failed_workflow", ("failed", "fails", "not working", "does not work", "keeps timing out", "timed out", "missing")),
@@ -205,6 +201,14 @@ _SOURCE_WEIGHT_KEYS = (
     # aggregate fields so round-tripped FAQ output does not mask search_count.
     "frequency",
 )
+_RESOLUTION_TEXT_KEYS = (
+    "resolution_text",
+    "resolved_text",
+    "resolution_summary",
+    "support_resolution",
+    "agent_resolution",
+    "answer_text",
+)
 _VOCABULARY_GAP_RULES = (
     ("export", "download", "download report", "report download"),
     ("dashboard", "analytics", "reporting", "reports"),
@@ -214,47 +218,6 @@ _VOCABULARY_GAP_RULES = (
     ("connect", "connection", "integration", "sync"),
     ("cancel", "cancellation", "renewal"),
 )
-_ACTION_RULES = (
-    (("credit report", "credit file", "credit bureau", "credit bureaus", "credit reporting", "incorrect information"), (
-        "Get your latest credit reports and mark the account, date, balance, or status that looks wrong.",
-        "File a dispute with the credit bureau and the company that supplied the information, then keep the confirmation numbers and copies of your records.",
-    )),
-    (("debt not owed", "not owe", "do not owe", "collect debt", "debt collection", "collector", "debt collector", "collection letter", "collection agency", "debt validation", "validation letter", "medical debt", "settled the debt"), (
-        "Ask the collector in writing to identify the original creditor, the amount, the account, and why they say you owe it.",
-        "Compare the notice with your payment, settlement, insurance, or provider records before you pay or share more information.",
-    )),
-    (_MORTGAGE_INTENT_TERMS, _MORTGAGE_ACTION_STEPS),
-    (("opening an account", "open an account", "opened an account", "early warning services", "identity theft"), (
-        "Gather the application, account-opening notice, denial reason, identity-theft report, or bank message tied to the issue.",
-        "Ask the bank or card issuer in writing to explain the account decision, fraud record, bonus term, or access restriction and keep copies of the response.",
-    )),
-    (("getting a credit card", "applied for a credit card", "credit card application", "activate card"), (
-        "Gather the card application, offer, denial notice, account terms, or activation message tied to the issue.",
-        "Ask the issuer to explain the decision, promotion, account status, or card record in writing before you reapply or activate anything.",
-    )),
-    (("communication and contact issues", "call at all hours", "calling at all hours", "various numbers", "telephone calls", "harass", "harassed", "harassment"), (
-        "Save the call log, message, notice, or contact record that shows when and how the company contacted you.",
-        "Ask the company in writing to explain the contact reason and update any communication preferences or dispute notes tied to the account.",
-    )),
-    (("export", "dashboard", "attribution", "analytics report", "download report", "report export"), (
-        "Open the reporting or analytics area and choose the date range you need.",
-        "Look for an Export or Download option, then ask an admin to check your role and plan access if it is missing.",
-    )),
-    (("handoff", "follow-up", "workflow", "automation", "manual"), (
-        "Find the workflow or automation rule that should handle this step.",
-        "Check the last failed handoff, note which step stopped, and send that detail to support if it still needs manual cleanup.",
-    )),
-    (("billing", "invoice", "payment", "receipt", "charge", "fee", "fees", "interest", "loan", "lease", "statement", "dispute"), (
-        "Open the bill, statement, payment history, or dispute record connected to the issue.",
-        "Compare the charge, fee, payment, or balance against your receipt, contract, or written confirmation.",
-    )),
-    (("login", "email", "profile", "password", "account"), (
-        "Open your profile, account settings, or login settings and find the email, password, or account field you need to change.",
-        "Save the change, then check the old and new inboxes for a confirmation message.",
-    )),
-)
-
-
 @dataclass(frozen=True)
 class TicketFAQMarkdownResult:
     """FAQ Markdown plus metadata useful for CLI summaries and tests."""
@@ -495,6 +458,7 @@ def build_ticket_faq_markdown(
                 "zero_results": _first_present(evidence, opportunity, key="zero_results"),
                 "zero_result": _first_present(evidence, opportunity, key="zero_result"),
                 "source_weight": _source_weight(evidence, opportunity),
+                "resolution_text": _resolution_text(evidence, opportunity),
             })
 
     sorted_groups = sorted(groups.items(), key=_group_sort_key)
@@ -650,7 +614,16 @@ def _item(
         source_count=len(source_ids),
         question_source=question_source,
     )
-    steps = _article_steps(topic, action_context, support_contact=support_contact)
+    resolution_texts = _resolution_texts(rows)
+    answer_evidence_status = (
+        "resolution_evidence" if resolution_texts else "draft_needs_review"
+    )
+    steps = _article_steps(
+        topic,
+        action_context,
+        support_contact=support_contact,
+        resolution_texts=resolution_texts,
+    )
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     opportunity = _opportunity_score(topic, rows)
@@ -665,9 +638,11 @@ def _item(
         "failure_risk_signals": opportunity["failure_risk_signals"],
         "opportunity_score": opportunity["opportunity_score"],
         "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
-        "action_items": _action_items(topic, action_context),
+        "action_items": steps,
         "summary": summary,
         "steps": steps,
+        "answer_evidence_status": answer_evidence_status,
+        "resolution_source_count": _resolution_source_count(rows),
         "when_to_contact_support": escalation,
         "evidence_quotes": evidence_quotes,
         "term_mappings": term_mappings,
@@ -765,6 +740,38 @@ def source_row_weight(*rows: Mapping[str, Any]) -> int:
 
 def _source_weight(*rows: Mapping[str, Any]) -> int:
     return source_row_weight(*rows)
+
+
+def _resolution_text(*rows: Mapping[str, Any]) -> str:
+    for row in rows:
+        for key in _RESOLUTION_TEXT_KEYS:
+            text = _compact(_field_value(row, key))
+            if text:
+                return text
+    return ""
+
+
+def _resolution_texts(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    values = (
+        _compact(row.get("resolution_text"))
+        for row in rows
+        if _compact(row.get("resolution_text"))
+    )
+    return tuple(dict.fromkeys(values))
+
+
+def _resolution_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    return len(_distinct_source_keys([
+        row for row in rows if _compact(row.get("resolution_text"))
+    ]))
+
+
+def _resolution_excerpt(value: Any, *, limit: int = 180) -> str:
+    sentence = _first_sentence(_compact(value))
+    text = sentence or _compact(value)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
 
 
 def _term_mappings(
@@ -1316,11 +1323,49 @@ def _summary(
     )
 
 
-def _article_steps(topic: str, evidence_text: str, *, support_contact: str | None) -> tuple[str, ...]:
-    steps = _action_items(topic, evidence_text)
+def _article_steps(
+    _topic: str,
+    _evidence_text: str,
+    *,
+    support_contact: str | None,
+    resolution_texts: Sequence[str] = (),
+) -> tuple[str, ...]:
+    if resolution_texts:
+        return _resolution_article_steps(resolution_texts, support_contact=support_contact)
+    return _draft_review_steps(support_contact)
+
+
+def _resolution_article_steps(
+    resolution_texts: Sequence[str],
+    *,
+    support_contact: str | None,
+) -> tuple[str, ...]:
+    excerpts = tuple(
+        dict.fromkeys(
+            excerpt
+            for text in resolution_texts
+            if (excerpt := _resolution_excerpt(text))
+        )
+    )
+    steps = tuple(
+        f"Use the uploaded resolution evidence: {excerpt}"
+        for excerpt in excerpts[:2]
+    )
+    if len(steps) >= 2:
+        return (*steps, _support_step(support_contact))
+    if len(steps) == 1:
+        return (
+            steps[0],
+            "Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.",
+            _support_step(support_contact),
+        )
+    return _draft_review_steps(support_contact)
+
+
+def _draft_review_steps(support_contact: str | None) -> tuple[str, ...]:
     return (
-        steps[0],
-        steps[1],
+        "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
+        "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
         _support_step(support_contact),
     )
 
@@ -1539,19 +1584,6 @@ def _vocabulary_gap_rule_metadata(rules: Sequence[Sequence[str]]) -> dict[str, A
     if not cleaned:
         return {}
     return {"vocabulary_gap_rules": [list(rule) for rule in cleaned]}
-
-
-def _action_items(topic: str, evidence_text: str) -> tuple[str, ...]:
-    if topic == "mortgage servicing issues":
-        return _MORTGAGE_ACTION_STEPS
-    text = f"{topic} {evidence_text}".lower()
-    for terms, steps in _ACTION_RULES:
-        if any(term in text for term in terms):
-            return steps
-    return (
-        "Review the account, page, or workflow named in the ticket.",
-        "Write down what you tried and the exact message or behavior you saw.",
-    )
 
 
 def _output_checks(
