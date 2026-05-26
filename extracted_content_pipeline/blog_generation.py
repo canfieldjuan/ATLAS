@@ -42,6 +42,9 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 # tenant-scope concept.
 _BLOG_REASONING_TARGET_MODE = "blog_blueprint"
 _BLOG_FAILURE_EXCERPT_CHARS = 1500
+_SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS = 25
+_SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS = 700
+_SMALL_SUPPORT_TICKET_BLOG_TARGET_WORDS = 1100
 
 
 @dataclass(frozen=True)
@@ -172,6 +175,16 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
     for blocker in blockers:
         code = str(blocker or "").strip()
         if code.startswith("content_too_short:"):
+            min_words_match = re.search(r"_need_(\d+)", code)
+            min_words = int(min_words_match.group(1)) if min_words_match else 1500
+            if min_words == _SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS:
+                instructions.append(
+                    f"- Expand `content` to at least {min_words} words while "
+                    "keeping the compact support-ticket brief shape. Use 3-4 "
+                    "H2 sections, no H3 subsections, and no broad scaling or "
+                    "process section."
+                )
+                continue
             instructions.append(
                 "- Expand `content` to at least 1500 words and keep it in the "
                 "1500-2200 word range. Add useful H2 sections and supporting "
@@ -205,7 +218,8 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "- Fix the support-ticket generated-content issue exactly. Use only "
                 "counts, timeframes, clusters, and customer wording present in the "
                 "blueprint. Do not invent calendar windows, ticket-reduction "
-                "percentages, ROI math, or future impact claims."
+                "percentages, ROI math, future impact claims, or claims that "
+                "customers will or could find answers without opening support tickets."
             )
     if not instructions:
         instructions.append(
@@ -666,7 +680,10 @@ class BlogPostGenerationService:
                 content=str(parsed.get("content") or ""),
                 context=context,
             ),
-            policy=self._config.quality_policy,
+            policy=_quality_policy_for_context(
+                context,
+                base_policy=self._config.quality_policy,
+            ),
         )
         support_ticket_blockers = _support_ticket_generated_content_blockers(
             parsed,
@@ -753,6 +770,65 @@ def _quality_context(
         "secondary_keywords": parsed.get("secondary_keywords"),
         "faq": parsed.get("faq"),
     }
+
+
+def _quality_policy_for_context(
+    context: Mapping[str, Any],
+    *,
+    base_policy: QualityPolicy | None,
+) -> QualityPolicy | None:
+    data_context = _mapping_dict(context.get("data_context"))
+    if not _uses_small_support_ticket_blog_policy(data_context):
+        return base_policy
+
+    thresholds = dict(base_policy.thresholds) if base_policy is not None else {}
+    thresholds.setdefault("min_words", _SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS)
+    thresholds.setdefault("target_words", _SMALL_SUPPORT_TICKET_BLOG_TARGET_WORDS)
+    metadata = dict(base_policy.metadata) if base_policy is not None else {}
+    metadata["support_ticket_small_upload"] = True
+    return QualityPolicy(
+        name=base_policy.name if base_policy is not None else "support_ticket_blog",
+        version=base_policy.version if base_policy is not None else "v1",
+        thresholds=thresholds,
+        metadata=metadata,
+    )
+
+
+def _uses_small_support_ticket_blog_policy(data_context: Mapping[str, Any]) -> bool:
+    if not _is_support_ticket_blog_context(data_context):
+        return False
+    if _truthy_context(data_context.get("has_measured_outcomes")):
+        return False
+    if _truthy_context(data_context.get("support_ticket_resolution_evidence_present")):
+        return False
+    row_counts = (
+        _positive_int_context(data_context.get("source_row_count")),
+        _positive_int_context(data_context.get("included_ticket_row_count")),
+    )
+    return any(
+        count is not None and count <= _SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS
+        for count in row_counts
+    )
+
+
+def _positive_int_context(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _truthy_context(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
 
 
 def _support_ticket_generated_content_blockers(

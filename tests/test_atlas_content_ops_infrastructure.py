@@ -91,10 +91,16 @@ def test_blog_generation_prompt_trims_small_support_ticket_uploads() -> None:
         assert "data_context.source_row_count" in prompt
         assert "data_context.included_ticket_row_count" in prompt
         assert "25 or fewer" in prompt
+        assert "short FAQ review brief instead of a full article" in prompt
         assert "700-1100 words" in prompt
-        assert "at most 5 H2 sections" in prompt
+        assert "3-4 H2 sections" in prompt
+        assert "no H3 subsections" in prompt
+        assert "no broad scaling/process section" in prompt
+        assert "first two H2 sections must open with 40-80 word answer paragraphs" in prompt
+        assert "exact `target_keyword`" in prompt
+        assert "customers will or could find answers" in prompt
         assert "no repeated sections that explain the same cluster" in prompt
-        assert "Draft FAQ shells to verify" in prompt
+        assert "Draft support ticket FAQ shells to verify" in prompt
 
 
 def test_host_skill_store_falls_back_to_packaged_skills() -> None:
