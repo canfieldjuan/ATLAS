@@ -25,6 +25,16 @@ try:
 except ImportError:  # pragma: no cover - optional host dependency
     load_dotenv = None
 
+from extracted_content_pipeline.support_ticket_context_contract import (
+    SUPPORT_TICKET_CATEGORY,
+    SUPPORT_TICKET_DEFAULT_TOPIC,
+    SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD,
+    SUPPORT_TICKET_SOURCE,
+    SUPPORT_TICKET_TOPIC_TYPE,
+    UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
+    UPLOADED_TICKETS_REVIEW_PERIOD,
+)
+
 
 DEFAULT_LANDING_PAGE_INPUTS: Mapping[str, Any] = {
     "campaign_name": "FAQ Report",
@@ -61,8 +71,8 @@ DEFAULT_BLOG_TOPIC_TYPE = "content_ops_live_smoke"
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
 )
-SUPPORT_TICKET_BLOG_TOPIC = "Support-ticket questions customers keep asking"
-SUPPORT_TICKET_BLOG_TOPIC_TYPE = "content_ops_support_ticket_faq"
+SUPPORT_TICKET_BLOG_TOPIC = SUPPORT_TICKET_DEFAULT_TOPIC
+SUPPORT_TICKET_BLOG_TOPIC_TYPE = SUPPORT_TICKET_TOPIC_TYPE
 
 AsyncCallable = Callable[[], Awaitable[None]]
 ServicesFactory = Callable[[], Any]
@@ -667,9 +677,15 @@ def _support_ticket_blog_blueprint_payload(
     cluster_summary = _cluster_summary(top_clusters)
     faq_questions = list(inputs.get("faq_questions") or [])
     draft_faq_entries = min(12, max(1, len(faq_questions) or included_row_count))
-    source_period = str(inputs.get("source_period") or "Uploaded support tickets")
+    source_period = str(
+        inputs.get("source_period") or UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
+    )
     has_valid_date_window = bool(inputs.get("faq_window_days"))
-    review_period = "last 90 days" if has_valid_date_window else "uploaded tickets"
+    review_period = (
+        SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD
+        if has_valid_date_window
+        else UPLOADED_TICKETS_REVIEW_PERIOD
+    )
     data_context = {
         "review_period": review_period,
         "source_row_count": source_row_count,
@@ -679,10 +695,10 @@ def _support_ticket_blog_blueprint_payload(
         "_known_vendors": [],
         "total_reviews_analyzed": included_row_count,
         "deep_enriched_count": included_row_count,
-        "category": "support tickets",
+        "category": SUPPORT_TICKET_CATEGORY,
         "topic": SUPPORT_TICKET_BLOG_TOPIC,
         "source_period": source_period,
-        "source": "support_ticket_provider",
+        "source": SUPPORT_TICKET_SOURCE,
     }
     if has_valid_date_window:
         data_context["report_date"] = "2026-05-23"

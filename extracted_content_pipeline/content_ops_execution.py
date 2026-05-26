@@ -15,6 +15,15 @@ from .generation_plan import GenerationPlan, GenerationPlanStep, build_generatio
 from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
 from .landing_page_ports import MarketingCampaign
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
+from .support_ticket_context_contract import (
+    SUPPORT_TICKET_CATEGORY,
+    SUPPORT_TICKET_DEFAULT_TOPIC,
+    SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD,
+    SUPPORT_TICKET_SOURCE,
+    UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
+    UPLOADED_TICKETS_REVIEW_PERIOD,
+    is_support_ticket_topic_type,
+)
 from .ticket_faq_markdown import normalize_vocabulary_gap_rules
 
 logger = logging.getLogger(__name__)
@@ -711,20 +720,26 @@ def _support_ticket_blog_data_context_from_inputs(
     inputs: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
     filters = _filters_from_inputs(inputs) or {}
-    if str(filters.get("topic_type") or "").strip() != "content_ops_support_ticket_faq":
+    if not is_support_ticket_topic_type(filters.get("topic_type")):
         return None
     top_clusters = _mapping_list_input(inputs.get("top_ticket_clusters"))
     included_count = _positive_int_context(inputs.get("included_ticket_row_count"))
     source_count = _positive_int_context(inputs.get("source_row_count"))
     question_count = _positive_int_context(inputs.get("question_like_ticket_count"))
-    source_period = _clean(inputs.get("source_period")) or "Uploaded support tickets"
-    review_period = "last 90 days" if inputs.get("faq_window_days") else "uploaded tickets"
+    source_period = (
+        _clean(inputs.get("source_period")) or UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
+    )
+    review_period = (
+        SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD
+        if inputs.get("faq_window_days")
+        else UPLOADED_TICKETS_REVIEW_PERIOD
+    )
     context: dict[str, Any] = {
-        "source": "support_ticket_provider",
+        "source": SUPPORT_TICKET_SOURCE,
         "source_period": source_period,
         "review_period": review_period,
-        "category": "support tickets",
-        "topic": _clean(inputs.get("topic")) or "Support-ticket questions customers keep asking",
+        "category": SUPPORT_TICKET_CATEGORY,
+        "topic": _clean(inputs.get("topic")) or SUPPORT_TICKET_DEFAULT_TOPIC,
         "source_row_count": source_count or included_count,
         "included_ticket_row_count": included_count,
         "question_like_ticket_count": question_count,

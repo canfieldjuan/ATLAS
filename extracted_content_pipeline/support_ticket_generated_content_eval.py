@@ -11,16 +11,25 @@ import sys
 from pathlib import Path
 from typing import Any
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from extracted_content_pipeline.support_ticket_context_contract import (
+        SUPPORT_TICKET_CLUSTER_KEYS,
+        SUPPORT_TICKET_SOURCE_COUNT_KEYS,
+        is_uploaded_ticket_context,
+    )
+else:
+    from .support_ticket_context_contract import (
+        SUPPORT_TICKET_CLUSTER_KEYS,
+        SUPPORT_TICKET_SOURCE_COUNT_KEYS,
+        is_uploaded_ticket_context,
+    )
+
 
 JsonDict = dict[str, Any]
 
 # From earlier stale smoke benchmark drift; still allowed when source-backed.
 _STALE_BENCHMARK_TOKENS = ("186", "78", "42%")
-_COUNT_CONTEXT_KEYS = (
-    "source_row_count",
-    "included_ticket_row_count",
-    "question_like_ticket_count",
-)
 _FRAMING_RE = re.compile(
     r"\b(?:support[-\s]?tickets?|tickets?|faq|help[-\s]?center|answers?)\b",
     re.IGNORECASE,
@@ -232,7 +241,7 @@ def _check_count_visibility(
 ) -> None:
     expected_counts = [
         int(source_context[key])
-        for key in _COUNT_CONTEXT_KEYS
+        for key in SUPPORT_TICKET_SOURCE_COUNT_KEYS
         if _positive_int(source_context.get(key)) is not None
     ]
     visible_counts = [
@@ -261,9 +270,7 @@ def _check_uploaded_ticket_timeframe_truthfulness(
     text: str,
     source_context: Mapping[str, Any],
 ) -> None:
-    source_period = str(source_context.get("source_period") or "").strip().lower()
-    review_period = str(source_context.get("review_period") or "").strip().lower()
-    if source_period != "uploaded support tickets" and review_period != "uploaded tickets":
+    if not is_uploaded_ticket_context(source_context):
         checks.append({
             "name": "uploaded_ticket_timeframe_truthful",
             "passed": True,
@@ -298,9 +305,7 @@ def _check_uploaded_ticket_cadence_truthfulness(
     text: str,
     source_context: Mapping[str, Any],
 ) -> None:
-    source_period = str(source_context.get("source_period") or "").strip().lower()
-    review_period = str(source_context.get("review_period") or "").strip().lower()
-    if source_period != "uploaded support tickets" and review_period != "uploaded tickets":
+    if not is_uploaded_ticket_context(source_context):
         checks.append({
             "name": "uploaded_ticket_cadence_truthful",
             "passed": True,
@@ -381,11 +386,11 @@ def _source_backed_percentages(source_context: Mapping[str, Any]) -> set[int]:
         count
         for count in (
             _positive_int(source_context.get(key))
-            for key in _COUNT_CONTEXT_KEYS
+            for key in SUPPORT_TICKET_SOURCE_COUNT_KEYS
         )
         if count is not None
     ]
-    clusters = source_context.get("top_ticket_clusters") or source_context.get("top_clusters")
+    clusters = _support_ticket_clusters(source_context)
     if isinstance(clusters, Sequence) and not isinstance(clusters, (str, bytes)):
         for cluster in clusters:
             if isinstance(cluster, Mapping):
@@ -437,7 +442,7 @@ def _check_source_signal_visibility(
 
 def _source_signals(source_context: Mapping[str, Any]) -> list[str]:
     signals: list[str] = []
-    clusters = source_context.get("top_ticket_clusters") or source_context.get("top_clusters")
+    clusters = _support_ticket_clusters(source_context)
     if isinstance(clusters, Sequence) and not isinstance(clusters, (str, bytes)):
         for cluster in clusters:
             if isinstance(cluster, Mapping):
@@ -484,7 +489,7 @@ def _result(
 
 
 def _source_context_summary(source_context: Mapping[str, Any]) -> JsonDict:
-    clusters = source_context.get("top_ticket_clusters") or source_context.get("top_clusters")
+    clusters = _support_ticket_clusters(source_context)
     return {
         "source_row_count": source_context.get("source_row_count"),
         "included_ticket_row_count": source_context.get("included_ticket_row_count"),
@@ -496,6 +501,14 @@ def _source_context_summary(source_context: Mapping[str, Any]) -> JsonDict:
             else 0
         ),
     }
+
+
+def _support_ticket_clusters(source_context: Mapping[str, Any]) -> Any:
+    for key in SUPPORT_TICKET_CLUSTER_KEYS:
+        clusters = source_context.get(key)
+        if clusters:
+            return clusters
+    return None
 
 
 def _record(

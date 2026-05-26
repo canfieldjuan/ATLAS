@@ -28,6 +28,7 @@ from .services.campaign_reasoning_context import (
     consumed_campaign_reasoning_contexts,
     normalize_campaign_reasoning_context,
 )
+from .support_ticket_context_contract import is_support_ticket_context
 from .support_ticket_generated_content_eval import (
     evaluate_support_ticket_generated_content,
 )
@@ -41,14 +42,6 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 # tenant-scope concept.
 _BLOG_REASONING_TARGET_MODE = "blog_blueprint"
 _BLOG_FAILURE_EXCERPT_CHARS = 1500
-_SUPPORT_TICKET_SOURCE_MARKER = "support_ticket"
-_SUPPORT_TICKET_PERIOD_MARKERS = ("support-ticket", "support ticket")
-_SUPPORT_TICKET_CATEGORY_MARKER = "support ticket"
-_SUPPORT_TICKET_COUNT_KEYS = (
-    "included_ticket_row_count",
-    "question_like_ticket_count",
-)
-_SUPPORT_TICKET_CLUSTER_KEYS = ("top_ticket_clusters", "top_clusters")
 
 
 @dataclass(frozen=True)
@@ -817,24 +810,7 @@ def _blueprint_with_data_context(
 
 
 def _is_support_ticket_blog_context(data_context: Mapping[str, Any]) -> bool:
-    source = str(data_context.get("source") or data_context.get("provider") or "").lower()
-    source_period = str(data_context.get("source_period") or "").lower()
-    category = str(data_context.get("category") or data_context.get("topic") or "").lower()
-    return (
-        _SUPPORT_TICKET_SOURCE_MARKER in source
-        or any(marker in source_period for marker in _SUPPORT_TICKET_PERIOD_MARKERS)
-        or _SUPPORT_TICKET_CATEGORY_MARKER in category
-        or any(_positive_int(data_context.get(key)) is not None for key in _SUPPORT_TICKET_COUNT_KEYS)
-        or any(_has_cluster_rows(data_context.get(key)) for key in _SUPPORT_TICKET_CLUSTER_KEYS)
-    )
-
-
-def _has_cluster_rows(value: Any) -> bool:
-    if isinstance(value, (str, bytes, bytearray)):
-        return False
-    if not isinstance(value, Sequence):
-        return False
-    return any(isinstance(item, Mapping) for item in value)
+    return is_support_ticket_context(data_context)
 
 
 def _blog_generation_prompts(
@@ -910,14 +886,6 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
-
-
-def _positive_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def _source_quote_tuple(value: Any) -> tuple[str, ...]:
