@@ -15,10 +15,9 @@ The host already has equivalent infrastructure:
 - `atlas_brain.skills.SkillRegistry.get(name) -> Optional[Skill]`,
   via `get_skill_registry()`.
 
-This module provides thin adapters and factories so the next
-slices (E2 / E3+) can wire LLM-needing generators
-(`landing_page`, `campaign`, etc.) into the Content Ops bundle
-without re-deriving the bridge each time.
+This module provides thin adapters and factories so Content Ops
+generators (`landing_page`, `campaign`, etc.) can use the host's LLM
+and skill infrastructure without re-deriving the bridge each time.
 
 This module is deliberately at `atlas_brain/_content_ops_infrastructure.py`
 (not inside `atlas_brain/api/`) so the test harness can import
@@ -42,6 +41,7 @@ from extracted_content_pipeline.campaign_ports import (
     LLMResponse,
     SkillStore,
 )
+from extracted_content_pipeline.campaign_llm_client import PipelineLLMClient
 
 
 class _HostLLMClient:
@@ -185,14 +185,20 @@ def build_content_ops_llm_client(
 
         pipeline_llm_resolver = get_pipeline_llm
 
+    pipeline_kwargs = {
+        "workload": "openrouter",
+        "prefer_cloud": True,
+        "try_openrouter": True,
+        "auto_activate_ollama": False,
+        "openrouter_model": None,
+    }
     if pipeline_llm_resolver is not None:
-        host_llm = pipeline_llm_resolver(
-            workload="openrouter",
-            try_openrouter=True,
-            auto_activate_ollama=False,
-        )
+        host_llm = pipeline_llm_resolver(**pipeline_kwargs)
         if host_llm is not None:
-            return _HostLLMClient(host_llm)
+            return PipelineLLMClient(
+                resolver=pipeline_llm_resolver,
+                **pipeline_kwargs,
+            )
 
     if llm_registry is None:
         # Lazy import: only production callers reach here. Tests
@@ -206,7 +212,10 @@ def build_content_ops_llm_client(
     host_llm = llm_registry.get_active()
     if host_llm is None:
         return None
-    return _HostLLMClient(host_llm)
+    return PipelineLLMClient(
+        resolver=lambda **_kwargs: host_llm,
+        **pipeline_kwargs,
+    )
 
 
 _HOST_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
