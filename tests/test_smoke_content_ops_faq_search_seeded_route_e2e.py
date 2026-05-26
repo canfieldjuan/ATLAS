@@ -321,7 +321,7 @@ async def test_cleanup_seeded_faqs_reports_actual_delete_rowcount(monkeypatch):
 
         async def execute(self, _query, faq_ids):
             self.deleted_ids = faq_ids
-            return "DELETE 1"
+            return "DELETE 2"
 
         async def close(self):
             self.closed = True
@@ -344,8 +344,8 @@ async def test_cleanup_seeded_faqs_reports_actual_delete_rowcount(monkeypatch):
     assert payload == {
         "ok": True,
         "requested_faq_ids": 2,
-        "deleted_faq_ids": 1,
-        "delete_status": "DELETE 1",
+        "deleted_faq_ids": 2,
+        "delete_status": "DELETE 2",
         "error": None,
     }
     assert fake_pool.deleted_ids == [
@@ -353,6 +353,37 @@ async def test_cleanup_seeded_faqs_reports_actual_delete_rowcount(monkeypatch):
         "22222222-2222-2222-2222-222222222222",
     ]
     assert fake_pool.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cleanup_seeded_faqs_fails_when_delete_rowcount_mismatches(monkeypatch):
+    class FakePool:
+        async def execute(self, _query, _faq_ids):
+            return "DELETE 1"
+
+        async def close(self):
+            return None
+
+    async def _create_pool(**_kwargs):
+        return FakePool()
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=_create_pool))
+
+    payload = await smoke._cleanup_seeded_faqs(
+        "postgresql://example",
+        [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+    )
+
+    assert payload == {
+        "ok": False,
+        "requested_faq_ids": 2,
+        "deleted_faq_ids": 1,
+        "delete_status": "DELETE 1",
+        "error": "cleanup deleted 1 FAQ rows but requested 2",
+    }
 
 
 @pytest.mark.asyncio
@@ -375,11 +406,11 @@ async def test_cleanup_seeded_faqs_surfaces_malformed_delete_status(monkeypatch)
     )
 
     assert payload == {
-        "ok": True,
+        "ok": False,
         "requested_faq_ids": 1,
         "deleted_faq_ids": None,
         "delete_status": "UPDATE 1",
-        "error": None,
+        "error": "cleanup delete status is not parseable: 'UPDATE 1'",
     }
 
 
