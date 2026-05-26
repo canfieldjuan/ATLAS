@@ -424,7 +424,7 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
         "ok": False,
         "phase": "preflight",
         "artifacts": {},
-        "seed": {"ok": False, "returncode": None},
+        "seed": _seed_not_run("preflight_failed", ok=False),
         "route": _route_not_run("preflight_failed", ok=False),
         "detail": _detail_not_run(
             "skip_detail_check" if args.skip_detail_check else "preflight_failed",
@@ -556,6 +556,17 @@ def _detail_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
 
 
 def _route_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
+    return {
+        "ok": ok,
+        "returncode": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "skipped": True,
+        "not_run_reason": reason,
+    }
+
+
+def _seed_not_run(reason: str, *, ok: bool) -> dict[str, Any]:
     return {
         "ok": ok,
         "returncode": None,

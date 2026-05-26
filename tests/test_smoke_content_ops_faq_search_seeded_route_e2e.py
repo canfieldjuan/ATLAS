@@ -437,6 +437,14 @@ def test_main_writes_preflight_result(tmp_path, capsys):
     assert payload["preflight_errors"] == [
         "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
     ]
+    assert payload["seed"] == {
+        "ok": False,
+        "returncode": None,
+        "stdout_tail": "",
+        "stderr_tail": "",
+        "skipped": True,
+        "not_run_reason": "preflight_failed",
+    }
     assert payload["route"] == {
         "ok": False,
         "returncode": None,
