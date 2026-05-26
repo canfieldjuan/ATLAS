@@ -30,17 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-26
-
-### Support-ticket descriptive blog output is long and repetitive on tiny uploads
-- File/location: `atlas_brain/skills/digest/blog_post_generation.md` and `extracted_content_pipeline/skills/digest/blog_post_generation.md`, support-ticket descriptive draft path.
-- Description: The live Haiku validation saved a truth-safe support-ticket blog from a 4-row upload, but the article repeated similar sections and used 10k+ output tokens.
-- Why it matters: The current output is acceptable for truthfulness validation, but small support-ticket uploads need tighter length/section guidance so review drafts are cheaper, easier to edit, and less repetitive.
-- Effort: S
-- Category: polish
-- Owner/session: content-ops/support-ticket-provider-descriptive-blog-live-validation
-- Found during: PR-Support-Ticket-Descriptive-Blog-Live-Validation.
-
 ## 2026-05-23
 
 ### FAQSCALE-1 - Large synchronous FAQ generation needs hosted limits / backpressure / background execution

@@ -113,7 +113,7 @@ cluster explanations and used more than 10k output tokens. This is not a
 truthfulness blocker for this validation, but it should be tightened before the
 product experience is polished.
 
-Parked in `HARDENING.md`:
+Parked in `ATLAS-HARDENING.md`:
 
 - `Support-ticket descriptive blog output is long and repetitive on tiny uploads`
 
@@ -124,4 +124,3 @@ Parked in `HARDENING.md`:
 - Explicit generated-content evaluator rerun - passed.
 - Manual copy audit for unsupported outcomes, unsupported timeframes/cadence,
   and concrete answer steps without resolution evidence - passed.
-

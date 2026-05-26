@@ -39,7 +39,7 @@ Slice phase: Functional validation
 |---|---|
 | `plans/PR-Support-Ticket-Descriptive-Blog-Live-Validation.md` | Plan doc for this live validation slice. |
 | `docs/extraction/validation/support_ticket_descriptive_blog_live_validation_2026-05-26.md` | Live Haiku validation record. |
-| `HARDENING.md` | Park non-blocking product polish found during live validation. |
+| `ATLAS-HARDENING.md` | Park non-blocking blog polish found during live validation. |
 
 ## Mechanism
 
