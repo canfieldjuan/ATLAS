@@ -92,11 +92,11 @@ patterns that caused descriptive drafts to fail:
 Completed:
 
 - `python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q`
-  - `41 passed`.
+  - `42 passed`.
 - `python -m pytest tests/test_extracted_blog_generation.py::test_generate_saves_descriptive_support_ticket_blog_without_outcome_or_resolution_evidence -q`
   - `1 passed`.
 - `python -m pytest tests/test_evaluate_support_ticket_generated_content.py tests/test_extracted_blog_generation.py -q`
-  - `98 passed`.
+  - `99 passed`.
 - `bash scripts/local_pr_review.sh --current-pr-body-file <PR body file>`
   - passed.
 
@@ -106,5 +106,5 @@ Completed:
 |---|---:|
 | Plan doc | ~105 |
 | Prompt guidance | ~10 |
-| Evaluator and tests | ~80 |
-| **Total** | **~195** |
+| Evaluator and tests | ~120 |
+| **Total** | **~235** |

@@ -292,7 +292,9 @@ _UNSUPPORTED_SUPPORT_ANSWER_STEP_PATTERNS = (
         r"\s*>\s*[A-Z][A-Za-z0-9 &/.-]{1,40}\b"
     ),
     re.compile(
-        r"(?:^|\b(?:like|should|must|can|to)\s+)"
+        r"(?:^|\b(?:like|should|must|can|to)\s+|"
+        r"\b(?:first|then|next|finally),?\s+|"
+        r"\bto\s+fix\s+(?:this|it),?\s+)"
         r"(?:click|select|open|go\s+to|choose)\s+[^.!?\n]{0,80}"
         r"\b(?:settings|menu|tab|button|dashboard|reports?|export|email|billing)\b",
         re.IGNORECASE,

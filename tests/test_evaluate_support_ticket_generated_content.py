@@ -791,6 +791,38 @@ def test_blog_export_fails_procedural_answer_steps_without_resolution_evidence()
     ]
 
 
+def test_blog_export_fails_procedural_answer_step_lead_ins_without_resolution_evidence() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Then click the Settings menu. "
+            "First, go to the billing dashboard. "
+            "Next, select the Export button. "
+            "To fix this, go to the Settings menu. "
+            "1. Click the Export tab."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is False
+    assert answer_step_check["details"]["unsupported_answer_steps"] == [
+        "Then click the Settings menu.",
+        "First, go to the billing dashboard.",
+        "Next, select the Export button.",
+        "To fix this, go to the Settings menu.",
+        "Click the Export tab.",
+    ]
+
+
 def test_blog_export_allows_non_ui_greater_than_comparisons() -> None:
     export = _blog_export(
         content_override=(
