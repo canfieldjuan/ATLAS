@@ -559,9 +559,42 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool) -> None:
     )
 
 
+def _preflight_summary(
+    args: argparse.Namespace,
+    *,
+    message: str,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    return _summary_payload(
+        ok=False,
+        run_id="preflight",
+        args=args,
+        cases=[],
+        results=[],
+        setup={
+            "ok": False,
+            "phase": "preflight",
+            "error": {
+                "type": "SystemExit",
+                "message": message,
+            },
+        },
+        elapsed_seconds=elapsed_seconds,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    code, summary = asyncio.run(run_smoke(args))
+    started = time.perf_counter()
+    try:
+        code, summary = asyncio.run(run_smoke(args))
+    except SystemExit as exc:
+        summary = _preflight_summary(
+            args,
+            message=str(exc.code or ""),
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        code = 2
     if args.output_result:
         _write_result(Path(args.output_result), summary)
     _print_summary(summary, as_json=bool(args.json))

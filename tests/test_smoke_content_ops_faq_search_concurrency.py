@@ -334,6 +334,50 @@ def test_validate_args_rejects_cleanup_manifest_without_kept_data() -> None:
         smoke._validate_args(args)
 
 
+def test_main_writes_result_for_preflight_failure(tmp_path) -> None:
+    result_path = tmp_path / "faq-search-preflight.json"
+
+    code = smoke.main([
+        "--database-url",
+        "",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["ok"] is False
+    assert payload["run_id"] == "preflight"
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "preflight",
+        "error": {
+            "type": "SystemExit",
+            "message": "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL",
+        },
+    }
+    assert payload["latency"] == {
+        "count": 0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "max_ms": 0.0,
+    }
+
+
 def test_main_writes_result_for_pool_creation_failure(tmp_path, monkeypatch) -> None:
     async def _raise_pool(*_args, **_kwargs):
         raise RuntimeError("resolver failed")
