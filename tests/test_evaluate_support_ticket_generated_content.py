@@ -464,6 +464,278 @@ def test_blog_export_fails_customer_retention_outcome_claims() -> None:
     ]
 
 
+def test_blog_export_fails_soft_customer_retention_outcome_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Customers who find answers quickly are more likely to stay."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Customers who find answers quickly are more likely to stay."
+    ]
+
+
+def test_blog_export_fails_support_volume_outcome_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Reduce support volume: customers find answers without opening a ticket."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Reduce support volume: customers find answers without opening a ticket."
+    ]
+
+
+def test_blog_export_fails_live_smoke_soft_outcome_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "This is the most efficient way to reduce repeat support tickets. "
+            "Unresolved reporting issues may delay customer decisions or trigger "
+            "churn at renewal time. "
+            "If customers are finding the FAQ and solving their own problems, "
+            "you'll see fewer tickets on that topic. "
+            "For a small support team, this matters because it frees up capacity. "
+            "Customers who find them should resolve their issues faster than "
+            "customers who open support tickets. "
+            "Your help content helps future customers find answers faster. "
+            "When a customer can answer their own question in 30 seconds instead "
+            "of waiting for support, they are more likely to stay, upgrade, "
+            "and recommend you. "
+            "These patterns indicate where FAQ entries would help customers find "
+            "answers without opening a support ticket. "
+            "Every FAQ entry that answers a question before a customer opens a "
+            "ticket can help free the support team. "
+            "A small team cannot scale by hiring more support staff; they scale "
+            "by reducing the number of tickets that need human attention. "
+            "Support teams spend countless hours answering the same questions. "
+            "This process typically takes 2-3 minutes and requires no support "
+            "intervention. "
+            "The cluster is an opportunity to deflect future tickets with a "
+            "single FAQ entry. "
+            "This builds a help center that reduces support load. "
+            "A single FAQ entry could resolve this issue for multiple users. "
+            "The FAQ could have provided an immediate answer. "
+            "Customers can find help without opening a support ticket. "
+            "Future customers can find the solution without opening a support "
+            "ticket. "
+            "Customers can find the answer in your help center without opening "
+            "a ticket. "
+            "The workflow reduces the volume of repeat support interactions. "
+            "Support teams spend thousands of hours answering repeat questions. "
+            "Uploaded support tickets reveal these patterns instantly. "
+            "The update takes effect immediately after verification. "
+            "This frees up support capacity for more complex issues. "
+            "This issue can create potential churn and affect account retention."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "This is the most efficient way to reduce repeat support tickets.",
+        (
+            "Unresolved reporting issues may delay customer decisions or trigger "
+            "churn at renewal time."
+        ),
+        (
+            "If customers are finding the FAQ and solving their own problems, "
+            "you'll see fewer tickets on that topic."
+        ),
+        "For a small support team, this matters because it frees up capacity.",
+        (
+            "Customers who find them should resolve their issues faster than "
+            "customers who open support tickets."
+        ),
+        "Your help content helps future customers find answers faster.",
+        (
+            "When a customer can answer their own question in 30 seconds instead "
+            "of waiting for support, they are more likely to stay, upgrade, "
+            "and recommend you."
+        ),
+        (
+            "These patterns indicate where FAQ entries would help customers find "
+            "answers without opening a support ticket."
+        ),
+        (
+            "Every FAQ entry that answers a question before a customer opens a "
+            "ticket can help free the support team."
+        ),
+        (
+            "A small team cannot scale by hiring more support staff; they scale "
+            "by reducing the number of tickets that need human attention."
+        ),
+        "Support teams spend countless hours answering the same questions.",
+        (
+            "This process typically takes 2-3 minutes and requires no support "
+            "intervention."
+        ),
+        (
+            "The cluster is an opportunity to deflect future tickets with a "
+            "single FAQ entry."
+        ),
+        "This builds a help center that reduces support load.",
+        "A single FAQ entry could resolve this issue for multiple users.",
+        "The FAQ could have provided an immediate answer.",
+        "Customers can find help without opening a support ticket.",
+        (
+            "Future customers can find the solution without opening a support "
+            "ticket."
+        ),
+        (
+            "Customers can find the answer in your help center without opening "
+            "a ticket."
+        ),
+        "The workflow reduces the volume of repeat support interactions.",
+        "Support teams spend thousands of hours answering repeat questions.",
+        "Uploaded support tickets reveal these patterns instantly.",
+        "The update takes effect immediately after verification.",
+        "This frees up support capacity for more complex issues.",
+    ]
+
+
+def test_blog_export_allows_churn_retention_context_and_disclaimers() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "We cannot promise this will reduce churn or improve retention. "
+            "Account retention is influenced by many factors beyond docs. "
+            "Slow support responses are a well-known churn driver in SaaS. "
+            "This issue can create potential churn and affect account retention."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is True
+    assert outcome_check["details"] == {"unsupported_claims": []}
+
+
+def test_blog_export_fails_direct_retention_improvement_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Publishing these answers improves account retention."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Publishing these answers improves account retention."
+    ]
+
+
+def test_blog_export_fails_claims_with_contrastive_or_guidance_phrasing() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Publishing answers reduces support volume rather than increasing it. "
+            "This will reduce churn rather than ignore it. "
+            "Use cautious language: support tickets will drop after publishing."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "Publishing answers reduces support volume rather than increasing it.",
+        "This will reduce churn rather than ignore it.",
+        "Use cautious language: support tickets will drop after publishing.",
+    ]
+
+
+def test_blog_export_fails_claims_after_disclaimer_contrast() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "We cannot promise this will reduce churn, but publishing answers "
+            "reduces support volume. "
+            "This is not a guarantee; support tickets will drop after publishing."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        (
+            "We cannot promise this will reduce churn, but publishing answers "
+            "reduces support volume."
+        ),
+        "This is not a guarantee; support tickets will drop after publishing.",
+    ]
+
+
 def test_blog_export_allows_cautious_support_outcome_language() -> None:
     export = _blog_export(
         content_override=(
