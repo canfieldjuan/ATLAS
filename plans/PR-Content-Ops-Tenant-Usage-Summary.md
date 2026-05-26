@@ -64,14 +64,14 @@ for global spend analysis.
 
 ## Verification
 
-- python -m pytest tests/test_extracted_content_ops_usage_summary.py tests/test_atlas_content_ops_generated_assets_api.py -q — 10 passed, 1 skipped, 1 warning.
-- python -m compileall -q extracted_content_pipeline/content_ops_usage_summary.py extracted_content_pipeline/api/control_surfaces.py tests/test_extracted_content_ops_usage_summary.py tests/test_atlas_content_ops_generated_assets_api.py — passed.
+- python -m pytest tests/test_extracted_content_ops_usage_summary.py tests/test_extracted_content_control_surface_api.py::test_usage_summary_route_returns_content_ops_llm_rollup_with_filters tests/test_atlas_content_ops_generated_assets_api.py -q — 11 passed, 2 skipped, 1 warning.
+- python -m compileall -q extracted_content_pipeline/content_ops_usage_summary.py extracted_content_pipeline/api/control_surfaces.py tests/test_extracted_content_ops_usage_summary.py tests/test_atlas_content_ops_generated_assets_api.py tests/test_extracted_content_control_surface_api.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
 - bash scripts/check_ascii_python.sh — passed.
 - git diff --check — passed.
-- bash scripts/local_pr_review.sh --current-pr-body-file <body> — passed.
+- bash scripts/local_pr_review.sh --current-pr-body-file <body> — pending final rerun before push.
 
 ## Estimated diff size
 
@@ -80,7 +80,7 @@ for global spend analysis.
 | Plan doc | ~75 |
 | Usage summary query | ~20 |
 | Control-surface route | ~30 |
-| Tests | ~80 |
-| **Total** | **~205** |
+| Tests | ~230 |
+| **Total** | **~355** |
 
 Under the 400 LOC soft cap.

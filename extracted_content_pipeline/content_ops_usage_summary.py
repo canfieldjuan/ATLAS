@@ -110,12 +110,14 @@ class _UsageFilters:
         self.request_id = request_id
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "account_id": self.account_id,
+        filters = {
             "asset_type": self.asset_type,
             "run_id": self.run_id,
             "request_id": self.request_id,
         }
+        if self.account_id is not None:
+            filters["account_id"] = self.account_id
+        return filters
 
 
 def _usage_where_clause(filters: _UsageFilters) -> tuple[str, list[Any]]:
