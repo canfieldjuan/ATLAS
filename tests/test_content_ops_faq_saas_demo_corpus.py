@@ -183,6 +183,31 @@ def test_saas_demo_seed_args_fail_closed_for_missing_required_values() -> None:
     ]
 
 
+def test_saas_demo_cleanup_args_skip_seed_only_required_values() -> None:
+    errors = seeder._validate_args(
+        SimpleNamespace(
+            database_url="postgresql://example",
+            account_id="acct-demo",
+            cleanup_faq_id="",
+            corpus_id="",
+            target_id="",
+            status="",
+            query="",
+            limit=0,
+        )
+    )
+
+    assert errors == ["--cleanup-faq-id must be a non-empty FAQ id"]
+
+
+def test_saas_demo_cleanup_delete_status_parser() -> None:
+    assert seeder._deleted_row_count("DELETE 1") == 1
+    assert seeder._deleted_row_count("DELETE 0") == 0
+    assert seeder._deleted_row_count("UPDATE 1") is None
+    assert seeder._deleted_row_count("DELETE nope") is None
+    assert seeder._deleted_row_count(None) is None
+
+
 @pytest.mark.asyncio
 async def test_saas_demo_seeder_saves_approves_projects_and_searches(monkeypatch) -> None:
     class _Pool:
@@ -275,3 +300,74 @@ async def test_saas_demo_seeder_rejects_search_results_for_different_faq(monkeyp
         "Seeded SaaS FAQ id was not present in verification search results"
     ]
     assert payload["search"]["matched_seeded_faq"] is False
+
+
+@pytest.mark.asyncio
+async def test_saas_demo_cleanup_deletes_single_faq_for_account() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, query, *args):
+            self.calls.append({"query": query, "args": args})
+            return "DELETE 1"
+
+    pool = _Pool()
+
+    payload = await seeder.cleanup_saas_demo_faq(
+        pool,
+        account_id="acct-demo",
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    assert payload == {
+        "phase": "cleanup",
+        "ok": True,
+        "account_id": "acct-demo",
+        "faq_id": "11111111-1111-1111-1111-111111111111",
+        "deleted_faq_ids": 1,
+        "delete_status": "DELETE 1",
+        "error": None,
+    }
+    assert "WHERE id = $1::uuid" in pool.calls[0]["query"]
+    assert "AND account_id = $2" in pool.calls[0]["query"]
+    assert pool.calls[0]["args"] == (
+        "11111111-1111-1111-1111-111111111111",
+        "acct-demo",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("delete_status", "expected"),
+    [
+        (
+            "DELETE 0",
+            {
+                "deleted_faq_ids": 0,
+                "error": "cleanup deleted 0 FAQ rows but expected 1",
+            },
+        ),
+        (
+            "UPDATE 1",
+            {
+                "deleted_faq_ids": None,
+                "error": "cleanup delete status is not parseable: 'UPDATE 1'",
+            },
+        ),
+    ],
+)
+async def test_saas_demo_cleanup_fails_on_bad_delete_result(delete_status, expected) -> None:
+    class _Pool:
+        async def execute(self, _query, *_args):
+            return delete_status
+
+    payload = await seeder.cleanup_saas_demo_faq(
+        _Pool(),
+        account_id="acct-demo",
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+    assert payload["ok"] is False
+    assert payload["deleted_faq_ids"] == expected["deleted_faq_ids"]
+    assert payload["error"] == expected["error"]
