@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -161,11 +162,106 @@ def test_faq_ids_from_cleanup_manifest_reports_unreadable_file():
     assert errors[0].startswith("cleanup manifest could not be read:")
 
 
+@pytest.mark.parametrize(("delete_status", "expected"), [("DELETE 2", 2), (" DELETE 0 ", 0)])
+def test_deleted_row_count_accepts_delete_tags(delete_status, expected):
+    assert smoke._deleted_row_count(delete_status) == expected
+
+
+@pytest.mark.parametrize(
+    "delete_status",
+    [
+        "UPDATE 2",
+        "DELETE",
+        "DELETE two",
+        "DELETE -1",
+        "DELETE 1 extra",
+        "",
+        ["DELETE", 1],
+        None,
+    ],
+)
+def test_deleted_row_count_rejects_malformed_tags(delete_status):
+    assert smoke._deleted_row_count(delete_status) is None
+
+
 @pytest.mark.asyncio
 async def test_cleanup_seeded_faqs_noops_without_ids():
     assert await smoke._cleanup_seeded_faqs("postgresql://example", []) == {
         "ok": True,
+        "requested_faq_ids": 0,
         "deleted_faq_ids": 0,
+        "delete_status": None,
+        "error": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_seeded_faqs_reports_actual_delete_rowcount(monkeypatch):
+    class FakePool:
+        def __init__(self):
+            self.closed = False
+            self.deleted_ids = None
+
+        async def execute(self, _query, faq_ids):
+            self.deleted_ids = faq_ids
+            return "DELETE 1"
+
+        async def close(self):
+            self.closed = True
+
+    fake_pool = FakePool()
+
+    async def _create_pool(**_kwargs):
+        return fake_pool
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=_create_pool))
+
+    payload = await smoke._cleanup_seeded_faqs(
+        "postgresql://example",
+        [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+    )
+
+    assert payload == {
+        "ok": True,
+        "requested_faq_ids": 2,
+        "deleted_faq_ids": 1,
+        "delete_status": "DELETE 1",
+        "error": None,
+    }
+    assert fake_pool.deleted_ids == [
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+    ]
+    assert fake_pool.closed is True
+
+
+@pytest.mark.asyncio
+async def test_cleanup_seeded_faqs_surfaces_malformed_delete_status(monkeypatch):
+    class FakePool:
+        async def execute(self, _query, _faq_ids):
+            return "UPDATE 1"
+
+        async def close(self):
+            return None
+
+    async def _create_pool(**_kwargs):
+        return FakePool()
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=_create_pool))
+
+    payload = await smoke._cleanup_seeded_faqs(
+        "postgresql://example",
+        ["11111111-1111-1111-1111-111111111111"],
+    )
+
+    assert payload == {
+        "ok": True,
+        "requested_faq_ids": 1,
+        "deleted_faq_ids": None,
+        "delete_status": "UPDATE 1",
         "error": None,
     }
 
@@ -210,7 +306,13 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
         return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
 
     async def _fake_cleanup(_database_url, faq_ids):
-        return {"ok": True, "deleted_faq_ids": len(faq_ids), "error": None}
+        return {
+            "ok": True,
+            "requested_faq_ids": len(faq_ids),
+            "deleted_faq_ids": len(faq_ids),
+            "delete_status": f"DELETE {len(faq_ids)}",
+            "error": None,
+        }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
     monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
@@ -253,7 +355,13 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
         return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "bad route"}
 
     async def _fake_cleanup(_database_url, faq_ids):
-        return {"ok": True, "deleted_faq_ids": len(faq_ids), "error": None}
+        return {
+            "ok": True,
+            "requested_faq_ids": len(faq_ids),
+            "deleted_faq_ids": len(faq_ids),
+            "delete_status": f"DELETE {len(faq_ids)}",
+            "error": None,
+        }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
     monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
@@ -286,7 +394,13 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
         return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
 
     async def _fake_cleanup(_database_url, _faq_ids):
-        return {"ok": False, "deleted_faq_ids": 0, "error": "cleanup failed"}
+        return {
+            "ok": False,
+            "requested_faq_ids": 1,
+            "deleted_faq_ids": 0,
+            "delete_status": None,
+            "error": "cleanup failed",
+        }
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
     monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
@@ -311,6 +425,8 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
     assert code == 1
     assert payload["cleanup"] == {
         "ok": False,
+        "requested_faq_ids": 1,
         "deleted_faq_ids": 0,
+        "delete_status": None,
         "error": "cleanup failed",
     }
