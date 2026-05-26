@@ -83,7 +83,7 @@ asset_type, request_id, run_id, skill_name, and attempt_no.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
 - bash scripts/check_ascii_python.sh — passed.
-- bash scripts/local_pr_review.sh --current-pr-body-file <body> — pending final rerun before push.
+- bash scripts/local_pr_review.sh --current-pr-body-file <body> — passed.
 
 ## Estimated diff size
 
