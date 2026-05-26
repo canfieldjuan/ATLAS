@@ -104,7 +104,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     return errors
 
 
-def _seed_command(args: argparse.Namespace, *, case_file: Path, seed_result: Path) -> list[str]:
+def _seed_command(
+    args: argparse.Namespace,
+    *,
+    case_file: Path,
+    cleanup_manifest: Path,
+    seed_result: Path,
+) -> list[str]:
     return [
         sys.executable,
         str(SEED_SCRIPT),
@@ -127,6 +133,8 @@ def _seed_command(args: argparse.Namespace, *, case_file: Path, seed_result: Pat
         "--keep-data",
         "--route-case-file-output",
         str(case_file),
+        "--cleanup-manifest-output",
+        str(cleanup_manifest),
         "--output-result",
         str(seed_result),
         "--json",
@@ -177,27 +185,24 @@ def _run_command(command: Sequence[str]) -> dict[str, Any]:
     }
 
 
-def _faq_ids_from_case_file(path: Path) -> tuple[list[str], list[str]]:
+def _faq_ids_from_cleanup_manifest(path: Path) -> tuple[list[str], list[str]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        return [], [f"case file could not be read: {exc}"]
+        return [], [f"cleanup manifest could not be read: {exc}"]
     except json.JSONDecodeError as exc:
-        return [], [f"case file must contain JSON: {exc.msg}"]
-    if not isinstance(data, list):
-        return [], ["case file must contain a JSON list"]
+        return [], [f"cleanup manifest must contain JSON: {exc.msg}"]
+    if not isinstance(data, Mapping):
+        return [], ["cleanup manifest must contain a JSON object"]
 
     faq_ids: list[str] = []
     errors: list[str] = []
-    for index, item in enumerate(data):
-        if not isinstance(item, Mapping):
-            errors.append(f"case[{index}] must be an object")
-            continue
-        faq_id = item.get("expected_first_faq_id")
-        if faq_id is None:
-            continue
+    raw_faq_ids = data.get("faq_ids")
+    if not isinstance(raw_faq_ids, list):
+        return [], ["cleanup manifest faq_ids must be a list"]
+    for index, faq_id in enumerate(raw_faq_ids):
         if not isinstance(faq_id, str) or not faq_id.strip():
-            errors.append(f"case[{index}].expected_first_faq_id must be a non-empty string")
+            errors.append(f"cleanup manifest faq_ids[{index}] must be a non-empty string")
             continue
         if faq_id.strip() not in faq_ids:
             faq_ids.append(faq_id.strip())
@@ -272,21 +277,33 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     artifact_dir = Path(temp_context.name) if temp_context else Path(args.artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     case_file = artifact_dir / "route-cases.json"
+    cleanup_manifest = artifact_dir / "cleanup-manifest.json"
     seed_result = artifact_dir / "seed-result.json"
     route_result = artifact_dir / "route-result.json"
 
     cleanup = {"ok": True, "deleted_faq_ids": 0, "error": None}
     try:
-        seed = _run_command(_seed_command(args, case_file=case_file, seed_result=seed_result))
+        seed = _run_command(
+            _seed_command(
+                args,
+                case_file=case_file,
+                cleanup_manifest=cleanup_manifest,
+                seed_result=seed_result,
+            )
+        )
         route = {"ok": False, "returncode": None, "stdout_tail": "", "stderr_tail": ""}
         if seed["ok"]:
             route = _run_command(_route_command(args, case_file=case_file, route_result=route_result))
-        faq_ids, case_errors = _faq_ids_from_case_file(case_file) if case_file.exists() else ([], [])
-        if case_errors:
+        faq_ids, manifest_errors = (
+            _faq_ids_from_cleanup_manifest(cleanup_manifest)
+            if cleanup_manifest.exists()
+            else ([], [])
+        )
+        if manifest_errors:
             cleanup = {
                 "ok": False,
                 "deleted_faq_ids": 0,
-                "error": "; ".join(case_errors),
+                "error": "; ".join(manifest_errors),
             }
         elif not bool(args.keep_data):
             cleanup = await _cleanup_seeded_faqs(str(args.database_url), faq_ids)
@@ -297,6 +314,7 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "artifacts": {
                 "dir": str(artifact_dir),
                 "case_file": str(case_file),
+                "cleanup_manifest": str(cleanup_manifest),
                 "seed_result": str(seed_result),
                 "route_result": str(route_result),
             },

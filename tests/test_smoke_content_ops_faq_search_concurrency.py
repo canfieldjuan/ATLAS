@@ -98,6 +98,43 @@ def test_write_route_case_file_writes_deterministic_json(tmp_path) -> None:
     assert payload[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
 
 
+def test_cleanup_manifest_payload_carries_all_seeded_ids() -> None:
+    cases = [
+        _case(),
+        _case(query="escrow shortage", expected_hit=False),
+        smoke.SearchCase(
+            account_id="acct-1",
+            corpus_id="corpus-2",
+            faq_id="22222222-2222-2222-2222-222222222222",
+            query="password reset",
+            expected_hit=True,
+        ),
+    ]
+
+    assert smoke._cleanup_manifest_payload(cases) == {
+        "account_ids": ["acct-1"],
+        "corpus_ids": ["corpus-1", "corpus-2"],
+        "faq_ids": [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+        "search_cases": 3,
+    }
+
+
+def test_write_cleanup_manifest_writes_deterministic_json(tmp_path) -> None:
+    path = tmp_path / "cleanup-manifest.json"
+
+    smoke._write_cleanup_manifest(path, [_case()])
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "account_ids": ["acct-1"],
+        "corpus_ids": ["corpus-1"],
+        "faq_ids": ["11111111-1111-1111-1111-111111111111"],
+        "search_cases": 1,
+    }
+
+
 @pytest.mark.asyncio
 async def test_run_case_records_failures_for_leaked_rows_and_hit_miss_mismatches() -> None:
     class _Response:
@@ -237,6 +274,7 @@ def test_validate_args_rejects_route_case_output_without_kept_data() -> None:
         max_p95_ms=None,
         max_single_request_ms=None,
         route_case_file_output=Path("cases.json"),
+        cleanup_manifest_output=None,
         keep_data=False,
     )
 
@@ -257,10 +295,32 @@ def test_validate_args_rejects_account_override_for_multiple_accounts() -> None:
         max_p95_ms=None,
         max_single_request_ms=None,
         route_case_file_output=None,
+        cleanup_manifest_output=None,
         keep_data=True,
     )
 
     with pytest.raises(SystemExit, match="--account-id requires --account-count 1"):
+        smoke._validate_args(args)
+
+
+def test_validate_args_rejects_cleanup_manifest_without_kept_data() -> None:
+    args = SimpleNamespace(
+        database_url="postgresql://example",
+        account_count=1,
+        account_id="acct-1",
+        corpora_per_account=1,
+        documents_per_corpus=1,
+        iterations=1,
+        concurrency=1,
+        pool_size=1,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        route_case_file_output=None,
+        cleanup_manifest_output=Path("cleanup.json"),
+        keep_data=False,
+    )
+
+    with pytest.raises(SystemExit, match="--cleanup-manifest-output requires --keep-data"):
         smoke._validate_args(args)
 
 

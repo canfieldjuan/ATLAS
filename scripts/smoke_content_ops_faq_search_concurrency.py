@@ -77,6 +77,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-single-request-ms", type=float)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--route-case-file-output", type=Path)
+    parser.add_argument("--cleanup-manifest-output", type=Path)
     parser.add_argument("--keep-data", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -103,6 +104,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--account-id requires --account-count 1")
     if args.route_case_file_output and not bool(args.keep_data):
         raise SystemExit("--route-case-file-output requires --keep-data")
+    if args.cleanup_manifest_output and not bool(args.keep_data):
+        raise SystemExit("--cleanup-manifest-output requires --keep-data")
 
 
 async def _create_pool(database_url: str, *, pool_size: int):
@@ -194,6 +197,25 @@ def _write_route_case_file(
             sort_keys=True,
         )
         + "\n",
+        encoding="utf-8",
+    )
+
+
+def _cleanup_manifest_payload(cases: Sequence[SearchCase]) -> dict[str, Any]:
+    return {
+        "account_ids": sorted({case.account_id for case in cases}),
+        "corpus_ids": sorted({case.corpus_id for case in cases}),
+        "faq_ids": sorted({case.faq_id for case in cases}),
+        "search_cases": len(cases),
+    }
+
+
+def _write_cleanup_manifest(path: Path | None, cases: Sequence[SearchCase]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(_cleanup_manifest_payload(cases), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
 
@@ -470,6 +492,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     results: list[dict[str, Any]] = []
     try:
         await _apply_migrations(pool)
+        _write_cleanup_manifest(args.cleanup_manifest_output, cases)
         await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
         _write_route_case_file(
             args.route_case_file_output,

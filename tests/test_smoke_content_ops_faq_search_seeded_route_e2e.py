@@ -75,14 +75,21 @@ def test_validate_args_reports_missing_required_fields_and_bad_numbers():
 def test_seed_command_keeps_data_and_writes_route_cases(tmp_path):
     args = _args(account_id="hosted-acct", artifact_dir=tmp_path)
     case_file = tmp_path / "cases.json"
+    cleanup_manifest = tmp_path / "cleanup.json"
     seed_result = tmp_path / "seed.json"
 
-    command = smoke._seed_command(args, case_file=case_file, seed_result=seed_result)
+    command = smoke._seed_command(
+        args,
+        case_file=case_file,
+        cleanup_manifest=cleanup_manifest,
+        seed_result=seed_result,
+    )
 
     assert str(smoke.SEED_SCRIPT) in command
     assert "--keep-data" in command
     assert command[command.index("--account-id") + 1] == "hosted-acct"
     assert command[command.index("--route-case-file-output") + 1] == str(case_file)
+    assert command[command.index("--cleanup-manifest-output") + 1] == str(cleanup_manifest)
     assert command[command.index("--output-result") + 1] == str(seed_result)
 
 
@@ -99,18 +106,19 @@ def test_route_command_uses_seeded_case_file_and_budgets(tmp_path):
     assert command[command.index("--max-single-request-ms") + 1] == "80"
 
 
-def test_faq_ids_from_case_file_deduplicates_expected_ids(tmp_path):
-    case_file = tmp_path / "cases.json"
+def test_faq_ids_from_cleanup_manifest_deduplicates_expected_ids(tmp_path):
+    manifest = tmp_path / "cleanup.json"
     _write_cases(
-        case_file,
-        [
-            {"expected_first_faq_id": "11111111-1111-1111-1111-111111111111"},
-            {"expected_first_faq_id": "11111111-1111-1111-1111-111111111111"},
-            {"query": "miss case"},
-        ],
+        manifest,
+        {
+            "faq_ids": [
+                "11111111-1111-1111-1111-111111111111",
+                "11111111-1111-1111-1111-111111111111",
+            ]
+        },
     )
 
-    faq_ids, errors = smoke._faq_ids_from_case_file(case_file)
+    faq_ids, errors = smoke._faq_ids_from_cleanup_manifest(manifest)
 
     assert errors == []
     assert faq_ids == ["11111111-1111-1111-1111-111111111111"]
@@ -119,38 +127,38 @@ def test_faq_ids_from_case_file_deduplicates_expected_ids(tmp_path):
 @pytest.mark.parametrize(
     ("payload", "expected_error"),
     [
-        ("{bad json", "case file must contain JSON: Expecting property name enclosed in double quotes"),
-        ({}, "case file must contain a JSON list"),
-        ([[]], "case[0] must be an object"),
+        ("{bad json", "cleanup manifest must contain JSON: Expecting property name enclosed in double quotes"),
+        ([], "cleanup manifest must contain a JSON object"),
+        ({}, "cleanup manifest faq_ids must be a list"),
         (
-            [{"expected_first_faq_id": ""}],
-            "case[0].expected_first_faq_id must be a non-empty string",
+            {"faq_ids": [""]},
+            "cleanup manifest faq_ids[0] must be a non-empty string",
         ),
         (
-            [{"expected_first_faq_id": 1}],
-            "case[0].expected_first_faq_id must be a non-empty string",
+            {"faq_ids": [1]},
+            "cleanup manifest faq_ids[0] must be a non-empty string",
         ),
     ],
 )
-def test_faq_ids_from_case_file_rejects_bad_shapes(tmp_path, payload, expected_error):
-    case_file = tmp_path / "cases.json"
+def test_faq_ids_from_cleanup_manifest_rejects_bad_shapes(tmp_path, payload, expected_error):
+    manifest = tmp_path / "cleanup.json"
     if isinstance(payload, str):
-        case_file.write_text(payload, encoding="utf-8")
+        manifest.write_text(payload, encoding="utf-8")
     else:
-        _write_cases(case_file, payload)
+        _write_cases(manifest, payload)
 
-    faq_ids, errors = smoke._faq_ids_from_case_file(case_file)
+    faq_ids, errors = smoke._faq_ids_from_cleanup_manifest(manifest)
 
     assert faq_ids == []
     assert expected_error in errors
 
 
-def test_faq_ids_from_case_file_reports_unreadable_file():
-    faq_ids, errors = smoke._faq_ids_from_case_file(Path("/tmp/atlas-missing-e2e-cases.json"))
+def test_faq_ids_from_cleanup_manifest_reports_unreadable_file():
+    faq_ids, errors = smoke._faq_ids_from_cleanup_manifest(Path("/tmp/atlas-missing-e2e-cleanup.json"))
 
     assert faq_ids == []
     assert errors
-    assert errors[0].startswith("case file could not be read:")
+    assert errors[0].startswith("cleanup manifest could not be read:")
 
 
 @pytest.mark.asyncio
@@ -194,10 +202,10 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     def _fake_run_command(command):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
-            case_file = Path(command[command.index("--route-case-file-output") + 1])
+            cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             _write_cases(
-                case_file,
-                [{"expected_first_faq_id": "11111111-1111-1111-1111-111111111111"}],
+                cleanup_manifest,
+                {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
             )
         return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
 
@@ -236,10 +244,10 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
     def _fake_run_command(command):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
-            case_file = Path(command[command.index("--route-case-file-output") + 1])
+            cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             _write_cases(
-                case_file,
-                [{"expected_first_faq_id": "11111111-1111-1111-1111-111111111111"}],
+                cleanup_manifest,
+                {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
             )
             return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
         return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "bad route"}
@@ -270,10 +278,10 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
 def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
     def _fake_run_command(command):
         if str(smoke.SEED_SCRIPT) in command:
-            case_file = Path(command[command.index("--route-case-file-output") + 1])
+            cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             _write_cases(
-                case_file,
-                [{"expected_first_faq_id": "11111111-1111-1111-1111-111111111111"}],
+                cleanup_manifest,
+                {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
             )
         return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
 
