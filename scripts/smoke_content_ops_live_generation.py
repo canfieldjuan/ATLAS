@@ -680,7 +680,7 @@ def _support_ticket_blog_blueprint_payload(
     source_period = str(
         inputs.get("source_period") or UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
     )
-    has_valid_date_window = bool(inputs.get("faq_window_days"))
+    has_valid_date_window = bool(inputs.get("has_dated_window"))
     review_period = (
         SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD
         if has_valid_date_window
@@ -699,6 +699,10 @@ def _support_ticket_blog_blueprint_payload(
         "topic": SUPPORT_TICKET_BLOG_TOPIC,
         "source_period": source_period,
         "source": SUPPORT_TICKET_SOURCE,
+        "has_dated_window": has_valid_date_window,
+        "has_measured_outcomes": bool(inputs.get("has_measured_outcomes")),
+        "measured_outcome_count": int(inputs.get("measured_outcome_count") or 0),
+        "measured_outcome_examples": list(inputs.get("measured_outcome_examples") or []),
     }
     if has_valid_date_window:
         data_context["report_date"] = "2026-05-23"

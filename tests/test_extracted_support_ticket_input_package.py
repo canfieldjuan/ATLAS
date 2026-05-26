@@ -49,6 +49,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     assert request.inputs["faq_window_days"] == 90
     assert request.inputs["faq_source_types"] == ["support_ticket"]
     assert request.inputs["source_period"] == "Last 90 days of support tickets"
+    assert request.inputs["has_dated_window"] is True
     assert request.inputs["cta_label"] == DEFAULT_FAQ_REPORT_CTA_LABEL
     assert request.inputs["topic"] == "Support-ticket questions customers keep asking"
     assert request.inputs["filters"] == {"topic_type": "content_ops_support_ticket_faq"}
@@ -60,6 +61,9 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     assert request.inputs["support_ticket_resolution_evidence_present"] is False
     assert request.inputs["support_ticket_resolution_evidence_count"] == 0
     assert request.inputs["support_ticket_resolution_examples"] == []
+    assert request.inputs["has_measured_outcomes"] is False
+    assert request.inputs["measured_outcome_count"] == 0
+    assert request.inputs["measured_outcome_examples"] == []
     assert request.inputs["top_ticket_clusters"] == [
         {"label": "profile updates", "count": 1},
         {"label": "Export dashboard", "count": 1},
@@ -127,6 +131,7 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
     ]
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
     assert package.inputs["support_ticket_resolution_evidence_present"] is False
+    assert package.inputs["has_dated_window"] is False
 
 
 def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() -> None:
@@ -158,6 +163,87 @@ def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() ->
     )
     assert package.metadata["support_ticket_resolution_evidence_present"] is True
     assert package.metadata["support_ticket_resolution_evidence_count"] == 1
+
+
+def test_support_ticket_input_package_surfaces_measured_outcome_evidence() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Do FAQs reduce repeat tickets?",
+            "description": "Can we tell if the billing FAQ helped?",
+            "measured_outcome": "Repeat billing tickets fell from 18 to 11 after publishing.",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Zero deflections",
+            "description": "What happened after the trial FAQ update?",
+            "deflection_rate": 0,
+        },
+    ])
+
+    assert package.inputs["has_measured_outcomes"] is True
+    assert package.inputs["measured_outcome_count"] == 2
+    assert package.inputs["measured_outcome_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "Do FAQs reduce repeat tickets?",
+            "text": "Repeat billing tickets fell from 18 to 11 after publishing.",
+        },
+        {
+            "source_id": "ticket-2",
+            "source_title": "Zero deflections",
+            "text": "0",
+        },
+    ]
+    assert package.inputs["source_material"][1]["measured_outcome"] == "0"
+    assert package.metadata["has_measured_outcomes"] is True
+    assert package.metadata["measured_outcome_count"] == 2
+
+
+def test_support_ticket_input_package_prefers_measured_outcome_value_over_label() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Did the billing FAQ help?",
+            "description": "Can we see what changed after publishing?",
+            "outcome_metric": "deflection_rate",
+            "outcome_value": "42%",
+        },
+    ])
+
+    assert package.inputs["has_measured_outcomes"] is True
+    assert package.inputs["measured_outcome_count"] == 1
+    assert package.inputs["measured_outcome_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "Did the billing FAQ help?",
+            "text": "42%",
+        }
+    ]
+    assert package.inputs["source_material"][0]["measured_outcome"] == "42%"
+
+
+def test_support_ticket_input_package_ignores_boolean_measured_outcome_flags() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Did the billing FAQ help?",
+            "description": "Can we see what changed after publishing?",
+            "outcome_value": False,
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Was this measured?",
+            "description": "Did we track the result?",
+            "measured_outcome": True,
+        },
+    ])
+
+    assert package.inputs["has_measured_outcomes"] is False
+    assert package.inputs["measured_outcome_count"] == 0
+    assert package.inputs["measured_outcome_examples"] == []
+    assert "measured_outcome" not in package.inputs["source_material"][0]
+    assert "measured_outcome" not in package.inputs["source_material"][1]
 
 
 def test_support_ticket_input_package_derives_faq_source_types_from_rows() -> None:
@@ -227,6 +313,7 @@ def test_support_ticket_input_package_omits_window_filter_without_row_dates() ->
 
     assert "faq_window_days" not in package.inputs
     assert package.inputs["source_period"] == "Uploaded support tickets"
+    assert package.inputs["has_dated_window"] is False
 
 
 def test_support_ticket_input_package_omits_window_filter_without_parseable_row_dates() -> None:
@@ -241,6 +328,7 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
 
     assert "faq_window_days" not in package.inputs
     assert package.inputs["source_period"] == "Uploaded support tickets"
+    assert package.inputs["has_dated_window"] is False
 
 
 def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() -> None:
@@ -259,6 +347,7 @@ def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() 
     ])
 
     assert "faq_window_days" not in package.inputs
+    assert package.inputs["has_dated_window"] is False
 
 
 def test_support_ticket_input_package_accepts_single_mapping_comment_thread() -> None:

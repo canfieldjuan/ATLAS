@@ -459,6 +459,7 @@ async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload()
                 "objections": ["Will this publish automatically?"],
                 "faq_questions": ["What happens after upload?"],
                 "source_period": "Last 90 days of support tickets",
+                "has_dated_window": True,
                 "source_row_count": 4,
                 "included_ticket_row_count": 4,
                 "skipped_ticket_row_count": 0,
@@ -478,6 +479,13 @@ async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload()
                     "source_title": "Reporting dashboard export",
                     "text": "Open Reports, choose Export, then select CSV.",
                 }],
+                "has_measured_outcomes": True,
+                "measured_outcome_count": 1,
+                "measured_outcome_examples": [{
+                    "source_id": "ticket-1",
+                    "source_title": "Reporting dashboard export",
+                    "text": "Repeat reporting tickets fell from 9 to 4.",
+                }],
                 "internal_links": ["/systems/ai-content-ops/intake"],
                 "cta_label": "Upload Ticket CSV -- Free Analysis",
                 "cta_url": "/systems/ai-content-ops/intake",
@@ -491,11 +499,15 @@ async def test_generate_threads_seo_geo_aeo_context_into_system_prompt_payload()
     assert '"secondary_keywords":["reduce repeat support tickets"]' in system_msg
     assert '"primary_entity":"FAQ Report"' in system_msg
     assert '"source_row_count":4' in system_msg
+    assert '"has_dated_window":true' in system_msg
     assert '"top_ticket_clusters":[{"label":"reporting friction","count":2}]' in system_msg
     assert '"support_ticket_resolution_evidence_present":true' in system_msg
     assert '"support_ticket_resolution_evidence_count":1' in system_msg
+    assert '"has_measured_outcomes":true' in system_msg
+    assert '"measured_outcome_count":1' in system_msg
     assert "We cannot export the reporting dashboard for analysts." in system_msg
     assert "Open Reports, choose Export, then select CSV." in system_msg
+    assert "Repeat reporting tickets fell from 9 to 4." in system_msg
     assert '"cta_url":"/systems/ai-content-ops/intake"' in system_msg
     assert "support ticket FAQ" not in user_msg
 
@@ -512,6 +524,7 @@ def test_build_draft_preserves_support_ticket_source_context_metadata() -> None:
             "skipped_ticket_row_count": 0,
             "truncated_ticket_row_count": 0,
             "question_like_ticket_count": 2,
+            "has_dated_window": False,
             "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
             "customer_wording_examples": [{
                 "source_id": "ticket-1",
@@ -522,6 +535,9 @@ def test_build_draft_preserves_support_ticket_source_context_metadata() -> None:
             "support_ticket_resolution_evidence_present": False,
             "support_ticket_resolution_evidence_count": 0,
             "support_ticket_resolution_examples": [],
+            "has_measured_outcomes": False,
+            "measured_outcome_count": 0,
+            "measured_outcome_examples": [],
             "support_ticket_source_summary": {"unsafe": "should not be copied"},
             "target_account": "should not be copied",
         },
@@ -538,6 +554,7 @@ def test_build_draft_preserves_support_ticket_source_context_metadata() -> None:
         "skipped_ticket_row_count": 0,
         "truncated_ticket_row_count": 0,
         "question_like_ticket_count": 2,
+        "has_dated_window": False,
         "top_ticket_clusters": [{"label": "reporting friction", "count": 2}],
         "customer_wording_examples": [{
             "source_id": "ticket-1",
@@ -547,6 +564,8 @@ def test_build_draft_preserves_support_ticket_source_context_metadata() -> None:
         }],
         "support_ticket_resolution_evidence_present": False,
         "support_ticket_resolution_evidence_count": 0,
+        "has_measured_outcomes": False,
+        "measured_outcome_count": 0,
     }
     assert "target_account" not in draft.metadata["source_context"]
     assert "support_ticket_source_summary" not in draft.metadata["source_context"]

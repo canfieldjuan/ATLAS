@@ -68,6 +68,7 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
     assert summary["skipped_ticket_row_count"] == 1
     assert summary["truncated_ticket_row_count"] == 0
     assert summary["source_period"] == "Uploaded support tickets"
+    assert summary["has_dated_window"] is False
     assert summary["has_window_filter"] is False
     assert summary["faq_question_count"] == 2
     assert summary["question_like_ticket_count"] == 2
@@ -87,6 +88,9 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
     assert summary["support_ticket_resolution_evidence_present"] is False
     assert summary["support_ticket_resolution_evidence_count"] == 0
     assert summary["support_ticket_resolution_examples"] == []
+    assert summary["has_measured_outcomes"] is False
+    assert summary["measured_outcome_count"] == 0
+    assert summary["measured_outcome_examples"] == []
     assert summary["warnings"] == [
         {
             "code": "ticket_row_missing_text",
@@ -116,6 +120,7 @@ def test_support_ticket_package_smoke_keeps_date_window_for_dated_rows(
     summary = build_support_ticket_package_smoke_summary(path, window_days=45)
 
     assert summary["source_period"] == "Last 45 days of support tickets"
+    assert summary["has_dated_window"] is True
     assert summary["has_window_filter"] is True
     assert summary["faq_window_days"] == 45
 
@@ -144,6 +149,44 @@ def test_support_ticket_package_smoke_reports_resolution_evidence(
             "source_title": "How do I export reports?",
             "text": "Open Reports, choose Export, then select CSV.",
         }
+    ]
+
+
+def test_support_ticket_package_smoke_reports_measured_outcome_evidence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    _write_csv(path, [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Do FAQs reduce repeat tickets?",
+            "description": "Can we tell if the billing FAQ helped?",
+            "measured_outcome": "Repeat billing tickets fell from 18 to 11.",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Zero deflections",
+            "description": "What happened after the trial FAQ update?",
+            "deflection_rate": "0",
+        },
+    ])
+
+    summary = build_support_ticket_package_smoke_summary(path)
+
+    assert summary["has_measured_outcomes"] is True
+    assert summary["measured_outcome_count"] == 2
+    assert summary["measured_outcome_example_count"] == 2
+    assert summary["measured_outcome_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "Do FAQs reduce repeat tickets?",
+            "text": "Repeat billing tickets fell from 18 to 11.",
+        },
+        {
+            "source_id": "ticket-2",
+            "source_title": "Zero deflections",
+            "text": "0",
+        },
     ]
 
 

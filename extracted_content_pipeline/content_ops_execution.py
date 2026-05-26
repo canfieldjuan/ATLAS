@@ -738,6 +738,7 @@ def _support_ticket_blog_data_context_from_inputs(
         "source": SUPPORT_TICKET_SOURCE,
         "source_period": source_period,
         "review_period": review_period,
+        "has_dated_window": _bool_context(inputs.get("has_dated_window")),
         "category": SUPPORT_TICKET_CATEGORY,
         "topic": _clean(inputs.get("topic")) or SUPPORT_TICKET_DEFAULT_TOPIC,
         "source_row_count": source_count or included_count,
@@ -757,6 +758,13 @@ def _support_ticket_blog_data_context_from_inputs(
         ),
         "support_ticket_resolution_examples": _mapping_list_input(
             inputs.get("support_ticket_resolution_examples")
+        ),
+        "has_measured_outcomes": _bool_context(inputs.get("has_measured_outcomes")),
+        "measured_outcome_count": _nonnegative_int_context(
+            inputs.get("measured_outcome_count")
+        ),
+        "measured_outcome_examples": _mapping_list_input(
+            inputs.get("measured_outcome_examples")
         ),
         "total_reviews_analyzed": included_count,
         "deep_enriched_count": included_count,
