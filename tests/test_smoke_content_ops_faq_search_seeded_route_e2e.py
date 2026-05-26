@@ -437,6 +437,12 @@ def test_main_writes_preflight_result(tmp_path, capsys):
     assert payload["preflight_errors"] == [
         "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL"
     ]
+    assert payload["detail"] == {
+        "ok": False,
+        "returncode": None,
+        "skipped": True,
+        "not_run_reason": "preflight_failed",
+    }
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
 
 
@@ -550,6 +556,7 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
     monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
+    result_path = tmp_path / "result.json"
 
     code = smoke.main([
         "--database-url",
@@ -562,9 +569,18 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
         "acct-1",
         "--artifact-dir",
         str(tmp_path / "artifacts"),
+        "--output-result",
+        str(result_path),
     ])
 
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
+    assert payload["detail"] == {
+        "ok": False,
+        "returncode": None,
+        "skipped": True,
+        "not_run_reason": "route_failed",
+    }
     assert len(calls) == 2
     assert all(str(smoke.CONTRACT_SCRIPT) not in command for command in calls)
 
@@ -613,7 +629,12 @@ def test_main_can_skip_detail_check_for_liveness_runs(tmp_path, monkeypatch):
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 0
-    assert payload["detail"] == {"ok": True, "returncode": None, "skipped": True}
+    assert payload["detail"] == {
+        "ok": True,
+        "returncode": None,
+        "skipped": True,
+        "not_run_reason": "skip_detail_check",
+    }
     assert len(calls) == 2
     assert all(str(smoke.CONTRACT_SCRIPT) not in command for command in calls)
 
