@@ -30,7 +30,7 @@ async def summarize_content_ops_llm_usage(
     summary = await pool.fetchrow(
         f"""
         SELECT
-            COALESCE(SUM(cost_usd), 0)::NUMERIC(12, 6) AS total_cost_usd,
+            COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
             COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
             COALESCE(SUM(billable_input_tokens), 0)::BIGINT AS billable_input_tokens,
             COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
@@ -52,7 +52,7 @@ async def summarize_content_ops_llm_usage(
         SELECT
             COALESCE(NULLIF(BTRIM(model_provider), ''), 'unknown') AS provider,
             COALESCE(NULLIF(BTRIM(model_name), ''), 'unknown') AS model,
-            COALESCE(SUM(cost_usd), 0)::NUMERIC(12, 6) AS cost_usd,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
             COUNT(*)::BIGINT AS calls,
             COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
             COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens
@@ -68,7 +68,7 @@ async def summarize_content_ops_llm_usage(
         f"""
         SELECT
             COALESCE(NULLIF(BTRIM(metadata ->> 'asset_type'), ''), 'unknown') AS asset_type,
-            COALESCE(SUM(cost_usd), 0)::NUMERIC(12, 6) AS cost_usd,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
             COUNT(*)::BIGINT AS calls,
             COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
             COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens
@@ -206,4 +206,3 @@ def _iso_or_none(value: Any) -> str | None:
         return str(isoformat())
     text = str(value).strip()
     return text or None
-

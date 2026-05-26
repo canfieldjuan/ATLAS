@@ -544,6 +544,7 @@ def create_content_ops_control_surface_router(
     input_provider: InputProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
     usage_pool_provider: PoolProvider | None = None,
+    usage_dependencies: Sequence[Any] | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -596,7 +597,7 @@ def create_content_ops_control_surface_router(
             reasoning_status=reasoning_status,
         )
 
-    @router.get("/usage/summary")
+    @router.get("/usage/summary", dependencies=list(usage_dependencies or ()))
     async def usage_summary(
         days: int = Query(default=7, ge=1, le=90),
         asset_type: str | None = Query(default=None, max_length=80),

@@ -25,6 +25,7 @@ class AuthUser:
     product: str = "consumer"  # consumer | b2b_retention | b2b_challenger
     trial_ends_at: Optional[datetime] = field(default=None, repr=False)
     is_admin: bool = False
+    is_platform_admin: bool = False
 
 
 def _synthetic_admin() -> AuthUser:
@@ -37,6 +38,7 @@ def _synthetic_admin() -> AuthUser:
         role="owner",
         product="consumer",
         is_admin=True,
+        is_platform_admin=True,
     )
 
 
@@ -119,6 +121,7 @@ async def require_auth(request: Request) -> AuthUser:
         product=row["product"] or "consumer",
         trial_ends_at=trial_ends,
         is_admin=_effective_is_admin(row["role"], row["is_admin"]),
+        is_platform_admin=bool(row["is_admin"]),
     )
 
 
@@ -180,6 +183,7 @@ async def optional_auth(request: Request) -> Optional[AuthUser]:
         product=row["product"] or "consumer",
         trial_ends_at=row["trial_ends_at"],
         is_admin=_effective_is_admin(row["role"], row["is_admin"]),
+        is_platform_admin=bool(row["is_admin"]),
     )
 
 
@@ -361,6 +365,7 @@ async def require_api_key(request: Request) -> AuthUser:
         product=account_row["product"] or "consumer",
         trial_ends_at=trial_ends,
         is_admin=False,
+        is_platform_admin=False,
     )
 
     client_ip = request.client.host if request.client else None
