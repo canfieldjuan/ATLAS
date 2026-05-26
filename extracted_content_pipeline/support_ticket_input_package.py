@@ -69,6 +69,23 @@ _TEXT_KEYS = (
     "notes",
     "summary",
 )
+_RESOLUTION_TEXT_KEYS = (
+    "resolution",
+    "resolution_text",
+    "resolution_summary",
+    "resolution_notes",
+    "resolved_notes",
+    "solution",
+    "solution_text",
+    "answer",
+    "answer_text",
+    "support_answer",
+    "support_response",
+    "agent_answer",
+    "agent_response",
+    "fix_summary",
+    "workaround",
+)
 _DATE_KEYS = ("created_at", "submitted_at", "updated_at", "date")
 _URL_KEYS = ("source_url", "ticket_url", "url", "link")
 _COMPANY_KEYS = ("company_name", "account_name", "company", "account")
@@ -147,6 +164,8 @@ def build_support_ticket_input_package(
     question_like_ticket_count = _question_like_ticket_count(normalized_rows)
     top_ticket_clusters = _top_ticket_clusters(normalized_rows)
     customer_wording_examples = _customer_wording_examples(normalized_rows)
+    resolution_evidence_count = _resolution_evidence_count(normalized_rows)
+    resolution_evidence_examples = _resolution_evidence_examples(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
         "reduce repeat support tickets",
@@ -186,6 +205,9 @@ def build_support_ticket_input_package(
         "question_like_ticket_count": question_like_ticket_count,
         "top_ticket_clusters": top_ticket_clusters,
         "customer_wording_examples": customer_wording_examples,
+        "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
+        "support_ticket_resolution_evidence_count": resolution_evidence_count,
+        "support_ticket_resolution_examples": resolution_evidence_examples,
         "internal_links": list(internal_links or (DEFAULT_FAQ_REPORT_CTA_URL,)),
         "cta_label": cta_label,
         "cta_url": cta_url,
@@ -206,6 +228,8 @@ def build_support_ticket_input_package(
             "skipped_row_count": skipped_row_count,
             "truncated_row_count": truncated_row_count,
             "source_period": source_period,
+            "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
+            "support_ticket_resolution_evidence_count": resolution_evidence_count,
         },
         warnings=tuple(warnings),
     )
@@ -232,6 +256,9 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         "source_title": source_title or source_id,
         "text": text,
     }
+    resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)
+    if resolution_text:
+        normalized["resolution_text"] = _clip_text(resolution_text, max_chars=500)
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
@@ -373,6 +400,35 @@ def _customer_wording_examples(
         pain_category = _clean(row.get("pain_category"))
         if pain_category:
             example["pain_category"] = pain_category
+        examples.append(example)
+        if len(examples) >= limit:
+            return examples
+    return examples
+
+
+def _resolution_evidence_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    return sum(1 for row in rows if _clean(row.get("resolution_text")))
+
+
+def _resolution_evidence_examples(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 4,
+    max_text_chars: int = 240,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        resolution_text = _compact(row.get("resolution_text"))
+        if not resolution_text:
+            continue
+        example = {
+            "source_id": _clean(row.get("source_id")),
+            "text": _clip_text(resolution_text, max_chars=max_text_chars),
+        }
+        source_title = _clean(row.get("source_title"))
+        source_id = _clean(row.get("source_id"))
+        if source_title and source_title != source_id:
+            example["source_title"] = source_title
         examples.append(example)
         if len(examples) >= limit:
             return examples

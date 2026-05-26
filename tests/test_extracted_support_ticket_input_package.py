@@ -57,6 +57,9 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     assert request.inputs["skipped_ticket_row_count"] == 0
     assert request.inputs["truncated_ticket_row_count"] == 0
     assert request.inputs["question_like_ticket_count"] == 2
+    assert request.inputs["support_ticket_resolution_evidence_present"] is False
+    assert request.inputs["support_ticket_resolution_evidence_count"] == 0
+    assert request.inputs["support_ticket_resolution_examples"] == []
     assert request.inputs["top_ticket_clusters"] == [
         {"label": "profile updates", "count": 1},
         {"label": "Export dashboard", "count": 1},
@@ -123,6 +126,38 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
         }
     ]
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
+    assert package.inputs["support_ticket_resolution_evidence_present"] is False
+
+
+def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I export reports?",
+            "description": "Where do I export the dashboard?",
+            "resolution": "Open Reports, choose Export, then select CSV.",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Where do I update billing?",
+            "description": "I cannot find the billing page.",
+        },
+    ])
+
+    assert package.inputs["support_ticket_resolution_evidence_present"] is True
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 1
+    assert package.inputs["support_ticket_resolution_examples"] == [
+        {
+            "source_id": "ticket-1",
+            "source_title": "How do I export reports?",
+            "text": "Open Reports, choose Export, then select CSV.",
+        }
+    ]
+    assert package.inputs["source_material"][0]["resolution_text"] == (
+        "Open Reports, choose Export, then select CSV."
+    )
+    assert package.metadata["support_ticket_resolution_evidence_present"] is True
+    assert package.metadata["support_ticket_resolution_evidence_count"] == 1
 
 
 def test_support_ticket_input_package_derives_faq_source_types_from_rows() -> None:

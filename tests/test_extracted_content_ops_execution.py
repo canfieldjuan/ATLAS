@@ -1106,6 +1106,13 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
                     "pain_category": "reporting friction",
                     "text": "How do we export campaign attribution data before renewal?",
                 }],
+                "support_ticket_resolution_evidence_present": True,
+                "support_ticket_resolution_evidence_count": 1,
+                "support_ticket_resolution_examples": [{
+                    "source_id": "ticket-1",
+                    "source_title": "Export dashboard",
+                    "text": "Open Reports, choose Export, then select CSV.",
+                }],
                 "support_ticket_source_summary": {"unsafe": "should not pass through"},
             },
         },
@@ -1141,6 +1148,13 @@ async def test_marketing_campaign_context_does_not_leak_unrelated_inputs() -> No
         "source_title": "Export dashboard",
         "pain_category": "reporting friction",
         "text": "How do we export campaign attribution data before renewal?",
+    }]
+    assert context.get("support_ticket_resolution_evidence_present") is True
+    assert context.get("support_ticket_resolution_evidence_count") == 1
+    assert context.get("support_ticket_resolution_examples") == [{
+        "source_id": "ticket-1",
+        "source_title": "Export dashboard",
+        "text": "Open Reports, choose Export, then select CSV.",
     }]
     assert "support_ticket_source_summary" not in context
 
