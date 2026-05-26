@@ -209,26 +209,65 @@ def _faq_ids_from_cleanup_manifest(path: Path) -> tuple[list[str], list[str]]:
     return faq_ids, errors
 
 
+def _deleted_row_count(delete_status: object) -> int | None:
+    if not isinstance(delete_status, str):
+        return None
+    parts = delete_status.strip().split()
+    if len(parts) != 2 or parts[0] != "DELETE":
+        return None
+    try:
+        row_count = int(parts[1])
+    except ValueError:
+        return None
+    return row_count if row_count >= 0 else None
+
+
 async def _cleanup_seeded_faqs(database_url: str, faq_ids: Sequence[str]) -> dict[str, Any]:
+    requested_faq_ids = len(faq_ids)
     if not faq_ids:
-        return {"ok": True, "deleted_faq_ids": 0, "error": None}
+        return {
+            "ok": True,
+            "requested_faq_ids": 0,
+            "deleted_faq_ids": 0,
+            "delete_status": None,
+            "error": None,
+        }
     try:
         import asyncpg  # type: ignore[import-not-found]
     except ImportError as exc:  # pragma: no cover - host dependency
-        return {"ok": False, "deleted_faq_ids": 0, "error": f"ImportError: {exc}"}
+        return {
+            "ok": False,
+            "requested_faq_ids": requested_faq_ids,
+            "deleted_faq_ids": 0,
+            "delete_status": None,
+            "error": f"ImportError: {exc}",
+        }
 
+    delete_status = None
     try:
         pool = await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=2)
         try:
-            await pool.execute(
+            delete_status = await pool.execute(
                 "DELETE FROM ticket_faq_markdown WHERE id = ANY($1::uuid[])",
                 list(faq_ids),
             )
         finally:
             await pool.close()
     except Exception as exc:
-        return {"ok": False, "deleted_faq_ids": 0, "error": f"{type(exc).__name__}: {exc}"}
-    return {"ok": True, "deleted_faq_ids": len(faq_ids), "error": None}
+        return {
+            "ok": False,
+            "requested_faq_ids": requested_faq_ids,
+            "deleted_faq_ids": 0,
+            "delete_status": delete_status,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "ok": True,
+        "requested_faq_ids": requested_faq_ids,
+        "deleted_faq_ids": _deleted_row_count(delete_status),
+        "delete_status": delete_status,
+        "error": None,
+    }
 
 
 def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
@@ -256,7 +295,13 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
         "artifacts": {},
         "seed": {"ok": False, "returncode": None},
         "route": {"ok": False, "returncode": None},
-        "cleanup": {"ok": False, "deleted_faq_ids": 0, "error": None},
+        "cleanup": {
+            "ok": False,
+            "requested_faq_ids": 0,
+            "deleted_faq_ids": 0,
+            "delete_status": None,
+            "error": None,
+        },
         "preflight_errors": list(errors),
         "keep_data": bool(args.keep_data),
         "elapsed_seconds": round(elapsed, 6),
@@ -281,7 +326,13 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     seed_result = artifact_dir / "seed-result.json"
     route_result = artifact_dir / "route-result.json"
 
-    cleanup = {"ok": True, "deleted_faq_ids": 0, "error": None}
+    cleanup = {
+        "ok": True,
+        "requested_faq_ids": 0,
+        "deleted_faq_ids": 0,
+        "delete_status": None,
+        "error": None,
+    }
     try:
         seed = _run_command(
             _seed_command(
@@ -302,7 +353,9 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if manifest_errors:
             cleanup = {
                 "ok": False,
+                "requested_faq_ids": len(faq_ids),
                 "deleted_faq_ids": 0,
+                "delete_status": None,
                 "error": "; ".join(manifest_errors),
             }
         elif not bool(args.keep_data):
