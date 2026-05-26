@@ -62,6 +62,40 @@ class _GenerateStringLLM:
         return "plain generated response"
 
 
+class _TraceLLM:
+    name = "openrouter"
+    model = "anthropic/claude-haiku-4-5"
+
+    def chat(self, messages, *, max_tokens, temperature):
+        return {
+            "response": "traced response",
+            "model": "anthropic/claude-haiku-4-5",
+            "usage": {
+                "input_tokens": "100",
+                "output_tokens": 25,
+                "total_tokens": 125,
+            },
+            "_trace_meta": {
+                "cache_read_tokens": 7,
+                "cache_creation_tokens": 5,
+                "billable_input_tokens": 93,
+                "api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+                "provider_request_id": "req_trace_123",
+                "ttft_ms": "12.5",
+                "inference_time_ms": 55,
+                "queue_time_ms": None,
+            },
+        }
+
+
+class _FailingChatLLM:
+    name = "openrouter"
+    model = "anthropic/claude-haiku-4-5"
+
+    def chat(self, messages, *, max_tokens, temperature):
+        raise RuntimeError("provider timeout")
+
+
 @pytest.mark.asyncio
 async def test_pipeline_llm_client_resolves_and_normalizes_chat_response():
     llm = _ChatLLM()
@@ -152,6 +186,101 @@ async def test_pipeline_llm_client_normalizes_string_generate_response():
     assert response.content == "plain generated response"
     assert response.model is None
     assert response.raw == "plain generated response"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_traces_successful_provider_usage_without_io_capture():
+    trace_calls = []
+    client = PipelineLLMClient(
+        workload="draft",
+        resolver=lambda **_: _TraceLLM(),
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+    )
+
+    response = await client.complete(
+        [LLMMessage(role="user", content="customer ticket text")],
+        max_tokens=200,
+        temperature=0.2,
+        metadata={"asset_type": "blog_post", "request_id": "req_123"},
+    )
+
+    assert response.content == "traced response"
+    assert len(trace_calls) == 1
+    span_name, trace = trace_calls[0]
+    assert span_name == "content_ops.llm.complete"
+    assert trace["status"] == "completed"
+    assert trace["input_tokens"] == 100
+    assert trace["output_tokens"] == 25
+    assert trace["cached_tokens"] == 7
+    assert trace["cache_write_tokens"] == 5
+    assert trace["billable_input_tokens"] == 93
+    assert trace["model"] == "anthropic/claude-haiku-4-5"
+    assert trace["provider"] == "openrouter"
+    assert trace["provider_request_id"] == "req_trace_123"
+    assert trace["api_endpoint"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert trace["ttft_ms"] == 12.5
+    assert trace["inference_time_ms"] == 55
+    assert trace["queue_time_ms"] is None
+    assert trace["metadata"] == {
+        "product": "content_ops",
+        "workload": "draft",
+        "llm_adapter": "pipeline",
+        "asset_type": "blog_post",
+        "request_id": "req_123",
+    }
+    assert "input_data" not in trace
+    assert "output_data" not in trace
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_traces_failed_provider_calls_without_io_capture():
+    trace_calls = []
+    client = PipelineLLMClient(
+        resolver=lambda **_: _FailingChatLLM(),
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="provider timeout"):
+        await client.complete(
+            [LLMMessage(role="user", content="customer ticket text")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={"asset_type": "landing_page"},
+        )
+
+    assert len(trace_calls) == 1
+    span_name, trace = trace_calls[0]
+    assert span_name == "content_ops.llm.complete"
+    assert trace["status"] == "failed"
+    assert trace["input_tokens"] == 0
+    assert trace["output_tokens"] == 0
+    assert trace["model"] == "anthropic/claude-haiku-4-5"
+    assert trace["provider"] == "openrouter"
+    assert trace["error_type"] == "RuntimeError"
+    assert trace["error_message"] == "provider timeout"
+    assert trace["metadata"]["product"] == "content_ops"
+    assert trace["metadata"]["asset_type"] == "landing_page"
+    assert "input_data" not in trace
+    assert "output_data" not in trace
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_does_not_fail_generation_when_tracing_fails():
+    def broken_tracer(span_name, **kwargs):
+        raise RuntimeError("trace table unavailable")
+
+    client = PipelineLLMClient(
+        resolver=lambda **_: _TraceLLM(),
+        tracer=broken_tracer,
+    )
+
+    response = await client.complete(
+        [LLMMessage(role="user", content="Write the email")],
+        max_tokens=200,
+        temperature=0.2,
+    )
+
+    assert response.content == "traced response"
 
 
 def test_llm_client_config_from_mapping_parses_provider_routing_fields():
