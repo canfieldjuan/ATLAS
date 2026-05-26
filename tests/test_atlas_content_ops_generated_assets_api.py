@@ -101,6 +101,26 @@ def test_content_ops_usage_summary_route_uses_shared_auth_and_pool() -> None:
     assert "_require_content_ops_usage_operator" in dependency_names
 
 
+def test_content_ops_tenant_usage_summary_route_uses_shared_auth_scope_and_pool() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/usage/summary/tenant")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+    dependency_names = [
+        getattr(dependency.call, "__name__", "")
+        for dependency in route.dependant.dependencies
+    ]
+
+    assert closure["usage_pool_provider"].__name__ == "get_db_pool"
+    assert closure["scope_provider"].__name__ == "build_content_ops_scope"
+    assert "_capture_content_ops_auth_user" in dependency_names
+    assert "_require_content_ops_usage_operator" not in dependency_names
+
+
 @pytest.mark.asyncio
 async def test_content_ops_usage_summary_operator_gate_rejects_account_admin() -> None:
     api_pkg = _fresh_api_package()

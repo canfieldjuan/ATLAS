@@ -13,6 +13,7 @@ async def summarize_content_ops_llm_usage(
     pool: Any,
     *,
     days: int = 7,
+    account_id: str | None = None,
     asset_type: str | None = None,
     run_id: str | None = None,
     request_id: str | None = None,
@@ -22,6 +23,7 @@ async def summarize_content_ops_llm_usage(
     resolved_days = _bounded_days(days)
     filters = _UsageFilters(
         days=resolved_days,
+        account_id=_clean_filter(account_id),
         asset_type=_clean_filter(asset_type),
         run_id=_clean_filter(run_id),
         request_id=_clean_filter(request_id),
@@ -96,21 +98,26 @@ class _UsageFilters:
         self,
         *,
         days: int,
+        account_id: str | None,
         asset_type: str | None,
         run_id: str | None,
         request_id: str | None,
     ) -> None:
         self.days = days
+        self.account_id = account_id
         self.asset_type = asset_type
         self.run_id = run_id
         self.request_id = request_id
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        filters = {
             "asset_type": self.asset_type,
             "run_id": self.run_id,
             "request_id": self.request_id,
         }
+        if self.account_id is not None:
+            filters["account_id"] = self.account_id
+        return filters
 
 
 def _usage_where_clause(filters: _UsageFilters) -> tuple[str, list[Any]]:
@@ -122,6 +129,9 @@ def _usage_where_clause(filters: _UsageFilters) -> tuple[str, list[Any]]:
             "OR metadata ->> 'product' = 'content_ops')"
         ),
     ]
+    if filters.account_id:
+        args.append(filters.account_id)
+        clauses.append(f"metadata ->> 'account_id' = ${len(args)}")
     if filters.asset_type:
         args.append(filters.asset_type)
         clauses.append(f"metadata ->> 'asset_type' = ${len(args)}")
