@@ -213,6 +213,7 @@ try:
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
         input_provider=build_content_ops_input_provider(),
         opportunity_import_pool_provider=get_db_pool,
+        usage_pool_provider=get_db_pool,
         ingestion_import_admission_provider=lambda: (
             build_content_ops_import_admission_gate(
                 max_concurrency=content_ops_config.ingestion_import_max_concurrency

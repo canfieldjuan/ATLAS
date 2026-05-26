@@ -30,10 +30,12 @@ Slice phase: Production hardening
 | File | Change |
 |---|---|
 | `plans/PR-Content-Ops-Usage-Summary.md` | Plan doc for the first Content Ops cost read path. |
+| `atlas_brain/api/__init__.py` | Wire the hosted Content Ops usage route to the Atlas DB pool. |
 | `extracted_content_pipeline/content_ops_usage_summary.py` | Query and serialize Content Ops llm_usage rollups. |
 | `extracted_content_pipeline/api/control_surfaces.py` | Expose the optional usage summary route. |
 | `extracted_content_pipeline/manifest.json` | Register the new usage-summary helper as an owned extracted-package file. |
 | `tests/test_extracted_content_control_surface_api.py` | Cover route provider behavior and usage-summary filters/output. |
+| `tests/test_atlas_content_ops_generated_assets_api.py` | Cover hosted Atlas wiring for the usage route. |
 
 ## Mechanism
 
@@ -46,6 +48,10 @@ llm_usage run_id column when present.
 The route is opt-in via `usage_pool_provider`, matching the existing host-owned
 provider pattern in the control-surface API. If the host does not wire a pool,
 the route returns 503 instead of pretending usage is available.
+
+Atlas wires the route to its shared DB pool in `atlas_brain/api/__init__.py` so
+the hosted `/api/v1/content-ops/usage/summary` path is usable immediately after
+merge.
 
 ## Intentional
 
@@ -68,7 +74,8 @@ the route returns 503 instead of pretending usage is available.
 ## Verification
 
 - python -m pytest tests/test_extracted_content_control_surface_api.py -q — 107 passed.
-- python -m compileall -q extracted_content_pipeline/content_ops_usage_summary.py extracted_content_pipeline/api/control_surfaces.py — passed.
+- python -m pytest tests/test_atlas_content_ops_generated_assets_api.py -q — 5 passed.
+- python -m compileall -q atlas_brain/api/__init__.py extracted_content_pipeline/content_ops_usage_summary.py extracted_content_pipeline/api/control_surfaces.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
@@ -79,12 +86,13 @@ the route returns 503 instead of pretending usage is available.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~95 |
+| Plan doc | ~105 |
+| Atlas host wiring | ~15 |
 | Usage summary helper | ~210 |
 | API route | ~60 |
-| Tests | ~120 |
+| Tests | ~140 |
 | Manifest | ~5 |
-| **Total** | **~490** |
+| **Total** | **~535** |
 
 This exceeds the 400 LOC soft cap because the first read path needs a query
 helper, a route seam, manifest inventory, and response-shape tests in the same
