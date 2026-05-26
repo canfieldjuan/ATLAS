@@ -631,6 +631,44 @@ async def test_generate_repairs_support_ticket_generated_content_failure() -> No
 
 
 @pytest.mark.asyncio
+async def test_generate_saves_descriptive_support_ticket_blog_without_outcome_or_resolution_evidence() -> None:
+    descriptive_content = _valid_support_ticket_content(
+        "Teams with fewer tickets may have a simpler support queue, but this "
+        "upload does not prove ticket reduction. Customers often go to billing "
+        "questions first when account wording is unclear. You can export your "
+        "data from most analytics tools. For this uploaded product, the draft "
+        "answer stays as: Draft answer - support team should add the verified "
+        "resolution before publishing. Faster resolution for customers is "
+        "something to measure after publishing, not an outcome these tickets prove."
+    )
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[_valid_support_ticket_blog_json(content=descriptive_content)],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.skipped == 0
+    assert result.errors == ()
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert not draft.data_context.get("support_ticket_resolution_evidence_present")
+    assert not draft.data_context.get("has_measured_outcomes")
+
+
+@pytest.mark.asyncio
 async def test_generate_keeps_trusted_support_ticket_context_over_model_context() -> None:
     service, _blueprints, blog_posts, _llm, _skills = _service(
         rows=[_support_ticket_blueprint()],

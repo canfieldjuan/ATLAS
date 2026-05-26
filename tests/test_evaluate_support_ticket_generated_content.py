@@ -814,6 +814,40 @@ def test_blog_export_allows_non_ui_greater_than_comparisons() -> None:
     assert answer_step_check["details"] == {"unsupported_answer_steps": []}
 
 
+def test_blog_export_allows_descriptive_support_ticket_draft_language() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Teams with fewer tickets tend to onboard faster, but this upload "
+            "does not prove that publishing an FAQ will create that result. "
+            "Customers often go to billing questions first when they cannot "
+            "find a plain-language answer. "
+            "You can export your data from most analytics tools. "
+            "That sentence is general background, not a verified answer for "
+            "the uploaded product. "
+            "Faster resolution for customers is a goal to track after publishing, "
+            "not an outcome proven by these tickets."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is True
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is True
+
+
 def test_blog_export_fails_unverified_answer_capabilities_without_resolution_evidence() -> None:
     export = _blog_export(
         content_override=(

@@ -241,10 +241,14 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\b(?:the\s+result|results?|publishing|publish(?:ing)?\s+(?:these\s+)?"
+        r"answers?|the\s+faq|faq\s+entries?)\b[^.!?\n]{0,120}"
         r"\bfewer\s+(?:repeat\s+)?(?:support\s+)?tickets\b",
         re.IGNORECASE,
     ),
     re.compile(
+        r"\b(?:the\s+result|results?|publishing|publish(?:ing)?\s+(?:these\s+)?"
+        r"answers?|the\s+faq|faq\s+entries?)\b[^.!?\n]{0,120}"
         r"\bfaster\s+resolution\s+for\s+customers\b",
         re.IGNORECASE,
     ),
@@ -288,7 +292,8 @@ _UNSUPPORTED_SUPPORT_ANSWER_STEP_PATTERNS = (
         r"\s*>\s*[A-Z][A-Za-z0-9 &/.-]{1,40}\b"
     ),
     re.compile(
-        r"\b(?:click|select|open|go\s+to|choose)\s+[^.!?\n]{0,80}"
+        r"(?:^|\b(?:like|should|must|can|to)\s+)"
+        r"(?:click|select|open|go\s+to|choose)\s+[^.!?\n]{0,80}"
         r"\b(?:settings|menu|tab|button|dashboard|reports?|export|email|billing)\b",
         re.IGNORECASE,
     ),
@@ -310,11 +315,11 @@ _UNSUPPORTED_SUPPORT_ANSWER_STEP_PATTERNS = (
     ),
     re.compile(
         r"\b(?:can|could)\s+(?:update|export|change)\b[^.!?\n]{0,120}"
-        r"\b(?:email|account|campaign|attribution|data|dashboard|report)\b",
+        r"\b(?:email|account|campaign|attribution|dashboard|report)\b",
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:email|account|campaign|attribution|data|dashboard|report)"
+        r"\b(?:email|account|campaign|attribution|dashboard|report)"
         r"[^.!?\n]{0,80}\bcan\s+be\s+(?:updated|exported|changed)\b",
         re.IGNORECASE,
     ),
