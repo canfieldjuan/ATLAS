@@ -629,6 +629,277 @@ def test_blog_export_fails_live_smoke_soft_outcome_claims() -> None:
     ]
 
 
+def test_blog_export_fails_evidence_contract_live_false_green_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 4 support tickets show email and reporting clusters. "
+            "The result: fewer repeat tickets, faster resolution for customers, "
+            "and a documented knowledge base your team can trust. "
+            "The clusters that appear most often in your support inbox are the "
+            "ones that will reduce the most repeat work when you answer them "
+            "in a help center. "
+            "If 2 customers asked the same question in your uploaded tickets, "
+            "more customers have asked it before, and more will ask it in the "
+            "future. "
+            "Each FAQ entry you publish is one fewer repeat ticket your team "
+            "has to answer. "
+            "Over time, that adds up to real time savings and a better customer "
+            "experience. "
+            "Document them, publish them, and watch your repeat ticket volume drop."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        (
+            "The result: fewer repeat tickets, faster resolution for customers, "
+            "and a documented knowledge base your team can trust."
+        ),
+        (
+            "The clusters that appear most often in your support inbox are the "
+            "ones that will reduce the most repeat work when you answer them "
+            "in a help center."
+        ),
+        (
+            "If 2 customers asked the same question in your uploaded tickets, "
+            "more customers have asked it before, and more will ask it in the "
+            "future."
+        ),
+        (
+            "Each FAQ entry you publish is one fewer repeat ticket your team "
+            "has to answer."
+        ),
+        (
+            "Over time, that adds up to real time savings and a better customer "
+            "experience."
+        ),
+        "Document them, publish them, and watch your repeat ticket volume drop.",
+    ]
+
+
+def test_blog_export_fails_second_live_false_green_outcome_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 4 support tickets show email and reporting clusters. "
+            "A support ticket FAQ strategy turns these repeated questions into "
+            "self-service answers that help customers and reduce support workload. "
+            "Every support ticket that could have been answered by a self-service "
+            "FAQ represents time your team is not spending on complex, one-off issues. "
+            "Your customers will find answers faster. "
+            "Your support team will focus on complex issues that require human judgment."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        (
+            "A support ticket FAQ strategy turns these repeated questions into "
+            "self-service answers that help customers and reduce support workload."
+        ),
+        (
+            "Every support ticket that could have been answered by a self-service "
+            "FAQ represents time your team is not spending on complex, one-off issues."
+        ),
+        "Your customers will find answers faster.",
+        "Your support team will focus on complex issues that require human judgment.",
+    ]
+
+
+def test_blog_export_fails_third_live_false_green_benefit_claims() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 4 support tickets show email and reporting clusters. "
+            "New customers will likely ask the same question. "
+            "Customers can find answers in the FAQ instead of opening a ticket, "
+            "freeing the team to focus on complex issues. "
+            "Customers get instant answers instead of waiting for support to respond. "
+            "The goal is to make your help center so complete that customers can "
+            "answer their own questions."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == [
+        "New customers will likely ask the same question.",
+        (
+            "Customers can find answers in the FAQ instead of opening a ticket, "
+            "freeing the team to focus on complex issues."
+        ),
+        "Customers get instant answers instead of waiting for support to respond.",
+        (
+            "The goal is to make your help center so complete that customers can "
+            "answer their own questions."
+        ),
+    ]
+
+
+def test_blog_export_fails_procedural_answer_steps_without_resolution_evidence() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Simple answers like Go to Settings > Email > Change Email are "
+            "faster to document and publish."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is False
+    assert answer_step_check["details"]["unsupported_answer_steps"] == [
+        (
+            "Simple answers like Go to Settings > Email > Change Email are "
+            "faster to document and publish."
+        )
+    ]
+
+
+def test_blog_export_allows_non_ui_greater_than_comparisons() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Revenue > Costs is a basic operating equation. "
+            "G2 > Capterra is just a preference statement here."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is True
+    assert answer_step_check["details"] == {"unsupported_answer_steps": []}
+
+
+def test_blog_export_fails_unverified_answer_capabilities_without_resolution_evidence() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Your support team has confirmed this is possible, but the exact "
+            "steps depend on your account type and permissions. "
+            "Campaign attribution data can be exported from the reporting dashboard."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is False
+    assert answer_step_check["details"]["unsupported_answer_steps"] == [
+        (
+            "Your support team has confirmed this is possible, but the exact "
+            "steps depend on your account type and permissions."
+        ),
+        "Campaign attribution data can be exported from the reporting dashboard.",
+    ]
+
+
+def test_blog_export_fails_likely_resolution_paths_without_resolution_evidence() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "For the email and profile updates cluster, the resolution is likely "
+            "straightforward: navigate to account settings, locate the email field, "
+            "update it, and confirm."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is False
+    assert answer_step_check["details"]["unsupported_answer_steps"] == [
+        (
+            "For the email and profile updates cluster, the resolution is likely "
+            "straightforward: navigate to account settings, locate the email field, "
+            "update it, and confirm."
+        )
+    ]
+
+
+def test_blog_export_allows_procedural_answer_steps_with_resolution_evidence() -> None:
+    context = _blog_context()
+    context["support_ticket_resolution_evidence_present"] = True
+    context["support_ticket_resolution_evidence_count"] = 1
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "The verified resolution says to go to Settings > Email > Change Email."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    answer_step_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_answer_steps_grounded"
+    )
+    assert answer_step_check["passed"] is True
+    assert answer_step_check["details"] == {"applicable": False}
+
+
 def test_blog_export_allows_churn_retention_context_and_disclaimers() -> None:
     export = _blog_export(
         content_override=(

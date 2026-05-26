@@ -133,6 +133,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\breduces?\s+support\s+workload\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\breduces?\s+the\s+volume\s+of\s+repeat\s+support\s+interactions\b",
         re.IGNORECASE,
     ),
@@ -181,6 +185,35 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcustomers\s+will\s+find\s+answers\s+faster\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+can\s+find\s+answers\b[^.!?\n]{0,120}"
+        r"\binstead\s+of\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+get\s+instant\s+answers\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+can\s+answer\s+their\s+own\s+questions\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsupport\s+team\s+will\s+focus\s+on\s+complex\s+issues\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfreeing\s+the\s+team\s+to\s+focus\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcould\s+have\s+been\s+(?:answered\s+by\s+)?(?:a\s+)?self-service\s+faq\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bin\s+\d+\s+seconds?\s+instead\s+of\s+waiting\b",
         re.IGNORECASE,
     ),
@@ -205,6 +238,84 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\b(?:most|more)\s+efficient\s+way\s+to\s+reduce\s+repeat\s+support\s+tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfewer\s+(?:repeat\s+)?(?:support\s+)?tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaster\s+resolution\s+for\s+customers\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:will|would)\s+reduce\b[^.!?\n]{0,120}\brepeat\s+work\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduces?\s+the\s+most\s+repeat\s+work\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bone\s+fewer\s+repeat\s+ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breal\s+time\s+savings\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwatch\s+(?:your\s+)?(?:repeat\s+)?ticket\s+volume\s+drop\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bmore\s+(?:customers\s+)?will\s+ask\s+it\s+in\s+the\s+future\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bnew\s+customers\s+will\s+likely\s+ask\s+the\s+same\s+question\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomer\s+got\s+unblocked\b",
+        re.IGNORECASE,
+    ),
+)
+_UNSUPPORTED_SUPPORT_ANSWER_STEP_PATTERNS = (
+    re.compile(
+        r"\b[A-Z][A-Za-z0-9 &/.-]{1,40}\s*>\s*"
+        r"[A-Z][A-Za-z0-9 &/.-]{1,40}"
+        r"\s*>\s*[A-Z][A-Za-z0-9 &/.-]{1,40}\b"
+    ),
+    re.compile(
+        r"\b(?:click|select|open|go\s+to|choose)\s+[^.!?\n]{0,80}"
+        r"\b(?:settings|menu|tab|button|dashboard|reports?|export|email|billing)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bnavigate\s+to\b[^.!?\n]{0,80}\bsettings\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\blocate\s+the\b[^.!?\n]{0,80}\bfield\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bresolution\s+is\s+likely\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsupport\s+team\s+has\s+confirmed\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:can|could)\s+(?:update|export|change)\b[^.!?\n]{0,120}"
+        r"\b(?:email|account|campaign|attribution|data|dashboard|report)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:email|account|campaign|attribution|data|dashboard|report)"
+        r"[^.!?\n]{0,80}\bcan\s+be\s+(?:updated|exported|changed)\b",
         re.IGNORECASE,
     ),
 )
@@ -300,6 +411,12 @@ def evaluate_support_ticket_generated_content(
         checks,
         errors,
         text=text,
+    )
+    _check_unsupported_support_answer_steps(
+        checks,
+        errors,
+        text=text,
+        source_context=context,
     )
     _check_source_signal_visibility(
         checks,
@@ -600,6 +717,60 @@ def _unsupported_support_outcome_claims(text: str) -> list[str]:
         ):
             claims.append(sentence)
     return _dedupe(claims)
+
+
+def _check_unsupported_support_answer_steps(
+    checks: list[JsonDict],
+    errors: list[str],
+    *,
+    text: str,
+    source_context: Mapping[str, Any],
+) -> None:
+    if _has_resolution_evidence(source_context):
+        checks.append({
+            "name": "support_ticket_answer_steps_grounded",
+            "passed": True,
+            "level": "error",
+            "details": {"applicable": False},
+        })
+        return
+    unsupported = _unsupported_support_answer_steps(text)
+    checks.append({
+        "name": "support_ticket_answer_steps_grounded",
+        "passed": not unsupported,
+        "level": "error",
+        "details": {"unsupported_answer_steps": unsupported},
+    })
+    if unsupported:
+        errors.append(
+            "generated text includes concrete support-ticket answer steps without "
+            "resolution evidence: " + "; ".join(unsupported)
+        )
+
+
+def _unsupported_support_answer_steps(text: str) -> list[str]:
+    claims: list[str] = []
+    for sentence in _sentences(text):
+        if any(
+            pattern.search(sentence)
+            for pattern in _UNSUPPORTED_SUPPORT_ANSWER_STEP_PATTERNS
+        ):
+            claims.append(sentence)
+    return _dedupe(claims)
+
+
+def _has_resolution_evidence(source_context: Mapping[str, Any]) -> bool:
+    value = source_context.get("support_ticket_resolution_evidence_present")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in {"true", "yes", "1"}:
+        return True
+    count = source_context.get("support_ticket_resolution_evidence_count")
+    if isinstance(count, int):
+        return count > 0
+    if isinstance(count, str) and count.strip().isdigit():
+        return int(count) > 0
+    return False
 
 
 _SUPPORT_OUTCOME_DISCLAIMER_RE = re.compile(

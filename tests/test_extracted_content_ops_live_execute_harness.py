@@ -183,7 +183,7 @@ def _real_service_response_for_metadata(
             "target_keyword": "support ticket FAQ report",
             "secondary_keywords": [
                 "customer support FAQ",
-                "reduce repeat support tickets",
+                "repeat support questions",
             ],
             "faq": [
                 {
@@ -442,7 +442,7 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
     assert draft.metadata["target_keyword"] == "support ticket FAQ report"
     assert draft.metadata["secondary_keywords"] == [
         "customer support FAQ",
-        "reduce repeat support tickets",
+        "repeat support questions",
     ]
     assert draft.data_context["source_period"] == "Uploaded support tickets"
     assert draft.data_context["source"] == "support_ticket_provider"
