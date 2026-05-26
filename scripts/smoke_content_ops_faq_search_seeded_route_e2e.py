@@ -363,10 +363,30 @@ async def _cleanup_seeded_faqs(database_url: str, faq_ids: Sequence[str]) -> dic
             "delete_status": delete_status,
             "error": f"{type(exc).__name__}: {exc}",
         }
+    deleted_faq_ids = _deleted_row_count(delete_status)
+    if deleted_faq_ids is None:
+        return {
+            "ok": False,
+            "requested_faq_ids": requested_faq_ids,
+            "deleted_faq_ids": None,
+            "delete_status": delete_status,
+            "error": f"cleanup delete status is not parseable: {delete_status!r}",
+        }
+    if deleted_faq_ids != requested_faq_ids:
+        return {
+            "ok": False,
+            "requested_faq_ids": requested_faq_ids,
+            "deleted_faq_ids": deleted_faq_ids,
+            "delete_status": delete_status,
+            "error": (
+                "cleanup deleted "
+                f"{deleted_faq_ids} FAQ rows but requested {requested_faq_ids}"
+            ),
+        }
     return {
         "ok": True,
         "requested_faq_ids": requested_faq_ids,
-        "deleted_faq_ids": _deleted_row_count(delete_status),
+        "deleted_faq_ids": deleted_faq_ids,
         "delete_status": delete_status,
         "error": None,
     }
