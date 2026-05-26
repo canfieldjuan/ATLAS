@@ -8,9 +8,77 @@ from uuid import uuid4
 
 import pytest
 
+from extracted_content_pipeline.api.control_surfaces import _required_scope_account_id
+from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_usage_summary import (
     summarize_content_ops_llm_usage,
 )
+
+
+class _UsageSummaryPool:
+    def __init__(self) -> None:
+        self.fetchrow_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.fetch_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetchrow(self, query: str, *args: object) -> dict[str, object]:
+        self.fetchrow_calls.append((query, args))
+        return {
+            "total_cost_usd": Decimal("0"),
+            "input_tokens": 0,
+            "billable_input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_calls": 0,
+            "failed_calls": 0,
+            "cache_hit_calls": 0,
+            "avg_duration_ms": 0,
+            "latest_call_at": None,
+        }
+
+    async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+        self.fetch_calls.append((query, args))
+        return []
+
+
+@pytest.mark.asyncio
+async def test_content_ops_usage_summary_filters_by_account_id_in_sql() -> None:
+    pool = _UsageSummaryPool()
+
+    payload = await summarize_content_ops_llm_usage(
+        pool,
+        days=14,
+        account_id="acct-123",
+        asset_type="landing_page",
+        run_id="run-1",
+        request_id="req-1",
+    )
+
+    query, args = pool.fetchrow_calls[0]
+    assert "metadata ->> 'account_id' = $2" in query
+    assert "metadata ->> 'asset_type' = $3" in query
+    assert "(run_id = $4 OR metadata ->> 'run_id' = $4)" in query
+    assert "metadata ->> 'request_id' = $5" in query
+    assert args == (14, "acct-123", "landing_page", "run-1", "req-1")
+    assert pool.fetch_calls[0][1] == args
+    assert pool.fetch_calls[1][1] == args
+    assert payload["filters"] == {
+        "account_id": "acct-123",
+        "asset_type": "landing_page",
+        "run_id": "run-1",
+        "request_id": "req-1",
+    }
+
+
+def test_content_ops_tenant_usage_requires_scope_account_id() -> None:
+    assert _required_scope_account_id(TenantScope(account_id="acct-123")) == "acct-123"
+
+    with pytest.raises(Exception) as exc:
+        _required_scope_account_id(TenantScope())
+
+    assert getattr(exc.value, "status_code", None) == 400
+    assert getattr(exc.value, "detail", None) == "account_id is required"
 
 
 @pytest.mark.integration

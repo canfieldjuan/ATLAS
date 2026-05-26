@@ -613,6 +613,24 @@ def create_content_ops_control_surface_router(
             request_id=request_id,
         )
 
+    @router.get("/usage/summary/tenant")
+    async def tenant_usage_summary(
+        days: int = Query(default=7, ge=1, le=90),
+        asset_type: str | None = Query(default=None, max_length=80),
+        run_id: str | None = Query(default=None, max_length=200),
+        request_id: str | None = Query(default=None, max_length=200),
+    ) -> dict[str, Any]:
+        pool = await _resolve_usage_pool(usage_pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        return await summarize_content_ops_llm_usage(
+            pool,
+            days=days,
+            account_id=_required_scope_account_id(scope),
+            asset_type=asset_type,
+            run_id=run_id,
+            request_id=request_id,
+        )
+
     @router.post("/preview")
     async def preview_generation(
         payload: ContentOpsRequestModel = Body(...),
@@ -1425,6 +1443,13 @@ async def _resolve_scope(provider: ScopeProvider | None) -> TenantScope | None:
             detail="Content Ops scope provider is unavailable.",
         ) from exc
     return _scope_from_value(value)
+
+
+def _required_scope_account_id(scope: TenantScope | None) -> str:
+    account_id = _clean(getattr(scope, "account_id", None))
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    return account_id
 
 
 async def _resolve_import_pool(provider: PoolProvider | None) -> Any:
