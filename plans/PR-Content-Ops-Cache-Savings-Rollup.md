@@ -33,6 +33,7 @@ Slice phase: Production hardening
 | `extracted_content_pipeline/campaign_llm_client.py` | Estimate and stamp cache-hit savings metadata. |
 | `extracted_content_pipeline/content_ops_usage_summary.py` | Aggregate numeric cache-savings metadata in the usage summary. |
 | `tests/test_extracted_campaign_llm_client.py` | Pin cache-hit savings metadata on traced calls. |
+| `tests/test_extracted_content_control_surface_api.py` | Pin the usage summary route payload shape with cache savings fields. |
 | `tests/test_extracted_content_ops_usage_summary.py` | Pin summary and breakdown cache-savings rollups. |
 
 ## Mechanism
@@ -40,9 +41,10 @@ Slice phase: Production hardening
 On an exact-cache hit, `_response_from_cache_hit(...)` already has the cached
 entry's original input/output token counts. This slice runs those counts through
 the shared `settings.ftl_tracing.pricing.cost_usd(...)` helper, using the cache
-entry provider/model. The result is written to trace metadata as a numeric
-`cache_savings_usd` field alongside `cached_input_tokens` and
-`cached_output_tokens`.
+entry provider/model and any stored provider-cache fields such as
+`cached_tokens`, `cache_write_tokens`, and `billable_input_tokens`. The result
+is written to trace metadata as a numeric `cache_savings_usd` field alongside
+`cached_input_tokens` and `cached_output_tokens`.
 
 The usage summary query then sums only numeric JSON values:
 
@@ -80,12 +82,13 @@ breaking the whole usage route.
 
 ## Verification
 
-- python -m pytest tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_usage_summary.py -q — 24 passed, 2 skipped, 1 warning.
-- python -m compileall -q extracted_content_pipeline/campaign_llm_client.py extracted_content_pipeline/content_ops_usage_summary.py tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_usage_summary.py — passed.
+- python -m pytest tests/test_extracted_content_control_surface_api.py::test_usage_summary_route_returns_content_ops_llm_rollup_with_filters tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_usage_summary.py -q — 25 passed, 2 skipped, 1 warning.
+- python -m compileall -q extracted_content_pipeline/campaign_llm_client.py extracted_content_pipeline/content_ops_usage_summary.py tests/test_extracted_campaign_llm_client.py tests/test_extracted_content_ops_usage_summary.py tests/test_extracted_content_control_surface_api.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
 - bash scripts/check_ascii_python.sh — passed.
+- bash scripts/run_extracted_pipeline_checks.sh — 2501 passed, 7 skipped, 1 warning.
 - git diff --check — passed.
 - bash scripts/local_pr_review.sh --current-pr-body-file <body> — passed.
 
@@ -94,9 +97,9 @@ breaking the whole usage route.
 | Area | Estimated LOC |
 |---|---:|
 | Plan doc | ~95 |
-| LLM client savings metadata | ~40 |
+| LLM client savings metadata | ~55 |
 | Usage summary aggregation | ~25 |
-| Tests | ~25 |
-| **Total** | **~185** |
+| Tests | ~60 |
+| **Total** | **~235** |
 
 This stays below the 400 LOC soft cap.

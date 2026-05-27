@@ -652,12 +652,28 @@ def _estimate_cache_savings_usd(
     try:
         from extracted_llm_infrastructure.config import settings
 
+        usage = hit.get("usage") if isinstance(hit.get("usage"), Mapping) else {}
         return _usage_float(
             settings.ftl_tracing.pricing.cost_usd(
                 str(hit.get("provider") or ""),
                 str(hit.get("model") or ""),
                 input_tokens,
                 output_tokens,
+                cached_tokens=_usage_int(
+                    usage.get("cached_tokens")
+                    or usage.get("cache_read_tokens")
+                    or usage.get("cache_read_input_tokens"),
+                ),
+                cache_write_tokens=_usage_int(
+                    usage.get("cache_write_tokens")
+                    or usage.get("cache_creation_tokens")
+                    or usage.get("cache_creation_input_tokens"),
+                ),
+                billable_input_tokens=(
+                    _usage_int(usage.get("billable_input_tokens"))
+                    if usage.get("billable_input_tokens") is not None
+                    else None
+                ),
             ),
         )
     except Exception:
