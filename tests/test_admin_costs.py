@@ -1355,7 +1355,28 @@ def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch)
         True,
         raising=False,
     )
-    client, _ = _client(monkeypatch)
+    content_ops_summary = {
+        "period_days": 14,
+        "summary": {
+            "total_calls": 3,
+            "cache_hit_calls": 1,
+            "total_cache_savings_usd": 0.0123,
+        },
+        "by_cache_status": [{
+            "cache_mode": "exact",
+            "cache_reason": "eligible",
+            "cache_result": "hit",
+            "cache_store_result": "skipped",
+            "calls": 1,
+            "cache_savings_usd": 0.0123,
+        }],
+    }
+    summarize_content_ops = AsyncMock(return_value=content_ops_summary)
+    monkeypatch.setattr(
+        "atlas_brain.api.admin_costs.summarize_content_ops_llm_usage",
+        summarize_content_ops,
+    )
+    client, pool = _client(monkeypatch)
     with client:
         res = client.get("/admin/costs/cache-health?days=14&top_n=5")
     assert res.status_code == 200
@@ -1367,6 +1388,8 @@ def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch)
     assert body["exact_cache"]["total_hits"] == 19
     assert body["provider_prompt_cache"]["cache_hit_calls"] == 11
     assert body["provider_prompt_cache"]["top_spans"][0]["span_name"] == "task.b2b_blog_post_generation"
+    assert body["content_ops"] == content_ops_summary
+    summarize_content_ops.assert_awaited_once_with(pool, days=14)
     assert body["anthropic_batching"]["submitted_jobs"] == 2
     assert body["anthropic_batching"]["estimated_savings_usd"] == pytest.approx(0.6)
     assert body["anthropic_batching"]["stages"][0]["stage_id"] == "b2b_campaign_generation.content"
