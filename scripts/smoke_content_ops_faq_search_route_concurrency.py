@@ -77,6 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-p95-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_P95_MS") or None)
     parser.add_argument("--max-single-request-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_SINGLE_REQUEST_MS") or None)
     parser.add_argument("--max-detail-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_DETAIL_MS") or None)
+    parser.add_argument("--max-case-error-rate", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_CASE_ERROR_RATE") or None)
     parser.set_defaults(require_results=True)
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--allow-empty-results", action="store_false", dest="require_results")
@@ -98,7 +99,14 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     for name in ("limit", "requests", "concurrency"):
         if int(getattr(args, name)) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
-    for name in ("timeout", "max_error_rate", "max_p95_ms", "max_single_request_ms", "max_detail_ms"):
+    for name in (
+        "timeout",
+        "max_error_rate",
+        "max_p95_ms",
+        "max_single_request_ms",
+        "max_detail_ms",
+        "max_case_error_rate",
+    ):
         value = getattr(args, name)
         if value is not None and not math.isfinite(float(value)):
             errors.append(f"--{name.replace('_', '-')} must be finite")
@@ -106,6 +114,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("--timeout must be positive")
     if not 0 <= float(args.max_error_rate) <= 1:
         errors.append("--max-error-rate must be between 0 and 1")
+    if args.max_case_error_rate is not None and not 0 <= float(args.max_case_error_rate) <= 1:
+        errors.append("--max-case-error-rate must be between 0 and 1")
     if bool(args.require_detail) and not bool(args.require_results):
         errors.append("--require-detail requires result rows; remove --allow-empty-results")
     if args.max_detail_ms is not None and not bool(args.require_detail):
@@ -472,8 +482,10 @@ def _budget_summary(
     *,
     latency: Mapping[str, Any],
     detail_latency: Mapping[str, Any],
+    case_summaries: Sequence[Mapping[str, Any]],
     errors: Mapping[str, Any],
     max_error_rate: float,
+    max_case_error_rate: float | None,
     max_p95_ms: float | None,
     max_single_request_ms: float | None,
     max_detail_ms: float | None,
@@ -517,6 +529,24 @@ def _budget_summary(
             )
             if not ok:
                 failures.append(f"detail_max_ms exceeded {limit_value}")
+    if max_case_error_rate is not None:
+        limit_value = round(float(max_case_error_rate), 6)
+        for case_summary in case_summaries:
+            case_index = int(case_summary.get("case_index") or 0)
+            case_errors = case_summary.get("errors")
+            actual = float(case_errors.get("rate") or 0.0) if isinstance(case_errors, Mapping) else 0.0
+            ok = actual <= limit_value
+            checks.append(
+                {
+                    "metric": "case_error_rate",
+                    "case_index": case_index,
+                    "actual": actual,
+                    "max": limit_value,
+                    "ok": ok,
+                }
+            )
+            if not ok:
+                failures.append(f"case_error_rate exceeded {limit_value} for case {case_index}")
     return {"ok": not failures, "checks": checks, "failures": failures}
 
 
@@ -532,11 +562,18 @@ def _summary_payload(
     errors = _error_summary(results)
     latency = _latency_summary(results)
     detail = _detail_summary(results, required=bool(args.require_detail))
+    case_summaries = _case_result_summaries(
+        active_cases,
+        results,
+        detail_required=bool(args.require_detail),
+    )
     budgets = _budget_summary(
         latency=latency,
         detail_latency=detail["latency"],
+        case_summaries=case_summaries,
         errors=errors,
         max_error_rate=float(args.max_error_rate),
+        max_case_error_rate=args.max_case_error_rate,
         max_p95_ms=args.max_p95_ms,
         max_single_request_ms=args.max_single_request_ms,
         max_detail_ms=args.max_detail_ms,
@@ -556,11 +593,7 @@ def _summary_payload(
             "total": len(active_cases),
             "case_file": str(args.case_file or ""),
             "items": [_case_snapshot(case) for case in active_cases[:20]],
-            "summaries": _case_result_summaries(
-                active_cases,
-                results,
-                detail_required=bool(args.require_detail),
-            ),
+            "summaries": case_summaries,
             "truncated": len(active_cases) > 20,
         },
         "requests": {
