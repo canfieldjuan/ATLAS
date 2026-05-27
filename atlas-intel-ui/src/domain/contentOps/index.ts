@@ -7,6 +7,7 @@
 
 export type {
   CampaignReasoningContextView,
+  ContentOpsCachePolicy,
   ContentOpsCatalog,
   ContentOpsIngestionDiagnostics,
   ContentOpsIngestionImportRequest,

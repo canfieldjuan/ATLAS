@@ -11,6 +11,7 @@
     "test:content-ops-ingestion-limits": "node --test scripts/content-ops-ingestion-limits.test.mjs",
     "test:content-ops-ingestion-routing": "node --test scripts/content-ops-ingestion-routing.test.mjs",
     "test:content-ops-input-display": "node --test scripts/content-ops-input-display.test.mjs",
+    "test:content-ops-cache-policy-ui": "node --test scripts/content-ops-cache-policy-ui.test.mjs",
     "test:content-ops-usage-budget-ui": "node --test scripts/content-ops-usage-budget-ui.test.mjs",
     "test:content-ops-usage-summary": "node --test scripts/content-ops-usage-summary.test.mjs",
     "test:landing-page-prerender": "node --test scripts/verify-landing-page-geo-prerender.test.mjs",
