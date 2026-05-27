@@ -575,6 +575,140 @@ def test_main_writes_result_for_seed_failure(tmp_path, monkeypatch) -> None:
     }
 
 
+def test_main_writes_result_for_cleanup_manifest_output_failure(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def execute(self, *_args):
+            raise AssertionError("cleanup should not run with --keep-data")
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _apply_noop(_pool):
+        return None
+
+    def _raise_manifest(*_args, **_kwargs):
+        raise OSError("manifest path bad")
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _apply_noop)
+    monkeypatch.setattr(smoke, "_write_cleanup_manifest", _raise_manifest)
+    result_path = tmp_path / "faq-search-manifest.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--cleanup-manifest-output",
+        str(tmp_path / "cleanup-manifest.json"),
+        "--keep-data",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "cleanup_manifest_output",
+        "error": {
+            "type": "OSError",
+            "message": "manifest path bad",
+        },
+    }
+
+
+def test_main_writes_result_for_route_case_file_output_failure(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def execute(self, *_args):
+            raise AssertionError("cleanup should not run with --keep-data")
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _apply_noop(_pool):
+        return None
+
+    async def _seed_noop(*_args, **_kwargs):
+        return None
+
+    def _raise_route_cases(*_args, **_kwargs):
+        raise OSError("route case path bad")
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _apply_noop)
+    monkeypatch.setattr(smoke, "_seed", _seed_noop)
+    monkeypatch.setattr(smoke, "_write_route_case_file", _raise_route_cases)
+    result_path = tmp_path / "faq-search-route-cases.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--route-case-file-output",
+        str(tmp_path / "route-cases.json"),
+        "--keep-data",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "route_case_file_output",
+        "error": {
+            "type": "OSError",
+            "message": "route case path bad",
+        },
+    }
+
+
 def test_failure_summary_limits_output() -> None:
     results = [
         {

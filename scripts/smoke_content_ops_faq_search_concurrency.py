@@ -550,7 +550,17 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 elapsed_seconds=time.perf_counter() - started,
             )
         cleanup_ready = True
-        _write_cleanup_manifest(args.cleanup_manifest_output, cases)
+        try:
+            _write_cleanup_manifest(args.cleanup_manifest_output, cases)
+        except Exception as exc:
+            return 1, _setup_failure_summary(
+                run_id=run_id,
+                args=args,
+                cases=cases,
+                phase="cleanup_manifest_output",
+                error=exc,
+                elapsed_seconds=time.perf_counter() - started,
+            )
         try:
             await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
         except Exception as exc:
@@ -562,11 +572,21 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 error=exc,
                 elapsed_seconds=time.perf_counter() - started,
             )
-        _write_route_case_file(
-            args.route_case_file_output,
-            cases,
-            documents_per_corpus=int(args.documents_per_corpus),
-        )
+        try:
+            _write_route_case_file(
+                args.route_case_file_output,
+                cases,
+                documents_per_corpus=int(args.documents_per_corpus),
+            )
+        except Exception as exc:
+            return 1, _setup_failure_summary(
+                run_id=run_id,
+                args=args,
+                cases=cases,
+                phase="route_case_file_output",
+                error=exc,
+                elapsed_seconds=time.perf_counter() - started,
+            )
         results = await _run_concurrent_searches(
             repo,
             cases,
