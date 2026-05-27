@@ -2468,6 +2468,8 @@ function PlanPanel({
 
       <InputProviderDiagnosticsSection diagnostics={plan.inputProvider} />
 
+      <UsageBudgetSection budget={plan.preview.usageBudget} />
+
       <div className="space-y-3">
         {plan.steps.map((step) => (
           <PlanStepCard key={step.output} step={step} />

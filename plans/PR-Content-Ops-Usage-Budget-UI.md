@@ -21,8 +21,9 @@ Slice phase: Product polish
 2. Add new-run form controls for the account budget cap and budget window.
 3. Validate the budget inputs client-side before preview/plan/execute.
 4. Render the backend budget evaluation in the preview verdict when present.
-5. Add a focused Node test for the request mapper, default budget fields, and
-   preview budget evaluation mapper.
+5. Render the refreshed plan-time budget evaluation when `/plan` returns one.
+6. Add a focused Node test for the request mapper, default budget fields,
+   preview budget evaluation mapper, and plan-panel budget verdict wiring.
 
 ### Files touched
 
@@ -30,12 +31,12 @@ Slice phase: Product polish
 |---|---|
 | `plans/PR-Content-Ops-Usage-Budget-UI.md` | Plan doc for the account usage budget UI slice. |
 | `atlas-intel-ui/package.json` | Add a focused usage-budget UI contract test script. |
-| `atlas-intel-ui/scripts/content-ops-usage-budget-ui.test.mjs` | Cover request mapping, default budget fields, and preview budget evaluation mapping. |
+| `atlas-intel-ui/scripts/content-ops-usage-budget-ui.test.mjs` | Cover request mapping, default budget fields, preview budget evaluation mapping, and plan-panel budget verdict wiring. |
 | `atlas-intel-ui/src/api/contentOps.ts` | Add wire fields for account usage budgets and preview budget evaluation. |
 | `atlas-intel-ui/src/domain/contentOps/types.ts` | Add camelCase budget request/evaluation domain fields. |
 | `atlas-intel-ui/src/domain/contentOps/fromWire.ts` | Map account budget fields both directions and preview evaluation responses. |
 | `atlas-intel-ui/src/domain/contentOps/index.ts` | Export the budget evaluation domain type. |
-| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | Add budget inputs, validation, request wiring, and preview rendering. |
+| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | Add budget inputs, validation, request wiring, and preview/plan budget rendering. |
 
 ## Mechanism
 
@@ -54,7 +55,9 @@ projected usage, and budget cap when the backend includes an evaluation.
 
 The focused Node test transpiles the existing TypeScript modules directly. It
 pins mapper behavior so the new request fields and preview evaluation cannot
-silently drop at the frontend contract layer.
+silently drop at the frontend contract layer. It also pins that the plan panel
+uses `plan.preview.usageBudget`, because `/plan` re-evaluates account usage and
+can return a fresher budget verdict than the earlier preview response.
 
 ## Intentional
 
@@ -79,7 +82,7 @@ silently drop at the frontend contract layer.
 
 ## Verification
 
-- npm --prefix atlas-intel-ui run test:content-ops-usage-budget-ui — 3 passed.
+- npm --prefix atlas-intel-ui run test:content-ops-usage-budget-ui — 4 passed.
 - npm --prefix atlas-intel-ui run build — passed.
 - npm --prefix atlas-intel-ui run lint — passed.
 - git diff --check — passed.

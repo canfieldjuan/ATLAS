@@ -23,6 +23,11 @@ const {
   toWireRequest,
 } = await loadTsModule('../src/domain/contentOps/fromWire.ts')
 
+const newRunSource = readFileSync(
+  new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
+  'utf8',
+)
+
 test('account usage budget request fields round-trip through domain mapping', () => {
   const domain = fromWireRequest({
     target_mode: 'vendor_retention',
@@ -83,4 +88,12 @@ test('preview mapper preserves account usage budget verdict', () => {
   assert.equal(preview.usageBudget?.exceeded, true)
   assert.equal(preview.normalizedRequest?.accountUsageBudgetUsd, 1)
   assert.equal(preview.normalizedRequest?.accountUsageBudgetDays, 7)
+})
+
+test('plan panel renders the refreshed plan preview budget verdict', () => {
+  assert.ok(
+    newRunSource.includes(
+      '<UsageBudgetSection budget={plan.preview.usageBudget} />',
+    ),
+  )
 })
