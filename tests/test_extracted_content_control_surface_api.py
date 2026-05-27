@@ -817,6 +817,41 @@ async def test_preview_generation_route_blocks_budget_between_base_and_retry_cos
 
 
 @pytest.mark.asyncio
+async def test_preview_generation_route_blocks_account_usage_budget():
+    pool = _UsagePool()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        usage_pool_provider=lambda: pool,
+        scope_provider=lambda: {"account_id": " acct-1 "},
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+            "account_usage_budget_usd": 1.5,
+            "account_usage_budget_days": 7,
+        }
+    )
+
+    assert payload["can_run"] is False
+    assert payload["usage_budget"]["current_cost_usd"] == 1.234567
+    assert payload["usage_budget"]["estimated_cost_usd"] == 0.36
+    assert payload["usage_budget"]["projected_cost_usd"] == 1.594567
+    assert payload["usage_budget"]["exceeded"] is True
+    assert "metadata ->> 'account_id' = $2" in pool.fetchrow_calls[0][0]
+    assert pool.fetchrow_calls[0][1] == (7, "acct-1")
+    assert (
+        "Projected account usage exceeds account_usage_budget_usd: "
+        "7-day projected 1.59 > 1.50"
+    ) in payload["warnings"]
+
+
+@pytest.mark.asyncio
 async def test_plan_generation_route_returns_execution_plan():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
@@ -839,6 +874,33 @@ async def test_plan_generation_route_returns_execution_plan():
     assert payload["steps"][0]["status"] == "runnable"
     assert payload["preview"]["can_run"] is True
     assert "input_provider" not in payload
+
+
+@pytest.mark.asyncio
+async def test_plan_generation_route_marks_steps_blocked_when_account_budget_exceeds():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        usage_pool_provider=lambda: _UsagePool(),
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+            "account_usage_budget_usd": 1.5,
+        }
+    )
+
+    assert payload["can_execute"] is False
+    assert payload["preview"]["can_run"] is False
+    assert payload["preview"]["usage_budget"]["exceeded"] is True
+    assert payload["steps"][0]["status"] == "blocked"
+    assert payload["steps"][0]["reason"] == "account_usage_budget_exceeded"
 
 
 @pytest.mark.asyncio
@@ -1810,6 +1872,42 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
     assert "input_provider" not in payload
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_blocks_account_usage_budget_before_generation():
+    service = _CampaignService()
+    provider_calls = {"count": 0}
+
+    def execution_services_provider():
+        provider_calls["count"] += 1
+        return ContentOpsExecutionServices(campaign=service)
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=execution_services_provider,
+        usage_pool_provider=lambda: _UsagePool(),
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {
+                    "target_account": "Acme",
+                    "offer": "Churn audit",
+                },
+                "account_usage_budget_usd": 1.5,
+            }
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["reason"] == "account_usage_budget_exceeded"
+    assert exc.value.detail["usage_budget"]["projected_cost_usd"] == 1.594567
+    assert provider_calls["count"] == 0
+    assert service.calls == []
 
 
 @pytest.mark.asyncio

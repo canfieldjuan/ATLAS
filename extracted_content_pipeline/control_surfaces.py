@@ -57,6 +57,8 @@ class ContentOpsRequest:
     outputs: tuple[str, ...] = ()
     limit: int = 1
     max_cost_usd: float | None = None
+    account_usage_budget_usd: float | None = None
+    account_usage_budget_days: int = 7
     inputs: Mapping[str, Any] = field(default_factory=dict)
     ingestion_profile: str = "domain_specific"
     require_quality_gates: bool = True
@@ -92,10 +94,38 @@ class ControlSurfacePreview:
                 "outputs": list(self.normalized_request.outputs),
                 "limit": self.normalized_request.limit,
                 "max_cost_usd": self.normalized_request.max_cost_usd,
+                "account_usage_budget_usd": (
+                    self.normalized_request.account_usage_budget_usd
+                ),
+                "account_usage_budget_days": (
+                    self.normalized_request.account_usage_budget_days
+                ),
                 "ingestion_profile": self.normalized_request.ingestion_profile,
                 "require_quality_gates": self.normalized_request.require_quality_gates,
                 "allow_unimplemented_outputs": self.normalized_request.allow_unimplemented_outputs,
             },
+        }
+
+
+@dataclass(frozen=True)
+class UsageBudgetEvaluation:
+    """Account-period budget evaluation for a proposed Content Ops run."""
+
+    budget_usd: float
+    period_days: int
+    current_cost_usd: float
+    estimated_cost_usd: float
+    projected_cost_usd: float
+    exceeded: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "budget_usd": round(self.budget_usd, 6),
+            "period_days": self.period_days,
+            "current_cost_usd": round(self.current_cost_usd, 6),
+            "estimated_cost_usd": round(self.estimated_cost_usd, 6),
+            "projected_cost_usd": round(self.projected_cost_usd, 6),
+            "exceeded": self.exceeded,
         }
 
 
@@ -248,6 +278,28 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
     if max_cost_usd is not None and max_cost_usd <= 0:
         raise ValueError(f"max_cost_usd must be positive; got {max_cost_usd:g}")
 
+    account_usage_budget_usd = (
+        float(payload["account_usage_budget_usd"])
+        if payload.get("account_usage_budget_usd") is not None
+        else None
+    )
+    if account_usage_budget_usd is not None and account_usage_budget_usd <= 0:
+        raise ValueError(
+            "account_usage_budget_usd must be positive; "
+            f"got {account_usage_budget_usd:g}"
+        )
+
+    account_usage_budget_days = int(
+        payload.get("account_usage_budget_days")
+        if payload.get("account_usage_budget_days") is not None
+        else 7
+    )
+    if account_usage_budget_days < 1 or account_usage_budget_days > 90:
+        raise ValueError(
+            "account_usage_budget_days must be between 1 and 90; "
+            f"got {account_usage_budget_days}"
+        )
+
     raw_inputs = payload.get("inputs")
     if raw_inputs is not None and not isinstance(raw_inputs, Mapping):
         raise ValueError("inputs must be an object")
@@ -264,6 +316,8 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         outputs=normalize_outputs(payload.get("outputs")),
         limit=limit,
         max_cost_usd=max_cost_usd,
+        account_usage_budget_usd=account_usage_budget_usd,
+        account_usage_budget_days=account_usage_budget_days,
         inputs=raw_inputs if isinstance(raw_inputs, Mapping) else {},
         ingestion_profile=str(payload.get("ingestion_profile") or "domain_specific").strip()
         or "domain_specific",
@@ -362,6 +416,32 @@ def estimate_cost_usd(
     return total
 
 
+def evaluate_usage_budget(
+    *,
+    budget_usd: float,
+    period_days: int,
+    current_cost_usd: float,
+    estimated_cost_usd: float,
+) -> UsageBudgetEvaluation:
+    """Return whether current account usage plus a proposed run exceeds budget."""
+
+    if budget_usd <= 0:
+        raise ValueError(f"budget_usd must be positive; got {budget_usd:g}")
+    if period_days < 1 or period_days > 90:
+        raise ValueError(f"period_days must be between 1 and 90; got {period_days}")
+    current = max(0.0, float(current_cost_usd))
+    estimated = max(0.0, float(estimated_cost_usd))
+    projected = current + estimated
+    return UsageBudgetEvaluation(
+        budget_usd=float(budget_usd),
+        period_days=int(period_days),
+        current_cost_usd=current,
+        estimated_cost_usd=estimated,
+        projected_cost_usd=projected,
+        exceeded=projected > float(budget_usd),
+    )
+
+
 def missing_required_inputs(
     outputs: Sequence[str],
     provided_inputs: Mapping[str, Any],
@@ -448,6 +528,8 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         outputs=selected_outputs,
         limit=request.limit,
         max_cost_usd=request.max_cost_usd,
+        account_usage_budget_usd=request.account_usage_budget_usd,
+        account_usage_budget_days=request.account_usage_budget_days,
         inputs=request.inputs,
         ingestion_profile=request.ingestion_profile,
         require_quality_gates=request.require_quality_gates,

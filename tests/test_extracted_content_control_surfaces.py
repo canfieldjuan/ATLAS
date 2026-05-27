@@ -1,6 +1,7 @@
 import pytest
 
 from extracted_content_pipeline.control_surfaces import (
+    evaluate_usage_budget,
     normalize_outputs,
     preview_from_mapping,
     request_from_mapping,
@@ -42,6 +43,8 @@ def test_preview_allows_implemented_outputs_under_budget():
     assert preview["estimated_cost_usd"] == 2.92
     assert preview["missing_inputs"] == []
     assert preview["blocked_outputs"] == []
+    assert preview["normalized_request"]["account_usage_budget_usd"] is None
+    assert preview["normalized_request"]["account_usage_budget_days"] == 7
 
 
 def test_preview_blocks_unknown_preset_instead_of_falling_back_to_email():
@@ -336,6 +339,41 @@ def test_request_from_mapping_rejects_zero_limit():
 def test_request_from_mapping_rejects_non_positive_budget():
     with pytest.raises(ValueError, match="max_cost_usd must be positive; got -1"):
         request_from_mapping({"max_cost_usd": -1})
+
+
+def test_request_from_mapping_rejects_non_positive_account_usage_budget():
+    with pytest.raises(
+        ValueError,
+        match="account_usage_budget_usd must be positive; got 0",
+    ):
+        request_from_mapping({"account_usage_budget_usd": 0})
+
+
+def test_request_from_mapping_rejects_account_usage_budget_days_out_of_range():
+    with pytest.raises(
+        ValueError,
+        match="account_usage_budget_days must be between 1 and 90; got 91",
+    ):
+        request_from_mapping({"account_usage_budget_days": 91})
+
+
+def test_evaluate_usage_budget_projects_current_plus_estimated_cost():
+    evaluation = evaluate_usage_budget(
+        budget_usd=2.0,
+        period_days=7,
+        current_cost_usd=1.2,
+        estimated_cost_usd=0.9,
+    )
+
+    assert evaluation.exceeded is True
+    assert evaluation.as_dict() == {
+        "budget_usd": 2.0,
+        "period_days": 7,
+        "current_cost_usd": 1.2,
+        "estimated_cost_usd": 0.9,
+        "projected_cost_usd": 2.1,
+        "exceeded": True,
+    }
 
 
 def test_request_from_mapping_rejects_non_object_inputs():
