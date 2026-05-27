@@ -343,6 +343,125 @@ def test_saas_demo_cleanup_runtime_failure_writes_result(
     }
 
 
+def test_saas_demo_seed_preserves_payload_when_pool_close_fails(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    database_url = "postgresql://user:secret@example.invalid/atlas"
+
+    class _Pool:
+        async def close(self):
+            raise OSError(f"pool close failed for {database_url}")
+
+    async def _fake_pool(_database_url):
+        return _Pool()
+
+    async def _seed_success(*_args, **_kwargs):
+        return {
+            "phase": "seed",
+            "ok": True,
+            "errors": [],
+            "account_id": "acct-demo",
+            "corpus_id": "synthetic-b2b-saas-demo",
+            "faq_id": "11111111-1111-1111-1111-111111111111",
+            "status": "approved",
+            "source_count": 36,
+            "ticket_source_count": 36,
+            "generated_items": 7,
+            "projected_documents": 7,
+            "search": {"query": "export attribution reports", "count": 1},
+        }
+
+    monkeypatch.setattr(seeder, "_create_pool", _fake_pool)
+    monkeypatch.setattr(seeder, "seed_saas_demo_faq", _seed_success)
+    result_path = tmp_path / "seed-close.json"
+
+    code = seeder.main([
+        "--database-url",
+        database_url,
+        "--account-id",
+        "acct-demo",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    output = capsys.readouterr().out
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert database_url not in output
+    assert database_url not in result_path.read_text(encoding="utf-8")
+    assert payload["phase"] == "seed"
+    assert payload["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["search"] == {"query": "export attribution reports", "count": 1}
+    assert payload["ok"] is False
+    assert payload["errors"] == []
+    assert payload["pool_close"] == {
+        "ok": False,
+        "attempted": True,
+        "error": {
+            "type": "OSError",
+            "message": "pool close failed for [redacted-database-url]",
+        },
+    }
+
+
+def test_saas_demo_cleanup_preserves_payload_when_pool_close_fails(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class _Pool:
+        async def close(self):
+            raise OSError("pool close failed")
+
+    async def _fake_pool(_database_url):
+        return _Pool()
+
+    async def _cleanup_success(*_args, **_kwargs):
+        return {
+            "phase": "cleanup",
+            "ok": True,
+            "errors": [],
+            "account_id": "acct-demo",
+            "faq_id": "11111111-1111-1111-1111-111111111111",
+            "deleted_faq_ids": 1,
+            "delete_status": "DELETE 1",
+        }
+
+    monkeypatch.setattr(seeder, "_create_pool", _fake_pool)
+    monkeypatch.setattr(seeder, "cleanup_saas_demo_faq", _cleanup_success)
+    result_path = tmp_path / "cleanup-close.json"
+
+    code = seeder.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--account-id",
+        "acct-demo",
+        "--cleanup-faq-id",
+        "11111111-1111-1111-1111-111111111111",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["phase"] == "cleanup"
+    assert payload["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["deleted_faq_ids"] == 1
+    assert payload["ok"] is False
+    assert payload["errors"] == []
+    assert payload["pool_close"] == {
+        "ok": False,
+        "attempted": True,
+        "error": {
+            "type": "OSError",
+            "message": "pool close failed",
+        },
+    }
+
+
 def test_saas_demo_cleanup_delete_status_parser() -> None:
     assert seeder._deleted_row_count("DELETE 1") == 1
     assert seeder._deleted_row_count("DELETE 0") == 0
