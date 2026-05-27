@@ -447,7 +447,8 @@ async def test_pipeline_llm_client_returns_exact_cache_hit_without_provider_call
     trace_calls = []
     exact_cache = _FakeExactCache(hit={
         "namespace": "content_ops.landing_page",
-        "model": "cached-model",
+        "provider": "openrouter",
+        "model": "anthropic/claude-haiku-4-5",
         "response_text": "cached response",
         "usage": {"input_tokens": 8, "output_tokens": 3},
         "metadata": {"cache_version": "v1"},
@@ -472,7 +473,7 @@ async def test_pipeline_llm_client_returns_exact_cache_hit_without_provider_call
         reset_content_ops_llm_trace_context(token)
 
     assert response.content == "cached response"
-    assert response.model == "cached-model"
+    assert response.model == "anthropic/claude-haiku-4-5"
     assert response.usage == {"input_tokens": 0, "output_tokens": 0}
     assert llm.calls == []
     assert len(exact_cache.lookups) == 1
@@ -480,9 +481,10 @@ async def test_pipeline_llm_client_returns_exact_cache_hit_without_provider_call
     trace_metadata = trace_calls[0][1]["metadata"]
     assert trace_metadata["cache_mode"] == "exact"
     assert trace_metadata["cache_result"] == "hit"
-    assert trace_metadata["cached_input_tokens"] == "8"
-    assert trace_metadata["cached_output_tokens"] == "3"
-    assert trace_metadata["billable_output_tokens"] == "0"
+    assert trace_metadata["cached_input_tokens"] == 8
+    assert trace_metadata["cached_output_tokens"] == 3
+    assert trace_metadata["billable_output_tokens"] == 0
+    assert trace_metadata["cache_savings_usd"] == 6e-06
     assert trace_calls[0][1]["input_tokens"] == 0
     assert trace_calls[0][1]["output_tokens"] == 0
     assert trace_calls[0][1]["cached_tokens"] == 8

@@ -422,7 +422,11 @@ class PipelineLLMClient:
             "billable_output_tokens",
         ):
             if key in trace_meta:
-                trace_metadata[key] = str(_usage_int(trace_meta.get(key)))
+                trace_metadata[key] = _usage_int(trace_meta.get(key))
+        if "cache_savings_usd" in trace_meta:
+            trace_metadata["cache_savings_usd"] = _usage_float(
+                trace_meta.get("cache_savings_usd"),
+            )
         if cache_metadata:
             trace_metadata.update({
                 str(key): str(value)
@@ -596,6 +600,11 @@ def _response_from_cache_hit(hit: Mapping[str, Any]) -> LLMResponse:
         "cached_tokens": input_tokens,
         "billable_input_tokens": 0,
         "billable_output_tokens": 0,
+        "cache_savings_usd": _estimate_cache_savings_usd(
+            hit,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        ),
     }
     return LLMResponse(
         content=str(hit.get("response_text") or ""),
@@ -625,6 +634,34 @@ def _usage_int(value: Any) -> int:
         return max(int(value or 0), 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _usage_float(value: Any) -> float:
+    try:
+        return round(max(float(value or 0), 0.0), 6)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _estimate_cache_savings_usd(
+    hit: Mapping[str, Any],
+    *,
+    input_tokens: int,
+    output_tokens: int,
+) -> float:
+    try:
+        from extracted_llm_infrastructure.config import settings
+
+        return _usage_float(
+            settings.ftl_tracing.pricing.cost_usd(
+                str(hit.get("provider") or ""),
+                str(hit.get("model") or ""),
+                input_tokens,
+                output_tokens,
+            ),
+        )
+    except Exception:
+        return 0.0
 
 
 def _trace_cache_metrics(

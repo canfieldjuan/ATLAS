@@ -30,6 +30,7 @@ class _UsageSummaryPool:
             "total_tokens": 0,
             "cached_tokens": 0,
             "cache_write_tokens": 0,
+            "cache_savings_usd": Decimal("0"),
             "total_calls": 0,
             "failed_calls": 0,
             "cache_hit_calls": 0,
@@ -130,6 +131,7 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
                         "product": "content_ops",
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_savings_usd": 0.0123,
                     }),
                     "run-a",
                 ),
@@ -150,6 +152,7 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
                         "product": "content_ops",
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_savings_usd": "not-a-number",
                     }),
                     "run-a",
                 ),
@@ -193,12 +196,14 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
         assert payload["summary"]["billable_input_tokens"] == 120
         assert payload["summary"]["cached_tokens"] == 10
         assert payload["summary"]["cache_write_tokens"] == 5
+        assert payload["summary"]["total_cache_savings_usd"] == 0.0123
         assert payload["summary"]["cache_hit_calls"] == 1
         assert payload["by_model"] == [
             {
                 "provider": "openrouter",
                 "model": "anthropic/claude-haiku-4-5",
                 "cost_usd": 0.15,
+                "cache_savings_usd": 0.0123,
                 "calls": 2,
                 "input_tokens": 130,
                 "output_tokens": 50,
@@ -208,6 +213,7 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
             {
                 "asset_type": "blog_post",
                 "cost_usd": 0.15,
+                "cache_savings_usd": 0.0123,
                 "calls": 2,
                 "input_tokens": 130,
                 "output_tokens": 50,
@@ -273,6 +279,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_a,
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_savings_usd": 0.01,
                     }),
                     "run-a",
                 ),
@@ -294,6 +301,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_a,
                         "asset_type": "landing_page",
                         "request_id": request_id,
+                        "cache_savings_usd": 0.02,
                     }),
                     "run-a",
                 ),
@@ -315,6 +323,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_b,
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_savings_usd": 0.05,
                     }),
                     "run-b",
                 ),
@@ -335,6 +344,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
         )
 
         assert account_a_payload["summary"]["total_cost_usd"] == 0.3
+        assert account_a_payload["summary"]["total_cache_savings_usd"] == 0.03
         assert account_a_payload["summary"]["total_calls"] == 2
         assert account_a_payload["summary"]["input_tokens"] == 300
         assert account_a_payload["summary"]["output_tokens"] == 120
@@ -345,6 +355,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
         }
 
         assert account_b_payload["summary"]["total_cost_usd"] == 0.5
+        assert account_b_payload["summary"]["total_cache_savings_usd"] == 0.05
         assert account_b_payload["summary"]["total_calls"] == 1
         assert account_b_payload["summary"]["input_tokens"] == 500
         assert account_b_payload["summary"]["output_tokens"] == 100
@@ -353,6 +364,7 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
             {
                 "asset_type": "blog_post",
                 "cost_usd": 0.5,
+                "cache_savings_usd": 0.05,
                 "calls": 1,
                 "input_tokens": 500,
                 "output_tokens": 100,
