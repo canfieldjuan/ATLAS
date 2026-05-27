@@ -709,6 +709,155 @@ def test_main_writes_result_for_route_case_file_output_failure(tmp_path, monkeyp
     }
 
 
+def test_main_reports_cleanup_failure_without_masking_seed_failure(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def execute(self, *_args):
+            raise OSError("cleanup failed")
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _apply_noop(_pool):
+        return None
+
+    async def _raise_seed(*_args, **_kwargs):
+        raise RuntimeError("seed failed")
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _apply_noop)
+    monkeypatch.setattr(smoke, "_seed", _raise_seed)
+    result_path = tmp_path / "faq-search-seed-cleanup.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "seed",
+        "error": {
+            "type": "RuntimeError",
+            "message": "seed failed",
+        },
+    }
+    assert payload["cleanup"] == {
+        "ok": False,
+        "attempted": True,
+        "error": {
+            "type": "OSError",
+            "message": "cleanup failed",
+        },
+    }
+
+
+def test_main_reports_cleanup_failure_without_masking_search_result(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def execute(self, *_args):
+            raise OSError("cleanup failed")
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _apply_noop(_pool):
+        return None
+
+    async def _seed_noop(*_args, **_kwargs):
+        return None
+
+    async def _search_noop(*_args, **_kwargs):
+        return [
+            {
+                "account_id": "acct-1",
+                "corpus_id": "corpus-1",
+                "query": "export attribution report",
+                "expected_hit": True,
+                "result_count": 1,
+                "elapsed_ms": 12.0,
+                "failures": [],
+            }
+        ]
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _apply_noop)
+    monkeypatch.setattr(smoke, "_seed", _seed_noop)
+    monkeypatch.setattr(smoke, "_run_concurrent_searches", _search_noop)
+    result_path = tmp_path / "faq-search-cleanup.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 1
+    assert payload["setup"] == {"ok": True, "phase": "complete", "error": None}
+    assert payload["latency"]["count"] == 1
+    assert payload["isolation"]["count"] == 0
+    assert payload["cleanup"] == {
+        "ok": False,
+        "attempted": True,
+        "error": {
+            "type": "OSError",
+            "message": "cleanup failed",
+        },
+    }
+
+
 def test_failure_summary_limits_output() -> None:
     results = [
         {
