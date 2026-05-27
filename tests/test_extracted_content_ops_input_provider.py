@@ -142,6 +142,31 @@ def test_merge_input_package_preserves_explicit_account_usage_budget() -> None:
     assert request.account_usage_budget_days == 14
 
 
+def test_merge_input_package_preserves_explicit_cache_policy() -> None:
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        outputs=("landing_page",),
+        inputs={
+            "source_material": _source_material(),
+            "offer": "Provider offer",
+            "audience": "Provider audience",
+        },
+    )
+
+    payload = merge_content_ops_input_package(
+        {
+            "outputs": ["landing_page"],
+            "content_ops_cache_policy": "exact-cache",
+            "inputs": {"offer": "Operator offer"},
+        },
+        package,
+    )
+    request = request_from_mapping(payload)
+
+    assert payload["content_ops_cache_policy"] == "exact-cache"
+    assert request.content_ops_cache_policy == "exact"
+
+
 def test_merge_input_package_ignores_null_request_overrides() -> None:
     package = ContentOpsInputPackage(
         provider="ticket_import",

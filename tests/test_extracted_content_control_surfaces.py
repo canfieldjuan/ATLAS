@@ -45,6 +45,32 @@ def test_preview_allows_implemented_outputs_under_budget():
     assert preview["blocked_outputs"] == []
     assert preview["normalized_request"]["account_usage_budget_usd"] is None
     assert preview["normalized_request"]["account_usage_budget_days"] == 7
+    assert preview["normalized_request"]["content_ops_cache_policy"] is None
+
+
+def test_request_normalizes_content_ops_cache_policy():
+    request = request_from_mapping({
+        "outputs": ["blog_post"],
+        "content_ops_cache_policy": "exact-cache",
+        "inputs": {"topic": "Support ticket questions"},
+    })
+    preview = preview_from_mapping({
+        "outputs": ["blog_post"],
+        "content_ops_cache_policy": "exact-cache",
+        "inputs": {"topic": "Support ticket questions"},
+    })
+
+    assert request.content_ops_cache_policy == "exact"
+    assert preview["normalized_request"]["content_ops_cache_policy"] == "exact"
+
+
+def test_request_rejects_unsupported_content_ops_cache_policy():
+    with pytest.raises(ValueError, match="unsupported content_ops_cache_policy"):
+        request_from_mapping({
+            "outputs": ["blog_post"],
+            "content_ops_cache_policy": "semantic",
+            "inputs": {"topic": "Support ticket questions"},
+        })
 
 
 def test_preview_blocks_unknown_preset_instead_of_falling_back_to_email():

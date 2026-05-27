@@ -44,6 +44,7 @@ from ..content_ops_input_provider import (
     ContentOpsInputProvider,
     merge_content_ops_input_package,
 )
+from ..content_ops_cache_policy import normalize_content_ops_cache_policy
 from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
@@ -461,6 +462,7 @@ if BaseModel is not None:
         max_cost_usd: float | None = Field(default=None, gt=0)
         account_usage_budget_usd: float | None = Field(default=None, gt=0)
         account_usage_budget_days: int = Field(7, ge=1, le=90)
+        content_ops_cache_policy: str | None = Field(default=None, max_length=40)
         inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
         ingestion_profile: str = Field("domain_specific", min_length=1, max_length=80)
         require_quality_gates: bool = True
@@ -484,6 +486,14 @@ if BaseModel is not None:
                 text = value.strip()
                 return text or None
             return value
+
+        @field_validator("content_ops_cache_policy")
+        @classmethod
+        def _normalize_content_ops_cache_policy(cls, value: Any) -> str | None:
+            try:
+                return normalize_content_ops_cache_policy(value)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
 
         @field_validator("inputs")
         @classmethod

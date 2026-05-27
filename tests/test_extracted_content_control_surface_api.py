@@ -800,6 +800,45 @@ async def test_preview_generation_route_returns_preflight_plan():
 
 
 @pytest.mark.asyncio
+async def test_preview_generation_route_normalizes_cache_policy_field():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"topic": "Support-ticket questions customers keep asking"},
+            "content_ops_cache_policy": "no-store",
+        }
+    )
+
+    assert payload["can_run"] is True
+    assert payload["normalized_request"]["content_ops_cache_policy"] == "no_store"
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_rejects_unknown_cache_policy_field():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["blog_post"],
+                "inputs": {"topic": "Support-ticket questions customers keep asking"},
+                "content_ops_cache_policy": "semantic",
+            }
+        )
+
+    assert exc.value.status_code == 422
+    assert "unsupported content_ops_cache_policy" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_blocks_budget_between_base_and_retry_cost():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),

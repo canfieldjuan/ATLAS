@@ -375,6 +375,8 @@ def _request_trace_metadata(
     request: ContentOpsRequest,
 ) -> dict[str, str]:
     metadata = _scope_trace_metadata(scope)
+    if request.content_ops_cache_policy:
+        metadata["content_ops_cache_policy"] = request.content_ops_cache_policy
     if _inputs_use_support_ticket_source(request.inputs):
         metadata.update({
             "source_type": SUPPORT_TICKET_SOURCE_MARKER,
