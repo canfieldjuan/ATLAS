@@ -118,6 +118,7 @@ export interface ContentOpsUsageSummaryTotals {
   totalTokens: number
   cachedTokens: number
   cacheWriteTokens: number
+  totalCacheSavingsUsd: number
   cacheHitCalls: number
   avgDurationMs: number
   latestCallAt: string | null
@@ -128,6 +129,7 @@ export interface ContentOpsUsageSummaryBreakdown {
   model?: string
   assetType?: string
   costUsd: number
+  cacheSavingsUsd: number
   calls: number
   inputTokens: number
   outputTokens: number
