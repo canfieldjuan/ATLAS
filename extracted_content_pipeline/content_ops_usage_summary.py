@@ -103,6 +103,32 @@ async def summarize_content_ops_llm_usage(
         """,
         *args,
     )
+    by_cache_status = await pool.fetch(
+        f"""
+        SELECT
+            COALESCE(NULLIF(BTRIM(metadata ->> 'cache_mode'), ''), 'unknown') AS cache_mode,
+            COALESCE(NULLIF(BTRIM(metadata ->> 'cache_reason'), ''), 'unknown') AS cache_reason,
+            COALESCE(NULLIF(BTRIM(metadata ->> 'cache_result'), ''), 'unknown') AS cache_result,
+            COALESCE(NULLIF(BTRIM(metadata ->> 'cache_store_result'), ''), 'unknown') AS cache_store_result,
+            COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(
+                CASE
+                    WHEN jsonb_typeof(metadata -> 'cache_savings_usd') = 'number'
+                    THEN (metadata ->> 'cache_savings_usd')::FLOAT
+                    ELSE 0
+                END
+            ), 0)::FLOAT AS cache_savings_usd,
+            COUNT(*)::BIGINT AS calls,
+            COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
+            COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens
+        FROM llm_usage
+        WHERE {where_sql}
+        GROUP BY cache_mode, cache_reason, cache_result, cache_store_result
+        ORDER BY calls DESC, cost_usd DESC
+        LIMIT 20
+        """,
+        *args,
+    )
     return {
         "period_days": resolved_days,
         "filters": filters.as_dict(),
@@ -110,6 +136,18 @@ async def summarize_content_ops_llm_usage(
         "by_model": [_breakdown_payload(row, label_keys=("provider", "model")) for row in by_model],
         "by_asset_type": [
             _breakdown_payload(row, label_keys=("asset_type",)) for row in by_asset_type
+        ],
+        "by_cache_status": [
+            _breakdown_payload(
+                row,
+                label_keys=(
+                    "cache_mode",
+                    "cache_reason",
+                    "cache_result",
+                    "cache_store_result",
+                ),
+            )
+            for row in by_cache_status
         ],
     }
 

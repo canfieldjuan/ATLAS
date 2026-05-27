@@ -64,6 +64,11 @@ async def test_content_ops_usage_summary_filters_by_account_id_in_sql() -> None:
     assert args == (14, "acct-123", "landing_page", "run-1", "req-1")
     assert pool.fetch_calls[0][1] == args
     assert pool.fetch_calls[1][1] == args
+    assert pool.fetch_calls[2][1] == args
+    assert "metadata ->> 'cache_mode'" in pool.fetch_calls[2][0]
+    assert "GROUP BY cache_mode, cache_reason, cache_result, cache_store_result" in (
+        pool.fetch_calls[2][0]
+    )
     assert payload["filters"] == {
         "account_id": "acct-123",
         "asset_type": "landing_page",
@@ -131,6 +136,9 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
                         "product": "content_ops",
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_mode": "exact",
+                        "cache_reason": "eligible",
+                        "cache_result": "hit",
                         "cache_savings_usd": 0.0123,
                     }),
                     "run-a",
@@ -152,6 +160,8 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
                         "product": "content_ops",
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_mode": "no_store",
+                        "cache_reason": "exact_cache_disabled",
                         "cache_savings_usd": "not-a-number",
                     }),
                     "run-a",
@@ -219,6 +229,30 @@ async def test_content_ops_usage_summary_contract_against_postgres() -> None:
                 "output_tokens": 50,
             }
         ]
+        assert payload["by_cache_status"] == [
+            {
+                "cache_mode": "exact",
+                "cache_reason": "eligible",
+                "cache_result": "hit",
+                "cache_store_result": "unknown",
+                "cost_usd": 0.1,
+                "cache_savings_usd": 0.0123,
+                "calls": 1,
+                "input_tokens": 100,
+                "output_tokens": 40,
+            },
+            {
+                "cache_mode": "no_store",
+                "cache_reason": "exact_cache_disabled",
+                "cache_result": "unknown",
+                "cache_store_result": "unknown",
+                "cost_usd": 0.05,
+                "cache_savings_usd": 0.0,
+                "calls": 1,
+                "input_tokens": 30,
+                "output_tokens": 10,
+            },
+        ]
     finally:
         await pool.execute(
             "DELETE FROM llm_usage WHERE metadata ->> 'request_id' = $1",
@@ -279,6 +313,10 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_a,
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_mode": "exact",
+                        "cache_reason": "eligible",
+                        "cache_result": "miss",
+                        "cache_store_result": "stored",
                         "cache_savings_usd": 0.01,
                     }),
                     "run-a",
@@ -301,6 +339,9 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_a,
                         "asset_type": "landing_page",
                         "request_id": request_id,
+                        "cache_mode": "exact",
+                        "cache_reason": "eligible",
+                        "cache_result": "hit",
                         "cache_savings_usd": 0.02,
                     }),
                     "run-a",
@@ -323,6 +364,8 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
                         "account_id": account_b,
                         "asset_type": "blog_post",
                         "request_id": request_id,
+                        "cache_mode": "no_store",
+                        "cache_reason": "customer_data_no_store",
                         "cache_savings_usd": 0.05,
                     }),
                     "run-b",
@@ -353,6 +396,10 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
             "blog_post",
             "landing_page",
         }
+        assert {row["cache_result"] for row in account_a_payload["by_cache_status"]} == {
+            "hit",
+            "miss",
+        }
 
         assert account_b_payload["summary"]["total_cost_usd"] == 0.5
         assert account_b_payload["summary"]["total_cache_savings_usd"] == 0.05
@@ -363,6 +410,19 @@ async def test_content_ops_usage_summary_isolates_accounts_against_postgres() ->
         assert account_b_payload["by_asset_type"] == [
             {
                 "asset_type": "blog_post",
+                "cost_usd": 0.5,
+                "cache_savings_usd": 0.05,
+                "calls": 1,
+                "input_tokens": 500,
+                "output_tokens": 100,
+            }
+        ]
+        assert account_b_payload["by_cache_status"] == [
+            {
+                "cache_mode": "no_store",
+                "cache_reason": "customer_data_no_store",
+                "cache_result": "unknown",
+                "cache_store_result": "unknown",
                 "cost_usd": 0.5,
                 "cache_savings_usd": 0.05,
                 "calls": 1,
