@@ -257,6 +257,92 @@ def test_saas_demo_cleanup_preflight_writes_result_before_exit(tmp_path) -> None
     }
 
 
+def test_saas_demo_seed_runtime_failure_writes_sanitized_result(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    database_url = "postgresql://user:secret@example.invalid/atlas"
+    result_path = tmp_path / "seed-runtime.json"
+
+    async def _raise_pool(database_url_arg):
+        raise RuntimeError(f"could not connect to {database_url_arg}")
+
+    monkeypatch.setattr(seeder, "_create_pool", _raise_pool)
+
+    code = seeder.main([
+        "--database-url",
+        database_url,
+        "--account-id",
+        "acct-demo",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    output = capsys.readouterr().out
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert database_url not in output
+    assert database_url not in result_path.read_text(encoding="utf-8")
+    assert payload == {
+        "phase": "runtime",
+        "ok": False,
+        "mode": "seed",
+        "errors": [
+            "RuntimeError: could not connect to [redacted-database-url]"
+        ],
+        "error": {
+            "type": "RuntimeError",
+            "message": "could not connect to [redacted-database-url]",
+        },
+    }
+
+
+def test_saas_demo_cleanup_runtime_failure_writes_result(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class _Pool:
+        async def close(self):
+            return None
+
+    async def _fake_pool(_database_url):
+        return _Pool()
+
+    async def _raise_cleanup(*_args, **_kwargs):
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(seeder, "_create_pool", _fake_pool)
+    monkeypatch.setattr(seeder, "cleanup_saas_demo_faq", _raise_cleanup)
+    result_path = tmp_path / "cleanup-runtime.json"
+
+    code = seeder.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--account-id",
+        "acct-demo",
+        "--cleanup-faq-id",
+        "11111111-1111-1111-1111-111111111111",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload == {
+        "phase": "runtime",
+        "ok": False,
+        "mode": "cleanup",
+        "errors": ["RuntimeError: cleanup failed"],
+        "error": {
+            "type": "RuntimeError",
+            "message": "cleanup failed",
+        },
+    }
+
+
 def test_saas_demo_cleanup_delete_status_parser() -> None:
     assert seeder._deleted_row_count("DELETE 1") == 1
     assert seeder._deleted_row_count("DELETE 0") == 0

@@ -32,14 +32,14 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-27
 
-### SaaS demo seeder runtime setup result artifact
+### SaaS demo seeder pool-close result preservation
 - File/location: `scripts/seed_content_ops_faq_saas_demo.py`, `_run(...)` / `main(...)`
-- Description: Pool creation or runtime seed/cleanup exceptions can still abort before `--output-result` is written.
-- Why it matters: Operators get a preflight artifact after this slice, but missing `asyncpg`, connection failures, or unexpected repository errors can still leave no machine-readable failure payload.
+- Description: If seed or cleanup succeeds but `pool.close()` raises, the runtime failure payload can replace the successful operation payload instead of reporting close failure as lifecycle metadata.
+- Why it matters: Operators get a result artifact, but a successful seed could be obscured by a close-time failure during repeated demo setup.
 - Effort: S
 - Category: correctness
 - Owner/session: content-ops/faq-generator
-- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Preflight-Result
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Runtime-Result review
 
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
