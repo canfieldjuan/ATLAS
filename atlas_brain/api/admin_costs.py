@@ -344,6 +344,9 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
     reasoning_mode = _recent_metadata_value(metadata, "reasoning_mode")
     phase = _recent_metadata_value(metadata, "phase")
     skill = _recent_metadata_value(metadata, "skill")
+    content_ops_description = _describe_content_ops_call(span_name, metadata)
+    if content_ops_description is not None:
+        return content_ops_description
 
     if span_name == "reasoning.stratified.reason":
         return "Stratified Reasoning", f"Full reason{f' for {vendor_name}' if vendor_name else ''}"
@@ -375,6 +378,42 @@ def _describe_recent_call(span_name: str, metadata: dict) -> tuple[str, str | No
     return span_name, detail
 
 
+def _describe_content_ops_call(
+    span_name: str,
+    metadata: dict,
+) -> tuple[str, str | None] | None:
+    product = str(_recent_metadata_value(metadata, "product") or "").strip().lower()
+    if span_name != "content_ops.llm.complete" and product != "content_ops":
+        return None
+
+    asset_type = _recent_metadata_value(metadata, "asset_type")
+    source_type = (
+        _recent_metadata_value(metadata, "source_material_type")
+        or _recent_metadata_value(metadata, "source_type")
+    )
+    cache_mode = _recent_metadata_value(metadata, "cache_mode")
+    cache_reason = _recent_metadata_value(metadata, "cache_reason")
+    cache_result = _recent_metadata_value(metadata, "cache_result")
+
+    title = "Content Ops"
+    if asset_type:
+        title = f"{title} {_humanize_identifier(asset_type)}"
+    else:
+        title = f"{title} LLM"
+
+    detail_parts = []
+    if source_type:
+        detail_parts.append(f"Source: {_humanize_identifier(source_type)}")
+    cache_parts = [
+        _humanize_identifier(value)
+        for value in (cache_mode, cache_reason, cache_result)
+        if value
+    ]
+    if cache_parts:
+        detail_parts.append(f"Cache: {' / '.join(cache_parts)}")
+    return title, " • ".join(detail_parts) or None
+
+
 def _serialize_recent_llm_call(row, *, run_id_override: str | None = None) -> dict:
     metadata = _normalize_metadata(row["metadata"])
     title, detail = _describe_recent_call(row["span_name"], metadata)
@@ -385,6 +424,16 @@ def _serialize_recent_llm_call(row, *, run_id_override: str | None = None) -> di
     event_type = str(_recent_metadata_value(metadata, "event_type") or "").strip() or None
     entity_type = str(_recent_metadata_value(metadata, "entity_type") or "").strip() or None
     entity_id = str(_recent_metadata_value(metadata, "entity_id") or "").strip() or None
+    content_ops_asset_type = str(_recent_metadata_value(metadata, "asset_type") or "").strip() or None
+    content_ops_source_type = str(
+        _recent_metadata_value(metadata, "source_material_type")
+        or _recent_metadata_value(metadata, "source_type")
+        or ""
+    ).strip() or None
+    cache_mode = str(_recent_metadata_value(metadata, "cache_mode") or "").strip() or None
+    cache_reason = str(_recent_metadata_value(metadata, "cache_reason") or "").strip() or None
+    cache_result = str(_recent_metadata_value(metadata, "cache_result") or "").strip() or None
+    cache_store_result = str(_recent_metadata_value(metadata, "cache_store_result") or "").strip() or None
     return {
         "id": str(row["id"]),
         "run_id": run_id,
@@ -397,6 +446,12 @@ def _serialize_recent_llm_call(row, *, run_id_override: str | None = None) -> di
         "event_type": event_type,
         "entity_type": entity_type,
         "entity_id": entity_id,
+        "content_ops_asset_type": content_ops_asset_type,
+        "content_ops_source_type": content_ops_source_type,
+        "cache_mode": cache_mode,
+        "cache_reason": cache_reason,
+        "cache_result": cache_result,
+        "cache_store_result": cache_store_result,
         "model": row["model_name"],
         "provider": row["model_provider"],
         "input_tokens": row["input_tokens"],
