@@ -65,6 +65,38 @@ python scripts/check_extracted_content_install.py --profile all --sender resend 
 Use `--skip-webhook-secret` only for trusted webhook replay installs that will
 invoke `ingest_extracted_campaign_webhook.py --skip-signature-verification`.
 
+## Step 1a: Configure Hosted Cache Policy Defaults
+
+Atlas-hosted Content Ops routes can apply a default LLM cache policy before
+preview, plan, or execute. Leave the value blank to keep the existing per-run
+behavior:
+
+```bash
+export ATLAS_B2B_CAMPAIGN_CONTENT_OPS_CACHE_POLICY_DEFAULT=""
+```
+
+Accepted values are:
+
+| Value | Meaning |
+|---|---|
+| `exact`, `exact-cache`, `exact_cache` | Request exact-cache behavior when the downstream cache policy says the run is eligible. |
+| `no-store`, `no_store`, `off`, `false`, `no`, `none` | Force no-store unless a run explicitly sends another supported value. |
+| blank | Do not apply a hosted default. |
+
+The hosted default only fills `content_ops_cache_policy` when the request did
+not already choose one. A per-run UI or API value still wins, including
+`no-store`.
+
+If the env value is not in the accepted set, hosted Content Ops generation
+requests fail with a configuration error instead of silently falling back. Fix
+the env value and restart the host before retrying.
+
+Support-ticket and customer-upload runs remain no-store under the default
+privacy policy. Setting this env value to `exact-cache` is not enough to cache
+customer-upload prompts; that also requires the separate
+`EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED=true` setting and a
+deliberate privacy decision by the host.
+
 ## Step 2: Apply Migrations
 
 Preview pending migrations:
