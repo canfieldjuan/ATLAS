@@ -4739,6 +4739,14 @@ class B2BCampaignConfig(BaseSettings):
             "precedence when set."
         ),
     )
+    content_ops_cache_policy_default: str = Field(
+        default="",
+        description=(
+            "Optional default Content Ops cache policy. Blank preserves the "
+            "per-run default; set ATLAS_B2B_CAMPAIGN_CONTENT_OPS_CACHE_POLICY_DEFAULT "
+            "to exact-cache or no-store to default hosted runs."
+        ),
+    )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
