@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-05-27
+
+### SaaS demo seeder runtime setup result artifact
+- File/location: `scripts/seed_content_ops_faq_saas_demo.py`, `_run(...)` / `main(...)`
+- Description: Pool creation or runtime seed/cleanup exceptions can still abort before `--output-result` is written.
+- Why it matters: Operators get a preflight artifact after this slice, but missing `asyncpg`, connection failures, or unexpected repository errors can still leave no machine-readable failure payload.
+- Effort: S
+- Category: correctness
+- Owner/session: content-ops/faq-generator
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Preflight-Result
+
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent

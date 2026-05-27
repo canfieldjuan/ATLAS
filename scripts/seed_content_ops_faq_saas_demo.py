@@ -319,6 +319,15 @@ def _write_result(path: Path | None, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _preflight_result(args: argparse.Namespace, errors: list[str]) -> dict[str, Any]:
+    return {
+        "phase": "preflight",
+        "ok": False,
+        "mode": "cleanup" if args.cleanup_faq_id is not None else "seed",
+        "errors": list(errors),
+    }
+
+
 def _print_result(payload: dict[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -343,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     errors = _validate_args(args)
     if errors:
+        _write_result(args.output_result, _preflight_result(args, errors))
         raise SystemExit("; ".join(errors))
     payload = asyncio.run(_run(args))
     _write_result(args.output_result, payload)
