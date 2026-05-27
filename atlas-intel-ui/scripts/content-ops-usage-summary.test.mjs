@@ -39,6 +39,11 @@ const { fromWireUsageSummary } = await loadTsModule(
   '../src/domain/contentOps/fromWire.ts',
 )
 
+const newRunSource = readFileSync(
+  new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
+  'utf8',
+)
+
 function installBrowserStubs() {
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -107,6 +112,19 @@ function usageSummaryPayload() {
         output_tokens: 25,
       },
     ],
+    by_cache_status: [
+      {
+        cache_mode: 'exact',
+        cache_reason: 'eligible',
+        cache_result: 'hit',
+        cache_store_result: 'unknown',
+        cost_usd: 0,
+        cache_savings_usd: 0.1234,
+        calls: 3,
+        input_tokens: 0,
+        output_tokens: 0,
+      },
+    ],
   }
 }
 
@@ -160,4 +178,24 @@ test('fromWireUsageSummary maps usage payload to domain shape', () => {
   assert.equal(summary.byAssetType[0].assetType, 'landing_page')
   assert.equal(summary.byAssetType[0].cacheSavingsUsd, 0.3)
   assert.equal(summary.byAssetType[0].calls, 7)
+  assert.equal(summary.byCacheStatus[0].cacheMode, 'exact')
+  assert.equal(summary.byCacheStatus[0].cacheReason, 'eligible')
+  assert.equal(summary.byCacheStatus[0].cacheResult, 'hit')
+  assert.equal(summary.byCacheStatus[0].cacheStoreResult, 'unknown')
+  assert.equal(summary.byCacheStatus[0].cacheSavingsUsd, 0.1234)
+})
+
+test('fromWireUsageSummary defaults missing cache diagnostics to empty list', () => {
+  const payload = usageSummaryPayload()
+  delete payload.by_cache_status
+
+  const summary = fromWireUsageSummary(payload)
+
+  assert.deepEqual(summary.byCacheStatus, [])
+})
+
+test('new run usage card exposes cache diagnostics section', () => {
+  assert.ok(newRunSource.includes('Cache diagnostics'))
+  assert.ok(newRunSource.includes('formatCacheDiagnosticLabel'))
+  assert.ok(newRunSource.includes('byCacheStatus.slice(0, 3)'))
 })

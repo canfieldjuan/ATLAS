@@ -137,6 +137,10 @@ export interface ContentOpsUsageSummaryBreakdownResponse {
   provider?: string
   model?: string
   asset_type?: string
+  cache_mode?: string
+  cache_reason?: string
+  cache_result?: string
+  cache_store_result?: string
   cost_usd: number
   cache_savings_usd: number
   calls: number
@@ -169,6 +173,7 @@ export interface ContentOpsUsageSummaryResponse {
   }
   by_model: ContentOpsUsageSummaryBreakdownResponse[]
   by_asset_type: ContentOpsUsageSummaryBreakdownResponse[]
+  by_cache_status?: ContentOpsUsageSummaryBreakdownResponse[]
 }
 
 // POST /content-ops/preview, /plan, /execute share this body shape.
