@@ -550,12 +550,19 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool) -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
     latency = summary["latency"]
+    setup_error = ""
+    setup = summary.get("setup")
+    if isinstance(setup, dict):
+        error = setup.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            setup_error = f" setup_error={error['message']}"
     print(
         "FAQ search concurrency smoke: "
         f"ok={summary['ok']} requests={summary['requests']['total']} "
         f"p50_ms={latency['p50_ms']} p95_ms={latency['p95_ms']} "
         f"max_ms={latency['max_ms']} failures={summary['isolation']['count']} "
         f"latency_budget_failures={len(summary['latency_budget']['failures'])}"
+        f"{setup_error}"
     )
 
 

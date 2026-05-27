@@ -61,7 +61,7 @@ changed.
 
 ## Verification
 
-- `pytest tests/test_smoke_content_ops_faq_search_concurrency.py -q` - 17
+- `pytest tests/test_smoke_content_ops_faq_search_concurrency.py -q` - 18
   passed.
 - Py compile for `scripts/smoke_content_ops_faq_search_concurrency.py` and
   `tests/test_smoke_content_ops_faq_search_concurrency.py` - passed.
@@ -74,13 +74,13 @@ changed.
   `extracted_content_pipeline` - passed.
 - Extracted standalone audit with `--fail-on-debt` - passed.
 - Python ASCII check for extracted packages - passed.
-- Extracted pipeline CI mirror - 2464 passed, 7 skipped, 1 warning.
+- Extracted pipeline CI mirror - 2465 passed, 7 skipped, 1 warning.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `plans/PR-Content-Ops-FAQ-Search-DB-Preflight-Result.md` | 86 |
-| `scripts/smoke_content_ops_faq_search_concurrency.py` | 35 |
-| `tests/test_smoke_content_ops_faq_search_concurrency.py` | 44 |
-| **Total** | **165** |
+| `scripts/smoke_content_ops_faq_search_concurrency.py` | 42 |
+| `tests/test_smoke_content_ops_faq_search_concurrency.py` | 68 |
+| **Total** | **196** |

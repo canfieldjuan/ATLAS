@@ -378,6 +378,30 @@ def test_main_writes_result_for_preflight_failure(tmp_path) -> None:
     }
 
 
+def test_main_prints_preflight_error_in_human_summary(capsys) -> None:
+    code = smoke.main([
+        "--database-url",
+        "",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+    ])
+
+    assert code == 2
+    output = capsys.readouterr().out
+    assert "FAQ search concurrency smoke: ok=False" in output
+    assert "setup_error=Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL" in output
+
+
 def test_main_writes_result_for_pool_creation_failure(tmp_path, monkeypatch) -> None:
     async def _raise_pool(*_args, **_kwargs):
         raise RuntimeError("resolver failed")
