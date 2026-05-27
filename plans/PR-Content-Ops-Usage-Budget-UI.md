@@ -30,7 +30,7 @@ Slice phase: Product polish
 |---|---|
 | `plans/PR-Content-Ops-Usage-Budget-UI.md` | Plan doc for the account usage budget UI slice. |
 | `atlas-intel-ui/package.json` | Add a focused usage-budget UI contract test script. |
-| `atlas-intel-ui/scripts/content-ops-usage-budget-ui.test.mjs` | Cover request/preview mapping and invalid budget request rejection. |
+| `atlas-intel-ui/scripts/content-ops-usage-budget-ui.test.mjs` | Cover request mapping, default budget fields, and preview budget evaluation mapping. |
 | `atlas-intel-ui/src/api/contentOps.ts` | Add wire fields for account usage budgets and preview budget evaluation. |
 | `atlas-intel-ui/src/domain/contentOps/types.ts` | Add camelCase budget request/evaluation domain fields. |
 | `atlas-intel-ui/src/domain/contentOps/fromWire.ts` | Map account budget fields both directions and preview evaluation responses. |
