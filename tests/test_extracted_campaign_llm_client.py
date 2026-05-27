@@ -14,6 +14,9 @@ from extracted_content_pipeline.campaign_llm_client import (
     set_content_ops_llm_trace_context,
 )
 from extracted_content_pipeline.campaign_ports import LLMMessage
+from extracted_content_pipeline.content_ops_cache_policy import (
+    ContentOpsExactCachePolicy,
+)
 from extracted_content_pipeline.settings import build_settings
 
 
@@ -269,6 +272,8 @@ async def test_pipeline_llm_client_traces_successful_provider_usage_without_io_c
         "llm_adapter": "pipeline",
         "asset_type": "blog_post",
         "request_id": "req_123",
+        "cache_mode": "no_store",
+        "cache_reason": "exact_cache_disabled",
     }
     assert "input_data" not in trace
     assert "output_data" not in trace
@@ -318,13 +323,56 @@ async def test_pipeline_llm_client_merges_scoped_trace_metadata_and_resets():
         "user_id": "user-1",
         "asset_type": "blog_post",
         "request_id": "req_123",
+        "cache_mode": "no_store",
+        "cache_reason": "exact_cache_disabled",
     }
     assert trace_calls[1][1]["metadata"] == {
         "product": "content_ops",
         "workload": "draft",
         "llm_adapter": "pipeline",
         "asset_type": "landing_page",
+        "cache_mode": "no_store",
+        "cache_reason": "exact_cache_disabled",
     }
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_traces_exact_cache_policy_decision_from_scope():
+    trace_calls = []
+    client = PipelineLLMClient(
+        workload="draft",
+        resolver=lambda **_: _TraceLLM(),
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+        cache_policy=ContentOpsExactCachePolicy(exact_cache_enabled=True),
+    )
+
+    token = set_content_ops_llm_trace_context({
+        "account_id": "acct-cache",
+        "user_id": "user-cache",
+    })
+    try:
+        await client.complete(
+            [LLMMessage(role="user", content="non-customer brief")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={
+                "asset_type": "landing_page",
+                "cache_policy": "exact",
+                "cache_mode": "spoofed",
+                "cache_reason": "spoofed",
+                "cache_namespace": "spoofed",
+                "cache_account_id": "spoofed",
+            },
+        )
+    finally:
+        reset_content_ops_llm_trace_context(token)
+
+    trace_metadata = trace_calls[0][1]["metadata"]
+    assert trace_metadata["cache_mode"] == "exact"
+    assert trace_metadata["cache_reason"] == "eligible"
+    assert trace_metadata["cache_namespace"] == "content_ops.landing_page"
+    assert trace_metadata["cache_account_id"] == "acct-cache"
+    assert trace_metadata["account_id"] == "acct-cache"
 
 
 @pytest.mark.asyncio
@@ -360,6 +408,8 @@ async def test_pipeline_llm_client_traces_failed_provider_calls_without_io_captu
     assert trace["metadata"]["product"] == "content_ops"
     assert trace["metadata"]["account_id"] == "acct-failed"
     assert trace["metadata"]["asset_type"] == "landing_page"
+    assert trace["metadata"]["cache_mode"] == "no_store"
+    assert trace["metadata"]["cache_reason"] == "exact_cache_disabled"
     assert "input_data" not in trace
     assert "output_data" not in trace
 
@@ -390,6 +440,9 @@ def test_llm_client_config_from_mapping_parses_provider_routing_fields():
         "try_openrouter": "0",
         "auto_activate_ollama": "yes",
         "openrouter_model": "anthropic/claude-haiku-4-5",
+        "exact_cache_enabled": "true",
+        "customer_data_exact_cache_enabled": "false",
+        "exact_cache_namespace_prefix": "tenant_content_ops",
     })
 
     assert config == PipelineLLMClientConfig(
@@ -398,6 +451,9 @@ def test_llm_client_config_from_mapping_parses_provider_routing_fields():
         try_openrouter=False,
         auto_activate_ollama=True,
         openrouter_model="anthropic/claude-haiku-4-5",
+        exact_cache_enabled=True,
+        customer_data_exact_cache_enabled=False,
+        exact_cache_namespace_prefix="tenant_content_ops",
     )
 
 
@@ -429,6 +485,9 @@ def test_llm_client_config_from_settings_namespace():
         try_openrouter = True
         auto_activate_ollama = False
         openrouter_model = "openai/gpt-4o-mini"
+        exact_cache_enabled = True
+        customer_data_exact_cache_enabled = False
+        exact_cache_namespace_prefix = "tenant_content_ops"
 
     assert PipelineLLMClientConfig.from_settings(_Settings()) == PipelineLLMClientConfig(
         workload="campaign",
@@ -436,6 +495,9 @@ def test_llm_client_config_from_settings_namespace():
         try_openrouter=True,
         auto_activate_ollama=False,
         openrouter_model="openai/gpt-4o-mini",
+        exact_cache_enabled=True,
+        customer_data_exact_cache_enabled=False,
+        exact_cache_namespace_prefix="tenant_content_ops",
     )
 
 
@@ -448,6 +510,15 @@ def test_build_settings_exposes_campaign_llm_provider_config(monkeypatch):
         "EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL",
         "anthropic/claude-haiku-4-5",
     )
+    monkeypatch.setenv("EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED", "true")
+    monkeypatch.setenv(
+        "EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED",
+        "false",
+    )
+    monkeypatch.setenv(
+        "EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_NAMESPACE_PREFIX",
+        "tenant_content_ops",
+    )
 
     config = PipelineLLMClientConfig.from_settings(build_settings().campaign_llm)
 
@@ -457,6 +528,9 @@ def test_build_settings_exposes_campaign_llm_provider_config(monkeypatch):
         try_openrouter=True,
         auto_activate_ollama=False,
         openrouter_model="anthropic/claude-haiku-4-5",
+        exact_cache_enabled=True,
+        customer_data_exact_cache_enabled=False,
+        exact_cache_namespace_prefix="tenant_content_ops",
     )
 
 

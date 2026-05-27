@@ -142,6 +142,18 @@ def build_settings() -> SimpleNamespace:
             True,
         ),
         openrouter_model=os.getenv("EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL") or None,
+        exact_cache_enabled=_to_bool(
+            os.getenv("EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED"),
+            False,
+        ),
+        customer_data_exact_cache_enabled=_to_bool(
+            os.getenv("EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED"),
+            False,
+        ),
+        exact_cache_namespace_prefix=(
+            os.getenv("EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_NAMESPACE_PREFIX")
+            or "content_ops"
+        ),
     )
 
     b2b_campaign = SimpleNamespace(

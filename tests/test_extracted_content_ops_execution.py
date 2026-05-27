@@ -11,6 +11,9 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.campaign_llm_client import (
     current_content_ops_llm_trace_context,
 )
+from extracted_content_pipeline.content_ops_cache_policy import (
+    ContentOpsExactCachePolicy,
+)
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -393,6 +396,47 @@ async def test_execute_sets_content_ops_llm_trace_context_from_scope() -> None:
         "account_id": "acct-1",
         "user_id": "user-1",
     }
+    assert current_content_ops_llm_trace_context() == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_marks_support_ticket_trace_context_for_cache_policy() -> None:
+    blog = _TraceContextCaptureService()
+    scope = TenantScope(account_id="acct-1", user_id="user-1")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {
+                "topic": "Support-ticket questions customers keep asking",
+                "filters": {"topic_type": "content_ops_support_ticket_faq"},
+                "included_ticket_row_count": 25,
+                "top_ticket_clusters": [{"intent": "billing", "count": 12}],
+            },
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+        scope=scope,
+    )
+
+    assert result["status"] == "completed"
+    trace_context = blog.calls[0]["trace_context"]
+    assert trace_context == {
+        "account_id": "acct-1",
+        "user_id": "user-1",
+        "source_type": "support_ticket",
+        "input_provider": "support_ticket_provider",
+    }
+    decision = ContentOpsExactCachePolicy(exact_cache_enabled=True).decide({
+        **trace_context,
+        "target_mode": "vendor_retention",
+        "blueprint_id": "support-ticket-blog",
+        "skill_name": "digest/blog_post_generation",
+        "asset_type": "blog_post",
+        "attempt_no": 1,
+        "content_ops_cache_policy": "exact",
+    })
+    assert decision.mode == "no_store"
+    assert decision.reason == "customer_data_no_store"
     assert current_content_ops_llm_trace_context() == {}
 
 

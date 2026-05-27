@@ -24,8 +24,10 @@ from .support_ticket_context_contract import (
     SUPPORT_TICKET_DEFAULT_TOPIC,
     SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD,
     SUPPORT_TICKET_SOURCE,
+    SUPPORT_TICKET_SOURCE_MARKER,
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
     UPLOADED_TICKETS_REVIEW_PERIOD,
+    is_support_ticket_context,
     is_support_ticket_topic_type,
 )
 from .ticket_faq_markdown import normalize_vocabulary_gap_rules
@@ -315,7 +317,7 @@ async def _execute_step(
             error,
         )
     trace_context_token = set_content_ops_llm_trace_context(
-        _scope_trace_metadata(scope)
+        _request_trace_metadata(scope=scope, request=request)
     )
     try:
         result = await _run_step(
@@ -364,6 +366,20 @@ def _scope_trace_metadata(scope: TenantScope) -> dict[str, str]:
         metadata["account_id"] = account_id
     if user_id:
         metadata["user_id"] = user_id
+    return metadata
+
+
+def _request_trace_metadata(
+    *,
+    scope: TenantScope,
+    request: ContentOpsRequest,
+) -> dict[str, str]:
+    metadata = _scope_trace_metadata(scope)
+    if _inputs_use_support_ticket_source(request.inputs):
+        metadata.update({
+            "source_type": SUPPORT_TICKET_SOURCE_MARKER,
+            "input_provider": SUPPORT_TICKET_SOURCE,
+        })
     return metadata
 
 
@@ -794,6 +810,28 @@ def _support_ticket_blog_data_context_from_inputs(
         for key, value in context.items()
         if value not in (None, "", [], {})
     }
+
+
+def _inputs_use_support_ticket_source(inputs: Mapping[str, Any]) -> bool:
+    filters = _filters_from_inputs(inputs) or {}
+    if is_support_ticket_topic_type(filters.get("topic_type")):
+        return True
+    if is_support_ticket_context(inputs):
+        return True
+    return _value_contains_support_ticket_source(inputs.get("source_material"))
+
+
+def _value_contains_support_ticket_source(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bytes, bytearray)):
+        return False
+    if isinstance(value, Mapping):
+        source_type = str(value.get("source_type") or value.get("type") or "").lower()
+        if "ticket" in source_type or SUPPORT_TICKET_SOURCE_MARKER in source_type:
+            return True
+        return any(_value_contains_support_ticket_source(item) for item in value.values())
+    if isinstance(value, Sequence):
+        return any(_value_contains_support_ticket_source(item) for item in value)
+    return False
 
 
 def _mapping_list_input(value: Any) -> list[dict[str, Any]]:

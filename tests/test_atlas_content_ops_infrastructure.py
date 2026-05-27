@@ -347,6 +347,8 @@ async def test_build_content_ops_llm_client_uses_pipeline_tracing_client(
         "llm_adapter": "pipeline",
         "asset_type": "blog_post",
         "request_id": "req-hosted",
+        "cache_mode": "no_store",
+        "cache_reason": "exact_cache_disabled",
     }
 
 
