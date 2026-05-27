@@ -30,20 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-27
-
-### FAQ search DB smoke pool close failures can mask result
-- File/location: `scripts/smoke_content_ops_faq_search_concurrency.py`
-  `run_smoke(...)` pool `finally` block.
-- Description: `pool.close()` exceptions can still replace a prepared
-  setup/search result instead of being reported as lifecycle metadata.
-- Why it matters: A close failure could hide whether retrieval passed, failed,
-  or never ran, making go-live smoke artifacts harder to interpret.
-- Effort: S
-- Category: correctness
-- Owner/session: Codex FAQ lane
-- Found during: PR-Content-Ops-FAQ-Search-DB-Cleanup-Result
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent

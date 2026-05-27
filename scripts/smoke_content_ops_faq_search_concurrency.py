@@ -438,7 +438,7 @@ def _failure_summary(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _cleanup_result(*, attempted: bool, error: BaseException | None = None) -> dict[str, Any]:
+def _lifecycle_result(*, attempted: bool, error: BaseException | None = None) -> dict[str, Any]:
     return {
         "ok": error is None,
         "attempted": attempted,
@@ -451,13 +451,14 @@ def _cleanup_result(*, attempted: bool, error: BaseException | None = None) -> d
     }
 
 
-def _with_cleanup_result(
+def _with_lifecycle_result(
     summary: dict[str, Any],
-    cleanup: dict[str, Any],
+    name: str,
+    result: dict[str, Any],
 ) -> dict[str, Any]:
     updated = dict(summary)
-    updated["cleanup"] = cleanup
-    updated["ok"] = bool(summary["ok"]) and bool(cleanup["ok"])
+    updated[name] = result
+    updated["ok"] = bool(summary["ok"]) and bool(result["ok"])
     return updated
 
 
@@ -498,7 +499,8 @@ def _summary_payload(
             "search_cases": len(cases),
         },
         "setup": setup,
-        "cleanup": _cleanup_result(attempted=False),
+        "cleanup": _lifecycle_result(attempted=False),
+        "pool_close": _lifecycle_result(attempted=False),
         "latency": latency,
         "latency_budget": latency_budget,
         "isolation": failure,
@@ -567,7 +569,8 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     results: list[dict[str, Any]] = []
     cleanup_ready = False
     summary: dict[str, Any] | None = None
-    cleanup = _cleanup_result(attempted=False)
+    cleanup = _lifecycle_result(attempted=False)
+    pool_close = _lifecycle_result(attempted=False)
     try:
         try:
             await _apply_migrations(pool)
@@ -641,13 +644,18 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if cleanup_ready and not bool(args.keep_data):
             try:
                 await _cleanup(pool, cases)
-                cleanup = _cleanup_result(attempted=True)
+                cleanup = _lifecycle_result(attempted=True)
             except Exception as exc:
-                cleanup = _cleanup_result(attempted=True, error=exc)
-        await pool.close()
+                cleanup = _lifecycle_result(attempted=True, error=exc)
+        try:
+            await pool.close()
+            pool_close = _lifecycle_result(attempted=True)
+        except Exception as exc:
+            pool_close = _lifecycle_result(attempted=True, error=exc)
     if summary is None:  # pragma: no cover - defensive guard for unexpected control flow.
         raise RuntimeError("FAQ search smoke did not produce a summary")
-    summary = _with_cleanup_result(summary, cleanup)
+    summary = _with_lifecycle_result(summary, "cleanup", cleanup)
+    summary = _with_lifecycle_result(summary, "pool_close", pool_close)
     return (0 if summary["ok"] else 1), summary
 
 
