@@ -18,7 +18,9 @@ Slice phase: Product polish
 2. Document accepted default values and their normalized meanings.
 3. Document that invalid values fail hosted Content Ops generation requests
    loudly instead of falling back silently.
-4. Document that support-ticket/customer-upload runs remain no-store unless the
+4. Document that an `exact-cache` default also requires
+   `EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED=true` before cache I/O happens.
+5. Document that support-ticket/customer-upload runs remain no-store unless the
    separate customer-data exact-cache setting is enabled.
 
 ### Files touched
@@ -58,7 +60,7 @@ the existing request field when a run did not explicitly choose a cache policy.
 
 - python scripts/audit_plan_doc.py plans/PR-Content-Ops-Cache-Default-Runbook.md
   — passed.
-- rg -n "ATLAS_B2B_CAMPAIGN_CONTENT_OPS_CACHE_POLICY_DEFAULT|EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED|exact-cache|no-store" extracted_content_pipeline/docs/host_install_runbook.md extracted_content_pipeline/content_ops_cache_policy.py atlas_brain/config.py
+- rg -n "ATLAS_B2B_CAMPAIGN_CONTENT_OPS_CACHE_POLICY_DEFAULT|EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED|EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED|exact-cache|no-store" extracted_content_pipeline/docs/host_install_runbook.md extracted_content_pipeline/content_ops_cache_policy.py extracted_content_pipeline/settings.py atlas_brain/config.py
   — confirmed the docs values match the implementation constants and host env
   name.
 - git diff --check — passed.

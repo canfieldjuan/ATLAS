@@ -83,6 +83,10 @@ Accepted values are:
 | `no-store`, `no_store`, `off`, `false`, `no`, `none` | Force no-store unless a run explicitly sends another supported value. |
 | blank | Do not apply a hosted default. |
 
+An `exact-cache` default only requests cache use. The extracted LLM client still
+requires `EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED=true` before it will look
+up or store exact-cache entries.
+
 The hosted default only fills `content_ops_cache_policy` when the request did
 not already choose one. A per-run UI or API value still wins, including
 `no-store`.
@@ -93,7 +97,8 @@ the env value and restart the host before retrying.
 
 Support-ticket and customer-upload runs remain no-store under the default
 privacy policy. Setting this env value to `exact-cache` is not enough to cache
-customer-upload prompts; that also requires the separate
+customer-upload prompts; that also requires both
+`EXTRACTED_CAMPAIGN_LLM_EXACT_CACHE_ENABLED=true` and the separate
 `EXTRACTED_CAMPAIGN_LLM_CUSTOMER_DATA_EXACT_CACHE_ENABLED=true` setting and a
 deliberate privacy decision by the host.
 
