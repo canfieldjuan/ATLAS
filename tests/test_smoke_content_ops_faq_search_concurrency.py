@@ -457,7 +457,7 @@ def test_main_writes_result_for_migration_failure(tmp_path, monkeypatch) -> None
 
         async def execute(self, *_args):
             self.cleanup_calls += 1
-            return "DELETE 0"
+            raise AssertionError("cleanup should not run before migrations succeed")
 
         async def close(self):
             self.closed = True
@@ -497,7 +497,7 @@ def test_main_writes_result_for_migration_failure(tmp_path, monkeypatch) -> None
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
     assert pool.closed is True
-    assert pool.cleanup_calls == 1
+    assert pool.cleanup_calls == 0
     assert payload["ok"] is False
     assert payload["requests"]["total"] == 0
     assert payload["setup"] == {

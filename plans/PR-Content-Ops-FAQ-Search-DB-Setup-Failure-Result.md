@@ -40,8 +40,13 @@ Slice phase: Production hardening
 Add a small `_setup_failure_summary(...)` helper that uses the existing
 `_summary_payload(...)` result shape with `ok = false`, no request results, and
 a phase-specific `setup.error` block. `run_smoke(...)` catches exceptions around
-only `_apply_migrations(...)` and `_seed(...)`, returns exit code `1`, and then
-lets the existing `finally` cleanup/close path run.
+only `_apply_migrations(...)` and `_seed(...)`, returns exit code `1`, and keeps
+pool close in the existing `finally`.
+
+Cleanup is enabled only after migrations succeed. That prevents a fresh-DB
+migration failure from being masked by cleanup against tables that may not
+exist, while seed failures still run cleanup because the migration-created
+tables are available.
 
 The successful path still runs migrations, writes optional case/cleanup files,
 seeds documents, runs concurrent searches, applies latency budgets, and returns
@@ -51,8 +56,9 @@ the existing success summary.
 
 - No broad catch around the retrieval phase; worker failures are already
   represented in `isolation`.
-- No cleanup behavior change. Cleanup still runs in `finally` unless
-  `--keep-data` is set.
+- Cleanup still runs after migrations succeed unless `--keep-data` is set; it
+  is intentionally skipped for migration failures because the cleanup table may
+  not exist yet.
 - Optional manifest and route-case file write failures are parked instead of
   included so this PR stays focused on DB setup phases.
 
@@ -86,8 +92,8 @@ the existing success summary.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result.md` | 93 |
+| `plans/PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result.md` | 99 |
 | `HARDENING.md` | 27 |
-| `scripts/smoke_content_ops_faq_search_concurrency.py` | 51 |
+| `scripts/smoke_content_ops_faq_search_concurrency.py` | 55 |
 | `tests/test_smoke_content_ops_faq_search_concurrency.py` | 126 |
-| **Total** | **297** |
+| **Total** | **307** |

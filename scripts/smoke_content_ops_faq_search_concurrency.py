@@ -536,6 +536,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         return 1, summary
     repo = PostgresTicketFAQSearchRepository(pool)
     results: list[dict[str, Any]] = []
+    cleanup_ready = False
     try:
         try:
             await _apply_migrations(pool)
@@ -548,6 +549,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 error=exc,
                 elapsed_seconds=time.perf_counter() - started,
             )
+        cleanup_ready = True
         _write_cleanup_manifest(args.cleanup_manifest_output, cases)
         try:
             await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
@@ -572,7 +574,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             concurrency=int(args.concurrency),
         )
     finally:
-        if not bool(args.keep_data):
+        if cleanup_ready and not bool(args.keep_data):
             await _cleanup(pool, cases)
         await pool.close()
     summary = _summary_payload(
