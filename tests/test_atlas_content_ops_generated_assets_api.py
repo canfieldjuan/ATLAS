@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from atlas_brain.auth.dependencies import AuthUser
+from extracted_content_pipeline.campaign_ports import TenantScope
 
 pytest.importorskip("asyncpg")
 
@@ -99,6 +100,48 @@ def test_content_ops_usage_summary_route_uses_shared_auth_and_pool() -> None:
     assert closure["usage_pool_provider"].__name__ == "get_db_pool"
     assert "_capture_content_ops_auth_user" in dependency_names
     assert "_require_content_ops_usage_operator" in dependency_names
+
+
+def test_content_ops_preview_route_uses_host_cache_policy_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(
+        settings.b2b_campaign,
+        "content_ops_cache_policy_default",
+        "exact-cache",
+    )
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/preview")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+    provider = closure["cache_policy_default_provider"]
+
+    assert provider.__name__ == "_content_ops_cache_policy_default"
+    assert provider(TenantScope(account_id="account-1")) == "exact-cache"
+
+
+def test_content_ops_cache_policy_default_provider_keeps_blank_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain.config import settings
+
+    monkeypatch.setattr(settings.b2b_campaign, "content_ops_cache_policy_default", " ")
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/preview")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+
+    assert closure["cache_policy_default_provider"](TenantScope()) is None
 
 
 def test_content_ops_tenant_usage_summary_route_uses_shared_auth_scope_and_pool() -> None:

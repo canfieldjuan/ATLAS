@@ -182,6 +182,7 @@ try:
         select_content_ops_reasoning_context_provider,
     )
     from ..auth.dependencies import AuthUser
+    from ..config import settings
     from ..storage.database import get_db_pool
 
     async def _capture_content_ops_auth_user(
@@ -208,6 +209,17 @@ try:
             return user
         raise HTTPException(status_code=403, detail="Platform admin access required")
 
+    def _content_ops_cache_policy_default(_scope: object) -> str | None:
+        policy = str(
+            getattr(
+                settings.b2b_campaign,
+                "content_ops_cache_policy_default",
+                "",
+            )
+            or ""
+        ).strip()
+        return policy or None
+
     content_ops_config = ContentOpsControlSurfaceApiConfig()
     content_ops_router = create_content_ops_control_surface_router(
         config=content_ops_config,
@@ -219,6 +231,7 @@ try:
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
         input_provider=build_content_ops_input_provider(),
+        cache_policy_default_provider=_content_ops_cache_policy_default,
         opportunity_import_pool_provider=get_db_pool,
         usage_pool_provider=get_db_pool,
         usage_dependencies=[Depends(_require_content_ops_usage_operator)],

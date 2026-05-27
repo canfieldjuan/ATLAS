@@ -93,6 +93,10 @@ ReasoningStatusProvider = Callable[
 LLMProvider = Callable[[], Any | Awaitable[Any]]
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
+CachePolicyDefaultProvider = Callable[
+    [TenantScope],
+    str | None | Awaitable[str | None],
+]
 InputProvider = ContentOpsInputProvider
 
 logger = logging.getLogger(__name__)
@@ -560,6 +564,7 @@ def create_content_ops_control_surface_router(
     usage_pool_provider: PoolProvider | None = None,
     usage_dependencies: Sequence[Any] | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
+    cache_policy_default_provider: CachePolicyDefaultProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -654,6 +659,11 @@ def create_content_ops_control_surface_router(
             input_provider=input_provider,
             scope_provider=scope_provider,
         )
+        payload_mapping = await _payload_with_cache_policy_default(
+            payload_mapping,
+            cache_policy_default_provider=cache_policy_default_provider,
+            scope_provider=scope_provider,
+        )
         budget_evaluation = await _evaluate_account_usage_budget(
             payload_mapping,
             usage_pool_provider=usage_pool_provider,
@@ -675,6 +685,11 @@ def create_content_ops_control_surface_router(
             payload_mapping = await _payload_with_input_provider(
                 _payload_to_mapping(payload, exclude_unset=input_provider is not None),
                 input_provider=input_provider,
+                scope_provider=scope_provider,
+            )
+            payload_mapping = await _payload_with_cache_policy_default(
+                payload_mapping,
+                cache_policy_default_provider=cache_policy_default_provider,
                 scope_provider=scope_provider,
             )
             budget_evaluation = await _evaluate_account_usage_budget(
@@ -847,6 +862,11 @@ def create_content_ops_control_surface_router(
             payload_mapping = await _payload_with_input_provider(
                 payload_mapping,
                 input_provider=input_provider,
+                scope=scope,
+            )
+            payload_mapping = await _payload_with_cache_policy_default(
+                payload_mapping,
+                cache_policy_default_provider=cache_policy_default_provider,
                 scope=scope,
             )
             _enforce_faq_execute_source_material_limit(
@@ -1138,6 +1158,47 @@ async def _payload_with_input_provider(
             status_code=503,
             detail="Content Ops input provider is unavailable.",
         ) from exc
+
+
+async def _payload_with_cache_policy_default(
+    payload: Mapping[str, Any],
+    *,
+    cache_policy_default_provider: CachePolicyDefaultProvider | None,
+    scope_provider: ScopeProvider | None = None,
+    scope: TenantScope | None = None,
+) -> dict[str, Any]:
+    out = dict(payload)
+    if cache_policy_default_provider is None:
+        return out
+    if _clean(out.get("content_ops_cache_policy")):
+        return out
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = await _resolve_scope(scope_provider)
+    try:
+        default_value = cache_policy_default_provider(resolved_scope or TenantScope())
+        if hasattr(default_value, "__await__"):
+            default_value = await default_value
+        normalized = normalize_content_ops_cache_policy(default_value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Content Ops cache policy default is invalid.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Content Ops cache policy default provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops cache policy default is unavailable.",
+        ) from exc
+    if normalized:
+        out["content_ops_cache_policy"] = normalized
+    return out
 
 
 def _with_input_provider_diagnostics(
