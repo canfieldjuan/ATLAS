@@ -69,6 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--status", default=os.environ.get("ATLAS_FAQ_SEARCH_STATUS", ""))
     parser.add_argument("--limit", type=int, default=os.environ.get("ATLAS_FAQ_SEARCH_LIMIT", "5"))
     parser.add_argument("--route", default=contract.DEFAULT_ROUTE)
+    parser.add_argument("--detail-route", default=os.environ.get("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--timeout", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_TIMEOUT", "10"))
     parser.add_argument("--requests", type=int, default=os.environ.get("ATLAS_FAQ_SEARCH_REQUESTS", "12"))
     parser.add_argument("--concurrency", type=int, default=os.environ.get("ATLAS_FAQ_SEARCH_CONCURRENCY", "4"))
@@ -78,6 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.set_defaults(require_results=True)
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--allow-empty-results", action="store_false", dest="require_results")
+    parser.add_argument("--require-detail", action="store_true")
     parser.add_argument("--case-file", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
@@ -223,6 +225,10 @@ def _run_one(
     started = time.perf_counter()
     errors: list[str] = []
     count: int | None = None
+    detail_checked = False
+    detail_elapsed_ms: float | None = None
+    detail_errors: list[str] = []
+    detail_faq_id: str | None = None
     active_case = _default_case(args) if case is None else case
     try:
         url = contract._build_url(
@@ -243,10 +249,34 @@ def _run_one(
         errors.extend(_expected_case_errors(payload, active_case))
         if type(payload.get("count")) is int:
             count = int(payload["count"])
+        if bool(args.require_detail) and not errors:
+            detail_faq_id = contract._first_result_faq_id(payload)
+            if detail_faq_id is None:
+                detail_errors.append("results[0].faq_id is required when --require-detail is set")
+            else:
+                detail_url = contract._build_detail_url(
+                    base_url=str(args.base_url),
+                    route=str(args.route),
+                    detail_route=str(args.detail_route or ""),
+                    faq_id=detail_faq_id,
+                )
+                try:
+                    detail_payload, detail_elapsed_ms = contract._timed_fetch_json(
+                        detail_url,
+                        token=str(args.token).strip(),
+                        timeout=float(args.timeout),
+                    )
+                    detail_checked = True
+                    detail_errors.extend(
+                        contract._validate_detail(detail_payload, faq_id=detail_faq_id)
+                    )
+                except (RuntimeError, OSError, TypeError, ValueError) as exc:
+                    detail_errors.append(f"{type(exc).__name__}: {exc}")
+            errors.extend(detail_errors)
     except (RuntimeError, OSError, TypeError, ValueError) as exc:
         errors.append(f"{type(exc).__name__}: {exc}")
     elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000)
-    return {
+    row = {
         "index": index,
         "ok": not errors,
         "count": count,
@@ -255,6 +285,18 @@ def _run_one(
         "case_index": int(active_case.get("case_index", 0)),
         "case": _case_snapshot(active_case),
     }
+    if bool(args.require_detail):
+        row.update(
+            {
+                "detail_checked": detail_checked,
+                "detail_faq_id": detail_faq_id,
+                "detail_elapsed_ms": (
+                    round(detail_elapsed_ms, 6) if detail_elapsed_ms is not None else None
+                ),
+                "detail_errors": detail_errors,
+            }
+        )
+    return row
 
 
 def _run_concurrent(
@@ -313,6 +355,30 @@ def _error_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _detail_summary(
+    results: Sequence[Mapping[str, Any]], *, required: bool
+) -> dict[str, Any]:
+    if not required:
+        return {"required": False, "checked": 0, "failures": 0, "items": []}
+
+    failures = [
+        {
+            "index": row.get("index"),
+            "faq_id": row.get("detail_faq_id"),
+            "errors": row.get("detail_errors"),
+        }
+        for row in results
+        if row.get("detail_errors")
+    ]
+    return {
+        "required": True,
+        "checked": sum(1 for row in results if row.get("detail_checked") is True),
+        "failures": len(failures),
+        "items": failures[:20],
+        "truncated": len(failures) > 20,
+    }
+
+
 def _budget_summary(
     *,
     latency: Mapping[str, Any],
@@ -366,6 +432,7 @@ def _summary_payload(
         "status": str(args.status or ""),
         "limit": int(args.limit),
         "require_results": bool(args.require_results),
+        "require_detail": bool(args.require_detail),
         "cases": {
             "total": len(active_cases),
             "case_file": str(args.case_file or ""),
@@ -379,6 +446,7 @@ def _summary_payload(
         },
         "latency": latency,
         "errors": errors,
+        "detail": _detail_summary(results, required=bool(args.require_detail)),
         "budgets": budgets,
         "preflight_errors": list(preflight_errors),
         "elapsed_seconds": round(elapsed_seconds, 6),
@@ -401,7 +469,9 @@ def _print_summary(summary: Mapping[str, Any], *, as_json: bool) -> None:
         "FAQ search hosted concurrency smoke: "
         f"ok={summary['ok']} requests={summary['requests']['total']} "
         f"errors={summary['errors']['count']} p95_ms={latency['p95_ms']} "
-        f"max_ms={latency['max_ms']} budget_failures={len(summary['budgets']['failures'])}"
+        f"max_ms={latency['max_ms']} detail_checked={summary['detail']['checked']} "
+        f"detail_failures={summary['detail']['failures']} "
+        f"budget_failures={len(summary['budgets']['failures'])}"
     )
 
 

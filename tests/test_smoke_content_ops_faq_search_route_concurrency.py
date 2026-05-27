@@ -40,6 +40,7 @@ def _args(**overrides):
         "status": "",
         "limit": 5,
         "route": "/api/v1/content-ops/faq-deflection-search",
+        "detail_route": "",
         "timeout": 10.0,
         "requests": 4,
         "concurrency": 2,
@@ -47,6 +48,7 @@ def _args(**overrides):
         "max_p95_ms": None,
         "max_single_request_ms": None,
         "require_results": True,
+        "require_detail": False,
         "case_file": None,
         "output_result": None,
         "json": False,
@@ -72,6 +74,24 @@ def _valid_payload():
             }
         ],
         "count": 1,
+    }
+
+
+def _valid_detail_payload(faq_id="11111111-1111-1111-1111-111111111111"):
+    return {
+        "account_id": "acct-1",
+        "id": faq_id,
+        "target_id": "corpus-1",
+        "target_mode": "faq_report",
+        "title": "Mortgage servicing issues",
+        "markdown": "# Mortgage servicing issues\n\nDraft answer.",
+        "items": [],
+        "source_count": 1,
+        "ticket_source_count": 4,
+        "output_checks": {},
+        "warnings": [],
+        "metadata": {},
+        "status": "published",
     }
 
 
@@ -119,6 +139,21 @@ def test_parser_requires_results_by_default_and_allows_explicit_liveness_probe()
 
     assert required.require_results is True
     assert liveness_only.require_results is False
+
+
+def test_parser_accepts_opt_in_detail_route_check():
+    parsed = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-detail",
+        "--detail-route",
+        "/api/v1/content-ops/faq-deflection-reports/{faq_id}",
+    ])
+
+    assert parsed.require_detail is True
+    assert parsed.detail_route == "/api/v1/content-ops/faq-deflection-reports/{faq_id}"
 
 
 def test_load_cases_defaults_to_cli_case():
@@ -267,6 +302,38 @@ def test_latency_and_error_summaries_are_compact():
     }
 
 
+def test_detail_summary_reports_required_detail_failures():
+    results = [
+        {"index": 0, "detail_checked": True, "detail_faq_id": "faq-1", "detail_errors": []},
+        {
+            "index": 1,
+            "detail_checked": False,
+            "detail_faq_id": "faq-2",
+            "detail_errors": ["RuntimeError: route request failed"],
+        },
+    ]
+
+    assert smoke._detail_summary(results, required=True) == {
+        "required": True,
+        "checked": 1,
+        "failures": 1,
+        "items": [
+            {
+                "index": 1,
+                "faq_id": "faq-2",
+                "errors": ["RuntimeError: route request failed"],
+            }
+        ],
+        "truncated": False,
+    }
+    assert smoke._detail_summary(results, required=False) == {
+        "required": False,
+        "checked": 0,
+        "failures": 0,
+        "items": [],
+    }
+
+
 def test_budget_summary_reports_error_and_latency_failures():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
@@ -315,6 +382,129 @@ def test_run_one_validates_contract_and_records_count(monkeypatch):
             "require_results": True,
         },
     }
+
+
+def test_run_one_fetches_and_validates_detail_when_required(monkeypatch):
+    responses = iter([
+        _json_response(_valid_payload()),
+        _json_response(_valid_detail_payload()),
+    ])
+    urls = []
+
+    def _fake_urlopen(request, **_kwargs):
+        urls.append(request.full_url)
+        return next(responses)
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    result = smoke._run_one(0, _args(require_detail=True))
+
+    assert result["ok"] is True
+    assert result["detail_checked"] is True
+    assert result["detail_faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert result["detail_errors"] == []
+    assert urls == [
+        (
+            "https://atlas.example.com/api/v1/content-ops/faq-deflection-search"
+            "?q=mortgage+dispute&limit=5"
+        ),
+        (
+            "https://atlas.example.com/api/v1/content-ops/faq-deflection-search/"
+            "11111111-1111-1111-1111-111111111111"
+        ),
+    ]
+
+
+def test_run_one_uses_detail_route_template_when_required(monkeypatch):
+    responses = iter([
+        _json_response(_valid_payload()),
+        _json_response(_valid_detail_payload()),
+    ])
+    urls = []
+
+    def _fake_urlopen(request, **_kwargs):
+        urls.append(request.full_url)
+        return next(responses)
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    result = smoke._run_one(
+        0,
+        _args(
+            require_detail=True,
+            detail_route="/api/v1/content-ops/faq-deflection-reports/{faq_id}",
+        ),
+    )
+
+    assert result["ok"] is True
+    assert urls[-1] == (
+        "https://atlas.example.com/api/v1/content-ops/faq-deflection-reports/"
+        "11111111-1111-1111-1111-111111111111"
+    )
+
+
+def test_run_one_requires_faq_id_for_detail_check(monkeypatch):
+    payload = _valid_payload()
+    del payload["results"][0]["faq_id"]
+    monkeypatch.setattr(
+        smoke.contract.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _json_response(payload),
+    )
+
+    result = smoke._run_one(0, _args(require_detail=True))
+
+    assert result["ok"] is False
+    assert result["detail_checked"] is False
+    assert result["detail_faq_id"] is None
+    assert result["detail_errors"] == [
+        "results[0].faq_id is required when --require-detail is set"
+    ]
+    assert result["errors"] == result["detail_errors"]
+
+
+def test_run_one_rejects_malformed_detail_envelope(monkeypatch):
+    responses = iter([
+        _json_response(_valid_payload()),
+        _json_response(_valid_detail_payload("22222222-2222-2222-2222-222222222222")),
+    ])
+    monkeypatch.setattr(
+        smoke.contract.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    result = smoke._run_one(0, _args(require_detail=True))
+
+    assert result["ok"] is False
+    assert result["detail_checked"] is True
+    assert result["detail_errors"] == ["detail.id must match results[0].faq_id"]
+    assert result["errors"] == ["detail.id must match results[0].faq_id"]
+
+
+def test_run_one_records_detail_transport_failures(monkeypatch):
+    calls = iter([
+        _json_response(_valid_payload()),
+        smoke.contract.urllib.error.URLError("detail unavailable"),
+    ])
+
+    def _fake_urlopen(*_args, **_kwargs):
+        value = next(calls)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    result = smoke._run_one(0, _args(require_detail=True))
+
+    assert result["ok"] is False
+    assert result["detail_checked"] is False
+    assert result["detail_faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert result["detail_errors"] == [
+        "RuntimeError: route request failed: detail unavailable"
+    ]
+    assert result["errors"] == result["detail_errors"]
 
 
 def test_run_one_captures_fetch_and_contract_errors(monkeypatch):
