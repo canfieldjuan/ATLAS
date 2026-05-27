@@ -47,6 +47,8 @@ from ..content_ops_input_provider import (
 from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
+    UsageBudgetEvaluation,
+    evaluate_usage_budget,
     preview_from_mapping,
     request_from_mapping,
     retry_adjusted_unit_cost_usd,
@@ -457,6 +459,8 @@ if BaseModel is not None:
         outputs: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
         limit: int = Field(1, ge=1, le=1000)
         max_cost_usd: float | None = Field(default=None, gt=0)
+        account_usage_budget_usd: float | None = Field(default=None, gt=0)
+        account_usage_budget_days: int = Field(7, ge=1, le=90)
         inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
         ingestion_profile: str = Field("domain_specific", min_length=1, max_length=80)
         require_quality_gates: bool = True
@@ -640,8 +644,16 @@ def create_content_ops_control_surface_router(
             input_provider=input_provider,
             scope_provider=scope_provider,
         )
+        budget_evaluation = await _evaluate_account_usage_budget(
+            payload_mapping,
+            usage_pool_provider=usage_pool_provider,
+            scope_provider=scope_provider,
+        )
         return _with_input_provider_diagnostics(
-            preview_from_mapping(payload_mapping),
+            _apply_usage_budget_to_preview(
+                preview_from_mapping(payload_mapping),
+                budget_evaluation,
+            ),
             payload_mapping,
         )
 
@@ -655,8 +667,16 @@ def create_content_ops_control_surface_router(
                 input_provider=input_provider,
                 scope_provider=scope_provider,
             )
+            budget_evaluation = await _evaluate_account_usage_budget(
+                payload_mapping,
+                usage_pool_provider=usage_pool_provider,
+                scope_provider=scope_provider,
+            )
             return _with_input_provider_diagnostics(
-                build_generation_plan_from_mapping(payload_mapping),
+                _apply_usage_budget_to_plan(
+                    build_generation_plan_from_mapping(payload_mapping),
+                    budget_evaluation,
+                ),
                 payload_mapping,
             )
         except ValueError as exc:
@@ -813,6 +833,27 @@ def create_content_ops_control_surface_router(
                 },
             )
         try:
+            scope = await _resolve_scope(scope_provider)
+            payload_mapping = await _payload_with_input_provider(
+                payload_mapping,
+                input_provider=input_provider,
+                scope=scope,
+            )
+            _enforce_faq_execute_source_material_limit(
+                payload_mapping,
+                max_rows=resolved_config.faq_execute_max_source_material_rows,
+            )
+            budget_evaluation = await _evaluate_account_usage_budget(
+                payload_mapping,
+                usage_pool_provider=usage_pool_provider,
+                scope_provider=scope_provider,
+                scope=scope,
+            )
+            if budget_evaluation is not None and budget_evaluation.exceeded:
+                raise HTTPException(
+                    status_code=400,
+                    detail=_budget_exceeded_error(budget_evaluation),
+                )
             if execution_services_provider is None:
                 raise HTTPException(
                     status_code=503,
@@ -824,16 +865,6 @@ def create_content_ops_control_surface_router(
                     status_code=503,
                     detail="Content Ops execution services are not configured.",
                 )
-            scope = await _resolve_scope(scope_provider)
-            payload_mapping = await _payload_with_input_provider(
-                payload_mapping,
-                input_provider=input_provider,
-                scope=scope,
-            )
-            _enforce_faq_execute_source_material_limit(
-                payload_mapping,
-                max_rows=resolved_config.faq_execute_max_source_material_rows,
-            )
             # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
             # per-request reasoning provider and derive a reasoning-aware
             # bundle. The base services from execution_services_provider
@@ -1500,6 +1531,88 @@ async def _resolve_usage_pool(pool_provider: PoolProvider | None) -> Any:
             detail="Content Ops usage database is unavailable.",
         )
     return pool
+
+
+async def _evaluate_account_usage_budget(
+    payload: Mapping[str, Any],
+    *,
+    usage_pool_provider: PoolProvider | None,
+    scope_provider: ScopeProvider | None,
+    scope: TenantScope | None = None,
+) -> UsageBudgetEvaluation | None:
+    request = request_from_mapping(payload)
+    if request.account_usage_budget_usd is None:
+        return None
+    pool = await _resolve_usage_pool(usage_pool_provider)
+    resolved_scope = scope if scope is not None else await _resolve_scope(scope_provider)
+    usage = await summarize_content_ops_llm_usage(
+        pool,
+        days=request.account_usage_budget_days,
+        account_id=_required_scope_account_id(resolved_scope),
+    )
+    current_cost = usage.get("summary", {}).get("total_cost_usd", 0.0)
+    return evaluate_usage_budget(
+        budget_usd=request.account_usage_budget_usd,
+        period_days=request.account_usage_budget_days,
+        current_cost_usd=float(current_cost or 0.0),
+        estimated_cost_usd=preview_from_mapping(payload)["estimated_cost_usd"],
+    )
+
+
+def _budget_warning(evaluation: UsageBudgetEvaluation) -> str:
+    return (
+        "Projected account usage exceeds account_usage_budget_usd: "
+        f"{evaluation.period_days}-day projected "
+        f"{evaluation.projected_cost_usd:.2f} > {evaluation.budget_usd:.2f}"
+    )
+
+
+def _apply_usage_budget_to_preview(
+    preview: dict[str, Any],
+    evaluation: UsageBudgetEvaluation | None,
+) -> dict[str, Any]:
+    if evaluation is None:
+        return preview
+    preview = dict(preview)
+    preview["usage_budget"] = evaluation.as_dict()
+    if evaluation.exceeded:
+        preview["can_run"] = False
+        warnings = list(preview.get("warnings") or ())
+        warnings.append(_budget_warning(evaluation))
+        preview["warnings"] = warnings
+    return preview
+
+
+def _apply_usage_budget_to_plan(
+    plan: dict[str, Any],
+    evaluation: UsageBudgetEvaluation | None,
+) -> dict[str, Any]:
+    if evaluation is None:
+        return plan
+    plan = dict(plan)
+    preview = _apply_usage_budget_to_preview(
+        dict(plan.get("preview") or {}),
+        evaluation,
+    )
+    plan["preview"] = preview
+    if evaluation.exceeded:
+        plan["can_execute"] = False
+        blocked_steps: list[dict[str, Any]] = []
+        for step in plan.get("steps") or ():
+            next_step = dict(step)
+            next_step["status"] = "blocked"
+            next_step["reason"] = "account_usage_budget_exceeded"
+            blocked_steps.append(next_step)
+        plan["steps"] = blocked_steps
+    return plan
+
+
+def _budget_exceeded_error(evaluation: UsageBudgetEvaluation) -> dict[str, Any]:
+    return {
+        "reason": "account_usage_budget_exceeded",
+        "message": _budget_warning(evaluation),
+        "usage_budget": evaluation.as_dict(),
+    }
 
 
 async def _import_ingestion_rows_with_admission(
