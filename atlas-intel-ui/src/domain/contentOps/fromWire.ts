@@ -24,6 +24,8 @@ import type {
   ContentOpsPreviewResponse,
   ContentOpsRequestBody,
   ContentOpsStepExecution as WireStepExecution,
+  ContentOpsUsageSummaryBreakdownResponse as WireUsageSummaryBreakdown,
+  ContentOpsUsageSummaryResponse,
   GenerationPlanResponse,
   GenerationPlanStep as WirePlanStep,
 } from '../../api/contentOps'
@@ -38,6 +40,8 @@ import type {
   ContentOpsInputContractView,
   ContentOpsInputProviderDiagnostics,
   ContentOpsInputProviderWarning,
+  ContentOpsUsageSummary,
+  ContentOpsUsageSummaryBreakdown,
   CampaignReasoningContextView,
   ContentOpsRequest,
   ContentOpsStepExecution,
@@ -170,6 +174,54 @@ function copyReasoningCapabilities(
       },
     ]),
   )
+}
+
+// ---------------------------------------------------------------------------
+// Usage summary
+// ---------------------------------------------------------------------------
+
+export function fromWireUsageSummary(
+  wire: ContentOpsUsageSummaryResponse,
+): ContentOpsUsageSummary {
+  return {
+    periodDays: wire.period_days,
+    filters: {
+      accountId: wire.filters.account_id,
+      assetType: wire.filters.asset_type,
+      runId: wire.filters.run_id,
+      requestId: wire.filters.request_id,
+    },
+    summary: {
+      totalCostUsd: wire.summary.total_cost_usd,
+      totalCalls: wire.summary.total_calls,
+      failedCalls: wire.summary.failed_calls,
+      inputTokens: wire.summary.input_tokens,
+      billableInputTokens: wire.summary.billable_input_tokens,
+      outputTokens: wire.summary.output_tokens,
+      totalTokens: wire.summary.total_tokens,
+      cachedTokens: wire.summary.cached_tokens,
+      cacheWriteTokens: wire.summary.cache_write_tokens,
+      cacheHitCalls: wire.summary.cache_hit_calls,
+      avgDurationMs: wire.summary.avg_duration_ms,
+      latestCallAt: wire.summary.latest_call_at,
+    },
+    byModel: wire.by_model.map(fromWireUsageSummaryBreakdown),
+    byAssetType: wire.by_asset_type.map(fromWireUsageSummaryBreakdown),
+  }
+}
+
+function fromWireUsageSummaryBreakdown(
+  wire: WireUsageSummaryBreakdown,
+): ContentOpsUsageSummaryBreakdown {
+  return {
+    provider: wire.provider,
+    model: wire.model,
+    assetType: wire.asset_type,
+    costUsd: wire.cost_usd,
+    calls: wire.calls,
+    inputTokens: wire.input_tokens,
+    outputTokens: wire.output_tokens,
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
   fetchContentOpsControlSurfaces,
+  fetchContentOpsTenantUsageSummary,
   importContentOpsIngestion,
   importContentOpsIngestionFile,
   inspectContentOpsIngestion,
@@ -30,6 +31,7 @@ import {
   fromWirePlan,
   fromWirePreview,
   fromWireRequest,
+  fromWireUsageSummary,
   inputContractDisplay,
   toWireIngestionInspectRequest,
   toWireIngestionImportRequest,
@@ -41,6 +43,7 @@ import {
   type ContentOpsInputProviderDiagnostics,
   type ContentOpsInputContractView,
   type ContentOpsRequest,
+  type ContentOpsUsageSummary,
   type CampaignReasoningContextView,
   type ContentOpsStepReasoningAudit,
   type ControlSurfacePreview,
@@ -146,10 +149,22 @@ export default function ContentOpsNewRun() {
     refresh,
     refreshing,
   } = useApiData(() => fetchContentOpsControlSurfaces(), [])
+  const {
+    data: wireUsageSummary,
+    loading: usageLoading,
+    error: usageError,
+  } = useApiData(
+    () => fetchContentOpsTenantUsageSummary({ days: 7 }),
+    [],
+  )
 
   const catalog = useMemo<ContentOpsCatalog | null>(
     () => (wireCatalog ? fromWireCatalog(wireCatalog) : null),
     [wireCatalog],
+  )
+  const usageSummary = useMemo<ContentOpsUsageSummary | null>(
+    () => (wireUsageSummary ? fromWireUsageSummary(wireUsageSummary) : null),
+    [wireUsageSummary],
   )
 
   const [request, setRequest] = useState<ContentOpsRequest>(() =>
@@ -756,6 +771,11 @@ export default function ContentOpsNewRun() {
           </button>
         </div>
       </div>
+      <UsageSummaryCard
+        loading={usageLoading}
+        error={usageError}
+        summary={usageSummary}
+      />
 
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* Preset picker */}
@@ -1358,6 +1378,87 @@ export default function ContentOpsNewRun() {
   )
 }
 
+function UsageSummaryCard({
+  loading,
+  error,
+  summary,
+}: {
+  loading: boolean
+  error: Error | null
+  summary: ContentOpsUsageSummary | null
+}) {
+  const totals = summary?.summary
+  const topAssetType = summary?.byAssetType[0]
+  return (
+    <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium text-slate-100">7-day usage</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Account-scoped Content Ops LLM usage.
+          </p>
+        </div>
+        {loading && (
+          <span className="flex items-center gap-2 text-xs text-slate-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading usage
+          </span>
+        )}
+        {error && !loading && (
+          <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-200">
+            Usage unavailable
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <UsageMetric
+          label="Spend"
+          value={totals ? formatUsd(totals.totalCostUsd) : '--'}
+        />
+        <UsageMetric
+          label="Calls"
+          value={totals ? formatCount(totals.totalCalls) : '--'}
+        />
+        <UsageMetric
+          label="Failures"
+          value={totals ? formatCount(totals.failedCalls) : '--'}
+        />
+        <UsageMetric
+          label="Cache hits"
+          value={totals ? formatCount(totals.cacheHitCalls) : '--'}
+        />
+        <UsageMetric
+          label="Tokens"
+          value={totals ? formatCount(totals.totalTokens) : '--'}
+        />
+      </div>
+      {summary && (
+        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+          <span>Latest: {formatUsageDate(totals?.latestCallAt ?? null)}</span>
+          {topAssetType && (
+            <span>
+              Top asset: {topAssetType.assetType ?? 'unknown'} (
+              {formatUsd(topAssetType.costUsd)})
+            </span>
+          )}
+          <span>Avg latency: {formatDuration(totals?.avgDurationMs ?? 0)}</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function UsageMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-1 text-sm font-semibold text-slate-100">{value}</div>
+    </div>
+  )
+}
+
 function PreviewVerdict({
   preview,
   planState,
@@ -1623,6 +1724,27 @@ function IngestionFileLoadResult({ state }: { state: IngestionFileLoadState }) {
 function formatCount(value: number): string {
   if (!Number.isFinite(value)) return 'unknown'
   return value.toLocaleString('en-US')
+}
+
+function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown'
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2,
+  }).format(value)
+}
+
+function formatUsageDate(value: string | null): string {
+  if (!value) return 'None yet'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
+}
+
+function formatDuration(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '--'
+  return `${Math.round(value).toLocaleString('en-US')} ms`
 }
 
 function formatUploadFormats(formats: string[]): string {

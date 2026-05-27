@@ -98,6 +98,50 @@ export interface ReasoningCapabilityStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Usage summary (GET /content-ops/usage/summary/tenant)
+// ---------------------------------------------------------------------------
+
+export interface ContentOpsUsageSummaryFilters {
+  accountId?: string | null
+  assetType?: string | null
+  runId?: string | null
+  requestId?: string | null
+}
+
+export interface ContentOpsUsageSummaryTotals {
+  totalCostUsd: number
+  totalCalls: number
+  failedCalls: number
+  inputTokens: number
+  billableInputTokens: number
+  outputTokens: number
+  totalTokens: number
+  cachedTokens: number
+  cacheWriteTokens: number
+  cacheHitCalls: number
+  avgDurationMs: number
+  latestCallAt: string | null
+}
+
+export interface ContentOpsUsageSummaryBreakdown {
+  provider?: string
+  model?: string
+  assetType?: string
+  costUsd: number
+  calls: number
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface ContentOpsUsageSummary {
+  periodDays: number
+  filters: ContentOpsUsageSummaryFilters
+  summary: ContentOpsUsageSummaryTotals
+  byModel: ContentOpsUsageSummaryBreakdown[]
+  byAssetType: ContentOpsUsageSummaryBreakdown[]
+}
+
+// ---------------------------------------------------------------------------
 // Request (POST /content-ops/{preview, plan, execute} body)
 // ---------------------------------------------------------------------------
 

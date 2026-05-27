@@ -124,6 +124,51 @@ export interface ContentOpsReasoningCapabilityStatus {
   missing?: string[]
 }
 
+// GET /content-ops/usage/summary/tenant
+
+export interface ContentOpsUsageSummaryParams {
+  days?: number
+  asset_type?: string
+  run_id?: string
+  request_id?: string
+}
+
+export interface ContentOpsUsageSummaryBreakdownResponse {
+  provider?: string
+  model?: string
+  asset_type?: string
+  cost_usd: number
+  calls: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface ContentOpsUsageSummaryResponse {
+  period_days: number
+  filters: {
+    account_id?: string | null
+    asset_type?: string | null
+    run_id?: string | null
+    request_id?: string | null
+  }
+  summary: {
+    total_cost_usd: number
+    total_calls: number
+    failed_calls: number
+    input_tokens: number
+    billable_input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    cached_tokens: number
+    cache_write_tokens: number
+    cache_hit_calls: number
+    avg_duration_ms: number
+    latest_call_at: string | null
+  }
+  by_model: ContentOpsUsageSummaryBreakdownResponse[]
+  by_asset_type: ContentOpsUsageSummaryBreakdownResponse[]
+}
+
 // POST /content-ops/preview, /plan, /execute share this body shape.
 
 export interface ContentOpsRequestBody {
@@ -516,8 +561,11 @@ async function withRefreshOn401(
   return retryRes
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const url = `${BASE}${path}`
+async function getJson<T>(
+  path: string,
+  params: object = {},
+): Promise<T> {
+  const url = `${BASE}${path}${queryString(params)}`
   const doFetch = () => fetchWithApiFallback(url, { headers: authHeaders() })
   const res = await withRefreshOn401(doFetch)
   if (!res.ok) {
@@ -607,7 +655,7 @@ function appendOptionalBoolean(
   if (typeof value === 'boolean') formData.set(key, String(value))
 }
 
-function queryString(params: GeneratedAssetListParams): string {
+function queryString(params: object): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue
@@ -704,6 +752,16 @@ async function getPublicAssetJson<T>(path: string): Promise<T> {
 /** GET /content-ops/control-surfaces -- catalog + presets + execution flags. */
 export function fetchContentOpsControlSurfaces(): Promise<ContentOpsCatalogResponse> {
   return getJson<ContentOpsCatalogResponse>('/control-surfaces')
+}
+
+/** GET /content-ops/usage/summary/tenant -- account-scoped LLM usage rollup. */
+export function fetchContentOpsTenantUsageSummary(
+  params: ContentOpsUsageSummaryParams = {},
+): Promise<ContentOpsUsageSummaryResponse> {
+  return getJson<ContentOpsUsageSummaryResponse>(
+    '/usage/summary/tenant',
+    params,
+  )
 }
 
 /** GET /content-assets/{asset}/drafts -- persisted generated assets. */
