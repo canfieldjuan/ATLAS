@@ -400,6 +400,30 @@ def _cleanup_result(
     }
 
 
+def _lifecycle_result(*, attempted: bool, error: BaseException | None = None) -> dict[str, Any]:
+    return {
+        "ok": error is None,
+        "attempted": attempted,
+        "error": None
+        if error is None
+        else {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
+
+
+def _with_lifecycle_result(
+    summary: dict[str, Any],
+    name: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(summary)
+    updated[name] = result
+    updated["ok"] = bool(summary["ok"]) and bool(result["ok"])
+    return updated
+
+
 def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
     if path is None:
         return
@@ -411,11 +435,22 @@ def _print_summary(summary: Mapping[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
+    artifact_cleanup = summary["artifact_cleanup"]
+    artifact_cleanup_error = artifact_cleanup.get("error") or {}
+    artifact_cleanup_suffix = ""
+    if not artifact_cleanup["ok"]:
+        artifact_cleanup_suffix = (
+            " artifact_cleanup_error="
+            f"{artifact_cleanup_error.get('type', 'Error')}: "
+            f"{artifact_cleanup_error.get('message', '')}"
+        )
     print(
         "FAQ search seeded route e2e: "
         f"ok={summary['ok']} seed={summary['seed']['ok']} "
         f"route={summary['route']['ok']} detail={summary['detail']['ok']} "
-        f"cleanup={summary['cleanup']['ok']}"
+        f"cleanup={summary['cleanup']['ok']} "
+        f"artifact_cleanup={artifact_cleanup['ok']}"
+        f"{artifact_cleanup_suffix}"
     )
 
 
@@ -437,6 +472,7 @@ def _preflight_summary(args: argparse.Namespace, errors: Sequence[str], elapsed:
             "delete_status": None,
             "errors": [],
         },
+        "artifact_cleanup": _lifecycle_result(attempted=False),
         "preflight_errors": list(errors),
         "keep_data": bool(args.keep_data),
         "elapsed_seconds": round(elapsed, 6),
@@ -473,6 +509,8 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "delete_status": None,
         "errors": [],
     }
+    artifact_cleanup = _lifecycle_result(attempted=False)
+    summary: dict[str, Any] | None = None
     try:
         seed = _run_command(
             _seed_command(
@@ -540,10 +578,17 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             "keep_data": bool(args.keep_data),
             "elapsed_seconds": round(time.perf_counter() - started, 6),
         }
-        return (0 if ok else 1), summary
     finally:
         if temp_context is not None:
-            temp_context.cleanup()
+            try:
+                temp_context.cleanup()
+                artifact_cleanup = _lifecycle_result(attempted=True)
+            except Exception as exc:
+                artifact_cleanup = _lifecycle_result(attempted=True, error=exc)
+    if summary is None:  # pragma: no cover - defensive guard for unexpected control flow.
+        raise RuntimeError("FAQ search seeded route e2e did not produce a summary")
+    summary = _with_lifecycle_result(summary, "artifact_cleanup", artifact_cleanup)
+    return (0 if summary["ok"] else 1), summary
 
 
 def _detail_not_run(reason: str, *, ok: bool) -> dict[str, Any]:

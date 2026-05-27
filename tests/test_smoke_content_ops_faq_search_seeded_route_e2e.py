@@ -459,6 +459,7 @@ def test_main_writes_preflight_result(tmp_path, capsys):
         "skipped": True,
         "not_run_reason": "preflight_failed",
     }
+    assert payload["artifact_cleanup"] == {"ok": True, "attempted": False, "error": None}
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
 
 
@@ -526,6 +527,7 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     assert payload["detail"]["ok"] is True
     assert payload["artifacts"]["detail_result"].endswith("detail-result.json")
     assert payload["cleanup"]["deleted_faq_ids"] == 1
+    assert payload["artifact_cleanup"] == {"ok": True, "attempted": False, "error": None}
     assert len(calls) == 3
     assert str(smoke.CONTRACT_SCRIPT) in calls[2]
 
@@ -782,3 +784,67 @@ def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
         "delete_status": None,
         "errors": ["cleanup failed"],
     }
+
+
+def test_main_reports_artifact_cleanup_failure_without_masking_seed_failure(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    class _TempDirectory:
+        def __init__(self, **_kwargs):
+            self.name = str(tmp_path / "temp-artifacts")
+
+        def cleanup(self):
+            raise OSError("artifact cleanup failed")
+
+    def _fake_run_command(command):
+        assert str(smoke.SEED_SCRIPT) in command
+        return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "bad seed"}
+
+    monkeypatch.setattr(smoke.tempfile, "TemporaryDirectory", _TempDirectory)
+    monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
+    result_path = tmp_path / "result.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["seed"] == {
+        "ok": False,
+        "returncode": 1,
+        "stdout_tail": "",
+        "stderr_tail": "bad seed",
+    }
+    assert payload["route"]["not_run_reason"] == "seed_failed"
+    assert payload["detail"]["not_run_reason"] == "seed_failed"
+    assert payload["cleanup"] == {
+        "ok": True,
+        "requested_faq_ids": 0,
+        "deleted_faq_ids": 0,
+        "delete_status": None,
+        "errors": [],
+    }
+    assert payload["artifact_cleanup"] == {
+        "ok": False,
+        "attempted": True,
+        "error": {
+            "type": "OSError",
+            "message": "artifact cleanup failed",
+        },
+    }
+    output = capsys.readouterr().out
+    assert "artifact_cleanup=False" in output
+    assert "artifact_cleanup_error=OSError: artifact cleanup failed" in output
