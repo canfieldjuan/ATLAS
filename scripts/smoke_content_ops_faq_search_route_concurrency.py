@@ -105,6 +105,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("--timeout must be positive")
     if not 0 <= float(args.max_error_rate) <= 1:
         errors.append("--max-error-rate must be between 0 and 1")
+    if bool(args.require_detail) and not bool(args.require_results):
+        errors.append("--require-detail requires result rows; remove --allow-empty-results")
     for name in ("max_p95_ms", "max_single_request_ms"):
         value = getattr(args, name)
         if value is not None and float(value) <= 0:

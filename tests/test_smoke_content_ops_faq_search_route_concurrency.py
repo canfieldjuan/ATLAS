@@ -147,6 +147,14 @@ def test_validate_args_reports_preflight_errors():
     ]
 
 
+def test_validate_args_rejects_detail_without_required_results():
+    errors = smoke._validate_args(_args(require_detail=True, require_results=False))
+
+    assert errors == [
+        "--require-detail requires result rows; remove --allow-empty-results"
+    ]
+
+
 def test_parser_requires_results_by_default_and_allows_explicit_liveness_probe():
     required = smoke._build_parser().parse_args([
         "--base-url",
@@ -790,6 +798,39 @@ def test_main_writes_case_file_preflight_result(tmp_path, capsys):
     assert payload["cases"]["case_file"] == str(case_file)
     assert payload["cases"]["total"] == 0
     assert payload["preflight_errors"] == ["case[0].limit must be a positive integer"]
+    assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
+
+
+def test_main_rejects_detail_with_allowed_empty_results_before_network(tmp_path, monkeypatch, capsys):
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _unexpected_urlopen(*_args, **_kwargs):
+        raise AssertionError("preflight failures must not issue route requests")
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _unexpected_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-detail",
+        "--allow-empty-results",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["ok"] is False
+    assert payload["phase"] == "preflight"
+    assert payload["require_detail"] is True
+    assert payload["require_results"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["preflight_errors"] == [
+        "--require-detail requires result rows; remove --allow-empty-results"
+    ]
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
 
 
