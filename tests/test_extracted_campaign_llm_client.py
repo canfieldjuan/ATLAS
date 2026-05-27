@@ -473,12 +473,18 @@ async def test_pipeline_llm_client_returns_exact_cache_hit_without_provider_call
 
     assert response.content == "cached response"
     assert response.model == "cached-model"
+    assert response.usage == {"input_tokens": 0, "output_tokens": 0}
     assert llm.calls == []
     assert len(exact_cache.lookups) == 1
     assert exact_cache.stores == []
     trace_metadata = trace_calls[0][1]["metadata"]
     assert trace_metadata["cache_mode"] == "exact"
     assert trace_metadata["cache_result"] == "hit"
+    assert trace_metadata["cached_input_tokens"] == "8"
+    assert trace_metadata["cached_output_tokens"] == "3"
+    assert trace_metadata["billable_output_tokens"] == "0"
+    assert trace_calls[0][1]["input_tokens"] == 0
+    assert trace_calls[0][1]["output_tokens"] == 0
     assert trace_calls[0][1]["cached_tokens"] == 8
     assert trace_calls[0][1]["billable_input_tokens"] == 0
 

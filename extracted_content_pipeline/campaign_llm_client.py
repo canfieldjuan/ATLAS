@@ -416,6 +416,13 @@ class PipelineLLMClient:
         trace_metadata.update(call_metadata)
         if cache_decision is not None:
             trace_metadata.update(cache_decision.trace_metadata())
+        for key in (
+            "cached_input_tokens",
+            "cached_output_tokens",
+            "billable_output_tokens",
+        ):
+            if key in trace_meta:
+                trace_metadata[key] = str(_usage_int(trace_meta.get(key)))
         if cache_metadata:
             trace_metadata.update({
                 str(key): str(value)
@@ -578,15 +585,25 @@ def _response_from_cache_hit(hit: Mapping[str, Any]) -> LLMResponse:
         or usage.get("prompt_tokens")
         or usage.get("total_tokens")
     )
+    output_tokens = _usage_int(
+        usage.get("output_tokens")
+        or usage.get("completion_tokens")
+    )
     raw_hit = dict(hit)
     raw_hit["_trace_meta"] = {
+        "cached_input_tokens": input_tokens,
+        "cached_output_tokens": output_tokens,
         "cached_tokens": input_tokens,
         "billable_input_tokens": 0,
+        "billable_output_tokens": 0,
     }
     return LLMResponse(
         content=str(hit.get("response_text") or ""),
         model=str(hit.get("model") or "") or None,
-        usage=dict(usage),
+        usage={
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
         raw=raw_hit,
     )
 

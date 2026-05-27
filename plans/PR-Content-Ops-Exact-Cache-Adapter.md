@@ -52,7 +52,9 @@ import the shared exact-cache helper only when needed. For each call:
    the shared exact-cache helper uses, scoped by provider, model, messages,
    max tokens, and temperature.
 4. Attempt lookup with the policy-provided namespace and account id.
-5. On hit, return an `LLMResponse` from the cached text and trace `cache_result=hit`.
+5. On hit, return an `LLMResponse` from the cached text and trace
+   `cache_result=hit`, zero provider usage for the current request, and
+   cache-specific token metadata for savings/diagnostics.
 6. On miss, call the provider, then store the successful response under the same
    namespace/account id and trace `cache_result=miss` plus the store result.
 7. On cache lookup/store error, trace the error metadata and continue generation.
@@ -104,10 +106,10 @@ controlled by the source-side policy from the previous slice.
 | Area | Estimated LOC |
 |---|---:|
 | Plan doc | ~100 |
-| LLM client adapter | ~170 |
+| LLM client adapter | ~190 |
 | Shared exact-cache helper | ~50 |
-| Tests | ~295 |
-| **Total** | **~615** |
+| Tests | ~300 |
+| **Total** | **~640** |
 
 This is above the 400 LOC soft cap because the adapter, shared-helper seam, and
 tests need to land together; otherwise the PR would either add an unused helper
