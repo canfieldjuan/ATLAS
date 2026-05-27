@@ -328,9 +328,39 @@ def _preflight_result(args: argparse.Namespace, errors: list[str]) -> dict[str, 
     }
 
 
+def _safe_error_message(args: argparse.Namespace, exc: Exception) -> str:
+    message = str(exc)
+    database_url = str(getattr(args, "database_url", "") or "").strip()
+    if database_url:
+        message = message.replace(database_url, "[redacted-database-url]")
+    return message
+
+
+def _runtime_error_result(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
+    message = _safe_error_message(args, exc)
+    error = {
+        "type": type(exc).__name__,
+        "message": message,
+    }
+    return {
+        "phase": "runtime",
+        "ok": False,
+        "mode": "cleanup" if args.cleanup_faq_id is not None else "seed",
+        "errors": [f"{error['type']}: {message}"],
+        "error": error,
+    }
+
+
 def _print_result(payload: dict[str, Any], *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if payload.get("phase") == "runtime":
+        print(
+            "SaaS FAQ demo runtime: "
+            f"ok={payload['ok']} mode={payload['mode']} "
+            f"errors={len(payload['errors'])}"
+        )
         return
     if payload.get("phase") == "cleanup":
         print(
@@ -354,7 +384,13 @@ def main(argv: list[str] | None = None) -> int:
     if errors:
         _write_result(args.output_result, _preflight_result(args, errors))
         raise SystemExit("; ".join(errors))
-    payload = asyncio.run(_run(args))
+    try:
+        payload = asyncio.run(_run(args))
+    except Exception as exc:
+        payload = _runtime_error_result(args, exc)
+        _write_result(args.output_result, payload)
+        _print_result(payload, as_json=bool(args.json))
+        return 1
     _write_result(args.output_result, payload)
     _print_result(payload, as_json=bool(args.json))
     return 0 if payload["ok"] else 1
