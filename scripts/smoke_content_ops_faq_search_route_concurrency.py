@@ -76,6 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-error-rate", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_ERROR_RATE", "0"))
     parser.add_argument("--max-p95-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_P95_MS") or None)
     parser.add_argument("--max-single-request-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_SINGLE_REQUEST_MS") or None)
+    parser.add_argument("--max-detail-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_DETAIL_MS") or None)
     parser.set_defaults(require_results=True)
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--allow-empty-results", action="store_false", dest="require_results")
@@ -97,7 +98,7 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     for name in ("limit", "requests", "concurrency"):
         if int(getattr(args, name)) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
-    for name in ("timeout", "max_error_rate", "max_p95_ms", "max_single_request_ms"):
+    for name in ("timeout", "max_error_rate", "max_p95_ms", "max_single_request_ms", "max_detail_ms"):
         value = getattr(args, name)
         if value is not None and not math.isfinite(float(value)):
             errors.append(f"--{name.replace('_', '-')} must be finite")
@@ -107,7 +108,9 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("--max-error-rate must be between 0 and 1")
     if bool(args.require_detail) and not bool(args.require_results):
         errors.append("--require-detail requires result rows; remove --allow-empty-results")
-    for name in ("max_p95_ms", "max_single_request_ms"):
+    if args.max_detail_ms is not None and not bool(args.require_detail):
+        errors.append("--max-detail-ms requires --require-detail")
+    for name in ("max_p95_ms", "max_single_request_ms", "max_detail_ms"):
         value = getattr(args, name)
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
@@ -337,6 +340,15 @@ def _latency_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _detail_latency_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    detail_results = [
+        {"elapsed_ms": row.get("detail_elapsed_ms")}
+        for row in results
+        if row.get("detail_checked") is True and row.get("detail_elapsed_ms") is not None
+    ]
+    return _latency_summary(detail_results)
+
+
 def _error_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     failures = [
         {
@@ -361,8 +373,15 @@ def _detail_summary(
     results: Sequence[Mapping[str, Any]], *, required: bool
 ) -> dict[str, Any]:
     if not required:
-        return {"required": False, "checked": 0, "failures": 0, "items": []}
+        return {
+            "required": False,
+            "checked": 0,
+            "failures": 0,
+            "items": [],
+            "latency": _latency_summary(()),
+        }
 
+    latency = _detail_latency_summary(results)
     failures = [
         {
             "index": row.get("index"),
@@ -378,16 +397,19 @@ def _detail_summary(
         "failures": len(failures),
         "items": failures[:20],
         "truncated": len(failures) > 20,
+        "latency": latency,
     }
 
 
 def _budget_summary(
     *,
     latency: Mapping[str, Any],
+    detail_latency: Mapping[str, Any],
     errors: Mapping[str, Any],
     max_error_rate: float,
     max_p95_ms: float | None,
     max_single_request_ms: float | None,
+    max_detail_ms: float | None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     failures: list[str] = []
@@ -403,6 +425,31 @@ def _budget_summary(
         checks.append({"metric": metric, "actual": actual, "max": limit_value, "ok": ok})
         if not ok:
             failures.append(f"{metric} exceeded {limit_value}")
+    if max_detail_ms is not None:
+        limit_value = round(float(max_detail_ms), 6)
+        if int(detail_latency.get("count") or 0) <= 0:
+            checks.append(
+                {
+                    "metric": "detail_max_ms",
+                    "actual": None,
+                    "max": limit_value,
+                    "ok": False,
+                }
+            )
+            failures.append("detail_max_ms had no checked detail rows")
+        else:
+            actual = float(detail_latency["max_ms"])
+            ok = actual <= limit_value
+            checks.append(
+                {
+                    "metric": "detail_max_ms",
+                    "actual": actual,
+                    "max": limit_value,
+                    "ok": ok,
+                }
+            )
+            if not ok:
+                failures.append(f"detail_max_ms exceeded {limit_value}")
     return {"ok": not failures, "checks": checks, "failures": failures}
 
 
@@ -417,12 +464,15 @@ def _summary_payload(
     active_cases = list(cases) if cases is not None else [_default_case(args)]
     errors = _error_summary(results)
     latency = _latency_summary(results)
+    detail = _detail_summary(results, required=bool(args.require_detail))
     budgets = _budget_summary(
         latency=latency,
+        detail_latency=detail["latency"],
         errors=errors,
         max_error_rate=float(args.max_error_rate),
         max_p95_ms=args.max_p95_ms,
         max_single_request_ms=args.max_single_request_ms,
+        max_detail_ms=args.max_detail_ms,
     )
     return {
         "ok": not preflight_errors and budgets["ok"],
@@ -448,7 +498,7 @@ def _summary_payload(
         },
         "latency": latency,
         "errors": errors,
-        "detail": _detail_summary(results, required=bool(args.require_detail)),
+        "detail": detail,
         "budgets": budgets,
         "preflight_errors": list(preflight_errors),
         "elapsed_seconds": round(elapsed_seconds, 6),
