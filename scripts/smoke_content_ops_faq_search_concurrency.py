@@ -477,6 +477,33 @@ def _summary_payload(
     }
 
 
+def _setup_failure_summary(
+    *,
+    run_id: str,
+    args: argparse.Namespace,
+    cases: Sequence[SearchCase],
+    phase: str,
+    error: BaseException,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    return _summary_payload(
+        ok=False,
+        run_id=run_id,
+        args=args,
+        cases=cases,
+        results=[],
+        setup={
+            "ok": False,
+            "phase": phase,
+            "error": {
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+        },
+        elapsed_seconds=elapsed_seconds,
+    )
+
+
 async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     _validate_args(args)
     run_id = uuid4().hex[:10]
@@ -509,10 +536,32 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         return 1, summary
     repo = PostgresTicketFAQSearchRepository(pool)
     results: list[dict[str, Any]] = []
+    cleanup_ready = False
     try:
-        await _apply_migrations(pool)
+        try:
+            await _apply_migrations(pool)
+        except Exception as exc:
+            return 1, _setup_failure_summary(
+                run_id=run_id,
+                args=args,
+                cases=cases,
+                phase="migrations",
+                error=exc,
+                elapsed_seconds=time.perf_counter() - started,
+            )
+        cleanup_ready = True
         _write_cleanup_manifest(args.cleanup_manifest_output, cases)
-        await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
+        try:
+            await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
+        except Exception as exc:
+            return 1, _setup_failure_summary(
+                run_id=run_id,
+                args=args,
+                cases=cases,
+                phase="seed",
+                error=exc,
+                elapsed_seconds=time.perf_counter() - started,
+            )
         _write_route_case_file(
             args.route_case_file_output,
             cases,
@@ -525,7 +574,7 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             concurrency=int(args.concurrency),
         )
     finally:
-        if not bool(args.keep_data):
+        if cleanup_ready and not bool(args.keep_data):
             await _cleanup(pool, cases)
         await pool.close()
     summary = _summary_payload(

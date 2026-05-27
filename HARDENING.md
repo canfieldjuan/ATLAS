@@ -30,6 +30,33 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-05-27
+
+### FAQ search DB smoke optional file-output failures lack result artifacts
+- File/location: `scripts/smoke_content_ops_faq_search_concurrency.py`
+  `_write_cleanup_manifest(...)` and `_write_route_case_file(...)` calls.
+- Description: Optional cleanup-manifest and route-case file write failures can
+  still abort the smoke before `--output-result` is written.
+- Why it matters: Operators running keep-data handoffs may lose the structured
+  smoke result when the failure is a bad local artifact path rather than a DB or
+  route issue.
+- Effort: S
+- Category: correctness
+- Owner/session: Codex FAQ lane
+- Found during: PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result
+
+### FAQ search DB smoke cleanup failures can mask original result
+- File/location: `scripts/smoke_content_ops_faq_search_concurrency.py`
+  `run_smoke(...)` cleanup `finally` block.
+- Description: Cleanup exceptions can still replace an earlier setup/search
+  result instead of being reported as cleanup metadata.
+- Why it matters: A failed cleanup could hide whether retrieval passed, failed,
+  or never ran, making go-live smoke artifacts harder to interpret.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex FAQ lane
+- Found during: PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result
+
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
