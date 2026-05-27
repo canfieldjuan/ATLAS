@@ -38,6 +38,7 @@ Slice phase: Production hardening
 | `extracted_content_pipeline/campaign_llm_client.py` | Evaluate policy and add cache decision metadata to LLM traces. |
 | `extracted_content_pipeline/settings.py` | Add extracted Content Ops cache settings defaults. |
 | `extracted_content_pipeline/manifest.json` | Register the new owned policy module. |
+| `tests/test_atlas_content_ops_infrastructure.py` | Update host infrastructure trace assertion for cache decision metadata. |
 | `tests/test_extracted_content_ops_cache_policy.py` | Cover policy branch decisions. |
 | `tests/test_extracted_campaign_llm_client.py` | Cover trace metadata carrying the cache decision. |
 | `scripts/run_extracted_pipeline_checks.sh` | Enroll the new extracted policy test. |
@@ -86,6 +87,7 @@ follow-up slices a concrete signal without changing generation behavior.
 
 ## Verification
 
+- python -m pytest tests/test_atlas_content_ops_infrastructure.py::test_build_content_ops_llm_client_uses_pipeline_tracing_client tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py -q — 28 passed, 1 warning.
 - python -m pytest tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py -q — 27 passed, 1 warning.
 - python -m compileall -q extracted_content_pipeline/content_ops_cache_policy.py extracted_content_pipeline/campaign_llm_client.py extracted_content_pipeline/settings.py tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
@@ -103,8 +105,8 @@ follow-up slices a concrete signal without changing generation behavior.
 | Plan doc | ~110 |
 | Policy module | ~150 |
 | LLM client/settings/manifest wiring | ~90 |
-| Tests and CI enrollment | ~205 |
-| **Total** | **~555** |
+| Tests and CI enrollment | ~210 |
+| **Total** | **~560** |
 
 This is above the 400 LOC soft cap because the policy module, integration
 wiring, and tests need to land together for the source-side cache contract to be
