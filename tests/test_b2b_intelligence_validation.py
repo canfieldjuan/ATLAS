@@ -1003,6 +1003,99 @@ async def test_lookup_cached_text_parses_stringified_json_fields(monkeypatch):
     assert hit["hit_count"] == 4
 
 
+@pytest.mark.asyncio
+async def test_lookup_cached_text_can_bypass_namespace_flag_for_policy_gated_callers(
+    monkeypatch,
+):
+    class FakePool:
+        def __init__(self):
+            self.fetches = 0
+
+        async def fetchrow(self, *_args, **_kwargs):
+            self.fetches += 1
+            return {
+                "cache_key": "abc",
+                "namespace": "content_ops.landing_page",
+                "provider": "provider",
+                "model": "model",
+                "response_text": "cached",
+                "usage_json": {"input_tokens": 12},
+                "metadata": {"cache_version": "v1"},
+                "created_at": "2026-03-31T01:00:00Z",
+                "last_hit_at": "2026-03-31T01:05:00Z",
+                "hit_count": 4,
+            }
+
+    monkeypatch.setattr(
+        exact_cache_mod,
+        "_is_cache_enabled_for_namespace",
+        lambda _namespace: False,
+    )
+    pool = FakePool()
+
+    default_hit = await exact_cache_mod.lookup_cached_text(
+        "content_ops.landing_page",
+        {"messages": [{"role": "user", "content": "x"}]},
+        pool=pool,
+        account_id="acct-1",
+    )
+    bypass_hit = await exact_cache_mod.lookup_cached_text(
+        "content_ops.landing_page",
+        {"messages": [{"role": "user", "content": "x"}]},
+        pool=pool,
+        account_id="acct-1",
+        require_namespace_enabled=False,
+    )
+
+    assert default_hit is None
+    assert bypass_hit is not None
+    assert bypass_hit["response_text"] == "cached"
+    assert pool.fetches == 1
+
+
+@pytest.mark.asyncio
+async def test_store_cached_text_can_bypass_namespace_flag_for_policy_gated_callers(
+    monkeypatch,
+):
+    class FakePool:
+        def __init__(self):
+            self.executes = 0
+
+        async def execute(self, *_args, **_kwargs):
+            self.executes += 1
+
+    monkeypatch.setattr(
+        exact_cache_mod,
+        "_is_cache_enabled_for_namespace",
+        lambda _namespace: False,
+    )
+    pool = FakePool()
+
+    default_stored = await exact_cache_mod.store_cached_text(
+        "content_ops.landing_page",
+        {"messages": [{"role": "user", "content": "x"}]},
+        provider="provider",
+        model="model",
+        response_text="cached",
+        pool=pool,
+        account_id="acct-1",
+    )
+    bypass_stored = await exact_cache_mod.store_cached_text(
+        "content_ops.landing_page",
+        {"messages": [{"role": "user", "content": "x"}]},
+        provider="provider",
+        model="model",
+        response_text="cached",
+        pool=pool,
+        account_id="acct-1",
+        require_namespace_enabled=False,
+    )
+
+    assert default_stored is False
+    assert bypass_stored is True
+    assert pool.executes == 1
+
+
 class TestAccountIntelligenceHygiene:
     def test_build_company_signal_blocked_names_by_vendor_includes_vendors_integrations_and_alternatives(self):
         blocked = _build_company_signal_blocked_names_by_vendor(

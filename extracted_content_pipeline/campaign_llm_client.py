@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
@@ -174,6 +174,78 @@ class PipelineLLMClientConfig:
 
 
 @dataclass(frozen=True)
+class ContentOpsExactCacheAdapter:
+    """Thin adapter over the shared exact-cache helpers.
+
+    Content Ops owns the cache eligibility policy. Once that policy returns an
+    account-scoped exact decision, this adapter reuses the shared request
+    envelope and Postgres cache helpers without applying the legacy B2B/Gateway
+    namespace feature flag a second time.
+    """
+
+    def build_request_envelope(
+        self,
+        *,
+        provider: str,
+        model: str,
+        messages: Sequence[LLMMessage],
+        max_tokens: int,
+        temperature: float,
+    ) -> dict[str, Any]:
+        from extracted_llm_infrastructure.services.b2b import llm_exact_cache
+
+        return llm_exact_cache.build_request_envelope(
+            provider=provider,
+            model=model,
+            messages=list(messages),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            extra={"product": "content_ops"},
+        )
+
+    async def lookup(
+        self,
+        decision: ContentOpsCacheDecision,
+        request_envelope: dict[str, Any],
+    ) -> Mapping[str, Any] | None:
+        from extracted_llm_infrastructure.services.b2b import llm_exact_cache
+
+        if not decision.namespace or not decision.account_id:
+            return None
+        return await llm_exact_cache.lookup_cached_text(
+            decision.namespace,
+            request_envelope,
+            account_id=decision.account_id,
+            require_namespace_enabled=False,
+        )
+
+    async def store(
+        self,
+        decision: ContentOpsCacheDecision,
+        request_envelope: dict[str, Any],
+        *,
+        provider: str,
+        model: str,
+        response: LLMResponse,
+    ) -> bool:
+        from extracted_llm_infrastructure.services.b2b import llm_exact_cache
+
+        if not decision.namespace or not decision.account_id:
+            return False
+        return bool(await llm_exact_cache.store_cached_text(
+            decision.namespace,
+            request_envelope,
+            provider=provider,
+            model=model,
+            response_text=response.content,
+            usage=dict(response.usage or {}),
+            metadata={"product": "content_ops"},
+            account_id=decision.account_id,
+            require_namespace_enabled=False,
+        ))
+
+
+@dataclass(frozen=True)
 class PipelineLLMClient:
     """Adapt extracted LLM infrastructure services to the product LLMClient port."""
 
@@ -185,6 +257,9 @@ class PipelineLLMClient:
     resolver: LLMResolver = _default_resolver
     tracer: LLMTraceCallable | None = _default_trace_llm_call
     cache_policy: ContentOpsExactCachePolicy = ContentOpsExactCachePolicy()
+    exact_cache: ContentOpsExactCacheAdapter | None = field(
+        default_factory=ContentOpsExactCacheAdapter,
+    )
 
     async def complete(
         self,
@@ -209,6 +284,38 @@ class PipelineLLMClient:
             messages=messages,
         )
         started = time.monotonic()
+        cache_request: dict[str, Any] | None = None
+        cache_metadata: dict[str, Any] = {}
+        provider = _provider_name(llm)
+        model = _model_name(llm) or ""
+        if cache_decision.cacheable and self.exact_cache is not None:
+            try:
+                cache_request = self.exact_cache.build_request_envelope(
+                    provider=provider,
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+                cache_hit = await self.exact_cache.lookup(
+                    cache_decision,
+                    cache_request,
+                )
+                if cache_hit is not None:
+                    response = _response_from_cache_hit(cache_hit)
+                    self._trace_call(
+                        llm=llm,
+                        response=response,
+                        duration_ms=_duration_ms(started),
+                        metadata=metadata,
+                        cache_decision=cache_decision,
+                        cache_metadata={"cache_result": "hit"},
+                    )
+                    return response
+                cache_metadata["cache_result"] = "miss"
+            except Exception as exc:
+                cache_request = None
+                cache_metadata.update(_cache_error_metadata("lookup_error", exc))
         try:
             call_args = {
                 "llm": llm,
@@ -230,17 +337,37 @@ class PipelineLLMClient:
                 duration_ms=_duration_ms(started),
                 metadata=metadata,
                 cache_decision=cache_decision,
+                cache_metadata=cache_metadata,
                 status="failed",
                 error_message=str(exc)[:500],
                 error_type=type(exc).__name__,
             )
             raise
+        if (
+            cache_decision.cacheable
+            and self.exact_cache is not None
+            and cache_request is not None
+        ):
+            try:
+                stored = await self.exact_cache.store(
+                    cache_decision,
+                    cache_request,
+                    provider=provider,
+                    model=model,
+                    response=response,
+                )
+                cache_metadata["cache_store_result"] = (
+                    "stored" if stored else "skipped"
+                )
+            except Exception as exc:
+                cache_metadata.update(_cache_error_metadata("store_error", exc))
         self._trace_call(
             llm=llm,
             response=response,
             duration_ms=_duration_ms(started),
             metadata=metadata,
             cache_decision=cache_decision,
+            cache_metadata=cache_metadata,
         )
         return response
 
@@ -252,6 +379,7 @@ class PipelineLLMClient:
         duration_ms: float,
         metadata: Mapping[str, Any] | None,
         cache_decision: ContentOpsCacheDecision | None,
+        cache_metadata: Mapping[str, Any] | None = None,
         status: str = "completed",
         error_message: str | None = None,
         error_type: str | None = None,
@@ -278,12 +406,29 @@ class PipelineLLMClient:
             "cache_reason",
             "cache_namespace",
             "cache_account_id",
+            "cache_result",
+            "cache_store_result",
+            "cache_error_type",
+            "cache_error_message",
         ):
             call_metadata.pop(key, None)
         trace_metadata.update(scoped_metadata)
         trace_metadata.update(call_metadata)
         if cache_decision is not None:
             trace_metadata.update(cache_decision.trace_metadata())
+        for key in (
+            "cached_input_tokens",
+            "cached_output_tokens",
+            "billable_output_tokens",
+        ):
+            if key in trace_meta:
+                trace_metadata[key] = str(_usage_int(trace_meta.get(key)))
+        if cache_metadata:
+            trace_metadata.update({
+                str(key): str(value)
+                for key, value in cache_metadata.items()
+                if value not in (None, "")
+            })
         try:
             self.tracer(
                 "content_ops.llm.complete",
@@ -431,6 +576,44 @@ def _to_response(result: Any, *, llm: Any) -> LLMResponse:
         usage=dict(usage),
         raw=result,
     )
+
+
+def _response_from_cache_hit(hit: Mapping[str, Any]) -> LLMResponse:
+    usage = hit.get("usage") if isinstance(hit.get("usage"), Mapping) else {}
+    input_tokens = _usage_int(
+        usage.get("input_tokens")
+        or usage.get("prompt_tokens")
+        or usage.get("total_tokens")
+    )
+    output_tokens = _usage_int(
+        usage.get("output_tokens")
+        or usage.get("completion_tokens")
+    )
+    raw_hit = dict(hit)
+    raw_hit["_trace_meta"] = {
+        "cached_input_tokens": input_tokens,
+        "cached_output_tokens": output_tokens,
+        "cached_tokens": input_tokens,
+        "billable_input_tokens": 0,
+        "billable_output_tokens": 0,
+    }
+    return LLMResponse(
+        content=str(hit.get("response_text") or ""),
+        model=str(hit.get("model") or "") or None,
+        usage={
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+        raw=raw_hit,
+    )
+
+
+def _cache_error_metadata(result: str, exc: Exception) -> dict[str, str]:
+    return {
+        "cache_result": result,
+        "cache_error_type": type(exc).__name__,
+        "cache_error_message": str(exc)[:200],
+    }
 
 
 def _duration_ms(started: float) -> float:
