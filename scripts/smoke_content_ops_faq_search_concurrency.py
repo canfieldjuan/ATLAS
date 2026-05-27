@@ -438,6 +438,29 @@ def _failure_summary(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _cleanup_result(*, attempted: bool, error: BaseException | None = None) -> dict[str, Any]:
+    return {
+        "ok": error is None,
+        "attempted": attempted,
+        "error": None
+        if error is None
+        else {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
+
+
+def _with_cleanup_result(
+    summary: dict[str, Any],
+    cleanup: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(summary)
+    updated["cleanup"] = cleanup
+    updated["ok"] = bool(summary["ok"]) and bool(cleanup["ok"])
+    return updated
+
+
 def _summary_payload(
     *,
     ok: bool,
@@ -456,7 +479,12 @@ def _summary_payload(
         max_single_request_ms=args.max_single_request_ms,
     )
     return {
-        "ok": ok and failure["count"] == 0 and latency_budget["ok"] and setup["ok"],
+        "ok": (
+            ok
+            and failure["count"] == 0
+            and latency_budget["ok"]
+            and setup["ok"]
+        ),
         "run_id": run_id,
         "requests": {
             "total": len(results),
@@ -470,6 +498,7 @@ def _summary_payload(
             "search_cases": len(cases),
         },
         "setup": setup,
+        "cleanup": _cleanup_result(attempted=False),
         "latency": latency,
         "latency_budget": latency_budget,
         "isolation": failure,
@@ -537,11 +566,13 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     repo = PostgresTicketFAQSearchRepository(pool)
     results: list[dict[str, Any]] = []
     cleanup_ready = False
+    summary: dict[str, Any] | None = None
+    cleanup = _cleanup_result(attempted=False)
     try:
         try:
             await _apply_migrations(pool)
         except Exception as exc:
-            return 1, _setup_failure_summary(
+            summary = _setup_failure_summary(
                 run_id=run_id,
                 args=args,
                 cases=cases,
@@ -549,63 +580,74 @@ async def run_smoke(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 error=exc,
                 elapsed_seconds=time.perf_counter() - started,
             )
-        cleanup_ready = True
-        try:
-            _write_cleanup_manifest(args.cleanup_manifest_output, cases)
-        except Exception as exc:
-            return 1, _setup_failure_summary(
-                run_id=run_id,
-                args=args,
-                cases=cases,
-                phase="cleanup_manifest_output",
-                error=exc,
-                elapsed_seconds=time.perf_counter() - started,
-            )
-        try:
-            await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
-        except Exception as exc:
-            return 1, _setup_failure_summary(
-                run_id=run_id,
-                args=args,
-                cases=cases,
-                phase="seed",
-                error=exc,
-                elapsed_seconds=time.perf_counter() - started,
-            )
-        try:
-            _write_route_case_file(
-                args.route_case_file_output,
+        if summary is None:
+            cleanup_ready = True
+            try:
+                _write_cleanup_manifest(args.cleanup_manifest_output, cases)
+            except Exception as exc:
+                summary = _setup_failure_summary(
+                    run_id=run_id,
+                    args=args,
+                    cases=cases,
+                    phase="cleanup_manifest_output",
+                    error=exc,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+        if summary is None:
+            try:
+                await _seed(pool, repo, cases, documents_per_corpus=int(args.documents_per_corpus))
+            except Exception as exc:
+                summary = _setup_failure_summary(
+                    run_id=run_id,
+                    args=args,
+                    cases=cases,
+                    phase="seed",
+                    error=exc,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+        if summary is None:
+            try:
+                _write_route_case_file(
+                    args.route_case_file_output,
+                    cases,
+                    documents_per_corpus=int(args.documents_per_corpus),
+                )
+            except Exception as exc:
+                summary = _setup_failure_summary(
+                    run_id=run_id,
+                    args=args,
+                    cases=cases,
+                    phase="route_case_file_output",
+                    error=exc,
+                    elapsed_seconds=time.perf_counter() - started,
+                )
+        if summary is None:
+            results = await _run_concurrent_searches(
+                repo,
                 cases,
-                documents_per_corpus=int(args.documents_per_corpus),
+                iterations=int(args.iterations),
+                concurrency=int(args.concurrency),
             )
-        except Exception as exc:
-            return 1, _setup_failure_summary(
+            summary = _summary_payload(
+                ok=True,
                 run_id=run_id,
                 args=args,
                 cases=cases,
-                phase="route_case_file_output",
-                error=exc,
+                results=results,
+                setup={"ok": True, "phase": "complete", "error": None},
                 elapsed_seconds=time.perf_counter() - started,
             )
-        results = await _run_concurrent_searches(
-            repo,
-            cases,
-            iterations=int(args.iterations),
-            concurrency=int(args.concurrency),
-        )
     finally:
         if cleanup_ready and not bool(args.keep_data):
-            await _cleanup(pool, cases)
+            try:
+                await _cleanup(pool, cases)
+                cleanup = _cleanup_result(attempted=True)
+            except Exception as exc:
+                cleanup = _cleanup_result(attempted=True, error=exc)
         await pool.close()
-    summary = _summary_payload(
-        ok=True,
-        run_id=run_id,
-        args=args,
-        cases=cases,
-        results=results,
-        setup={"ok": True, "phase": "complete", "error": None},
-        elapsed_seconds=time.perf_counter() - started,
-    )
+    if summary is None:  # pragma: no cover - defensive guard for unexpected control flow.
+        raise RuntimeError("FAQ search smoke did not produce a summary")
+    summary = _with_cleanup_result(summary, cleanup)
     return (0 if summary["ok"] else 1), summary
 
 
