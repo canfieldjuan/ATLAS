@@ -30,17 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-27
-
-### Reject Contradictory FAQ Route Detail Concurrency Flags
-- File/location: `scripts/smoke_content_ops_faq_search_route_concurrency.py` argument preflight.
-- Description: `--require-detail --allow-empty-results` currently fails loudly per request instead of rejecting the contradictory flags before the run starts.
-- Why it matters: Preflight rejection would make operator mistakes clearer and avoid spending concurrency requests on a configuration that cannot hydrate detail rows.
-- Effort: S
-- Category: polish
-- Owner/session: Codex FAQ lane
-- Found during: PR #1025 review follow-up while starting the next FAQ search slice.
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
