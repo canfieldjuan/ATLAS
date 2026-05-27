@@ -438,6 +438,36 @@ def _case_result_summaries(
     return summaries
 
 
+def _worst_case_summary(summary: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    cases = summary.get("cases")
+    if not isinstance(cases, Mapping):
+        return None
+    case_summaries = cases.get("summaries")
+    if not isinstance(case_summaries, Sequence) or isinstance(case_summaries, (str, bytes)):
+        return None
+
+    best: Mapping[str, Any] | None = None
+    best_key: tuple[float, float, float, int] | None = None
+    for item in case_summaries:
+        if not isinstance(item, Mapping):
+            continue
+        errors = item.get("errors")
+        latency = item.get("latency")
+        if not isinstance(errors, Mapping) or not isinstance(latency, Mapping):
+            continue
+        case_index = int(item.get("case_index") or 0)
+        key = (
+            float(errors.get("count") or 0.0),
+            float(latency.get("p95_ms") or 0.0),
+            float(latency.get("max_ms") or 0.0),
+            -case_index,
+        )
+        if best_key is None or key > best_key:
+            best = item
+            best_key = key
+    return best
+
+
 def _budget_summary(
     *,
     latency: Mapping[str, Any],
@@ -559,6 +589,17 @@ def _print_summary(summary: Mapping[str, Any], *, as_json: bool) -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
     latency = summary["latency"]
+    worst_case = _worst_case_summary(summary)
+    worst_case_text = ""
+    if worst_case is not None:
+        worst_latency = worst_case["latency"]
+        worst_errors = worst_case["errors"]
+        worst_case_text = (
+            f" worst_case_index={worst_case['case_index']}"
+            f" worst_case_errors={worst_errors['count']}"
+            f" worst_case_p95_ms={worst_latency['p95_ms']}"
+            f" worst_case_max_ms={worst_latency['max_ms']}"
+        )
     print(
         "FAQ search hosted concurrency smoke: "
         f"ok={summary['ok']} requests={summary['requests']['total']} "
@@ -566,6 +607,7 @@ def _print_summary(summary: Mapping[str, Any], *, as_json: bool) -> None:
         f"max_ms={latency['max_ms']} detail_checked={summary['detail']['checked']} "
         f"detail_failures={summary['detail']['failures']} "
         f"budget_failures={len(summary['budgets']['failures'])}"
+        f"{worst_case_text}"
     )
 
 

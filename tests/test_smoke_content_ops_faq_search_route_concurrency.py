@@ -491,6 +491,91 @@ def test_case_result_summaries_group_mixed_case_visibility():
     ]
 
 
+def test_worst_case_summary_prefers_errors_then_latency():
+    summary = {
+        "cases": {
+            "summaries": [
+                {
+                    "case_index": 0,
+                    "errors": {"count": 0, "rate": 0.0},
+                    "latency": {"p95_ms": 200.0, "max_ms": 250.0},
+                },
+                {
+                    "case_index": 1,
+                    "errors": {"count": 1, "rate": 0.5},
+                    "latency": {"p95_ms": 100.0, "max_ms": 120.0},
+                },
+                {
+                    "case_index": 2,
+                    "errors": {"count": 1, "rate": 0.5},
+                    "latency": {"p95_ms": 100.0, "max_ms": 120.0},
+                },
+                {
+                    "case_index": 3,
+                    "errors": {"count": 1, "rate": 0.5},
+                    "latency": {"p95_ms": 150.0, "max_ms": 160.0},
+                },
+            ]
+        }
+    }
+
+    tie_summary = {
+        "cases": {
+            "summaries": [
+                {
+                    "case_index": 1,
+                    "errors": {"count": 1, "rate": 0.5},
+                    "latency": {"p95_ms": 100.0, "max_ms": 120.0},
+                },
+                {
+                    "case_index": 2,
+                    "errors": {"count": 1, "rate": 0.5},
+                    "latency": {"p95_ms": 100.0, "max_ms": 120.0},
+                },
+            ]
+        }
+    }
+
+    assert smoke._worst_case_summary(summary)["case_index"] == 3
+    assert smoke._worst_case_summary(tie_summary)["case_index"] == 1
+    assert smoke._worst_case_summary({"cases": {"summaries": []}}) is None
+    assert smoke._worst_case_summary({"cases": {"summaries": "not-a-list"}}) is None
+
+
+def test_print_summary_includes_worst_case_signal(capsys):
+    summary = {
+        "ok": False,
+        "requests": {"total": 3},
+        "errors": {"count": 1},
+        "latency": {"p95_ms": 50.0, "max_ms": 75.0},
+        "detail": {"checked": 2, "failures": 1},
+        "budgets": {"failures": ["error_rate exceeded 0.0"]},
+        "cases": {
+            "summaries": [
+                {
+                    "case_index": 0,
+                    "errors": {"count": 0, "rate": 0.0},
+                    "latency": {"p95_ms": 15.0, "max_ms": 20.0},
+                },
+                {
+                    "case_index": 1,
+                    "errors": {"count": 1, "rate": 1.0},
+                    "latency": {"p95_ms": 30.0, "max_ms": 30.0},
+                },
+            ]
+        },
+    }
+
+    smoke._print_summary(summary, as_json=False)
+
+    assert capsys.readouterr().out.strip() == (
+        "FAQ search hosted concurrency smoke: ok=False requests=3 errors=1 "
+        "p95_ms=50.0 max_ms=75.0 detail_checked=2 detail_failures=1 "
+        "budget_failures=1 worst_case_index=1 worst_case_errors=1 "
+        "worst_case_p95_ms=30.0 worst_case_max_ms=30.0"
+    )
+
+
 def test_budget_summary_reports_error_and_latency_failures():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
