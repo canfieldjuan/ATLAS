@@ -93,19 +93,22 @@ class ContentOpsExactCachePolicy:
     ) -> ContentOpsCacheDecision:
         del messages  # Future adapter may use a redacted/digest-only envelope.
         values = dict(metadata or {})
-        requested_policy = _policy_value(
-            values.get("content_ops_cache_policy") or values.get("cache_policy")
-        )
+        try:
+            requested_policy = normalize_content_ops_cache_policy(
+                values.get("content_ops_cache_policy") or values.get("cache_policy")
+            )
+        except ValueError:
+            requested_policy = "unsupported"
         asset_type = _clean_text(values.get("asset_type"))
         account_id = _clean_text(values.get("account_id"))
 
-        if requested_policy in NO_STORE_POLICY_VALUES:
+        if requested_policy == "no_store":
             return ContentOpsCacheDecision("no_store", "policy_no_store")
         if not self.exact_cache_enabled:
             return ContentOpsCacheDecision("no_store", "exact_cache_disabled")
         if not requested_policy:
             return ContentOpsCacheDecision("no_store", "policy_no_store")
-        if requested_policy and requested_policy not in EXACT_POLICY_VALUES:
+        if requested_policy != "exact":
             return ContentOpsCacheDecision("no_store", "unsupported_cache_policy")
         if not account_id:
             return ContentOpsCacheDecision("no_store", "missing_account_scope")
@@ -124,6 +127,19 @@ class ContentOpsExactCachePolicy:
             namespace=namespace,
             account_id=account_id,
         )
+
+
+def normalize_content_ops_cache_policy(value: Any) -> str | None:
+    """Return the canonical request cache policy, or raise for unsupported input."""
+
+    text = _policy_value(value)
+    if not text:
+        return None
+    if text in NO_STORE_POLICY_VALUES:
+        return "no_store"
+    if text in EXACT_POLICY_VALUES:
+        return "exact"
+    raise ValueError(f"unsupported content_ops_cache_policy: {value!r}")
 
 
 def _clean_text(value: Any) -> str:

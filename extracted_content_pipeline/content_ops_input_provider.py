@@ -26,6 +26,7 @@ _REQUEST_KEYS = frozenset({
     "max_cost_usd",
     "account_usage_budget_usd",
     "account_usage_budget_days",
+    "content_ops_cache_policy",
     "inputs",
     "ingestion_profile",
     "require_quality_gates",

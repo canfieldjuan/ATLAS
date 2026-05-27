@@ -407,6 +407,7 @@ async def test_execute_marks_support_ticket_trace_context_for_cache_policy() -> 
     result = await execute_content_ops_from_mapping(
         {
             "outputs": ["blog_post"],
+            "content_ops_cache_policy": "exact-cache",
             "inputs": {
                 "topic": "Support-ticket questions customers keep asking",
                 "filters": {"topic_type": "content_ops_support_ticket_faq"},
@@ -423,6 +424,7 @@ async def test_execute_marks_support_ticket_trace_context_for_cache_policy() -> 
     assert trace_context == {
         "account_id": "acct-1",
         "user_id": "user-1",
+        "content_ops_cache_policy": "exact",
         "source_type": "support_ticket",
         "input_provider": "support_ticket_provider",
     }
@@ -433,7 +435,6 @@ async def test_execute_marks_support_ticket_trace_context_for_cache_policy() -> 
         "skill_name": "digest/blog_post_generation",
         "asset_type": "blog_post",
         "attempt_no": 1,
-        "content_ops_cache_policy": "exact",
     })
     assert decision.mode == "no_store"
     assert decision.reason == "customer_data_no_store"

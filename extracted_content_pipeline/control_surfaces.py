@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
+from .content_ops_cache_policy import normalize_content_ops_cache_policy
 from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     landing_page_quality_repair_attempts_from_inputs,
@@ -59,6 +60,7 @@ class ContentOpsRequest:
     max_cost_usd: float | None = None
     account_usage_budget_usd: float | None = None
     account_usage_budget_days: int = 7
+    content_ops_cache_policy: str | None = None
     inputs: Mapping[str, Any] = field(default_factory=dict)
     ingestion_profile: str = "domain_specific"
     require_quality_gates: bool = True
@@ -99,6 +101,9 @@ class ControlSurfacePreview:
                 ),
                 "account_usage_budget_days": (
                     self.normalized_request.account_usage_budget_days
+                ),
+                "content_ops_cache_policy": (
+                    self.normalized_request.content_ops_cache_policy
                 ),
                 "ingestion_profile": self.normalized_request.ingestion_profile,
                 "require_quality_gates": self.normalized_request.require_quality_gates,
@@ -318,6 +323,9 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         max_cost_usd=max_cost_usd,
         account_usage_budget_usd=account_usage_budget_usd,
         account_usage_budget_days=account_usage_budget_days,
+        content_ops_cache_policy=normalize_content_ops_cache_policy(
+            payload.get("content_ops_cache_policy")
+        ),
         inputs=raw_inputs if isinstance(raw_inputs, Mapping) else {},
         ingestion_profile=str(payload.get("ingestion_profile") or "domain_specific").strip()
         or "domain_specific",
@@ -530,6 +538,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         max_cost_usd=request.max_cost_usd,
         account_usage_budget_usd=request.account_usage_budget_usd,
         account_usage_budget_days=request.account_usage_budget_days,
+        content_ops_cache_policy=request.content_ops_cache_policy,
         inputs=request.inputs,
         ingestion_profile=request.ingestion_profile,
         require_quality_gates=request.require_quality_gates,

@@ -2,7 +2,25 @@ from types import SimpleNamespace
 
 from extracted_content_pipeline.content_ops_cache_policy import (
     ContentOpsExactCachePolicy,
+    normalize_content_ops_cache_policy,
 )
+
+
+def test_normalize_content_ops_cache_policy_returns_canonical_values():
+    assert normalize_content_ops_cache_policy(None) is None
+    assert normalize_content_ops_cache_policy(" exact-cache ") == "exact"
+    assert normalize_content_ops_cache_policy("exact_cache") == "exact"
+    assert normalize_content_ops_cache_policy("no-store") == "no_store"
+    assert normalize_content_ops_cache_policy("off") == "no_store"
+
+
+def test_normalize_content_ops_cache_policy_rejects_unsupported_value():
+    try:
+        normalize_content_ops_cache_policy("semantic")
+    except ValueError as exc:
+        assert "unsupported content_ops_cache_policy" in str(exc)
+    else:
+        raise AssertionError("expected unsupported cache policy to raise")
 
 
 def test_policy_defaults_to_no_store_when_exact_cache_disabled():
