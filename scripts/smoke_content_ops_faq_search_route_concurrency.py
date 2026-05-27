@@ -557,7 +557,7 @@ def _summary_payload(
             "case_file": str(args.case_file or ""),
             "items": [_case_snapshot(case) for case in active_cases[:20]],
             "summaries": _case_result_summaries(
-                active_cases[:20],
+                active_cases,
                 results,
                 detail_required=bool(args.require_detail),
             ),

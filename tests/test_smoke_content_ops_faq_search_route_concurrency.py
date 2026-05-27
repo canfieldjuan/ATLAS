@@ -1148,6 +1148,56 @@ def test_main_result_includes_case_summaries_for_mixed_cases(tmp_path, monkeypat
     assert payload["cases"]["summaries"][1]["latency"]["count"] == 1
 
 
+def test_main_case_summaries_cover_cases_beyond_preview_cap(tmp_path, monkeypatch):
+    case_file = _write_case_file(
+        tmp_path,
+        [
+            {
+                "query": f"query {index}",
+                "corpus_id": f"corp-{index}",
+                "limit": 1,
+            }
+            for index in range(21)
+        ],
+    )
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _fake_urlopen(request, **_kwargs):
+        query = smoke.contract.urllib.parse.parse_qs(
+            smoke.contract.urllib.parse.urlsplit(request.full_url).query
+        )["q"][0]
+        if query == "query 20":
+            return _json_response({"query": query, "results": [], "count": 0})
+        return _json_response(_valid_payload())
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--case-file",
+        str(case_file),
+        "--requests",
+        "21",
+        "--concurrency",
+        "3",
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["cases"]["total"] == 21
+    assert len(payload["cases"]["items"]) == 20
+    assert payload["cases"]["truncated"] is True
+    assert len(payload["cases"]["summaries"]) == 21
+    assert payload["cases"]["summaries"][20]["case"]["query"] == "query 20"
+    assert payload["cases"]["summaries"][20]["errors"] == {"count": 1, "rate": 1.0}
+    assert smoke._worst_case_summary(payload)["case_index"] == 20
+
+
 def test_main_returns_exit_1_and_writes_result_for_contract_failures(tmp_path, monkeypatch):
     result_path = tmp_path / "hosted-concurrency.json"
     monkeypatch.setattr(
