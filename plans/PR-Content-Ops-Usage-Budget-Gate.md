@@ -23,8 +23,11 @@ Slice phase: Production hardening
    account budget field is provided.
 4. Keep budget enforcement fail-closed when the usage pool or tenant account
    scope is unavailable.
-5. Add focused tests for request validation, preview/plan response shaping, and
-   execute blocking before generation services run.
+5. Preserve the budget fields through input-provider merges so provider-backed
+   flows use the same gate.
+6. Add focused tests for request validation, input-provider merging,
+   preview/plan response shaping, and execute blocking before generation
+   services run.
 
 ### Files touched
 
@@ -33,8 +36,10 @@ Slice phase: Production hardening
 | `plans/PR-Content-Ops-Usage-Budget-Gate.md` | Plan doc for the usage-backed budget gate. |
 | `extracted_content_pipeline/control_surfaces.py` | Add account-period budget fields and pure budget evaluation. |
 | `extracted_content_pipeline/api/control_surfaces.py` | Apply account-scoped usage budget checks to preview, plan, and execute routes. |
+| `extracted_content_pipeline/content_ops_input_provider.py` | Preserve account-period budget fields through input-provider request merges. |
 | `tests/test_extracted_content_control_surfaces.py` | Cover request validation and budget evaluation. |
 | `tests/test_extracted_content_control_surface_api.py` | Cover API preview/plan/execute budget gate wiring. |
+| `tests/test_extracted_content_ops_input_provider.py` | Cover budget fields surviving input-provider merge. |
 
 ## Mechanism
 
@@ -49,6 +54,10 @@ then evaluates projected spend with the pure control-surface helper and attaches
 an `usage_budget` payload to preview/plan output. If projected spend exceeds the
 budget, preview returns `can_run: false`, plan returns `can_execute: false`, and
 execute raises a 400 before resolving or calling generation services.
+
+The input-provider request allowlist includes the new budget fields so uploaded
+or provider-backed source flows cannot accidentally drop the caller's budget
+before the shared budget evaluation runs.
 
 ## Intentional
 
@@ -76,6 +85,8 @@ execute raises a 400 before resolving or calling generation services.
 
 - python -m pytest tests/test_extracted_content_control_surfaces.py tests/test_extracted_content_control_surface_api.py::test_preview_generation_route_blocks_account_usage_budget tests/test_extracted_content_control_surface_api.py::test_plan_generation_route_marks_steps_blocked_when_account_budget_exceeds tests/test_extracted_content_control_surface_api.py::test_execute_generation_route_blocks_account_usage_budget_before_generation -q — 35 passed.
 - python -m compileall -q extracted_content_pipeline/control_surfaces.py extracted_content_pipeline/api/control_surfaces.py tests/test_extracted_content_control_surfaces.py tests/test_extracted_content_control_surface_api.py — passed.
+- python -m pytest tests/test_extracted_content_ops_input_provider.py tests/test_extracted_content_control_surfaces.py tests/test_extracted_content_control_surface_api.py::test_preview_generation_route_blocks_account_usage_budget tests/test_extracted_content_control_surface_api.py::test_plan_generation_route_marks_steps_blocked_when_account_budget_exceeds tests/test_extracted_content_control_surface_api.py::test_execute_generation_route_blocks_account_usage_budget_before_generation -q — 41 passed.
+- python -m compileall -q extracted_content_pipeline/content_ops_input_provider.py extracted_content_pipeline/control_surfaces.py extracted_content_pipeline/api/control_surfaces.py tests/test_extracted_content_ops_input_provider.py tests/test_extracted_content_control_surfaces.py tests/test_extracted_content_control_surface_api.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt — passed.
@@ -87,11 +98,12 @@ execute raises a 400 before resolving or calling generation services.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~90 |
+| Plan doc | ~105 |
 | Control-surface request/evaluation | ~85 |
 | API route wiring | ~140 |
-| Tests | ~140 |
-| **Total** | **~455** |
+| Input-provider merge | ~5 |
+| Tests | ~170 |
+| **Total** | **~505** |
 
 This is over the 400 LOC soft cap because preview, plan, and execute all need to
 use the same budget contract in one slice for the gate to be load-bearing.

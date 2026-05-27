@@ -114,6 +114,34 @@ def test_merge_input_package_keeps_explicit_request_inputs_authoritative() -> No
     assert preview.can_run is True
 
 
+def test_merge_input_package_preserves_explicit_account_usage_budget() -> None:
+    package = ContentOpsInputPackage(
+        provider="ticket_import",
+        outputs=("landing_page",),
+        inputs={
+            "source_material": _source_material(),
+            "offer": "Provider offer",
+            "audience": "Provider audience",
+        },
+    )
+
+    payload = merge_content_ops_input_package(
+        {
+            "outputs": ["landing_page"],
+            "account_usage_budget_usd": 1.5,
+            "account_usage_budget_days": 14,
+            "inputs": {"offer": "Operator offer"},
+        },
+        package,
+    )
+    request = request_from_mapping(payload)
+
+    assert payload["account_usage_budget_usd"] == 1.5
+    assert payload["account_usage_budget_days"] == 14
+    assert request.account_usage_budget_usd == 1.5
+    assert request.account_usage_budget_days == 14
+
+
 def test_merge_input_package_ignores_null_request_overrides() -> None:
     package = ContentOpsInputPackage(
         provider="ticket_import",
