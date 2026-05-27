@@ -180,14 +180,28 @@ class _UsagePool:
                     "output_tokens": 200,
                 }
             ]
+        if "GROUP BY asset_type" in str(query):
+            return [
+                {
+                    "asset_type": "blog_post",
+                    "cost_usd": Decimal("0.750000"),
+                    "cache_savings_usd": Decimal("0.0123"),
+                    "calls": 2,
+                    "input_tokens": 600,
+                    "output_tokens": 150,
+                }
+            ]
         return [
             {
-                "asset_type": "blog_post",
-                "cost_usd": Decimal("0.750000"),
+                "cache_mode": "exact",
+                "cache_reason": "eligible",
+                "cache_result": "hit",
+                "cache_store_result": "unknown",
+                "cost_usd": Decimal("0.000000"),
                 "cache_savings_usd": Decimal("0.0123"),
                 "calls": 2,
-                "input_tokens": 600,
-                "output_tokens": 150,
+                "input_tokens": 0,
+                "output_tokens": 0,
             }
         ]
 
@@ -434,6 +448,19 @@ async def test_usage_summary_route_returns_content_ops_llm_rollup_with_filters()
             "output_tokens": 150,
         }
     ]
+    assert payload["by_cache_status"] == [
+        {
+            "cache_mode": "exact",
+            "cache_reason": "eligible",
+            "cache_result": "hit",
+            "cache_store_result": "unknown",
+            "cost_usd": 0.0,
+            "cache_savings_usd": 0.0123,
+            "calls": 2,
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    ]
     summary_query, summary_args = pool.fetchrow_calls[0]
     assert "span_name = 'content_ops.llm.complete'" in summary_query
     assert "metadata ->> 'product' = 'content_ops'" in summary_query
@@ -441,7 +468,7 @@ async def test_usage_summary_route_returns_content_ops_llm_rollup_with_filters()
     assert "(run_id = $3 OR metadata ->> 'run_id' = $3)" in summary_query
     assert "metadata ->> 'request_id' = $4" in summary_query
     assert summary_args == (14, "blog_post", "run-123", "req-456")
-    assert len(pool.fetch_calls) == 2
+    assert len(pool.fetch_calls) == 3
 
 
 @pytest.mark.asyncio
