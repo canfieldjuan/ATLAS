@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
+
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parent.parent
@@ -108,6 +110,57 @@ def _valid_term_mapping():
         "opportunity_score": 42,
         "first_source_id": "CFPB-1",
     }
+
+
+def _expected_checker_item_keys():
+    return (
+        set(_MODULE.DETAIL_ITEM_STRING_FIELDS)
+        | set(_MODULE.DETAIL_ITEM_INT_FIELDS)
+        | set(_MODULE.DETAIL_ITEM_STRING_LIST_FIELDS)
+        | set(_MODULE.DETAIL_ITEM_COUNT_MAP_FIELDS)
+        | {"term_mappings"}
+    )
+
+
+def _expected_checker_term_mapping_keys():
+    return (
+        set(_MODULE.DETAIL_TERM_MAPPING_STRING_FIELDS)
+        | set(_MODULE.DETAIL_TERM_MAPPING_INT_FIELDS)
+        | {"failure_risk_signals"}
+    )
+
+
+def _producer_detail_item():
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "search-export-1",
+                "source_type": "search_log",
+                "text": "How do I export attribution report?",
+                "zero_results": "true",
+                "source_weight": "20",
+            },
+            {
+                "source_id": "ticket-email-1",
+                "source_type": "support_ticket",
+                "source_title": "Email update",
+                "text": "How do I change my email?",
+                "resolution_text": (
+                    "Open account settings, choose Profile, update the email "
+                    "address, then confirm the verification email"
+                ),
+            },
+        ],
+        title="Support Ticket FAQ Report",
+        max_items=2,
+        max_evidence_per_item=2,
+        support_contact="https://example.com/support",
+        documentation_terms=("Download report",),
+        vocabulary_gap_rules=(("export", "download report"),),
+    )
+    payload = json.loads(json.dumps(result.as_dict()))
+    assert payload["items"]
+    return payload["items"][0]
 
 
 def test_build_url_encodes_query_and_optional_filters():
@@ -247,6 +300,15 @@ def test_validate_detail_accepts_full_generated_faq_payload():
         _valid_detail_payload(),
         faq_id="11111111-1111-1111-1111-111111111111",
     ) == []
+
+
+def test_validate_detail_item_matches_generated_faq_producer_shape():
+    item = _producer_detail_item()
+
+    assert set(item) == _expected_checker_item_keys()
+    assert item["term_mappings"]
+    assert set(item["term_mappings"][0]) == _expected_checker_term_mapping_keys()
+    assert _MODULE._validate_detail_item(item, index=0) == []
 
 
 def test_validate_detail_accepts_expected_seed_fields():
