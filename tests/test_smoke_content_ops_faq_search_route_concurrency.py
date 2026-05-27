@@ -404,6 +404,93 @@ def test_detail_summary_reports_required_detail_failures():
     }
 
 
+def test_case_result_summaries_group_mixed_case_visibility():
+    cases = [
+        {
+            "query": "credit report",
+            "corpus_id": "corp-a",
+            "status": "published",
+            "limit": 2,
+            "require_results": True,
+        },
+        {
+            "query": "mortgage dispute",
+            "corpus_id": "corp-b",
+            "status": "",
+            "limit": 3,
+            "require_results": True,
+        },
+    ]
+    results = [
+        {
+            "index": 0,
+            "case_index": 0,
+            "elapsed_ms": 10.0,
+            "errors": [],
+            "detail_checked": True,
+            "detail_elapsed_ms": 4.0,
+            "detail_errors": [],
+        },
+        {
+            "index": 1,
+            "case_index": 1,
+            "elapsed_ms": 30.0,
+            "errors": ["results must include at least one item"],
+            "detail_checked": False,
+            "detail_elapsed_ms": None,
+            "detail_errors": ["results[0].faq_id is required when --require-detail is set"],
+        },
+        {
+            "index": 2,
+            "case_index": 0,
+            "elapsed_ms": 20.0,
+            "errors": [],
+            "detail_checked": True,
+            "detail_elapsed_ms": 6.0,
+            "detail_errors": [],
+        },
+    ]
+
+    assert smoke._case_result_summaries(cases, results, detail_required=True) == [
+        {
+            "case_index": 0,
+            "case": {
+                "query": "credit report",
+                "corpus_id": "corp-a",
+                "status": "published",
+                "limit": 2,
+                "require_results": True,
+            },
+            "requests": 2,
+            "errors": {"count": 0, "rate": 0.0},
+            "latency": {"count": 2, "p50_ms": 15.0, "p95_ms": 20.0, "max_ms": 20.0},
+            "detail": {
+                "checked": 2,
+                "failures": 0,
+                "latency": {"count": 2, "p50_ms": 5.0, "p95_ms": 6.0, "max_ms": 6.0},
+            },
+        },
+        {
+            "case_index": 1,
+            "case": {
+                "query": "mortgage dispute",
+                "corpus_id": "corp-b",
+                "status": "",
+                "limit": 3,
+                "require_results": True,
+            },
+            "requests": 1,
+            "errors": {"count": 1, "rate": 1.0},
+            "latency": {"count": 1, "p50_ms": 30.0, "p95_ms": 30.0, "max_ms": 30.0},
+            "detail": {
+                "checked": 0,
+                "failures": 1,
+                "latency": {"count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0},
+            },
+        },
+    ]
+
+
 def test_budget_summary_reports_error_and_latency_failures():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
@@ -929,6 +1016,51 @@ def test_main_rejects_detail_budget_without_detail_check_before_network(tmp_path
     }
     assert payload["preflight_errors"] == ["--max-detail-ms requires --require-detail"]
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
+
+
+def test_main_result_includes_case_summaries_for_mixed_cases(tmp_path, monkeypatch):
+    case_file = _write_case_file(
+        tmp_path,
+        [
+            {"query": "credit report", "corpus_id": "corp-a", "limit": 2},
+            {"query": "mortgage dispute", "corpus_id": "corp-b", "limit": 3},
+        ],
+    )
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _fake_urlopen(request, **_kwargs):
+        query = smoke.contract.urllib.parse.parse_qs(
+            smoke.contract.urllib.parse.urlsplit(request.full_url).query
+        )["q"][0]
+        if query == "credit report":
+            return _json_response(_valid_payload())
+        return _json_response({"query": query, "results": [], "count": 0})
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--case-file",
+        str(case_file),
+        "--requests",
+        "2",
+        "--concurrency",
+        "2",
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["cases"]["summaries"][0]["requests"] == 1
+    assert payload["cases"]["summaries"][0]["errors"] == {"count": 0, "rate": 0.0}
+    assert payload["cases"]["summaries"][0]["latency"]["count"] == 1
+    assert payload["cases"]["summaries"][1]["requests"] == 1
+    assert payload["cases"]["summaries"][1]["errors"] == {"count": 1, "rate": 1.0}
+    assert payload["cases"]["summaries"][1]["latency"]["count"] == 1
 
 
 def test_main_returns_exit_1_and_writes_result_for_contract_failures(tmp_path, monkeypatch):
