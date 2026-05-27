@@ -47,6 +47,7 @@ def _args(**overrides):
         "max_error_rate": 0.0,
         "max_p95_ms": None,
         "max_single_request_ms": None,
+        "max_detail_ms": None,
         "require_results": True,
         "require_detail": False,
         "case_file": None,
@@ -155,6 +156,18 @@ def test_validate_args_rejects_detail_without_required_results():
     ]
 
 
+def test_validate_args_rejects_detail_budget_without_detail_check():
+    errors = smoke._validate_args(_args(max_detail_ms=100.0, require_detail=False))
+
+    assert errors == ["--max-detail-ms requires --require-detail"]
+
+
+def test_validate_args_rejects_non_positive_detail_budget():
+    errors = smoke._validate_args(_args(max_detail_ms=0.0, require_detail=True))
+
+    assert errors == ["--max-detail-ms must be positive"]
+
+
 def test_parser_requires_results_by_default_and_allows_explicit_liveness_probe():
     required = smoke._build_parser().parse_args([
         "--base-url",
@@ -187,6 +200,21 @@ def test_parser_accepts_opt_in_detail_route_check():
 
     assert parsed.require_detail is True
     assert parsed.detail_route == "/api/v1/content-ops/faq-deflection-reports/{faq_id}"
+
+
+def test_parser_accepts_detail_latency_budget_with_detail_check():
+    parsed = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--require-detail",
+        "--max-detail-ms",
+        "250",
+    ])
+
+    assert parsed.require_detail is True
+    assert parsed.max_detail_ms == 250.0
 
 
 def test_load_cases_defaults_to_cli_case():
@@ -337,11 +365,18 @@ def test_latency_and_error_summaries_are_compact():
 
 def test_detail_summary_reports_required_detail_failures():
     results = [
-        {"index": 0, "detail_checked": True, "detail_faq_id": "faq-1", "detail_errors": []},
+        {
+            "index": 0,
+            "detail_checked": True,
+            "detail_faq_id": "faq-1",
+            "detail_elapsed_ms": 12.0,
+            "detail_errors": [],
+        },
         {
             "index": 1,
             "detail_checked": False,
             "detail_faq_id": "faq-2",
+            "detail_elapsed_ms": None,
             "detail_errors": ["RuntimeError: route request failed"],
         },
     ]
@@ -358,22 +393,26 @@ def test_detail_summary_reports_required_detail_failures():
             }
         ],
         "truncated": False,
+        "latency": {"count": 1, "p50_ms": 12.0, "p95_ms": 12.0, "max_ms": 12.0},
     }
     assert smoke._detail_summary(results, required=False) == {
         "required": False,
         "checked": 0,
         "failures": 0,
         "items": [],
+        "latency": {"count": 0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0},
     }
 
 
 def test_budget_summary_reports_error_and_latency_failures():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
+        detail_latency={"count": 2, "p95_ms": 25.0, "max_ms": 30.0},
         errors={"rate": 0.25},
         max_error_rate=0.0,
         max_p95_ms=40.0,
         max_single_request_ms=100.0,
+        max_detail_ms=20.0,
     )
 
     assert summary == {
@@ -382,11 +421,34 @@ def test_budget_summary_reports_error_and_latency_failures():
             {"metric": "error_rate", "actual": 0.25, "max": 0.0, "ok": False},
             {"metric": "p95_ms", "actual": 50.0, "max": 40.0, "ok": False},
             {"metric": "max_ms", "actual": 75.0, "max": 100.0, "ok": True},
+            {"metric": "detail_max_ms", "actual": 30.0, "max": 20.0, "ok": False},
         ],
         "failures": [
             "error_rate exceeded 0.0",
             "p95_ms exceeded 40.0",
+            "detail_max_ms exceeded 20.0",
         ],
+    }
+
+
+def test_budget_summary_fails_closed_when_detail_budget_has_no_detail_rows():
+    summary = smoke._budget_summary(
+        latency={"p95_ms": 50.0, "max_ms": 75.0},
+        detail_latency={"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+        errors={"rate": 0.0},
+        max_error_rate=0.0,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        max_detail_ms=20.0,
+    )
+
+    assert summary == {
+        "ok": False,
+        "checks": [
+            {"metric": "error_rate", "actual": 0.0, "max": 0.0, "ok": True},
+            {"metric": "detail_max_ms", "actual": None, "max": 20.0, "ok": False},
+        ],
+        "failures": ["detail_max_ms had no checked detail rows"],
     }
 
 
@@ -831,6 +893,41 @@ def test_main_rejects_detail_with_allowed_empty_results_before_network(tmp_path,
     assert payload["preflight_errors"] == [
         "--require-detail requires result rows; remove --allow-empty-results"
     ]
+    assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
+
+
+def test_main_rejects_detail_budget_without_detail_check_before_network(tmp_path, monkeypatch, capsys):
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _unexpected_urlopen(*_args, **_kwargs):
+        raise AssertionError("preflight failures must not issue route requests")
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _unexpected_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-detail-ms",
+        "250",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["ok"] is False
+    assert payload["phase"] == "preflight"
+    assert payload["require_detail"] is False
+    assert payload["detail"]["latency"] == {
+        "count": 0,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "max_ms": 0.0,
+    }
+    assert payload["preflight_errors"] == ["--max-detail-ms requires --require-detail"]
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
 
 
