@@ -287,6 +287,124 @@ def _run_command(command: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _compact_error_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"count": 0, "items": [], "truncated": False}
+    raw_items = value.get("items")
+    items = raw_items if isinstance(raw_items, list) else []
+    count = value.get("count")
+    return {
+        "count": count if type(count) is int else 0,
+        **({"rate": value.get("rate")} if "rate" in value else {}),
+        "items": items[:5],
+        "truncated": bool(value.get("truncated")) or len(items) > 5,
+    }
+
+
+def _child_result_artifact_error(path: Path, message: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "available": False,
+        "path": str(path),
+        "errors": [message],
+    }
+
+
+def _compact_child_result_artifact(path: Path, *, kind: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return _child_result_artifact_error(path, f"result artifact could not be read: {exc}")
+    except json.JSONDecodeError as exc:
+        return _child_result_artifact_error(path, f"result artifact must contain JSON: {exc.msg}")
+    if not isinstance(payload, Mapping):
+        return _child_result_artifact_error(path, "result artifact must contain a JSON object")
+
+    raw_ok = payload.get("ok")
+    artifact_errors = []
+    if type(raw_ok) is not bool:
+        artifact_errors.append("result artifact ok must be a boolean")
+    summary: dict[str, Any] = {
+        "ok": raw_ok is True and not artifact_errors,
+        "available": True,
+        "path": str(path),
+    }
+    if artifact_errors:
+        summary["artifact_errors"] = artifact_errors
+    if kind == "seed":
+        for key in (
+            "run_id",
+            "requests",
+            "seed",
+            "setup",
+            "cleanup",
+            "pool_close",
+            "latency",
+            "latency_budget",
+            "elapsed_seconds",
+        ):
+            if key in payload:
+                summary[key] = payload[key]
+        if isinstance(payload.get("isolation"), Mapping):
+            summary["isolation"] = _compact_error_summary(payload["isolation"])
+        return summary
+    if kind == "route":
+        for key in (
+            "phase",
+            "requests",
+            "latency",
+            "budgets",
+            "preflight_errors",
+            "elapsed_seconds",
+        ):
+            if key in payload:
+                summary[key] = payload[key]
+        if isinstance(payload.get("cases"), Mapping):
+            cases = payload["cases"]
+            total = cases.get("total")
+            summary["cases"] = {
+                "total": total if type(total) is int else 0,
+                "case_file": str(cases.get("case_file") or ""),
+                "truncated": bool(cases.get("truncated")),
+            }
+        if isinstance(payload.get("errors"), Mapping):
+            summary["errors"] = _compact_error_summary(payload["errors"])
+        return summary
+    if kind == "detail":
+        for key in (
+            "phase",
+            "count",
+            "detail_checked",
+            "detail_faq_id",
+            "search_elapsed_ms",
+            "detail_elapsed_ms",
+            "total_elapsed_ms",
+            "errors",
+        ):
+            if key in payload:
+                summary[key] = payload[key]
+        if isinstance(summary.get("errors"), list):
+            summary["errors"] = summary["errors"][:10]
+        return summary
+    summary["errors"] = [f"unknown child result kind: {kind}"]
+    summary["ok"] = False
+    return summary
+
+
+def _with_result_artifact(
+    phase: dict[str, Any],
+    path: Path,
+    *,
+    kind: str,
+) -> dict[str, Any]:
+    result_artifact = _compact_child_result_artifact(path, kind=kind)
+    updated = dict(phase)
+    updated["result_artifact"] = result_artifact
+    if bool(phase.get("ok")) and not bool(result_artifact["ok"]):
+        updated["ok"] = False
+    return updated
+
+
 def _faq_ids_from_cleanup_manifest(path: Path) -> tuple[list[str], list[str]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -520,9 +638,11 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 seed_result=seed_result,
             )
         )
+        seed = _with_result_artifact(seed, seed_result, kind="seed")
         route = _route_not_run("waiting_for_seed", ok=False)
         if seed["ok"]:
             route = _run_command(_route_command(args, case_file=case_file, route_result=route_result))
+            route = _with_result_artifact(route, route_result, kind="route")
         else:
             route = _route_not_run("seed_failed", ok=False)
         if not bool(seed["ok"]) and not bool(args.skip_detail_check):
@@ -543,6 +663,7 @@ async def _run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 detail = _run_command(
                     _detail_command(args, detail_case=detail_case, detail_result=detail_result)
                 )
+                detail = _with_result_artifact(detail, detail_result, kind="detail")
                 detail["skipped"] = False
         faq_ids, manifest_errors = (
             _faq_ids_from_cleanup_manifest(cleanup_manifest)

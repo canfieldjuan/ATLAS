@@ -49,6 +49,76 @@ def _write_cases(path: Path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_child_result(command, *, ok: bool = True) -> None:
+    if "--output-result" not in command:
+        return
+    result_path = Path(command[command.index("--output-result") + 1])
+    if str(smoke.SEED_SCRIPT) in command:
+        _write_cases(
+            result_path,
+            {
+                "ok": ok,
+                "run_id": "seed-run-1",
+                "requests": {"total": 12, "iterations": 12, "concurrency": 4},
+                "seed": {
+                    "accounts": 1,
+                    "corpora_per_account": 2,
+                    "documents_per_corpus": 3,
+                    "search_cases": 2,
+                },
+                "setup": {"ok": ok, "phase": "complete"},
+                "cleanup": {"ok": True, "attempted": False, "error": None},
+                "pool_close": {"ok": True, "attempted": True, "error": None},
+                "latency": {"count": 12, "p50_ms": 1.0, "p95_ms": 2.0, "max_ms": 3.0},
+                "latency_budget": {"ok": True, "checks": [], "failures": []},
+                "isolation": {"count": 0, "items": [], "truncated": False},
+                "elapsed_seconds": 1.25,
+            },
+        )
+        return
+    if str(smoke.ROUTE_SCRIPT) in command:
+        _write_cases(
+            result_path,
+            {
+                "ok": ok,
+                "phase": "complete",
+                "requests": {"total": 12, "configured": 12, "concurrency": 4},
+                "latency": {"count": 12, "p50_ms": 4.0, "p95_ms": 5.0, "max_ms": 6.0},
+                "errors": {
+                    "count": 0 if ok else 1,
+                    "rate": 0.0 if ok else 0.083333,
+                    "items": [] if ok else [{"index": 0, "errors": ["bad route"]}],
+                    "truncated": False,
+                },
+                "budgets": {"ok": ok, "checks": [], "failures": [] if ok else ["error_rate exceeded 0.0"]},
+                "cases": {
+                    "total": 1,
+                    "case_file": "route-cases.json",
+                    "items": [],
+                    "truncated": False,
+                },
+                "preflight_errors": [],
+                "elapsed_seconds": 0.75,
+            },
+        )
+        return
+    if str(smoke.CONTRACT_SCRIPT) in command:
+        _write_cases(
+            result_path,
+            {
+                "ok": ok,
+                "phase": "complete",
+                "count": 1 if ok else 0,
+                "detail_checked": ok,
+                "detail_faq_id": "11111111-1111-1111-1111-111111111111" if ok else "",
+                "search_elapsed_ms": 7.0,
+                "detail_elapsed_ms": 8.0,
+                "total_elapsed_ms": 15.0,
+                "errors": [] if ok else ["detail failed"],
+            },
+        )
+
+
 def test_validate_args_reports_missing_required_fields_and_bad_numbers():
     errors = smoke._validate_args(
         _args(
@@ -222,6 +292,89 @@ def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
     assert command[command.index("--expected-detail-title") + 1] == "FAQ Search Smoke"
     assert command[command.index("--expected-detail-status") + 1] == "approved"
     assert command[command.index("--output-result") + 1] == str(detail_result)
+
+
+def test_compact_child_result_artifact_summarizes_route_without_full_case_items(tmp_path):
+    artifact = tmp_path / "route-result.json"
+    _write_cases(
+        artifact,
+        {
+            "ok": True,
+            "phase": "complete",
+            "requests": {"total": 4, "configured": 4, "concurrency": 2},
+            "latency": {"count": 4, "p50_ms": 1.0, "p95_ms": 2.0, "max_ms": 3.0},
+            "errors": {
+                "count": 6,
+                "rate": 0.5,
+                "items": [{"index": index, "errors": [f"failure {index}"]} for index in range(6)],
+                "truncated": False,
+            },
+            "budgets": {"ok": False, "failures": ["error_rate exceeded 0.0"]},
+            "cases": {
+                "total": 2,
+                "case_file": "route-cases.json",
+                "items": [{"query": "one"}, {"query": "two"}],
+                "truncated": False,
+            },
+            "elapsed_seconds": 0.5,
+        },
+    )
+
+    payload = smoke._compact_child_result_artifact(artifact, kind="route")
+
+    assert payload["ok"] is True
+    assert payload["available"] is True
+    assert payload["requests"]["total"] == 4
+    assert payload["errors"]["count"] == 6
+    assert len(payload["errors"]["items"]) == 5
+    assert payload["errors"]["truncated"] is True
+    assert payload["cases"] == {
+        "total": 2,
+        "case_file": "route-cases.json",
+        "truncated": False,
+    }
+
+
+def test_compact_child_result_artifact_rejects_non_boolean_ok(tmp_path):
+    artifact = tmp_path / "route-result.json"
+    _write_cases(
+        artifact,
+        {
+            "ok": "false",
+            "phase": "complete",
+            "requests": {"total": 1, "configured": 1, "concurrency": 1},
+            "errors": {"count": 0, "rate": 0.0, "items": [], "truncated": False},
+        },
+    )
+
+    payload = smoke._compact_child_result_artifact(artifact, kind="route")
+
+    assert payload["ok"] is False
+    assert payload["available"] is True
+    assert payload["artifact_errors"] == ["result artifact ok must be a boolean"]
+
+
+@pytest.mark.parametrize(
+    ("contents", "expected_error"),
+    [
+        ("{bad json", "result artifact must contain JSON"),
+        ("[]", "result artifact must contain a JSON object"),
+    ],
+)
+def test_compact_child_result_artifact_rejects_malformed_artifacts(
+    tmp_path,
+    contents,
+    expected_error,
+):
+    artifact = tmp_path / "child-result.json"
+    artifact.write_text(contents, encoding="utf-8")
+
+    payload = smoke._compact_child_result_artifact(artifact, kind="route")
+
+    assert payload["ok"] is False
+    assert payload["available"] is False
+    assert payload["path"] == str(artifact)
+    assert payload["errors"][0].startswith(expected_error)
 
 
 def test_faq_ids_from_cleanup_manifest_deduplicates_expected_ids(tmp_path):
@@ -468,6 +621,7 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
 
     def _fake_run_command(command):
         calls.append(command)
+        _write_child_result(command)
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             route_cases = Path(command[command.index("--route-case-file-output") + 1])
@@ -524,6 +678,9 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 0
     assert payload["ok"] is True
+    assert payload["seed"]["result_artifact"]["run_id"] == "seed-run-1"
+    assert payload["route"]["result_artifact"]["requests"]["total"] == 12
+    assert payload["detail"]["result_artifact"]["detail_checked"] is True
     assert payload["detail"]["ok"] is True
     assert payload["artifacts"]["detail_result"].endswith("detail-result.json")
     assert payload["cleanup"]["deleted_faq_ids"] == 1
@@ -532,12 +689,67 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     assert str(smoke.CONTRACT_SCRIPT) in calls[2]
 
 
+def test_main_fails_when_successful_seed_missing_result_artifact(tmp_path, monkeypatch):
+    calls = []
+
+    def _fake_run_command(command):
+        calls.append(command)
+        assert str(smoke.SEED_SCRIPT) in command
+        cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
+        _write_cases(
+            cleanup_manifest,
+            {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
+        )
+        return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
+
+    async def _fake_cleanup(_database_url, faq_ids):
+        return {
+            "ok": True,
+            "requested_faq_ids": len(faq_ids),
+            "deleted_faq_ids": len(faq_ids),
+            "delete_status": f"DELETE {len(faq_ids)}",
+            "errors": [],
+        }
+
+    monkeypatch.setattr(smoke, "_run_command", _fake_run_command)
+    monkeypatch.setattr(smoke, "_cleanup_seeded_faqs", _fake_cleanup)
+    result_path = tmp_path / "result.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--artifact-dir",
+        str(tmp_path / "artifacts"),
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["seed"]["ok"] is False
+    assert payload["seed"]["returncode"] == 0
+    assert payload["seed"]["result_artifact"]["available"] is False
+    assert payload["seed"]["result_artifact"]["errors"][0].startswith(
+        "result artifact could not be read:"
+    )
+    assert payload["route"]["not_run_reason"] == "seed_failed"
+    assert payload["cleanup"]["deleted_faq_ids"] == 1
+    assert len(calls) == 1
+
+
 def test_main_seed_failure_marks_route_not_run_and_still_cleans_up(tmp_path, monkeypatch):
     calls = []
 
     def _fake_run_command(command):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
+            _write_child_result(command)
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             _write_cases(
                 cleanup_manifest,
@@ -595,6 +807,7 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
     def _fake_run_command(command):
         calls.append(command)
         if str(smoke.SEED_SCRIPT) in command:
+            _write_child_result(command)
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             route_cases = Path(command[command.index("--route-case-file-output") + 1])
             _write_cases(
@@ -618,6 +831,7 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
                 {"faq_ids": ["11111111-1111-1111-1111-111111111111"]},
             )
             return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
+        _write_child_result(command, ok=False)
         return {"ok": False, "returncode": 1, "stdout_tail": "", "stderr_tail": "bad route"}
 
     async def _fake_cleanup(_database_url, faq_ids):
@@ -650,12 +864,10 @@ def test_main_route_failure_still_cleans_up(tmp_path, monkeypatch):
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
-    assert payload["route"] == {
-        "ok": False,
-        "returncode": 1,
-        "stdout_tail": "",
-        "stderr_tail": "bad route",
-    }
+    assert payload["route"]["ok"] is False
+    assert payload["route"]["returncode"] == 1
+    assert payload["route"]["stderr_tail"] == "bad route"
+    assert payload["route"]["result_artifact"]["errors"]["count"] == 1
     assert payload["detail"] == {
         "ok": False,
         "returncode": None,
@@ -671,6 +883,7 @@ def test_main_can_skip_detail_check_for_liveness_runs(tmp_path, monkeypatch):
 
     def _fake_run_command(command):
         calls.append(command)
+        _write_child_result(command)
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             _write_cases(
@@ -722,6 +935,7 @@ def test_main_can_skip_detail_check_for_liveness_runs(tmp_path, monkeypatch):
 
 def test_main_reports_cleanup_failure(tmp_path, monkeypatch):
     def _fake_run_command(command):
+        _write_child_result(command)
         if str(smoke.SEED_SCRIPT) in command:
             cleanup_manifest = Path(command[command.index("--cleanup-manifest-output") + 1])
             route_cases = Path(command[command.index("--route-case-file-output") + 1])
@@ -822,12 +1036,14 @@ def test_main_reports_artifact_cleanup_failure_without_masking_seed_failure(
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
     assert payload["ok"] is False
-    assert payload["seed"] == {
-        "ok": False,
-        "returncode": 1,
-        "stdout_tail": "",
-        "stderr_tail": "bad seed",
-    }
+    assert payload["seed"]["ok"] is False
+    assert payload["seed"]["returncode"] == 1
+    assert payload["seed"]["stdout_tail"] == ""
+    assert payload["seed"]["stderr_tail"] == "bad seed"
+    assert payload["seed"]["result_artifact"]["available"] is False
+    assert payload["seed"]["result_artifact"]["errors"][0].startswith(
+        "result artifact could not be read:"
+    )
     assert payload["route"]["not_run_reason"] == "seed_failed"
     assert payload["detail"]["not_run_reason"] == "seed_failed"
     assert payload["cleanup"] == {
