@@ -147,6 +147,8 @@ export interface ContentOpsUsageSummary {
 // Request (POST /content-ops/{preview, plan, execute} body)
 // ---------------------------------------------------------------------------
 
+export type ContentOpsCachePolicy = 'exact' | 'no_store'
+
 export interface ContentOpsRequest {
   targetMode: string
   preset: string | null
@@ -155,6 +157,7 @@ export interface ContentOpsRequest {
   maxCostUsd: number | null
   accountUsageBudgetUsd: number | null
   accountUsageBudgetDays: number
+  contentOpsCachePolicy: ContentOpsCachePolicy | null
   inputs: Record<string, unknown>
   ingestionProfile: string
   requireQualityGates: boolean

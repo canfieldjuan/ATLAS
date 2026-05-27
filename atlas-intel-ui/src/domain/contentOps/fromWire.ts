@@ -45,6 +45,7 @@ import type {
   ContentOpsUsageSummaryBreakdown,
   ContentOpsUsageBudgetEvaluation,
   CampaignReasoningContextView,
+  ContentOpsCachePolicy,
   ContentOpsRequest,
   ContentOpsStepExecution,
   ControlSurfacePresetView,
@@ -248,6 +249,7 @@ export function fromWireRequest(
     maxCostUsd: wire.max_cost_usd ?? null,
     accountUsageBudgetUsd: wire.account_usage_budget_usd ?? null,
     accountUsageBudgetDays: wire.account_usage_budget_days ?? 7,
+    contentOpsCachePolicy: normalizedCachePolicy(wire.content_ops_cache_policy),
     inputs: { ...(wire.inputs ?? {}) },
     ingestionProfile: wire.ingestion_profile ?? 'domain_specific',
     requireQualityGates: wire.require_quality_gates ?? true,
@@ -270,11 +272,16 @@ export function toWireRequest(
     max_cost_usd: domain.maxCostUsd,
     account_usage_budget_usd: domain.accountUsageBudgetUsd,
     account_usage_budget_days: domain.accountUsageBudgetDays,
+    content_ops_cache_policy: domain.contentOpsCachePolicy,
     inputs: { ...domain.inputs },
     ingestion_profile: domain.ingestionProfile,
     require_quality_gates: domain.requireQualityGates,
     allow_unimplemented_outputs: domain.allowUnimplementedOutputs,
   }
+}
+
+function normalizedCachePolicy(value: unknown): ContentOpsCachePolicy | null {
+  return value === 'exact' || value === 'no_store' ? value : null
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +383,9 @@ export function fromWirePreview(
             wire.normalized_request.account_usage_budget_usd ?? null,
           accountUsageBudgetDays:
             wire.normalized_request.account_usage_budget_days ?? 7,
+          contentOpsCachePolicy: normalizedCachePolicy(
+            wire.normalized_request.content_ops_cache_policy,
+          ),
           ingestionProfile:
             wire.normalized_request.ingestion_profile ?? 'domain_specific',
           requireQualityGates:

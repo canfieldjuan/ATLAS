@@ -37,6 +37,7 @@ import {
   toWireIngestionImportRequest,
   toWireRequest,
   type ContentOpsCatalog,
+  type ContentOpsCachePolicy,
   type ContentOpsIngestionDiagnostics,
   type ContentOpsIngestionImportResponse,
   type ContentOpsExecutionResult,
@@ -1324,6 +1325,28 @@ export default function ContentOpsNewRun() {
               />
               <span className="mt-1 block text-xs text-slate-500">
                 Uses account-scoped Content Ops usage for this lookback window.
+              </span>
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Cache policy</span>
+              <select
+                value={request.contentOpsCachePolicy ?? ''}
+                onChange={(e) => {
+                  const value = e.target.value as ContentOpsCachePolicy | ''
+                  setRequest((p) => ({
+                    ...p,
+                    contentOpsCachePolicy: value === '' ? null : value,
+                  }))
+                  markStale()
+                }}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+              >
+                <option value="">Backend default</option>
+                <option value="no_store">No store</option>
+                <option value="exact">Exact cache</option>
+              </select>
+              <span className="mt-1 block text-xs text-slate-500">
+                Exact cache only applies when backend policy allows the request.
               </span>
             </label>
             <label className="block text-sm">

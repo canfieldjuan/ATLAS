@@ -181,6 +181,7 @@ export interface ContentOpsRequestBody {
   max_cost_usd?: number | null
   account_usage_budget_usd?: number | null
   account_usage_budget_days?: number
+  content_ops_cache_policy?: string | null
   inputs?: Record<string, unknown>
   ingestion_profile?: string                       // default "domain_specific"
   require_quality_gates?: boolean                  // default true
