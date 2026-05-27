@@ -120,3 +120,21 @@ def test_policy_can_be_configured_from_settings_namespace():
 
     assert decision.mode == "exact"
     assert decision.namespace == "tenant_content_ops.blog_post"
+
+
+def test_policy_from_settings_parses_false_string_flags_as_disabled():
+    policy = ContentOpsExactCachePolicy.from_settings(SimpleNamespace(
+        exact_cache_enabled="false",
+        customer_data_exact_cache_enabled="false",
+        exact_cache_namespace_prefix="tenant_content_ops",
+    ))
+
+    decision = policy.decide({
+        "account_id": "acct-1",
+        "asset_type": "landing_page",
+        "input_provider": "atlas_support_ticket_request",
+        "cache_policy": "exact",
+    })
+
+    assert decision.mode == "no_store"
+    assert decision.reason == "exact_cache_disabled"

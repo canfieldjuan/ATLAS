@@ -71,11 +71,13 @@ class ContentOpsExactCachePolicy:
     @classmethod
     def from_settings(cls, settings_obj: Any) -> "ContentOpsExactCachePolicy":
         return cls(
-            exact_cache_enabled=bool(
+            exact_cache_enabled=_to_bool(
                 getattr(settings_obj, "exact_cache_enabled", False),
+                False,
             ),
-            customer_data_exact_cache_enabled=bool(
+            customer_data_exact_cache_enabled=_to_bool(
                 getattr(settings_obj, "customer_data_exact_cache_enabled", False),
+                False,
             ),
             namespace_prefix=_clean_text(
                 getattr(settings_obj, "exact_cache_namespace_prefix", None),
@@ -126,6 +128,19 @@ class ContentOpsExactCachePolicy:
 
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _to_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = _clean_text(value).lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _policy_value(value: Any) -> str:
