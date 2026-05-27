@@ -48,6 +48,7 @@ def _args(**overrides):
         "max_p95_ms": None,
         "max_single_request_ms": None,
         "max_detail_ms": None,
+        "max_case_error_rate": None,
         "require_results": True,
         "require_detail": False,
         "case_file": None,
@@ -168,6 +169,15 @@ def test_validate_args_rejects_non_positive_detail_budget():
     assert errors == ["--max-detail-ms must be positive"]
 
 
+def test_validate_args_rejects_case_error_budget_outside_rate_range():
+    assert smoke._validate_args(_args(max_case_error_rate=-0.1)) == [
+        "--max-case-error-rate must be between 0 and 1"
+    ]
+    assert smoke._validate_args(_args(max_case_error_rate=1.1)) == [
+        "--max-case-error-rate must be between 0 and 1"
+    ]
+
+
 def test_parser_requires_results_by_default_and_allows_explicit_liveness_probe():
     required = smoke._build_parser().parse_args([
         "--base-url",
@@ -215,6 +225,19 @@ def test_parser_accepts_detail_latency_budget_with_detail_check():
 
     assert parsed.require_detail is True
     assert parsed.max_detail_ms == 250.0
+
+
+def test_parser_accepts_case_error_rate_budget():
+    parsed = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-case-error-rate",
+        "0.25",
+    ])
+
+    assert parsed.max_case_error_rate == 0.25
 
 
 def test_load_cases_defaults_to_cli_case():
@@ -580,8 +603,13 @@ def test_budget_summary_reports_error_and_latency_failures():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
         detail_latency={"count": 2, "p95_ms": 25.0, "max_ms": 30.0},
+        case_summaries=[
+            {"case_index": 0, "errors": {"rate": 0.0}},
+            {"case_index": 1, "errors": {"rate": 0.5}},
+        ],
         errors={"rate": 0.25},
         max_error_rate=0.0,
+        max_case_error_rate=0.25,
         max_p95_ms=40.0,
         max_single_request_ms=100.0,
         max_detail_ms=20.0,
@@ -594,11 +622,26 @@ def test_budget_summary_reports_error_and_latency_failures():
             {"metric": "p95_ms", "actual": 50.0, "max": 40.0, "ok": False},
             {"metric": "max_ms", "actual": 75.0, "max": 100.0, "ok": True},
             {"metric": "detail_max_ms", "actual": 30.0, "max": 20.0, "ok": False},
+            {
+                "metric": "case_error_rate",
+                "case_index": 0,
+                "actual": 0.0,
+                "max": 0.25,
+                "ok": True,
+            },
+            {
+                "metric": "case_error_rate",
+                "case_index": 1,
+                "actual": 0.5,
+                "max": 0.25,
+                "ok": False,
+            },
         ],
         "failures": [
             "error_rate exceeded 0.0",
             "p95_ms exceeded 40.0",
             "detail_max_ms exceeded 20.0",
+            "case_error_rate exceeded 0.25 for case 1",
         ],
     }
 
@@ -607,8 +650,10 @@ def test_budget_summary_fails_closed_when_detail_budget_has_no_detail_rows():
     summary = smoke._budget_summary(
         latency={"p95_ms": 50.0, "max_ms": 75.0},
         detail_latency={"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+        case_summaries=[],
         errors={"rate": 0.0},
         max_error_rate=0.0,
+        max_case_error_rate=None,
         max_p95_ms=None,
         max_single_request_ms=None,
         max_detail_ms=20.0,
@@ -1146,6 +1191,69 @@ def test_main_result_includes_case_summaries_for_mixed_cases(tmp_path, monkeypat
     assert payload["cases"]["summaries"][1]["requests"] == 1
     assert payload["cases"]["summaries"][1]["errors"] == {"count": 1, "rate": 1.0}
     assert payload["cases"]["summaries"][1]["latency"]["count"] == 1
+
+
+def test_main_fails_case_error_budget_when_aggregate_error_budget_passes(tmp_path, monkeypatch):
+    case_file = _write_case_file(
+        tmp_path,
+        [
+            {"query": "credit report", "corpus_id": "corp-a", "limit": 2},
+            {"query": "mortgage dispute", "corpus_id": "corp-b", "limit": 3},
+        ],
+    )
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _fake_urlopen(request, **_kwargs):
+        query = smoke.contract.urllib.parse.parse_qs(
+            smoke.contract.urllib.parse.urlsplit(request.full_url).query
+        )["q"][0]
+        if query == "credit report":
+            return _json_response(_valid_payload())
+        return _json_response({"query": query, "results": [], "count": 0})
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _fake_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--case-file",
+        str(case_file),
+        "--requests",
+        "2",
+        "--concurrency",
+        "2",
+        "--max-error-rate",
+        "1",
+        "--max-case-error-rate",
+        "0",
+        "--output-result",
+        str(result_path),
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["errors"]["rate"] == 0.5
+    assert payload["budgets"]["checks"][-2:] == [
+        {
+            "metric": "case_error_rate",
+            "case_index": 0,
+            "actual": 0.0,
+            "max": 0.0,
+            "ok": True,
+        },
+        {
+            "metric": "case_error_rate",
+            "case_index": 1,
+            "actual": 1.0,
+            "max": 0.0,
+            "ok": False,
+        },
+    ]
+    assert payload["budgets"]["failures"] == [
+        "case_error_rate exceeded 0.0 for case 1"
+    ]
 
 
 def test_main_case_summaries_cover_cases_beyond_preview_cap(tmp_path, monkeypatch):
