@@ -1,6 +1,7 @@
 import csv
 from dataclasses import replace
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -198,6 +199,62 @@ def test_saas_demo_cleanup_args_skip_seed_only_required_values() -> None:
     )
 
     assert errors == ["--cleanup-faq-id must be a non-empty FAQ id"]
+
+
+def test_saas_demo_seed_preflight_writes_result_before_exit(tmp_path) -> None:
+    result_path = tmp_path / "seed-preflight.json"
+
+    with pytest.raises(SystemExit) as exc:
+        seeder.main([
+            "--database-url",
+            "",
+            "--account-id",
+            "",
+            "--output-result",
+            str(result_path),
+            "--json",
+        ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert str(exc.value) == (
+        "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL; "
+        "ATLAS_FAQ_SEARCH_ACCOUNT_ID, ATLAS_ACCOUNT_ID, or --account-id is required"
+    )
+    assert payload == {
+        "phase": "preflight",
+        "ok": False,
+        "mode": "seed",
+        "errors": [
+            "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL",
+            "ATLAS_FAQ_SEARCH_ACCOUNT_ID, ATLAS_ACCOUNT_ID, or --account-id is required",
+        ],
+    }
+
+
+def test_saas_demo_cleanup_preflight_writes_result_before_exit(tmp_path) -> None:
+    result_path = tmp_path / "cleanup-preflight.json"
+
+    with pytest.raises(SystemExit) as exc:
+        seeder.main([
+            "--database-url",
+            "postgresql://example",
+            "--account-id",
+            "acct-demo",
+            "--cleanup-faq-id",
+            "",
+            "--output-result",
+            str(result_path),
+            "--json",
+        ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert str(exc.value) == "--cleanup-faq-id must be a non-empty FAQ id"
+    assert payload == {
+        "phase": "preflight",
+        "ok": False,
+        "mode": "cleanup",
+        "errors": ["--cleanup-faq-id must be a non-empty FAQ id"],
+    }
 
 
 def test_saas_demo_cleanup_delete_status_parser() -> None:
