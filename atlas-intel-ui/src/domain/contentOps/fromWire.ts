@@ -24,6 +24,7 @@ import type {
   ContentOpsPreviewResponse,
   ContentOpsRequestBody,
   ContentOpsStepExecution as WireStepExecution,
+  ContentOpsUsageBudgetEvaluationResponse as WireUsageBudgetEvaluation,
   ContentOpsUsageSummaryBreakdownResponse as WireUsageSummaryBreakdown,
   ContentOpsUsageSummaryResponse,
   GenerationPlanResponse,
@@ -42,6 +43,7 @@ import type {
   ContentOpsInputProviderWarning,
   ContentOpsUsageSummary,
   ContentOpsUsageSummaryBreakdown,
+  ContentOpsUsageBudgetEvaluation,
   CampaignReasoningContextView,
   ContentOpsRequest,
   ContentOpsStepExecution,
@@ -242,6 +244,8 @@ export function fromWireRequest(
     outputs: wire.outputs ? [...wire.outputs] : [],
     limit: wire.limit ?? 1,
     maxCostUsd: wire.max_cost_usd ?? null,
+    accountUsageBudgetUsd: wire.account_usage_budget_usd ?? null,
+    accountUsageBudgetDays: wire.account_usage_budget_days ?? 7,
     inputs: { ...(wire.inputs ?? {}) },
     ingestionProfile: wire.ingestion_profile ?? 'domain_specific',
     requireQualityGates: wire.require_quality_gates ?? true,
@@ -262,6 +266,8 @@ export function toWireRequest(
     outputs: [...domain.outputs],
     limit: domain.limit,
     max_cost_usd: domain.maxCostUsd,
+    account_usage_budget_usd: domain.accountUsageBudgetUsd,
+    account_usage_budget_days: domain.accountUsageBudgetDays,
     inputs: { ...domain.inputs },
     ingestion_profile: domain.ingestionProfile,
     require_quality_gates: domain.requireQualityGates,
@@ -364,6 +370,10 @@ export function fromWirePreview(
             : [],
           limit: wire.normalized_request.limit ?? 1,
           maxCostUsd: wire.normalized_request.max_cost_usd ?? null,
+          accountUsageBudgetUsd:
+            wire.normalized_request.account_usage_budget_usd ?? null,
+          accountUsageBudgetDays:
+            wire.normalized_request.account_usage_budget_days ?? 7,
           ingestionProfile:
             wire.normalized_request.ingestion_profile ?? 'domain_specific',
           requireQualityGates:
@@ -377,7 +387,23 @@ export function fromWirePreview(
   if (inputProvider) {
     preview.inputProvider = inputProvider
   }
+  if (wire.usage_budget) {
+    preview.usageBudget = fromWireUsageBudgetEvaluation(wire.usage_budget)
+  }
   return preview
+}
+
+export function fromWireUsageBudgetEvaluation(
+  wire: WireUsageBudgetEvaluation,
+): ContentOpsUsageBudgetEvaluation {
+  return {
+    budgetUsd: wire.budget_usd,
+    periodDays: wire.period_days,
+    currentCostUsd: wire.current_cost_usd,
+    estimatedCostUsd: wire.estimated_cost_usd,
+    projectedCostUsd: wire.projected_cost_usd,
+    exceeded: wire.exceeded,
+  }
 }
 
 export function fromWireInputProviderDiagnostics(

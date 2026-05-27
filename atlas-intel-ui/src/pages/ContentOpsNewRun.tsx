@@ -49,6 +49,7 @@ import {
   type ControlSurfacePreview,
   type GenerationPlan,
   type GenerationPlanStep,
+  type ContentOpsUsageBudgetEvaluation,
 } from '../domain/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
@@ -58,6 +59,7 @@ type SubmitState =
   | { kind: 'submitting' }
   | { kind: 'invalid_inputs_json'; message: string }
   | { kind: 'invalid_max_cost'; message: string }
+  | { kind: 'invalid_usage_budget'; message: string }
   | { kind: 'error'; message: string }
   | { kind: 'success'; preview: ControlSurfacePreview }
 
@@ -174,6 +176,10 @@ export default function ContentOpsNewRun() {
   // user can type `0.` mid-entry without React re-rendering as `0` and
   // swallowing the decimal point. Parsed to a number at submit time.
   const [maxCostUsdInput, setMaxCostUsdInput] = useState<string>('')
+  const [accountUsageBudgetUsdInput, setAccountUsageBudgetUsdInput] =
+    useState<string>('')
+  const [accountUsageBudgetDaysInput, setAccountUsageBudgetDaysInput] =
+    useState<string>('7')
   const [inputsJson, setInputsJson] = useState<string>(DEFAULT_INPUTS_JSON)
   const [ingestionRowsJson, setIngestionRowsJson] = useState<string>(
     DEFAULT_INGESTION_ROWS_JSON,
@@ -357,7 +363,7 @@ export default function ContentOpsNewRun() {
     | { ok: true; domainRequest: ContentOpsRequest }
     | {
         ok: false
-        kind: 'invalid_inputs_json' | 'invalid_max_cost'
+        kind: 'invalid_inputs_json' | 'invalid_max_cost' | 'invalid_usage_budget'
         message: string
       }
 
@@ -418,12 +424,43 @@ export default function ContentOpsNewRun() {
       normalizedMaxCost = parsed
     }
 
+    const trimmedAccountBudget = accountUsageBudgetUsdInput.trim()
+    let normalizedAccountBudget: number | null = null
+    if (trimmedAccountBudget !== '') {
+      const parsed = Number(trimmedAccountBudget)
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return {
+          ok: false,
+          kind: 'invalid_usage_budget',
+          message:
+            'Account usage budget must be a positive number (e.g. 5.00). Leave blank for no account cap.',
+        }
+      }
+      normalizedAccountBudget = parsed
+    }
+
+    const trimmedAccountBudgetDays = accountUsageBudgetDaysInput.trim()
+    const parsedAccountBudgetDays = Number(trimmedAccountBudgetDays)
+    if (
+      !Number.isInteger(parsedAccountBudgetDays) ||
+      parsedAccountBudgetDays < 1 ||
+      parsedAccountBudgetDays > 90
+    ) {
+      return {
+        ok: false,
+        kind: 'invalid_usage_budget',
+        message: 'Budget window must be a whole number from 1 to 90 days.',
+      }
+    }
+
     return {
       ok: true,
       domainRequest: {
         ...request,
         inputs: parsedInputs,
         maxCostUsd: normalizedMaxCost,
+        accountUsageBudgetUsd: normalizedAccountBudget,
+        accountUsageBudgetDays: parsedAccountBudgetDays,
       },
     }
   }
@@ -1256,6 +1293,40 @@ export default function ContentOpsNewRun() {
               />
             </label>
             <label className="block text-sm">
+              <span className="text-slate-300">Account budget (USD)</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={accountUsageBudgetUsdInput}
+                onChange={(e) => {
+                  setAccountUsageBudgetUsdInput(e.target.value)
+                  markStale()
+                }}
+                placeholder="(no account cap)"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                Stops the run if projected account spend would cross this cap.
+              </span>
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Budget window (days)</span>
+              <input
+                type="number"
+                min={1}
+                max={90}
+                value={accountUsageBudgetDaysInput}
+                onChange={(e) => {
+                  setAccountUsageBudgetDaysInput(e.target.value)
+                  markStale()
+                }}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                Uses account-scoped Content Ops usage for this lookback window.
+              </span>
+            </label>
+            <label className="block text-sm">
               <span className="text-slate-300">Ingestion profile</span>
               <select
                 value={request.ingestionProfile}
@@ -1337,6 +1408,11 @@ export default function ContentOpsNewRun() {
       {submitState.kind === 'invalid_max_cost' && (
         <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
           Invalid max cost: {submitState.message}
+        </div>
+      )}
+      {submitState.kind === 'invalid_usage_budget' && (
+        <div className="mt-6 rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          Invalid account budget: {submitState.message}
         </div>
       )}
       {submitState.kind === 'error' && (
@@ -1549,6 +1625,8 @@ function PreviewVerdict({
         </Section>
       )}
 
+      <UsageBudgetSection budget={preview.usageBudget} />
+
       <InputProviderDiagnosticsSection diagnostics={preview.inputProvider} />
 
       {preview.normalizedRequest && (
@@ -1559,6 +1637,59 @@ function PreviewVerdict({
         </Section>
       )}
     </section>
+  )
+}
+
+function UsageBudgetSection({
+  budget,
+}: {
+  budget?: ContentOpsUsageBudgetEvaluation
+}) {
+  if (!budget) return null
+  return (
+    <Section label="Account usage budget">
+      <div
+        className={clsx(
+          'rounded-md border px-3 py-2 text-xs',
+          budget.exceeded
+            ? 'border-amber-500/40 bg-amber-500/10 text-amber-100'
+            : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+        )}
+      >
+        <div className="mb-2 font-medium">
+          {budget.exceeded
+            ? 'Projected usage is over budget.'
+            : 'Projected usage is within budget.'}
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+          <UsageBudgetMetric
+            label={`${budget.periodDays}-day usage`}
+            value={formatUsd(budget.currentCostUsd)}
+          />
+          <UsageBudgetMetric
+            label="This run"
+            value={formatUsd(budget.estimatedCostUsd)}
+          />
+          <UsageBudgetMetric
+            label="Projected"
+            value={formatUsd(budget.projectedCostUsd)}
+          />
+          <UsageBudgetMetric
+            label="Budget"
+            value={formatUsd(budget.budgetUsd)}
+          />
+        </div>
+      </div>
+    </Section>
+  )
+}
+
+function UsageBudgetMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wide opacity-70">{label}</div>
+      <div className="mt-0.5 font-mono text-sm">{value}</div>
+    </div>
   )
 }
 
@@ -2336,6 +2467,8 @@ function PlanPanel({
       </div>
 
       <InputProviderDiagnosticsSection diagnostics={plan.inputProvider} />
+
+      <UsageBudgetSection budget={plan.preview.usageBudget} />
 
       <div className="space-y-3">
         {plan.steps.map((step) => (

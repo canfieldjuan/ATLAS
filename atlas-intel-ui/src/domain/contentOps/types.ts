@@ -151,6 +151,8 @@ export interface ContentOpsRequest {
   outputs: string[]
   limit: number
   maxCostUsd: number | null
+  accountUsageBudgetUsd: number | null
+  accountUsageBudgetDays: number
   inputs: Record<string, unknown>
   ingestionProfile: string
   requireQualityGates: boolean
@@ -167,6 +169,15 @@ export interface ContentOpsInputProviderDiagnostics {
   provider: string
   metadata: Record<string, unknown>
   warnings: ContentOpsInputProviderWarning[]
+}
+
+export interface ContentOpsUsageBudgetEvaluation {
+  budgetUsd: number
+  periodDays: number
+  currentCostUsd: number
+  estimatedCostUsd: number
+  projectedCostUsd: number
+  exceeded: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +247,7 @@ export interface ControlSurfacePreview {
   blockedOutputs: string[]
   warnings: string[]
   inputProvider?: ContentOpsInputProviderDiagnostics
+  usageBudget?: ContentOpsUsageBudgetEvaluation
   // The preview's normalized request omits `inputs` per the
   // backend's `as_dict()` contract (see contract doc); it is
   // typed as a partial of `ContentOpsRequest` here.
