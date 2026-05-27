@@ -11,6 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
+RUNBOOK = ROOT / "docs/extraction/validation/content_ops_faq_route_concurrency_runbook.md"
 SPEC = importlib.util.spec_from_file_location("smoke_content_ops_faq_search_route_concurrency", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
@@ -238,6 +239,57 @@ def test_parser_accepts_case_error_rate_budget():
     ])
 
     assert parsed.max_case_error_rate == 0.25
+
+
+def test_route_concurrency_runbook_documents_current_budget_flags():
+    text = RUNBOOK.read_text(encoding="utf-8")
+    expected_flags = [
+        "--require-detail",
+        "--max-error-rate",
+        "--max-case-error-rate",
+        "--max-p95-ms",
+        "--max-single-request-ms",
+        "--max-detail-ms",
+        "--output-result",
+    ]
+
+    for flag in expected_flags:
+        assert flag in text
+
+    assert '--token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"' in text
+    assert '--token "$ATLAS_B2B_JWT"' not in text
+    assert "Use hit-only case files with `--require-detail`" in text
+    assert "Run known miss cases separately without\n`--require-detail`" in text
+
+    parsed = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}",
+        "--case-file",
+        "/tmp/faq-route-cases.json",
+        "--requests",
+        "40",
+        "--concurrency",
+        "8",
+        "--require-detail",
+        "--max-error-rate",
+        "0",
+        "--max-case-error-rate",
+        "0",
+        "--max-p95-ms",
+        "1500",
+        "--max-single-request-ms",
+        "3000",
+        "--max-detail-ms",
+        "1000",
+        "--output-result",
+        "/tmp/faq-route-concurrency-result.json",
+    ])
+
+    assert parsed.require_detail is True
+    assert parsed.max_case_error_rate == 0.0
+    assert parsed.max_detail_ms == 1000.0
 
 
 def test_load_cases_defaults_to_cli_case():
