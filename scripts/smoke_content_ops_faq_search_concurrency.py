@@ -550,18 +550,58 @@ def _print_summary(summary: dict[str, Any], *, as_json: bool) -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
     latency = summary["latency"]
+    setup_error = ""
+    setup = summary.get("setup")
+    if isinstance(setup, dict):
+        error = setup.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            setup_error = f" setup_error={error['message']}"
     print(
         "FAQ search concurrency smoke: "
         f"ok={summary['ok']} requests={summary['requests']['total']} "
         f"p50_ms={latency['p50_ms']} p95_ms={latency['p95_ms']} "
         f"max_ms={latency['max_ms']} failures={summary['isolation']['count']} "
         f"latency_budget_failures={len(summary['latency_budget']['failures'])}"
+        f"{setup_error}"
+    )
+
+
+def _preflight_summary(
+    args: argparse.Namespace,
+    *,
+    message: str,
+    elapsed_seconds: float,
+) -> dict[str, Any]:
+    return _summary_payload(
+        ok=False,
+        run_id="preflight",
+        args=args,
+        cases=[],
+        results=[],
+        setup={
+            "ok": False,
+            "phase": "preflight",
+            "error": {
+                "type": "SystemExit",
+                "message": message,
+            },
+        },
+        elapsed_seconds=elapsed_seconds,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    code, summary = asyncio.run(run_smoke(args))
+    started = time.perf_counter()
+    try:
+        code, summary = asyncio.run(run_smoke(args))
+    except SystemExit as exc:
+        summary = _preflight_summary(
+            args,
+            message=str(exc.code or ""),
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        code = 2
     if args.output_result:
         _write_result(Path(args.output_result), summary)
     _print_summary(summary, as_json=bool(args.json))
