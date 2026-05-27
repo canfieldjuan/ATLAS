@@ -4,9 +4,9 @@
 
 The Content Ops usage card now shows spend, savings, cache hits, and tokens, but
 operators still cannot see why the cache applied or skipped from the UI. The
-backend read model for cache diagnostics is in PR #1031; this slice prepares the
-Intel UI to consume that field without breaking against the current production
-response while the backend PR is still in review.
+backend read model for cache diagnostics landed in PR #1031; this slice prepares
+the Intel UI to consume that field without breaking against older deployed
+responses that do not include the new key yet.
 
 ## Scope (this PR)
 
@@ -17,7 +17,7 @@ Slice phase: Product polish
 2. Map cache mode, reason, lookup result, and store result into the Content Ops
    domain summary shape.
 3. Default missing backend cache diagnostics to an empty list so the UI stays
-   compatible before PR #1031 deploys.
+   compatible with older deployed responses.
 4. Render the top cache diagnostic rows in the existing Content Ops usage card.
 5. Add focused UI contract tests for mapping and rendering strings.
 
@@ -42,8 +42,8 @@ responses keep rendering.
 
 The existing usage card remains the only UI surface. When cache diagnostics are
 available, it shows the top three rows by backend sort order with a compact
-label, call count, spend, and savings. If the backend has not shipped the field
-yet, the section is omitted.
+label, call count, spend, and savings. If an older backend response omits the
+field, the section is omitted.
 
 ## Intentional
 
@@ -52,7 +52,7 @@ yet, the section is omitted.
 - This does not add a new route or separate cache dashboard; the diagnostics
   live with the existing 7-day usage card.
 - This renders top rows only so the card remains scannable.
-- The wire field is optional until PR #1031 is merged and deployed.
+- The wire field remains optional for deployment-order compatibility.
 
 ## Deferred
 
