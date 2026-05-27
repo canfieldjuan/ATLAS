@@ -1486,10 +1486,14 @@ function UsageSummaryCard({
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
         <UsageMetric
           label="Spend"
           value={totals ? formatUsd(totals.totalCostUsd) : '--'}
+        />
+        <UsageMetric
+          label="Saved"
+          value={totals ? formatUsd(totals.totalCacheSavingsUsd) : '--'}
         />
         <UsageMetric
           label="Calls"

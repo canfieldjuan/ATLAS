@@ -81,6 +81,7 @@ function usageSummaryPayload() {
       total_tokens: 150,
       cached_tokens: 10,
       cache_write_tokens: 4,
+      total_cache_savings_usd: 0.4321,
       cache_hit_calls: 3,
       avg_duration_ms: 320.5,
       latest_call_at: '2026-05-26T12:00:00+00:00',
@@ -90,6 +91,7 @@ function usageSummaryPayload() {
         provider: 'openrouter',
         model: 'anthropic/claude-3-5-haiku',
         cost_usd: 1.2,
+        cache_savings_usd: 0.4,
         calls: 10,
         input_tokens: 80,
         output_tokens: 40,
@@ -99,6 +101,7 @@ function usageSummaryPayload() {
       {
         asset_type: 'landing_page',
         cost_usd: 0.8,
+        cache_savings_usd: 0.3,
         calls: 7,
         input_tokens: 60,
         output_tokens: 25,
@@ -148,10 +151,13 @@ test('fromWireUsageSummary maps usage payload to domain shape', () => {
     requestId: undefined,
   })
   assert.equal(summary.summary.totalCostUsd, 1.2345)
+  assert.equal(summary.summary.totalCacheSavingsUsd, 0.4321)
   assert.equal(summary.summary.totalTokens, 150)
   assert.equal(summary.summary.cacheHitCalls, 3)
   assert.equal(summary.byModel[0].model, 'anthropic/claude-3-5-haiku')
   assert.equal(summary.byModel[0].costUsd, 1.2)
+  assert.equal(summary.byModel[0].cacheSavingsUsd, 0.4)
   assert.equal(summary.byAssetType[0].assetType, 'landing_page')
+  assert.equal(summary.byAssetType[0].cacheSavingsUsd, 0.3)
   assert.equal(summary.byAssetType[0].calls, 7)
 })

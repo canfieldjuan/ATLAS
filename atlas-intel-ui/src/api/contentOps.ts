@@ -138,6 +138,7 @@ export interface ContentOpsUsageSummaryBreakdownResponse {
   model?: string
   asset_type?: string
   cost_usd: number
+  cache_savings_usd: number
   calls: number
   input_tokens: number
   output_tokens: number
@@ -161,6 +162,7 @@ export interface ContentOpsUsageSummaryResponse {
     total_tokens: number
     cached_tokens: number
     cache_write_tokens: number
+    total_cache_savings_usd: number
     cache_hit_calls: number
     avg_duration_ms: number
     latest_call_at: string | null
