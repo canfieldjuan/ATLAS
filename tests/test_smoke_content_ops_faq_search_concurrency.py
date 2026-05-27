@@ -449,6 +449,132 @@ def test_main_writes_result_for_pool_creation_failure(tmp_path, monkeypatch) -> 
     }
 
 
+def test_main_writes_result_for_migration_failure(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+            self.cleanup_calls = 0
+
+        async def execute(self, *_args):
+            self.cleanup_calls += 1
+            return "DELETE 0"
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _raise_migrations(_pool):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _raise_migrations)
+    result_path = tmp_path / "faq-search-migrations.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert pool.cleanup_calls == 1
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "migrations",
+        "error": {
+            "type": "RuntimeError",
+            "message": "migration failed",
+        },
+    }
+
+
+def test_main_writes_result_for_seed_failure(tmp_path, monkeypatch) -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.closed = False
+            self.cleanup_calls = 0
+
+        async def execute(self, *_args):
+            self.cleanup_calls += 1
+            return "DELETE 0"
+
+        async def close(self):
+            self.closed = True
+
+    pool = _Pool()
+
+    async def _fake_pool(*_args, **_kwargs):
+        return pool
+
+    async def _apply_noop(_pool):
+        return None
+
+    async def _raise_seed(*_args, **_kwargs):
+        raise RuntimeError("seed failed")
+
+    monkeypatch.setattr(smoke, "_create_pool", _fake_pool)
+    monkeypatch.setattr(smoke, "_apply_migrations", _apply_noop)
+    monkeypatch.setattr(smoke, "_seed", _raise_seed)
+    result_path = tmp_path / "faq-search-seed.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example.invalid/atlas",
+        "--account-count",
+        "1",
+        "--corpora-per-account",
+        "1",
+        "--documents-per-corpus",
+        "1",
+        "--iterations",
+        "1",
+        "--concurrency",
+        "1",
+        "--pool-size",
+        "1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 1
+    assert pool.closed is True
+    assert pool.cleanup_calls == 1
+    assert payload["ok"] is False
+    assert payload["requests"]["total"] == 0
+    assert payload["setup"] == {
+        "ok": False,
+        "phase": "seed",
+        "error": {
+            "type": "RuntimeError",
+            "message": "seed failed",
+        },
+    }
+
+
 def test_failure_summary_limits_output() -> None:
     results = [
         {
