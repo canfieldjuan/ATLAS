@@ -267,6 +267,7 @@ async def lookup_cached_text(
     *,
     pool: Any | None = None,
     account_id: str = SENTINEL_ACCOUNT_ID,
+    require_namespace_enabled: bool = True,
 ) -> B2BLLMExactCacheHit | None:
     """Return the cached text for an exact request envelope.
 
@@ -276,7 +277,13 @@ async def lookup_cached_text(
     so cross-tenant hits are impossible -- the (cache_key, account_id)
     composite PK guarantees isolation at the storage layer.
     """
-    if not namespace or not _is_cache_enabled_for_namespace(namespace):
+    if (
+        not namespace
+        or (
+            require_namespace_enabled
+            and not _is_cache_enabled_for_namespace(namespace)
+        )
+    ):
         return None
 
     db_pool = _resolve_pool(pool)
@@ -329,6 +336,7 @@ async def store_cached_text(
     metadata: dict[str, Any] | None = None,
     pool: Any | None = None,
     account_id: str = SENTINEL_ACCOUNT_ID,
+    require_namespace_enabled: bool = True,
 ) -> bool:
     """Store a successful exact-match response.
 
@@ -340,7 +348,10 @@ async def store_cached_text(
         not namespace
         or not response_text
         or not str(response_text).strip()
-        or not _is_cache_enabled_for_namespace(namespace)
+        or (
+            require_namespace_enabled
+            and not _is_cache_enabled_for_namespace(namespace)
+        )
     ):
         return False
 
@@ -396,10 +407,16 @@ def lookup_cached_text_sync(
     request_envelope: dict[str, Any],
     *,
     pool: Any | None = None,
+    require_namespace_enabled: bool = True,
 ) -> B2BLLMExactCacheHit | None:
     """Sync wrapper for exact-cache lookup."""
     return _run_coro_sync(
-        lookup_cached_text(namespace, request_envelope, pool=pool)
+        lookup_cached_text(
+            namespace,
+            request_envelope,
+            pool=pool,
+            require_namespace_enabled=require_namespace_enabled,
+        )
     )
 
 
@@ -413,6 +430,7 @@ def store_cached_text_sync(
     usage: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     pool: Any | None = None,
+    require_namespace_enabled: bool = True,
 ) -> bool:
     """Sync wrapper for exact-cache store."""
     return bool(
@@ -426,6 +444,7 @@ def store_cached_text_sync(
                 usage=usage,
                 metadata=metadata,
                 pool=pool,
+                require_namespace_enabled=require_namespace_enabled,
             )
         )
     )

@@ -104,6 +104,72 @@ class _FailingChatLLM:
         raise RuntimeError("provider timeout")
 
 
+class _FakeExactCache:
+    def __init__(
+        self,
+        *,
+        hit=None,
+        lookup_exc: Exception | None = None,
+        store_exc: Exception | None = None,
+        store_result: bool = True,
+    ):
+        self.hit = hit
+        self.lookup_exc = lookup_exc
+        self.store_exc = store_exc
+        self.store_result = store_result
+        self.envelopes = []
+        self.lookups = []
+        self.stores = []
+
+    def build_request_envelope(
+        self,
+        *,
+        provider,
+        model,
+        messages,
+        max_tokens,
+        temperature,
+    ):
+        envelope = {
+            "provider": provider,
+            "model": model,
+            "messages": [
+                {"role": item.role, "content": item.content}
+                for item in messages
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        self.envelopes.append(envelope)
+        return envelope
+
+    async def lookup(self, decision, request_envelope):
+        self.lookups.append((decision, request_envelope))
+        if self.lookup_exc is not None:
+            raise self.lookup_exc
+        return self.hit
+
+    async def store(
+        self,
+        decision,
+        request_envelope,
+        *,
+        provider,
+        model,
+        response,
+    ):
+        self.stores.append({
+            "decision": decision,
+            "request_envelope": request_envelope,
+            "provider": provider,
+            "model": model,
+            "response": response,
+        })
+        if self.store_exc is not None:
+            raise self.store_exc
+        return self.store_result
+
+
 @pytest.mark.asyncio
 async def test_pipeline_llm_client_resolves_and_normalizes_chat_response():
     llm = _ChatLLM()
@@ -373,6 +439,142 @@ async def test_pipeline_llm_client_traces_exact_cache_policy_decision_from_scope
     assert trace_metadata["cache_namespace"] == "content_ops.landing_page"
     assert trace_metadata["cache_account_id"] == "acct-cache"
     assert trace_metadata["account_id"] == "acct-cache"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_returns_exact_cache_hit_without_provider_call():
+    llm = _ChatLLM()
+    trace_calls = []
+    exact_cache = _FakeExactCache(hit={
+        "namespace": "content_ops.landing_page",
+        "model": "cached-model",
+        "response_text": "cached response",
+        "usage": {"input_tokens": 8, "output_tokens": 3},
+        "metadata": {"cache_version": "v1"},
+    })
+    client = PipelineLLMClient(
+        workload="draft",
+        resolver=lambda **_: llm,
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+        cache_policy=ContentOpsExactCachePolicy(exact_cache_enabled=True),
+        exact_cache=exact_cache,
+    )
+
+    token = set_content_ops_llm_trace_context({"account_id": "acct-cache"})
+    try:
+        response = await client.complete(
+            [LLMMessage(role="user", content="stable non-customer prompt")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={"asset_type": "landing_page", "cache_policy": "exact"},
+        )
+    finally:
+        reset_content_ops_llm_trace_context(token)
+
+    assert response.content == "cached response"
+    assert response.model == "cached-model"
+    assert llm.calls == []
+    assert len(exact_cache.lookups) == 1
+    assert exact_cache.stores == []
+    trace_metadata = trace_calls[0][1]["metadata"]
+    assert trace_metadata["cache_mode"] == "exact"
+    assert trace_metadata["cache_result"] == "hit"
+    assert trace_calls[0][1]["cached_tokens"] == 8
+    assert trace_calls[0][1]["billable_input_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_stores_exact_cache_miss_after_provider_call():
+    llm = _ChatLLM()
+    trace_calls = []
+    exact_cache = _FakeExactCache()
+    client = PipelineLLMClient(
+        workload="draft",
+        resolver=lambda **_: llm,
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+        cache_policy=ContentOpsExactCachePolicy(exact_cache_enabled=True),
+        exact_cache=exact_cache,
+    )
+
+    token = set_content_ops_llm_trace_context({"account_id": "acct-cache"})
+    try:
+        response = await client.complete(
+            [LLMMessage(role="user", content="stable non-customer prompt")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={"asset_type": "landing_page", "cache_policy": "exact"},
+        )
+    finally:
+        reset_content_ops_llm_trace_context(token)
+
+    assert response.content == "chat response"
+    assert len(llm.calls) == 1
+    assert len(exact_cache.lookups) == 1
+    assert len(exact_cache.stores) == 1
+    stored = exact_cache.stores[0]
+    assert stored["provider"] == "_ChatLLM"
+    assert stored["model"] == "chat-model"
+    assert stored["response"].content == "chat response"
+    trace_metadata = trace_calls[0][1]["metadata"]
+    assert trace_metadata["cache_result"] == "miss"
+    assert trace_metadata["cache_store_result"] == "stored"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_skips_adapter_when_policy_is_no_store():
+    llm = _ChatLLM()
+    exact_cache = _FakeExactCache()
+    client = PipelineLLMClient(
+        resolver=lambda **_: llm,
+        cache_policy=ContentOpsExactCachePolicy(exact_cache_enabled=False),
+        exact_cache=exact_cache,
+    )
+
+    response = await client.complete(
+        [LLMMessage(role="user", content="prompt")],
+        max_tokens=200,
+        temperature=0.2,
+        metadata={"asset_type": "landing_page", "cache_policy": "exact"},
+    )
+
+    assert response.content == "chat response"
+    assert len(llm.calls) == 1
+    assert exact_cache.envelopes == []
+    assert exact_cache.lookups == []
+    assert exact_cache.stores == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_llm_client_continues_when_cache_lookup_fails():
+    llm = _ChatLLM()
+    trace_calls = []
+    exact_cache = _FakeExactCache(lookup_exc=RuntimeError("cache unavailable"))
+    client = PipelineLLMClient(
+        resolver=lambda **_: llm,
+        tracer=lambda span_name, **kwargs: trace_calls.append((span_name, kwargs)),
+        cache_policy=ContentOpsExactCachePolicy(exact_cache_enabled=True),
+        exact_cache=exact_cache,
+    )
+
+    token = set_content_ops_llm_trace_context({"account_id": "acct-cache"})
+    try:
+        response = await client.complete(
+            [LLMMessage(role="user", content="stable non-customer prompt")],
+            max_tokens=200,
+            temperature=0.2,
+            metadata={"asset_type": "landing_page", "cache_policy": "exact"},
+        )
+    finally:
+        reset_content_ops_llm_trace_context(token)
+
+    assert response.content == "chat response"
+    assert len(llm.calls) == 1
+    assert len(exact_cache.lookups) == 1
+    assert exact_cache.stores == []
+    trace_metadata = trace_calls[0][1]["metadata"]
+    assert trace_metadata["cache_result"] == "lookup_error"
+    assert trace_metadata["cache_error_type"] == "RuntimeError"
+    assert trace_metadata["cache_error_message"] == "cache unavailable"
 
 
 @pytest.mark.asyncio
