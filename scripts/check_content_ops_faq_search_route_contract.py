@@ -42,6 +42,51 @@ DETAIL_FIELDS = (
     "metadata",
     "status",
 )
+DETAIL_ITEM_STRING_FIELDS = (
+    "topic",
+    "question",
+    "question_source",
+    "summary",
+    "answer",
+    "answer_evidence_status",
+    "when_to_contact_support",
+)
+DETAIL_ITEM_INT_FIELDS = (
+    "frequency",
+    "weighted_frequency",
+    "ticket_count",
+    "opportunity_score",
+    "failure_risk_score",
+    "resolution_source_count",
+    "evidence_count",
+    "displayed_evidence_count",
+)
+DETAIL_ITEM_STRING_LIST_FIELDS = (
+    "failure_risk_signals",
+    "steps",
+    "action_items",
+    "evidence_quotes",
+    "source_ids",
+    "source_labels",
+)
+DETAIL_ITEM_COUNT_MAP_FIELDS = (
+    "source_type_counts",
+    "weighted_source_volume_by_type",
+)
+DETAIL_TERM_MAPPING_STRING_FIELDS = (
+    "customer_term",
+    "documentation_term",
+    "suggestion",
+    "first_source_id",
+)
+DETAIL_TERM_MAPPING_INT_FIELDS = (
+    "source_id_count",
+    "zero_result_source_count",
+    "failure_risk_score",
+    "opportunity_score",
+)
+DETAIL_QUESTION_SOURCES = {"customer_wording", "source_policy"}
+DETAIL_ANSWER_EVIDENCE_STATUSES = {"resolution_evidence", "draft_needs_review"}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -244,6 +289,13 @@ def _validate_detail(
     for field in ("items", "warnings"):
         if field in data and not isinstance(data[field], list):
             errors.append(f"detail.{field} must be a list")
+    items = data.get("items")
+    if isinstance(items, list):
+        if not items:
+            errors.append("detail.items must include at least one item")
+        else:
+            for index, item in enumerate(items):
+                errors.extend(_validate_detail_item(item, index=index))
     for field in ("output_checks", "metadata"):
         if field in data and not isinstance(data[field], Mapping):
             errors.append(f"detail.{field} must be an object")
@@ -253,6 +305,103 @@ def _validate_detail(
             errors.append(
                 f"detail.{field} expected {expected_value!r} but got {actual!r}"
             )
+    return errors
+
+
+def _validate_detail_item(item: Any, *, index: int) -> list[str]:
+    path = f"detail.items[{index}]"
+    if not isinstance(item, Mapping):
+        return [f"{path} must be an object"]
+
+    errors: list[str] = []
+    for field in DETAIL_ITEM_STRING_FIELDS:
+        errors.extend(_require_string(item, f"{path}.{field}", field))
+    for field in DETAIL_ITEM_INT_FIELDS:
+        errors.extend(_require_integer(item, f"{path}.{field}", field))
+    for field in DETAIL_ITEM_STRING_LIST_FIELDS:
+        errors.extend(_require_string_list(item, f"{path}.{field}", field))
+    for field in DETAIL_ITEM_COUNT_MAP_FIELDS:
+        errors.extend(_require_int_mapping(item, f"{path}.{field}", field))
+
+    question_source = item.get("question_source")
+    if isinstance(question_source, str) and question_source not in DETAIL_QUESTION_SOURCES:
+        errors.append(
+            f"{path}.question_source must be one of {sorted(DETAIL_QUESTION_SOURCES)}"
+        )
+    evidence_status = item.get("answer_evidence_status")
+    if isinstance(evidence_status, str) and evidence_status not in DETAIL_ANSWER_EVIDENCE_STATUSES:
+        errors.append(
+            f"{path}.answer_evidence_status must be one of {sorted(DETAIL_ANSWER_EVIDENCE_STATUSES)}"
+        )
+    term_mappings = item.get("term_mappings")
+    if "term_mappings" not in item:
+        errors.append(f"{path}.term_mappings is required")
+    elif not isinstance(term_mappings, list):
+        errors.append(f"{path}.term_mappings must be a list")
+    else:
+        for mapping_index, mapping in enumerate(term_mappings):
+            errors.extend(
+                _validate_term_mapping(
+                    mapping,
+                    path=f"{path}.term_mappings[{mapping_index}]",
+                )
+            )
+    return errors
+
+
+def _validate_term_mapping(mapping: Any, *, path: str) -> list[str]:
+    if not isinstance(mapping, Mapping):
+        return [f"{path} must be an object"]
+    errors: list[str] = []
+    for field in DETAIL_TERM_MAPPING_STRING_FIELDS:
+        errors.extend(_require_string(mapping, f"{path}.{field}", field))
+    for field in DETAIL_TERM_MAPPING_INT_FIELDS:
+        errors.extend(_require_integer(mapping, f"{path}.{field}", field))
+    errors.extend(_require_string_list(mapping, f"{path}.failure_risk_signals", "failure_risk_signals"))
+    return errors
+
+
+def _require_string(row: Mapping[str, Any], path: str, field: str) -> list[str]:
+    if field not in row:
+        return [f"{path} is required"]
+    if not isinstance(row[field], str):
+        return [f"{path} must be a string"]
+    return []
+
+
+def _require_integer(row: Mapping[str, Any], path: str, field: str) -> list[str]:
+    if field not in row:
+        return [f"{path} is required"]
+    if type(row[field]) is not int:
+        return [f"{path} must be an integer"]
+    return []
+
+
+def _require_string_list(row: Mapping[str, Any], path: str, field: str) -> list[str]:
+    if field not in row:
+        return [f"{path} is required"]
+    values = row[field]
+    if not isinstance(values, list):
+        return [f"{path} must be a list"]
+    return [
+        f"{path}[{index}] must be a string"
+        for index, value in enumerate(values)
+        if not isinstance(value, str)
+    ]
+
+
+def _require_int_mapping(row: Mapping[str, Any], path: str, field: str) -> list[str]:
+    if field not in row:
+        return [f"{path} is required"]
+    value = row[field]
+    if not isinstance(value, Mapping):
+        return [f"{path} must be an object"]
+    errors: list[str] = []
+    for key, count in value.items():
+        if not isinstance(key, str):
+            errors.append(f"{path} keys must be strings")
+        if type(count) is not int:
+            errors.append(f"{path}.{key} must be an integer")
     return errors
 
 

@@ -57,13 +57,56 @@ def _valid_detail_payload():
         "target_mode": "support_account",
         "title": "Support FAQ",
         "markdown": "# Support FAQ",
-        "items": [],
+        "items": [_valid_detail_item()],
         "source_count": 1,
         "ticket_source_count": 1,
         "output_checks": {},
         "warnings": [],
         "metadata": {"corpus_id": "corpus-1"},
         "status": "approved",
+    }
+
+
+def _valid_detail_item():
+    return {
+        "topic": "Mortgage servicing issues",
+        "question": "How do I dispute a mortgage payment error?",
+        "question_source": "customer_wording",
+        "summary": "Customers ask how to dispute mortgage payment errors.",
+        "frequency": 12,
+        "weighted_frequency": 12,
+        "ticket_count": 12,
+        "opportunity_score": 42,
+        "failure_risk_score": 1,
+        "failure_risk_signals": ["repeat_question"],
+        "answer": "Customers mention mortgage payment disputes.",
+        "steps": ["Review the statement.", "Contact support with records."],
+        "action_items": ["Review the statement.", "Contact support with records."],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_source_count": 1,
+        "when_to_contact_support": "Contact support if the payment still looks wrong.",
+        "evidence_quotes": ["`CFPB-1`: payment dispute"],
+        "source_ids": ["CFPB-1"],
+        "source_labels": ["`CFPB-1`"],
+        "source_type_counts": {"support_ticket": 1},
+        "weighted_source_volume_by_type": {"support_ticket": 12},
+        "term_mappings": [_valid_term_mapping()],
+        "evidence_count": 1,
+        "displayed_evidence_count": 1,
+    }
+
+
+def _valid_term_mapping():
+    return {
+        "customer_term": "payment error",
+        "documentation_term": "payment dispute",
+        "suggestion": "Use payment error as alternate phrasing.",
+        "source_id_count": 1,
+        "zero_result_source_count": 0,
+        "failure_risk_score": 1,
+        "failure_risk_signals": ["repeat_question"],
+        "opportunity_score": 42,
+        "first_source_id": "CFPB-1",
     }
 
 
@@ -226,6 +269,7 @@ def test_validate_detail_accepts_expected_seed_fields():
         ({"id": "22222222-2222-2222-2222-222222222222"}, "detail.id must match results[0].faq_id"),
         ({"markdown": 1}, "detail.markdown must be a string"),
         ({"items": {}}, "detail.items must be a list"),
+        ({"items": []}, "detail.items must include at least one item"),
         ({"source_count": True}, "detail.source_count must be an integer"),
         ({"output_checks": []}, "detail.output_checks must be an object"),
     ],
@@ -261,6 +305,63 @@ def test_validate_detail_rejects_expected_seed_field_mismatches(expected, messag
         _valid_detail_payload(),
         faq_id="11111111-1111-1111-1111-111111111111",
         expected=expected,
+    )
+
+
+@pytest.mark.parametrize(
+    ("patch", "expected"),
+    [
+        ({"question": 1}, "detail.items[0].question must be a string"),
+        ({"summary": None}, "detail.items[0].summary must be a string"),
+        ({"ticket_count": True}, "detail.items[0].ticket_count must be an integer"),
+        ({"steps": "read docs"}, "detail.items[0].steps must be a list"),
+        ({"source_ids": [1]}, "detail.items[0].source_ids[0] must be a string"),
+        ({"source_type_counts": []}, "detail.items[0].source_type_counts must be an object"),
+        ({"source_type_counts": {"support_ticket": True}}, "detail.items[0].source_type_counts.support_ticket must be an integer"),
+        ({"question_source": "internal_taxonomy"}, "detail.items[0].question_source must be one of ['customer_wording', 'source_policy']"),
+        ({"answer_evidence_status": "guessed"}, "detail.items[0].answer_evidence_status must be one of ['draft_needs_review', 'resolution_evidence']"),
+        ({"term_mappings": {}}, "detail.items[0].term_mappings must be a list"),
+    ],
+)
+def test_validate_detail_rejects_generated_item_contract_drift(patch, expected):
+    payload = _valid_detail_payload()
+    payload["items"][0].update(patch)
+
+    assert expected in _MODULE._validate_detail(
+        payload,
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+
+def test_validate_detail_requires_generated_item_fields():
+    payload = _valid_detail_payload()
+    del payload["items"][0]["action_items"]
+
+    assert "detail.items[0].action_items is required" in _MODULE._validate_detail(
+        payload,
+        faq_id="11111111-1111-1111-1111-111111111111",
+    )
+
+
+@pytest.mark.parametrize(
+    ("mapping", "expected"),
+    [
+        ("bad", "detail.items[0].term_mappings[0] must be an object"),
+        ({"customer_term": 1}, "detail.items[0].term_mappings[0].customer_term must be a string"),
+        ({"source_id_count": True}, "detail.items[0].term_mappings[0].source_id_count must be an integer"),
+        ({"failure_risk_signals": [1]}, "detail.items[0].term_mappings[0].failure_risk_signals[0] must be a string"),
+    ],
+)
+def test_validate_detail_rejects_term_mapping_contract_drift(mapping, expected):
+    payload = _valid_detail_payload()
+    if isinstance(mapping, dict):
+        payload["items"][0]["term_mappings"][0].update(mapping)
+    else:
+        payload["items"][0]["term_mappings"][0] = mapping
+
+    assert expected in _MODULE._validate_detail(
+        payload,
+        faq_id="11111111-1111-1111-1111-111111111111",
     )
 
 
