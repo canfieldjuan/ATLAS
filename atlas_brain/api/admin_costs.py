@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psutil
+from extracted_content_pipeline.content_ops_usage_summary import summarize_content_ops_llm_usage
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..auth.dependencies import AuthUser, require_auth
@@ -2720,6 +2721,7 @@ async def cache_health(
         since,
         top_n,
     )
+    content_ops_usage = await summarize_content_ops_llm_usage(pool, days=days)
 
     batch_summary_row = await _safe_fetchrow(
         pool,
@@ -3024,6 +3026,7 @@ async def cache_health(
                 for row in prompt_cache_spans
             ],
         },
+        "content_ops": content_ops_usage,
         "anthropic_batching": {
             "enabled": bool(settings.b2b_churn.anthropic_batch_enabled),
             "stale_job_threshold_minutes": stale_threshold_minutes,
