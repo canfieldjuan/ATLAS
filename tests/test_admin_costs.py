@@ -919,6 +919,40 @@ class _FakePool:
                 },
                 "created_at": datetime(2026, 3, 31, 22, 15, tzinfo=timezone.utc),
             }]
+        if "content_ops.llm.complete" in args:
+            return [{
+                "id": uuid4(),
+                "run_id": "content-ops-run-1",
+                "span_name": "content_ops.llm.complete",
+                "operation_type": "llm_call",
+                "model_name": "anthropic/claude-3-5-haiku",
+                "model_provider": "openrouter",
+                "input_tokens": 7200,
+                "billable_input_tokens": 0,
+                "cached_tokens": 7200,
+                "cache_write_tokens": 0,
+                "output_tokens": 900,
+                "total_tokens": 8100,
+                "cost_usd": Decimal("0"),
+                "duration_ms": 122,
+                "ttft_ms": 30,
+                "inference_time_ms": 80,
+                "queue_time_ms": 4,
+                "tokens_per_second": 40.5,
+                "status": "completed",
+                "api_endpoint": "exact-cache",
+                "provider_request_id": None,
+                "metadata": {
+                    "product": "content_ops",
+                    "asset_type": "landing_page",
+                    "source_material_type": "support_ticket",
+                    "cache_mode": "no_store",
+                    "cache_reason": "customer_data_no_store",
+                    "cache_result": "hit",
+                    "cache_store_result": "skipped",
+                },
+                "created_at": datetime(2026, 3, 31, 22, 20, tzinfo=timezone.utc),
+            }]
         return [{
             "id": uuid4(),
             "run_id": "run-blog-1",
@@ -1347,6 +1381,27 @@ def test_recent_calls_filters_and_surfaces_battle_card_context(monkeypatch):
     assert "source_name" in pool.last_fetch_query
     assert "event_type" in pool.last_fetch_query
     assert "entity_type" in pool.last_fetch_query
+
+
+def test_recent_calls_labels_content_ops_trace_metadata(monkeypatch):
+    client, pool = _client(monkeypatch)
+    with client:
+        res = client.get(
+            "/admin/costs/recent?span_name=content_ops.llm.complete&limit=10"
+        )
+    assert res.status_code == 200
+    row = res.json()["calls"][0]
+    assert row["title"] == "Content Ops Landing Page"
+    assert row["detail"] == (
+        "Source: Support Ticket • Cache: No Store / Customer Data No Store / Hit"
+    )
+    assert row["content_ops_asset_type"] == "landing_page"
+    assert row["content_ops_source_type"] == "support_ticket"
+    assert row["cache_mode"] == "no_store"
+    assert row["cache_reason"] == "customer_data_no_store"
+    assert row["cache_result"] == "hit"
+    assert row["cache_store_result"] == "skipped"
+    assert "span_name =" in pool.last_fetch_query
 
 
 def test_cache_health_rolls_up_exact_prompt_semantic_and_task_reuse(monkeypatch):
