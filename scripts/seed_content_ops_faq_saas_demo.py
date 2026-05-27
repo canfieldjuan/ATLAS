@@ -291,25 +291,44 @@ async def cleanup_saas_demo_faq(
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     pool = await _create_pool(str(args.database_url))
+    payload: dict[str, Any] | None = None
+    close_result = _lifecycle_result(attempted=False)
+    primary_error: Exception | None = None
     try:
         if args.cleanup_faq_id is not None:
-            return await cleanup_saas_demo_faq(
+            payload = await cleanup_saas_demo_faq(
                 pool,
                 account_id=str(args.account_id),
                 faq_id=str(args.cleanup_faq_id),
             )
-        return await seed_saas_demo_faq(
-            pool,
-            account_id=str(args.account_id),
-            user_id=str(args.user_id or ""),
-            corpus_id=str(args.corpus_id),
-            target_id=str(args.target_id),
-            status=str(args.status),
-            query=str(args.query),
-            limit=int(args.limit),
-        )
+        else:
+            payload = await seed_saas_demo_faq(
+                pool,
+                account_id=str(args.account_id),
+                user_id=str(args.user_id or ""),
+                corpus_id=str(args.corpus_id),
+                target_id=str(args.target_id),
+                status=str(args.status),
+                query=str(args.query),
+                limit=int(args.limit),
+            )
+    except Exception as exc:
+        primary_error = exc
     finally:
-        await pool.close()
+        try:
+            await pool.close()
+            close_result = _lifecycle_result(attempted=True)
+        except Exception as exc:
+            close_result = _lifecycle_result(
+                attempted=True,
+                error=exc,
+                message=_safe_error_message(args, exc),
+            )
+    if primary_error is not None:
+        raise primary_error
+    if payload is None:  # pragma: no cover - defensive guard for unexpected control flow.
+        raise RuntimeError("SaaS FAQ demo seeder did not produce a result payload")
+    return _with_pool_close_result(payload, close_result)
 
 
 def _write_result(path: Path | None, payload: dict[str, Any]) -> None:
@@ -326,6 +345,34 @@ def _preflight_result(args: argparse.Namespace, errors: list[str]) -> dict[str, 
         "mode": "cleanup" if args.cleanup_faq_id is not None else "seed",
         "errors": list(errors),
     }
+
+
+def _lifecycle_result(
+    *,
+    attempted: bool,
+    error: Exception | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": error is None,
+        "attempted": attempted,
+        "error": None
+        if error is None
+        else {
+            "type": type(error).__name__,
+            "message": message if message is not None else str(error),
+        },
+    }
+
+
+def _with_pool_close_result(
+    payload: dict[str, Any],
+    close_result: dict[str, Any],
+) -> dict[str, Any]:
+    updated = dict(payload)
+    updated["pool_close"] = close_result
+    updated["ok"] = bool(payload["ok"]) and bool(close_result["ok"])
+    return updated
 
 
 def _safe_error_message(args: argparse.Namespace, exc: Exception) -> str:

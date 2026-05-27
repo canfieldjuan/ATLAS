@@ -30,17 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-27
-
-### SaaS demo seeder pool-close result preservation
-- File/location: `scripts/seed_content_ops_faq_saas_demo.py`, `_run(...)` / `main(...)`
-- Description: If seed or cleanup succeeds but `pool.close()` raises, the runtime failure payload can replace the successful operation payload instead of reporting close failure as lifecycle metadata.
-- Why it matters: Operators get a result artifact, but a successful seed could be obscured by a close-time failure during repeated demo setup.
-- Effort: S
-- Category: correctness
-- Owner/session: content-ops/faq-generator
-- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Runtime-Result review
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
