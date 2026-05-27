@@ -401,6 +401,43 @@ def _detail_summary(
     }
 
 
+def _case_result_summaries(
+    cases: Sequence[Mapping[str, Any]],
+    results: Sequence[Mapping[str, Any]],
+    *,
+    detail_required: bool,
+) -> list[dict[str, Any]]:
+    grouped: dict[int, list[Mapping[str, Any]]] = {index: [] for index in range(len(cases))}
+    for row in results:
+        case_index = row.get("case_index")
+        if type(case_index) is int and 0 <= case_index < len(cases):
+            grouped.setdefault(case_index, []).append(row)
+
+    summaries: list[dict[str, Any]] = []
+    for case_index, case in enumerate(cases):
+        rows = grouped.get(case_index, [])
+        errors = _error_summary(rows)
+        detail = _detail_summary(rows, required=detail_required)
+        summaries.append(
+            {
+                "case_index": case_index,
+                "case": _case_snapshot(case),
+                "requests": len(rows),
+                "errors": {
+                    "count": errors["count"],
+                    "rate": errors["rate"],
+                },
+                "latency": _latency_summary(rows),
+                "detail": {
+                    "checked": detail["checked"],
+                    "failures": detail["failures"],
+                    "latency": detail["latency"],
+                },
+            }
+        )
+    return summaries
+
+
 def _budget_summary(
     *,
     latency: Mapping[str, Any],
@@ -489,6 +526,11 @@ def _summary_payload(
             "total": len(active_cases),
             "case_file": str(args.case_file or ""),
             "items": [_case_snapshot(case) for case in active_cases[:20]],
+            "summaries": _case_result_summaries(
+                active_cases[:20],
+                results,
+                detail_required=bool(args.require_detail),
+            ),
             "truncated": len(active_cases) > 20,
         },
         "requests": {
