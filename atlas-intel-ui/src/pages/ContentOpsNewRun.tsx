@@ -44,6 +44,7 @@ import {
   type ContentOpsInputProviderDiagnostics,
   type ContentOpsInputContractView,
   type ContentOpsRequest,
+  type ContentOpsUsageSummaryBreakdown,
   type ContentOpsUsageSummary,
   type CampaignReasoningContextView,
   type ContentOpsStepReasoningAudit,
@@ -1488,6 +1489,7 @@ function UsageSummaryCard({
 }) {
   const totals = summary?.summary
   const topAssetType = summary?.byAssetType[0]
+  const cacheDiagnostics = summary?.byCacheStatus.slice(0, 3) ?? []
   return (
     <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1536,19 +1538,69 @@ function UsageSummaryCard({
         />
       </div>
       {summary && (
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
-          <span>Latest: {formatUsageDate(totals?.latestCallAt ?? null)}</span>
-          {topAssetType && (
-            <span>
-              Top asset: {topAssetType.assetType ?? 'unknown'} (
-              {formatUsd(topAssetType.costUsd)})
-            </span>
+        <>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+            <span>Latest: {formatUsageDate(totals?.latestCallAt ?? null)}</span>
+            {topAssetType && (
+              <span>
+                Top asset: {topAssetType.assetType ?? 'unknown'} (
+                {formatUsd(topAssetType.costUsd)})
+              </span>
+            )}
+            <span>Avg latency: {formatDuration(totals?.avgDurationMs ?? 0)}</span>
+          </div>
+          {cacheDiagnostics.length > 0 && (
+            <div className="mt-3 rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Cache diagnostics
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                {cacheDiagnostics.map((row) => (
+                  <div
+                    key={cacheDiagnosticKey(row)}
+                    className="rounded border border-slate-800 bg-slate-950/60 px-2.5 py-2"
+                  >
+                    <div className="truncate text-xs font-medium text-slate-200">
+                      {formatCacheDiagnosticLabel(row)}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      {formatCount(row.calls)} calls · {formatUsd(row.costUsd)} spend ·{' '}
+                      {formatUsd(row.cacheSavingsUsd)} saved
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
-          <span>Avg latency: {formatDuration(totals?.avgDurationMs ?? 0)}</span>
-        </div>
+        </>
       )}
     </section>
   )
+}
+
+function cacheDiagnosticKey(row: ContentOpsUsageSummaryBreakdown): string {
+  return [
+    row.cacheMode ?? 'unknown',
+    row.cacheReason ?? 'unknown',
+    row.cacheResult ?? 'unknown',
+    row.cacheStoreResult ?? 'unknown',
+  ].join(':')
+}
+
+function formatCacheDiagnosticLabel(
+  row: ContentOpsUsageSummaryBreakdown,
+): string {
+  const mode = formatCacheDiagnosticPart(row.cacheMode)
+  const reason = formatCacheDiagnosticPart(row.cacheReason)
+  const result = formatCacheDiagnosticPart(row.cacheResult)
+  const store = formatCacheDiagnosticPart(row.cacheStoreResult)
+
+  return `${mode} / ${reason} / ${result} / ${store}`
+}
+
+function formatCacheDiagnosticPart(value: string | undefined): string {
+  if (!value) return 'unknown'
+  return value.replaceAll('_', ' ')
 }
 
 function UsageMetric({ label, value }: { label: string; value: string }) {

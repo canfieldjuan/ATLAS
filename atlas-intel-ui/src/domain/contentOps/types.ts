@@ -128,6 +128,10 @@ export interface ContentOpsUsageSummaryBreakdown {
   provider?: string
   model?: string
   assetType?: string
+  cacheMode?: string
+  cacheReason?: string
+  cacheResult?: string
+  cacheStoreResult?: string
   costUsd: number
   cacheSavingsUsd: number
   calls: number
@@ -141,6 +145,7 @@ export interface ContentOpsUsageSummary {
   summary: ContentOpsUsageSummaryTotals
   byModel: ContentOpsUsageSummaryBreakdown[]
   byAssetType: ContentOpsUsageSummaryBreakdown[]
+  byCacheStatus: ContentOpsUsageSummaryBreakdown[]
 }
 
 // ---------------------------------------------------------------------------

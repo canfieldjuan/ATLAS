@@ -211,6 +211,9 @@ export function fromWireUsageSummary(
     },
     byModel: wire.by_model.map(fromWireUsageSummaryBreakdown),
     byAssetType: wire.by_asset_type.map(fromWireUsageSummaryBreakdown),
+    byCacheStatus: (wire.by_cache_status ?? []).map(
+      fromWireUsageSummaryBreakdown,
+    ),
   }
 }
 
@@ -221,6 +224,10 @@ function fromWireUsageSummaryBreakdown(
     provider: wire.provider,
     model: wire.model,
     assetType: wire.asset_type,
+    cacheMode: wire.cache_mode,
+    cacheReason: wire.cache_reason,
+    cacheResult: wire.cache_result,
+    cacheStoreResult: wire.cache_store_result,
     costUsd: wire.cost_usd,
     cacheSavingsUsd: wire.cache_savings_usd,
     calls: wire.calls,
