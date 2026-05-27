@@ -26,8 +26,11 @@ Slice phase: Production hardening
    trace metadata.
 4. Keep cache behavior read-only in this slice: no cache lookup, no cache store,
    and no changes to generated output.
-5. Add focused tests for policy branches and LLM trace integration.
-6. Enroll the new policy tests in the extracted pipeline CI runner.
+5. Mark support-ticket-sourced execution requests in the shared LLM trace
+   context so the policy sees the real customer-data source marker.
+6. Add focused tests for policy branches, executor source-marker propagation,
+   and LLM trace integration.
+7. Enroll the new policy tests in the extracted pipeline CI runner.
 
 ### Files touched
 
@@ -36,11 +39,13 @@ Slice phase: Production hardening
 | `plans/PR-Content-Ops-Exact-Cache-Policy.md` | Plan doc for the cache-policy seam. |
 | `extracted_content_pipeline/content_ops_cache_policy.py` | Add Content Ops exact-cache policy decisions. |
 | `extracted_content_pipeline/campaign_llm_client.py` | Evaluate policy and add cache decision metadata to LLM traces. |
+| `extracted_content_pipeline/content_ops_execution.py` | Carry support-ticket source markers into the LLM trace context. |
 | `extracted_content_pipeline/settings.py` | Add extracted Content Ops cache settings defaults. |
 | `extracted_content_pipeline/manifest.json` | Register the new owned policy module. |
 | `tests/test_atlas_content_ops_infrastructure.py` | Update host infrastructure trace assertion for cache decision metadata. |
 | `tests/test_extracted_content_ops_cache_policy.py` | Cover policy branch decisions. |
 | `tests/test_extracted_campaign_llm_client.py` | Cover trace metadata carrying the cache decision. |
+| `tests/test_extracted_content_ops_execution.py` | Pin support-ticket execution marker propagation for cache policy decisions. |
 | `scripts/run_extracted_pipeline_checks.sh` | Enroll the new extracted policy test. |
 
 ## Mechanism
@@ -63,6 +68,11 @@ returns a decision:
 each call. The result is added to trace metadata as decision fields such as
 `cache_mode`, `cache_reason`, and `cache_namespace`. This gives operators and
 follow-up slices a concrete signal without changing generation behavior.
+
+`content_ops_execution.py` adds support-ticket source markers to the shared
+LLM trace context when the request inputs come from the support-ticket path.
+That makes the policy block the same metadata shape that real blog and landing
+generation calls see, instead of relying on synthetic per-call markers.
 
 ## Intentional
 
@@ -87,6 +97,8 @@ follow-up slices a concrete signal without changing generation behavior.
 
 ## Verification
 
+- python -m pytest tests/test_extracted_content_ops_execution.py::test_execute_marks_support_ticket_trace_context_for_cache_policy tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py -q — 29 passed, 1 warning.
+- python -m compileall -q extracted_content_pipeline/content_ops_execution.py tests/test_extracted_content_ops_execution.py — passed.
 - python -m pytest tests/test_atlas_content_ops_infrastructure.py::test_build_content_ops_llm_client_uses_pipeline_tracing_client tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py -q — 29 passed, 1 warning.
 - python -m compileall -q extracted_content_pipeline/content_ops_cache_policy.py tests/test_extracted_content_ops_cache_policy.py — passed.
 - python -m pytest tests/test_extracted_content_ops_cache_policy.py tests/test_extracted_campaign_llm_client.py -q — 27 passed, 1 warning.
@@ -105,9 +117,10 @@ follow-up slices a concrete signal without changing generation behavior.
 |---|---:|
 | Plan doc | ~110 |
 | Policy module | ~170 |
+| Executor trace-source wiring | ~40 |
 | LLM client/settings/manifest wiring | ~90 |
-| Tests and CI enrollment | ~230 |
-| **Total** | **~595** |
+| Tests and CI enrollment | ~285 |
+| **Total** | **~695** |
 
 This is above the 400 LOC soft cap because the policy module, integration
 wiring, and tests need to land together for the source-side cache contract to be
