@@ -177,6 +177,8 @@ export interface ContentOpsRequestBody {
   outputs?: string[]
   limit?: number                                   // 1..1000
   max_cost_usd?: number | null
+  account_usage_budget_usd?: number | null
+  account_usage_budget_days?: number
   inputs?: Record<string, unknown>
   ingestion_profile?: string                       // default "domain_specific"
   require_quality_gates?: boolean                  // default true
@@ -193,6 +195,15 @@ export interface ContentOpsInputProviderDiagnostics {
   provider: string
   metadata: Record<string, unknown>
   warnings: ContentOpsInputProviderWarning[]
+}
+
+export interface ContentOpsUsageBudgetEvaluationResponse {
+  budget_usd: number
+  period_days: number
+  current_cost_usd: number
+  estimated_cost_usd: number
+  projected_cost_usd: number
+  exceeded: boolean
 }
 
 // POST /content-ops/ingestion/inspect body and response
@@ -283,6 +294,7 @@ export interface ContentOpsPreviewResponse {
   warnings: string[]
   normalized_request: ContentOpsRequestBody | null
   input_provider?: ContentOpsInputProviderDiagnostics
+  usage_budget?: ContentOpsUsageBudgetEvaluationResponse
 }
 
 // POST /content-ops/plan response
