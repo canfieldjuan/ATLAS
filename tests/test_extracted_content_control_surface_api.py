@@ -10,6 +10,9 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.campaign_llm_client import (
+    current_content_ops_llm_trace_context,
+)
 from extracted_content_pipeline.campaign_ports import CampaignReasoningContext
 from extracted_content_pipeline.content_ops_input_provider import ContentOpsInputPackage
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
@@ -76,6 +79,19 @@ class _CampaignService:
             "kwargs": dict(kwargs),
         })
         return {"generated": 1, "saved_ids": ["draft-1"]}
+
+
+class _TraceContextCampaignService(_CampaignService):
+    async def generate(self, *, scope, target_mode, limit=None, filters=None, **kwargs):
+        result = await super().generate(
+            scope=scope,
+            target_mode=target_mode,
+            limit=limit,
+            filters=filters,
+            **kwargs,
+        )
+        self.calls[-1]["trace_context"] = current_content_ops_llm_trace_context()
+        return result
 
 
 class _SyncInputProvider:
@@ -843,6 +859,88 @@ async def test_preview_generation_route_normalizes_cache_policy_field():
 
     assert payload["can_run"] is True
     assert payload["normalized_request"]["content_ops_cache_policy"] == "no_store"
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_applies_cache_policy_default_from_scope():
+    provider_calls = []
+
+    def cache_policy_default_provider(scope):
+        provider_calls.append(scope)
+        return "exact-cache"
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-cache-default"},
+        input_provider=_SyncInputProvider(ContentOpsInputPackage(
+            provider="atlas_support_ticket_request",
+            inputs={"topic": "Provider fallback topic"},
+            outputs=("blog_post",),
+        )),
+        cache_policy_default_provider=cache_policy_default_provider,
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"topic": "Support-ticket questions customers keep asking"},
+        }
+    )
+
+    assert payload["can_run"] is True
+    assert provider_calls[0].account_id == "acct-cache-default"
+    assert payload["normalized_request"]["content_ops_cache_policy"] == "exact"
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_preserves_explicit_cache_policy_over_default():
+    provider_called = False
+
+    def cache_policy_default_provider(scope):
+        nonlocal provider_called
+        del scope
+        provider_called = True
+        return "exact"
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-cache-default"},
+        cache_policy_default_provider=cache_policy_default_provider,
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["blog_post"],
+            "inputs": {"topic": "Support-ticket questions customers keep asking"},
+            "content_ops_cache_policy": "no-store",
+        }
+    )
+
+    assert provider_called is False
+    assert payload["normalized_request"]["content_ops_cache_policy"] == "no_store"
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_rejects_invalid_cache_policy_default():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-cache-default"},
+        cache_policy_default_provider=lambda _scope: "semantic",
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["blog_post"],
+                "inputs": {"topic": "Support-ticket questions customers keep asking"},
+            }
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Content Ops cache policy default is invalid."
 
 
 @pytest.mark.asyncio
@@ -2758,6 +2856,32 @@ async def test_execute_route_without_reasoning_provider_passes_services_unchange
     # The original instance handled the request; no wrapping happened.
     assert len(base.calls) == 1
     assert base.calls[0]["reasoning_context"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_route_applies_cache_policy_default_to_trace_context():
+    campaign = _TraceContextCampaignService()
+    router = create_content_ops_control_surface_router(
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            campaign=campaign
+        ),
+        scope_provider=lambda: {"account_id": "acct-cache-default"},
+        cache_policy_default_provider=lambda _scope: "exact-cache",
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Audit"},
+        }
+    )
+
+    assert campaign.calls[0]["trace_context"] == {
+        "account_id": "acct-cache-default",
+        "content_ops_cache_policy": "exact",
+    }
+    assert current_content_ops_llm_trace_context() == {}
 
 
 @pytest.mark.asyncio
