@@ -13,6 +13,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from .campaign_ports import LLMMessage, LLMResponse
+from .content_ops_cache_policy import (
+    ContentOpsCacheDecision,
+    ContentOpsExactCachePolicy,
+)
 
 
 class LLMUnavailableError(RuntimeError):
@@ -88,6 +92,9 @@ class PipelineLLMClientConfig:
     try_openrouter: bool = True
     auto_activate_ollama: bool = True
     openrouter_model: str | None = None
+    exact_cache_enabled: bool = False
+    customer_data_exact_cache_enabled: bool = False
+    exact_cache_namespace_prefix: str = "content_ops"
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "PipelineLLMClientConfig":
@@ -97,6 +104,15 @@ class PipelineLLMClientConfig:
             try_openrouter=_to_bool(values.get("try_openrouter"), True),
             auto_activate_ollama=_to_bool(values.get("auto_activate_ollama"), True),
             openrouter_model=_optional_text(values.get("openrouter_model")),
+            exact_cache_enabled=_to_bool(values.get("exact_cache_enabled"), False),
+            customer_data_exact_cache_enabled=_to_bool(
+                values.get("customer_data_exact_cache_enabled"),
+                False,
+            ),
+            exact_cache_namespace_prefix=(
+                _optional_text(values.get("exact_cache_namespace_prefix"))
+                or "content_ops"
+            ),
         )
 
     @classmethod
@@ -111,6 +127,20 @@ class PipelineLLMClientConfig:
             ),
             openrouter_model=_optional_text(
                 getattr(settings_obj, "openrouter_model", None),
+            ),
+            exact_cache_enabled=_to_bool(
+                getattr(settings_obj, "exact_cache_enabled", None),
+                False,
+            ),
+            customer_data_exact_cache_enabled=_to_bool(
+                getattr(settings_obj, "customer_data_exact_cache_enabled", None),
+                False,
+            ),
+            exact_cache_namespace_prefix=(
+                _optional_text(
+                    getattr(settings_obj, "exact_cache_namespace_prefix", None),
+                )
+                or "content_ops"
             ),
         )
 
@@ -131,6 +161,15 @@ class PipelineLLMClientConfig:
                 True,
             ),
             openrouter_model=_optional_text(env.get(f"{prefix}OPENROUTER_MODEL")),
+            exact_cache_enabled=_to_bool(env.get(f"{prefix}EXACT_CACHE_ENABLED"), False),
+            customer_data_exact_cache_enabled=_to_bool(
+                env.get(f"{prefix}CUSTOMER_DATA_EXACT_CACHE_ENABLED"),
+                False,
+            ),
+            exact_cache_namespace_prefix=(
+                _optional_text(env.get(f"{prefix}EXACT_CACHE_NAMESPACE_PREFIX"))
+                or "content_ops"
+            ),
         )
 
 
@@ -145,6 +184,7 @@ class PipelineLLMClient:
     openrouter_model: str | None = None
     resolver: LLMResolver = _default_resolver
     tracer: LLMTraceCallable | None = _default_trace_llm_call
+    cache_policy: ContentOpsExactCachePolicy = ContentOpsExactCachePolicy()
 
     async def complete(
         self,
@@ -164,6 +204,10 @@ class PipelineLLMClient:
         if llm is None:
             raise LLMUnavailableError("No LLM route configured for campaign generation")
 
+        cache_decision = self.cache_policy.decide(
+            _cache_policy_metadata(metadata),
+            messages=messages,
+        )
         started = time.monotonic()
         try:
             call_args = {
@@ -185,6 +229,7 @@ class PipelineLLMClient:
                 response=None,
                 duration_ms=_duration_ms(started),
                 metadata=metadata,
+                cache_decision=cache_decision,
                 status="failed",
                 error_message=str(exc)[:500],
                 error_type=type(exc).__name__,
@@ -195,6 +240,7 @@ class PipelineLLMClient:
             response=response,
             duration_ms=_duration_ms(started),
             metadata=metadata,
+            cache_decision=cache_decision,
         )
         return response
 
@@ -205,6 +251,7 @@ class PipelineLLMClient:
         response: LLMResponse | None,
         duration_ms: float,
         metadata: Mapping[str, Any] | None,
+        cache_decision: ContentOpsCacheDecision | None,
         status: str = "completed",
         error_message: str | None = None,
         error_type: str | None = None,
@@ -226,8 +273,17 @@ class PipelineLLMClient:
         call_metadata = dict(metadata or {})
         call_metadata.pop("account_id", None)
         call_metadata.pop("user_id", None)
+        for key in (
+            "cache_mode",
+            "cache_reason",
+            "cache_namespace",
+            "cache_account_id",
+        ):
+            call_metadata.pop(key, None)
         trace_metadata.update(scoped_metadata)
         trace_metadata.update(call_metadata)
+        if cache_decision is not None:
+            trace_metadata.update(cache_decision.trace_metadata())
         try:
             self.tracer(
                 "content_ops.llm.complete",
@@ -301,6 +357,11 @@ def create_pipeline_llm_client(
         auto_activate_ollama=resolved.auto_activate_ollama,
         openrouter_model=resolved.openrouter_model,
         resolver=resolver,
+        cache_policy=ContentOpsExactCachePolicy(
+            exact_cache_enabled=resolved.exact_cache_enabled,
+            customer_data_exact_cache_enabled=resolved.customer_data_exact_cache_enabled,
+            namespace_prefix=resolved.exact_cache_namespace_prefix,
+        ),
     )
 
 
@@ -328,6 +389,16 @@ def _to_chat_messages(messages: Sequence[LLMMessage]) -> list[Any]:
         )
         for message in messages
     ]
+
+
+def _cache_policy_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    scoped_metadata = current_content_ops_llm_trace_context()
+    call_metadata = dict(metadata or {})
+    call_metadata.pop("account_id", None)
+    call_metadata.pop("user_id", None)
+    merged = dict(scoped_metadata)
+    merged.update(call_metadata)
+    return merged
 
 
 def _llm_call_is_async(llm: Any) -> bool:

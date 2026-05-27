@@ -182,6 +182,9 @@
       "target": "extracted_content_pipeline/campaign_llm_client.py"
     },
     {
+      "target": "extracted_content_pipeline/content_ops_cache_policy.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_ports.py"
     },
     {
