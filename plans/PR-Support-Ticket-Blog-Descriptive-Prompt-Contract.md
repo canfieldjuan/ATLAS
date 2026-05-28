@@ -23,7 +23,9 @@ Slice phase: Functional validation
 2. Tell the generator to use only observed counts, clusters, customer wording,
    and review-needed FAQ shells; neutralize tied-cluster ranking; and keep
    post-publication measurement language non-promissory.
-3. Pin that the addendum appears in both first-pass and repair prompts.
+3. Recompute the full descriptive contract before applying the addendum so stale
+   caller-provided mode flags cannot suppress or force it.
+4. Pin that the addendum appears in both first-pass and repair prompts.
 
 ### Files touched
 
@@ -34,8 +36,9 @@ Slice phase: Functional validation
 ## Mechanism
 
 `_blog_generation_prompts` already receives the enriched blueprint, including
-`data_context.support_ticket_blog_mode`. This PR appends a small, explicit user
-prompt addendum when that mode is `descriptive_no_outcome`.
+the support-ticket data context. This PR appends a small, explicit user prompt
+addendum when recomputing `support_ticket_descriptive_blog_contract()` says the
+context is questions-only support-ticket evidence.
 
 The addendum repeats the contract in plain instructions the model sees right
 before generation: describe what the uploaded tickets show, avoid business
@@ -44,8 +47,11 @@ tied, use draft-answer placeholders when resolution evidence is absent, and do
 not claim FAQ entries will be discoverable, rank, reduce tickets, or prove they
 are working.
 
-Because repair prompts reuse the original base user prompt, the same addendum
-also carries into quality repair attempts.
+The blueprint enrichment now also clears stale descriptive contract fields for
+support-ticket contexts that no longer qualify and overwrites stale non-matching
+mode fields for questions-only contexts that do qualify. Because repair prompts
+reuse the original base user prompt, the same addendum also carries into quality
+repair attempts.
 
 ## Intentional
 
@@ -53,8 +59,8 @@ also carries into quality repair attempts.
   contract source that caused the last live retries to drift.
 - The evaluator backstop remains unchanged here; the previous slice already
   proved it catches the observed bad drafts.
-- The addendum is only applied for support-ticket blogs without measured
-  outcomes or resolution evidence.
+- The addendum is only applied after recomputing the full evidence contract, so
+  stale caller-provided mode fields do not decide prompt behavior.
 
 ## Deferred
 
@@ -66,8 +72,8 @@ also carries into quality repair attempts.
 
 ## Verification
 
-- Command: python -m pytest tests/test_extracted_blog_generation.py::test_generate_puts_support_ticket_descriptive_contract_in_prompt tests/test_extracted_blog_generation.py::test_quality_repair_prompt_keeps_support_ticket_descriptive_contract -q
-  - Passed, 2 tests.
+- Command: python -m pytest tests/test_extracted_blog_generation.py::test_generate_puts_support_ticket_descriptive_contract_in_prompt tests/test_extracted_blog_generation.py::test_generate_recomputes_stale_support_ticket_descriptive_contract tests/test_extracted_blog_generation.py::test_generate_clears_stale_descriptive_contract_for_outcome_backed_context tests/test_extracted_blog_generation.py::test_quality_repair_prompt_keeps_support_ticket_descriptive_contract -q
+  - Passed, 4 tests.
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-blog-descriptive-prompt-contract-pr-body.md
   - Pending.
 
@@ -75,7 +81,7 @@ also carries into quality repair attempts.
 
 | Area | Estimated LOC |
 |---|---:|
-| Prompt addendum | ~45 |
-| Tests | ~25 |
-| Plan doc | ~70 |
-| Total | ~140 |
+| Prompt addendum | ~55 |
+| Tests | ~70 |
+| Plan doc | ~80 |
+| Total | ~205 |

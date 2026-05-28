@@ -72,6 +72,12 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
     "Draft answer - support team should add the verified resolution before publishing."
 )
+_SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
+    "support_ticket_blog_mode",
+    "allowed_claims",
+    "forbidden_claims",
+    "draft_answer_guidance",
+)
 
 
 @dataclass(frozen=True)
@@ -939,13 +945,16 @@ def _blueprint_with_support_ticket_blog_contract(
     blueprint: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     data_context = _mapping_dict(blueprint.get("data_context"))
-    contract = support_ticket_descriptive_blog_contract(data_context)
-    if not contract:
+    if not _is_support_ticket_blog_context(data_context):
         return blueprint
+    contract = support_ticket_descriptive_blog_contract(data_context)
     enriched = dict(blueprint)
     merged = dict(data_context)
-    for key, value in contract.items():
-        merged.setdefault(key, value)
+    for key in _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS:
+        merged.pop(key, None)
+    merged.update(contract)
+    if merged == data_context:
+        return blueprint
     enriched["data_context"] = merged
     return enriched
 
@@ -1004,7 +1013,7 @@ def _with_support_ticket_descriptive_prompt_addendum(
     blueprint: Mapping[str, Any],
 ) -> str:
     data_context = _mapping_dict(blueprint.get("data_context"))
-    if data_context.get("support_ticket_blog_mode") != SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE:
+    if not support_ticket_descriptive_blog_contract(data_context):
         return prompt
     return (
         f"{prompt}\n\n"
