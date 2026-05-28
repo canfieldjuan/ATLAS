@@ -10,7 +10,7 @@ pattern does not reject neutral language.
 AGENTS.md already says false-positive surfaces need rejection fixtures, but the
 rule is broad enough that evaluator-pattern slices keep treating it as
 optional. This workflow/process slice makes the requirement explicit for
-denylist, regex, and pattern-list evaluator changes.
+denylist, regex, phrase-matcher, and pattern-list evaluator changes.
 
 ## Scope (this PR)
 
@@ -18,8 +18,8 @@ Ownership lane: workflow/process
 Slice phase: Workflow/process
 
 1. Update the checker/evaluator coverage contract to require at least one
-   allowed near-miss fixture whenever a PR adds or changes denylist, regex, or
-   pattern-list detection.
+   allowed near-miss fixture whenever a PR adds or changes denylist, regex,
+   phrase-matcher, or pattern-list detection.
 2. Update the reviewer checklist so reviewers can enforce that precision
    requirement directly instead of re-raising it as a recurring NIT.
 3. Keep this to workflow documentation only; no product code, evaluator code,
@@ -36,8 +36,8 @@ The existing `3i. Checkers prove their failure detection` section already
 requires negative fixtures and false-positive rejection fixtures. This slice
 adds a specific sub-rule for evaluator pattern work:
 
-- new or changed denylist/regex/pattern-list detectors need one bad fixture
-  that must fail and one allowed near-miss fixture that must pass
+- new or changed denylist/regex/phrase-matcher/pattern-list detectors need one
+  bad fixture that must fail and one allowed near-miss fixture that must pass
 - the plan must explicitly defer the near-miss only when it names why that is
   safe and what future PR owns it
 

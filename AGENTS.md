@@ -434,9 +434,9 @@ Before LGTM, the reviewer confirms:
       has a focused negative fixture, OR predicates have one-marker
       fixtures, and false-positive surfaces are covered or explicitly
       deferred with a named future slice. If the PR adds or changes
-      denylist/regex/pattern-list detection, the coverage includes an
-      allowed near-miss fixture or the plan names the future PR that will add
-      it.
+      denylist/regex/phrase-matcher/pattern-list detection, the coverage
+      includes an allowed near-miss fixture or the plan names the future PR
+      that will add it.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.
