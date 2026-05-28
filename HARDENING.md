@@ -50,15 +50,6 @@ register under `docs/technical-debt/`.
 - Owner/session: content-ops/faq-search
 - Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
 
-### LLM usage storage schema mismatch hides per-run cost telemetry
-- File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
-- Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.
-- Why it matters: Generation still works, but local cost/usage surfacing is incomplete, which blocks the cost visibility work the product needs before heavier validation and production use.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/support-ticket-provider
-- Found during: PR-Support-Ticket-SaaS-Demo-Generated-Content-Acceptance
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
