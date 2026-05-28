@@ -365,11 +365,19 @@ Required coverage shape:
    checks need tests for lookalikes: strings that are `Sequence`, empty lists,
    malformed-but-realistic JSON, unknown headings, missing keys, or unrelated
    route envelopes.
-4. **I/O checkers mock the transport, not the checker.** For network/file/DB
+4. **Evaluator pattern changes prove precision.** If a PR adds or changes a
+   denylist, regex, phrase matcher, or pattern list in an evaluator/checker,
+   pair the bad-input fixture with at least one allowed near-miss fixture that
+   should still pass. Example: a support-ticket claim detector that blocks
+   "traffic suggests customers found the answer" also needs a neutral
+   measurement sentence such as "use page views as one signal" that remains
+   allowed. If the near-miss is intentionally omitted, the plan must name the
+   risk, why it is safe for this slice, and the future PR that will add it.
+5. **I/O checkers mock the transport, not the checker.** For network/file/DB
    checkers, test the real fetch/read path by mocking `urlopen`, file handles,
    DB cursors, or equivalent transport boundaries. Replacing the checker’s
    own fetch helper with a fake is not enough.
-5. **Result-envelope drift fails closed.** If a checker returns `ok`,
+6. **Result-envelope drift fails closed.** If a checker returns `ok`,
    `errors`, `count`, `results`, or similar contract fields, tests must cover
    malformed or contradictory envelopes so missing error lists, count
    mismatches, or non-object payloads do not silently pass.
@@ -425,7 +433,10 @@ Before LGTM, the reviewer confirms:
 - [ ] For checker/evaluator/validator/gate PRs, each detection branch
       has a focused negative fixture, OR predicates have one-marker
       fixtures, and false-positive surfaces are covered or explicitly
-      deferred with a named future slice.
+      deferred with a named future slice. If the PR adds or changes
+      denylist/regex/phrase-matcher/pattern-list detection, the coverage
+      includes an allowed near-miss fixture or the plan names the future PR
+      that will add it.
 - [ ] No drift from the plan's stated scope (no scope creep, no
       "while I was at it" cleanups beyond the slice's contract).
 - [ ] Defensible trade-offs are explained in **Intentional**.
