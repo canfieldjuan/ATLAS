@@ -32,8 +32,8 @@ Slice phase: Workflow/process
 The workflow runs on pull requests and pushes to `main` when these paths change:
 the workflow file itself, `atlas_brain/api/admin_costs.py`, or
 `tests/test_admin_costs.py`. It checks out the repo, sets up Python 3.11,
-installs the same lightweight route-test dependencies used by adjacent CI
-jobs plus `psutil`, and runs:
+   installs the same lightweight route-test dependencies used by adjacent CI
+   jobs plus `asyncpg` and `psutil`, and runs:
 
 ```bash
 python -m pytest tests/test_admin_costs.py -q
@@ -59,6 +59,8 @@ python -m pytest tests/test_admin_costs.py -q
 
 - Workflow YAML parse command: python inline PyYAML load for `.github/workflows/admin_costs_checks.yml` — passed.
 - Admin costs pytest command: python -m pytest tests/test_admin_costs.py -q — 21 passed, 1 warning.
+- First GitHub Actions run — failed during collection because the workflow did
+  not install `asyncpg`, which is imported by `atlas_brain.storage.database`.
 
 ## Estimated diff size
 
