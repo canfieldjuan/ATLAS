@@ -57,6 +57,37 @@ def _default_case(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _query_summary(
+    cases: Sequence[Mapping[str, Any]], *, from_case_file: bool
+) -> dict[str, Any]:
+    unique_queries: list[str] = []
+    seen: set[str] = set()
+    for case in cases:
+        query = str(case["query"])
+        if query in seen:
+            continue
+        seen.add(query)
+        unique_queries.append(query)
+
+    if not unique_queries:
+        return {
+            "query": "no valid case queries" if from_case_file else "",
+            "query_mode": "case_file_invalid" if from_case_file else "none",
+            "query_count": 0,
+        }
+    if len(unique_queries) == 1:
+        return {
+            "query": unique_queries[0],
+            "query_mode": "case_file" if from_case_file else "single",
+            "query_count": 1,
+        }
+    return {
+        "query": "multiple case-file queries" if from_case_file else "multiple queries",
+        "query_mode": "case_file_mixed" if from_case_file else "mixed",
+        "query_count": len(unique_queries),
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run concurrent hosted FAQ search route reads."
@@ -667,6 +698,10 @@ def _summary_payload(
     preflight_errors: Sequence[str] = (),
 ) -> dict[str, Any]:
     active_cases = list(cases) if cases is not None else [_default_case(args)]
+    query_summary = _query_summary(
+        active_cases,
+        from_case_file=args.case_file is not None,
+    )
     errors = _error_summary(results)
     latency = _latency_summary(results)
     detail = _detail_summary(results, required=bool(args.require_detail))
@@ -693,7 +728,9 @@ def _summary_payload(
         "phase": "preflight" if preflight_errors else "complete",
         "route": str(args.route),
         "base_url": contract._clean_url(str(args.base_url)),
-        "query": str(args.query),
+        "query": query_summary["query"],
+        "query_mode": query_summary["query_mode"],
+        "query_count": query_summary["query_count"],
         "corpus_id": str(args.corpus_id or ""),
         "status": str(args.status or ""),
         "limit": int(args.limit),

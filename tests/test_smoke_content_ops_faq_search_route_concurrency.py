@@ -381,6 +381,77 @@ def test_load_cases_inherits_optional_cli_defaults(tmp_path):
     ]
 
 
+def test_summary_payload_uses_single_case_file_query(tmp_path):
+    case_file = tmp_path / "cases.json"
+    cases = [
+        {
+            "query": "cancel enterprise export",
+            "corpus_id": "corp-a",
+            "status": "published",
+            "limit": 3,
+            "require_results": True,
+        }
+    ]
+
+    payload = smoke._summary_payload(
+        args=_args(query="mortgage dispute", case_file=case_file),
+        cases=cases,
+        results=[],
+        elapsed_seconds=0.0,
+    )
+
+    assert payload["query"] == "cancel enterprise export"
+    assert payload["query_mode"] == "case_file"
+    assert payload["query_count"] == 1
+
+
+def test_summary_payload_marks_mixed_case_file_queries(tmp_path):
+    case_file = tmp_path / "cases.json"
+    cases = [
+        {
+            "query": "cancel enterprise export",
+            "corpus_id": "corp-a",
+            "status": "published",
+            "limit": 3,
+            "require_results": True,
+        },
+        {
+            "query": "invite seat limit",
+            "corpus_id": "corp-b",
+            "status": "published",
+            "limit": 3,
+            "require_results": True,
+        },
+    ]
+
+    payload = smoke._summary_payload(
+        args=_args(query="mortgage dispute", case_file=case_file),
+        cases=cases,
+        results=[],
+        elapsed_seconds=0.0,
+    )
+
+    assert payload["query"] == "multiple case-file queries"
+    assert payload["query_mode"] == "case_file_mixed"
+    assert payload["query_count"] == 2
+
+
+def test_summary_payload_marks_invalid_case_file_without_default_query(tmp_path):
+    case_file = tmp_path / "cases.json"
+
+    payload = smoke._summary_payload(
+        args=_args(query="mortgage dispute", case_file=case_file),
+        cases=[],
+        results=[],
+        elapsed_seconds=0.0,
+        preflight_errors=["case[0].query must be a non-empty string"],
+    )
+
+    assert payload["query"] == "no valid case queries"
+    assert payload["query_mode"] == "case_file_invalid"
+    assert payload["query_count"] == 0
+
+
 def test_load_cases_rejects_case_empty_results_with_detail_required(tmp_path):
     case_file = _write_case_file(
         tmp_path,
@@ -1549,6 +1620,9 @@ def test_main_result_includes_case_summaries_for_mixed_cases(tmp_path, monkeypat
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 1
+    assert payload["query"] == "multiple case-file queries"
+    assert payload["query_mode"] == "case_file_mixed"
+    assert payload["query_count"] == 2
     assert payload["cases"]["summaries"][0]["requests"] == 1
     assert payload["cases"]["summaries"][0]["errors"] == {"count": 0, "rate": 0.0}
     assert payload["cases"]["summaries"][0]["latency"]["count"] == 1
