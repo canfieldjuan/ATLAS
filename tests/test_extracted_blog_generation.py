@@ -1052,7 +1052,11 @@ async def test_generate_quality_repair_prompt_explains_known_blockers() -> None:
     assert "Replace vague H2 headings" in retry_prompt
     assert "`Summary`" in retry_prompt
     assert "specific question or answer headings" in retry_prompt
-    assert "Make at least two H2 sections independently citable" in retry_prompt
+    assert "Rewrite at least two H2 sections" in retry_prompt
+    assert "first paragraph immediately after each of those H2 headings" in retry_prompt
+    assert "must be 40-120 words" in retry_prompt
+    assert "exact `target_keyword` string from the previous JSON" in retry_prompt
+    assert "Do not rely on the title, introduction, blockquotes, bullets" in retry_prompt
 
 
 def test_blog_quality_repair_guidance_uses_compact_support_ticket_word_floor() -> None:

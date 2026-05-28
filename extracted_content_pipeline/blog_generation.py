@@ -228,9 +228,13 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
             )
         elif code == "geo_citable_section_structure_missing":
             instructions.append(
-                "- Make at least two H2 sections independently citable. Each of "
-                "those sections must start with a 40-120 word answer paragraph "
-                "that includes the exact `target_keyword` or clearest named subject."
+                "- Rewrite at least two H2 sections so each one is independently "
+                "citable. The first paragraph immediately after each of those H2 "
+                "headings must be 40-120 words and must include the exact "
+                "`target_keyword` string from the previous JSON. If no "
+                "`target_keyword` exists, include the exact clearest named topic "
+                "term. Do not rely on the title, introduction, blockquotes, "
+                "bullets, or later paragraphs to satisfy this check."
             )
         elif code == "geo_citation_safety_failed":
             instructions.append(
