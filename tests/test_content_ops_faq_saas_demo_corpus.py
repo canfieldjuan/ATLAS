@@ -227,6 +227,7 @@ def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
     assert parsed.max_error_rate == 0
     assert parsed.max_case_error_rate == 0
     assert parsed.max_detail_ms == 2500
+    assert parsed.artifact_dir == Path("/tmp/faq-saas-demo-route-e2e-artifacts")
     assert parsed.output_result == Path("/tmp/faq-saas-demo-route-e2e-result.json")
     assert e2e_smoke._validate_args(parsed) == []
 
