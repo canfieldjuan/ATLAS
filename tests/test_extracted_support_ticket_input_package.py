@@ -288,7 +288,7 @@ def test_support_ticket_clusters_include_remaining_bucket() -> None:
             "description": f"How do I fix issue {index}?",
             "pain_category": f"category-{index}",
         }
-        for index in range(1, 9)
+        for index in range(1, 15)
     ])
 
     assert package.inputs["top_ticket_clusters"] == [
@@ -298,6 +298,12 @@ def test_support_ticket_clusters_include_remaining_bucket() -> None:
         {"label": "category-4", "count": 1},
         {"label": "category-5", "count": 1},
         {"label": "category-6", "count": 1},
+        {"label": "category-7", "count": 1},
+        {"label": "category-8", "count": 1},
+        {"label": "category-9", "count": 1},
+        {"label": "category-10", "count": 1},
+        {"label": "category-11", "count": 1},
+        {"label": "category-12", "count": 1},
         {"label": "remaining", "count": 2},
     ]
 

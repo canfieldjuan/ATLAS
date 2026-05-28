@@ -43,6 +43,7 @@ Slice phase: Functional validation
 - `extracted_content_pipeline/support_ticket_input_package.py` - support-ticket cluster rollup limit.
 - `plans/PR-Support-Ticket-SaaS-Demo-Blog-Final-Retry.md` - this plan.
 - `tests/test_evaluate_support_ticket_generated_content.py` - false-green evaluator coverage.
+- `tests/test_extracted_support_ticket_input_package.py` - extracted package cluster rollup coverage.
 - `tests/test_smoke_content_ops_support_ticket_package.py` - cluster rollup coverage.
 
 ## Mechanism
@@ -106,6 +107,8 @@ cluster-correct blog retries still failed manual review.
   - Failed as expected after the evaluator was tightened for the second cluster-correct false-green claims and metadata surface.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py tests/test_smoke_content_ops_support_ticket_package.py -q
   - Passed, 57 tests.
+- Command: python -m pytest tests/test_extracted_support_ticket_input_package.py::test_support_ticket_clusters_include_remaining_bucket -q
+  - Passed.
 - Command: python -m pytest tests/test_smoke_content_ops_support_ticket_package.py -q
   - Passed, 8 tests.
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-saas-demo-blog-final-retry-pr-body.md
@@ -116,10 +119,10 @@ cluster-correct blog retries still failed manual review.
 | Area | Estimated LOC |
 |---|---:|
 | Validation note | ~83 |
-| Cluster rollup fix + tests | ~30 |
+| Cluster rollup fix + tests | ~45 |
 | Evaluator and prompt contract | ~235 |
-| Plan doc | ~136 |
-| Total | ~484 |
+| Plan doc | ~140 |
+| Total | ~503 |
 
 Over the 400-LOC soft cap because the same PR needs to record the rejection,
 fix the source rollup, and pin the evaluator false-green that made the fixture
