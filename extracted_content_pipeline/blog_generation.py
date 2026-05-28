@@ -58,7 +58,11 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
     "prevented tickets or fewer repeat questions",
     "churn, retention, upgrade, referral, ROI, or capacity outcomes",
     "claims that FAQ entries help customers find answers or avoid tickets",
+    "claims that customers can find answers themselves because an FAQ exists",
     "faster resolution or customers finding answers without opening tickets",
+    "claims that FAQ entries reduce how often the team answers a question",
+    "claims that FAQ entries perform better in search without measured evidence",
+    "claims that lower repeat tickets prove an FAQ entry is working",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
 )
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
@@ -248,7 +252,10 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "counts, timeframes, clusters, and customer wording present in the "
                 "blueprint. Do not invent calendar windows, ticket-reduction "
                 "percentages, ROI math, future impact claims, or claims that "
-                "customers will or could find answers without opening support tickets."
+                "customers will or could find answers without opening support tickets. "
+                "Do not say FAQ entries reduce support load, reduce how often the "
+                "team answers a question, perform better in search, or prove they "
+                "are working when repeat tickets decline."
             )
             instructions.append(
                 "- If `data_context.support_ticket_blog_mode` is "
