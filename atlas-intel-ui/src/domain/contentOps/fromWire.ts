@@ -590,6 +590,12 @@ export function fromWireExecution(
     steps: wire.steps.map(fromWireStepExecution),
     errors: wire.errors.map((e) => ({ ...e })),
   }
+  if (typeof wire.request_id === 'string' && wire.request_id.trim()) {
+    result.requestId = wire.request_id
+  }
+  if (wire.usage_summary) {
+    result.usageSummary = fromWireUsageSummary(wire.usage_summary)
+  }
   const inputProvider = fromWireInputProviderDiagnostics(wire.input_provider)
   if (inputProvider) {
     result.inputProvider = inputProvider

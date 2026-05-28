@@ -150,4 +150,5 @@ Next useful slices:
 - broaden live validation across more customer CSV shapes
 - decide whether to promote this accepted artifact into a minimized regression
   fixture
-- surface per-run Content Ops usage/cost in the product UI
+- per-run Content Ops usage/cost in the product UI is addressed by
+  `plans/PR-Content-Ops-Run-Usage-Summary.md`
