@@ -589,6 +589,21 @@ async def test_generate_sends_blueprint_in_user_message_when_template_has_no_pla
 
 
 @pytest.mark.asyncio
+async def test_generate_keeps_dynamic_blueprint_out_of_system_prompt() -> None:
+    service, _blueprints, _blog_posts, llm, _skills = _service(
+        prompts={"digest/blog_post_generation": "Write from {blueprint_json}"}
+    )
+
+    await service.generate(scope=TenantScope(), target_mode="vendor_retention", limit=1)
+
+    system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "the blueprint JSON supplied in the user message" in system_prompt
+    assert "HubSpot pricing pressure" not in system_prompt
+    assert '"topic":"HubSpot pricing pressure"' in user_prompt
+
+
+@pytest.mark.asyncio
 async def test_generate_blocks_low_quality_posts_without_saving() -> None:
     service, _blueprints, blog_posts, _llm, _skills = _service(
         responses=[_valid_blog_json(content="Too short.")],
@@ -847,10 +862,11 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
     assert result.generated == 1
     system_prompt = llm.calls[0]["messages"][0].content
     user_prompt = llm.calls[0]["messages"][1].content
-    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
-    assert '"allowed_claims":' in system_prompt
-    assert '"forbidden_claims":' in system_prompt
-    assert '"draft_answer_guidance":' in system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' not in system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in user_prompt
+    assert '"allowed_claims":' in user_prompt
+    assert '"forbidden_claims":' in user_prompt
+    assert '"draft_answer_guidance":' in user_prompt
     assert "Support-ticket descriptive mode instructions:" in user_prompt
     assert "Do not rank tied clusters by business impact" in user_prompt
     assert "Measurement language must be observational only" in user_prompt
@@ -875,8 +891,10 @@ async def test_generate_recomputes_stale_support_ticket_descriptive_contract() -
     assert result.generated == 1
     system_prompt = llm.calls[0]["messages"][0].content
     user_prompt = llm.calls[0]["messages"][1].content
-    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' not in system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in user_prompt
     assert "stale_non_descriptive" not in system_prompt
+    assert "stale_non_descriptive" not in user_prompt
     assert "Support-ticket descriptive mode instructions:" in user_prompt
 
 
@@ -910,7 +928,9 @@ async def test_generate_clears_stale_descriptive_contract_for_outcome_backed_con
     assert "forbidden_claims" not in draft.data_context
     assert "draft_answer_guidance" not in draft.data_context
     assert "descriptive_no_outcome" not in system_prompt
+    assert "descriptive_no_outcome" not in user_prompt
     assert "stale allowed" not in system_prompt
+    assert "stale allowed" not in user_prompt
     assert "Support-ticket descriptive mode instructions:" not in user_prompt
 
 
@@ -942,7 +962,8 @@ async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract()
     assert result.generated == 1
     repair_system_prompt = llm.calls[1]["messages"][0].content
     retry_prompt = llm.calls[1]["messages"][1].content
-    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in repair_system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' not in repair_system_prompt
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in retry_prompt
     assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
     assert "Support-ticket descriptive mode instructions:" in retry_prompt
     assert "Do not rank tied clusters by business impact" in retry_prompt
@@ -1511,15 +1532,12 @@ def test_parse_blog_post_response_accepts_missing_content_for_quality_pack_to_ju
 
 
 # -----------------------
-# PR-Blog-Topic-Per-Call: per-call topic kwarg substitutes into the prompt
+# PR-Blog-Prompt-Cache-Stability: per-call topic stays in the user prompt
 # -----------------------
 
 
 @pytest.mark.asyncio
-async def test_generate_per_call_topic_substitutes_into_prompt():
-    """Operator-supplied topic reaches the system prompt via the
-    ``{topic}`` placeholder."""
-
+async def test_generate_per_call_topic_stays_out_of_system_prompt():
     service, _bps, _drafts, llm, _skills = _service(
         prompts={
             "digest/blog_post_generation": "Focus: {topic}\n\nWrite from {blueprint_json}"
@@ -1534,14 +1552,14 @@ async def test_generate_per_call_topic_substitutes_into_prompt():
     )
 
     system_prompt = llm.calls[0]["messages"][0].content
-    assert "Focus: Renewal pricing pressure on mid-market SaaS" in system_prompt
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "the operator-supplied topic provided in the user message" in system_prompt
+    assert "Renewal pricing pressure on mid-market SaaS" not in system_prompt
+    assert "Operator-supplied topic focus: Renewal pricing pressure on mid-market SaaS" in user_prompt
 
 
 @pytest.mark.asyncio
-async def test_generate_no_topic_resolves_placeholder_to_empty_string():
-    """No-topic case: the ``{topic}`` placeholder still gets substituted
-    (to ``""``), keeping the prompt structurally clean."""
-
+async def test_generate_no_topic_keeps_system_prompt_stable_without_user_topic():
     service, _bps, _drafts, llm, _skills = _service(
         prompts={
             "digest/blog_post_generation": "Focus: {topic}\n\nWrite from {blueprint_json}"
@@ -1556,9 +1574,10 @@ async def test_generate_no_topic_resolves_placeholder_to_empty_string():
     )
 
     system_prompt = llm.calls[0]["messages"][0].content
-    # Placeholder substituted with empty string -- "Focus: \n\n..." remains.
+    user_prompt = llm.calls[0]["messages"][1].content
     assert "{topic}" not in system_prompt
-    assert "Focus: \n" in system_prompt or "Focus:\n" in system_prompt
+    assert "Focus: the operator-supplied topic provided in the user message" in system_prompt
+    assert "Operator-supplied topic focus:" not in user_prompt
 
 
 @pytest.mark.asyncio
@@ -1577,7 +1596,9 @@ async def test_generate_topic_no_placeholder_no_op():
     )
 
     system_prompt = llm.calls[0]["messages"][0].content
-    assert "Some topic" not in system_prompt  # no placeholder, no substitution
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Some topic" not in system_prompt
+    assert "Operator-supplied topic focus: Some topic" in user_prompt
     assert "{topic}" not in system_prompt
 
 
@@ -1636,11 +1657,13 @@ async def test_generate_with_reasoning_provider_merges_context_into_blueprint() 
     assert call["target_id"] == "bp-1"
     assert call["target_mode"] == "blog_blueprint"
 
-    # LLM saw the merged blueprint JSON.
+    # LLM saw the merged blueprint JSON in the per-run user prompt.
     system_prompt = llm.calls[0]["messages"][0].content
-    assert "reasoning_context" in system_prompt
-    assert "campaign_reasoning_context" in system_prompt
-    assert "Renewal pricing rose 22 percent" in system_prompt
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "reasoning_context" not in system_prompt
+    assert "reasoning_context" in user_prompt
+    assert "campaign_reasoning_context" in user_prompt
+    assert "Renewal pricing rose 22 percent" in user_prompt
     result_dict = result.as_dict()
     assert result_dict["reasoning_contexts_used"] == 1
     assert result_dict["consumed_reasoning_contexts"][0]["top_theses"][0]["claim"] == (

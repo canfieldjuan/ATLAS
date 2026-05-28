@@ -454,10 +454,11 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
     assert call["metadata"]["skill_name"] == "digest/blog_post_generation"
     assert call["metadata"]["asset_type"] == "blog_post"
     system_prompt, user_prompt = _message_texts(call)
-    assert "Support-ticket questions customers keep asking" in system_prompt
-    assert "content_ops_support_ticket_faq" in system_prompt
-    assert "support_ticket_provider" in system_prompt
-    assert "included_ticket_row_count" in system_prompt
+    assert "Support-ticket questions customers keep asking" not in system_prompt
+    assert "Support-ticket questions customers keep asking" in user_prompt
+    assert "content_ops_support_ticket_faq" in user_prompt
+    assert "support_ticket_provider" in user_prompt
+    assert "included_ticket_row_count" in user_prompt
     assert "Generate one blog post" in user_prompt
 
 
