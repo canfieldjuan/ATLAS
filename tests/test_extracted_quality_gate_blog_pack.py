@@ -263,6 +263,29 @@ def test_geo_context_blocks_missing_draft_contract_pieces():
     }
 
 
+def test_geo_context_requires_topic_terms_for_citable_sections():
+    body = (
+        "## What does Atlas Support Desk show in the ticket sample?\n\n"
+        "Atlas Support Desk shows 36 uploaded tickets with repeated customer "
+        "questions across export, dashboard, login, permissions, API, and sync "
+        "topics. The opening answer is long enough to look independently "
+        "citable, and it names a visible entity, but it intentionally omits the "
+        "configured topic terms so save-time validation matches export "
+        "readiness.\n\n"
+        "## How should Atlas Support Desk teams read the pattern?\n\n"
+        "Atlas Support Desk teams should treat the ticket sample as source "
+        "evidence for FAQ planning during the last 90 days. The paragraph is "
+        "again long enough and visibly entity-specific, but it still omits the "
+        "configured topic terms that export readiness requires for citable "
+        "sections.\n\n"
+        + _LONG_GOOD_BODY
+    )
+
+    report = evaluate_blog_post(_make_input(body, **_geo_context()))
+
+    assert "geo_citable_section_structure_missing" in report.metadata["blocking_codes"]
+
+
 def test_geo_context_blocks_citation_safety_when_existing_findings_fail():
     body = _GEO_READY_BODY + "\n\nSee {{todo}} before publishing."
 

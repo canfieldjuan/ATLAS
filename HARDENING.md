@@ -32,15 +32,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
-### Blog save-time GEO gate and export readiness disagree on citable sections
-- File/location: `extracted_quality_gate/blog_pack.py`, `extracted_content_pipeline/blog_post_export.py`, live run in `tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_geo/blog-post-draft.json`.
-- Description: After the GEO repair guidance landed, the 36-row SaaS demo blog saved and passed support-ticket generated-content evaluation, but the exported draft still reported GEO `needs_review` because `citable_section_structure` was missing. Diagnostic replay showed the save-time quality pack passed the same draft with only a warning, so save-time and export citable-section rules are not equivalent.
-- Why it matters: The blog path can save a draft that is not export-ready for GEO, which would let an apparently successful generation miss the SEO/GEO/AEO acceptance bar.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/support-ticket-provider
-- Found during: PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture
-
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
 - Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.

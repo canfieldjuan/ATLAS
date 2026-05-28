@@ -717,8 +717,7 @@ def _geo_self_contained_section(
         return False
     if topic_terms:
         searchable = f"{heading} {first_paragraph}".lower()
-        if any(term.lower() in searchable for term in topic_terms):
-            return True
+        return any(term.lower() in searchable for term in topic_terms)
     return _visible_entity_present(heading, first_paragraph)
 
 
