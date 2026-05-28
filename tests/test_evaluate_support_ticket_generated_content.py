@@ -1105,6 +1105,11 @@ def test_blog_export_fails_help_center_discoverability_false_green_claims() -> N
             "Their frontline perspective can reveal whether customers are finding "
             "the FAQ entries and what follow-up questions they ask."
         ),
+        "High FAQ views suggest customers found the answer.",
+        (
+            "Their frontline perspective can reveal whether customers are not "
+            "finding FAQ entries."
+        ),
     ]
     export = _blog_export(
         content_override=(
@@ -1125,6 +1130,31 @@ def test_blog_export_fails_help_center_discoverability_false_green_claims() -> N
     )
     assert outcome_check["passed"] is False
     assert outcome_check["details"]["unsupported_claims"] == claims
+
+
+def test_blog_export_allows_neutral_discoverability_measurement_language() -> None:
+    export = _blog_export(
+        content_override=(
+            "The uploaded 36 support tickets show reporting and dashboard "
+            "clusters. Use FAQ page views as one signal after publishing. "
+            "Low traffic is a reason to review titles, internal links, and "
+            "answer coverage. Support team observations can show what follow-up "
+            "questions customers ask."
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is True
+    assert outcome_check["details"] == {"unsupported_claims": []}
 
 
 def test_blog_export_fails_cluster_fixed_saas_demo_false_green_claims() -> None:

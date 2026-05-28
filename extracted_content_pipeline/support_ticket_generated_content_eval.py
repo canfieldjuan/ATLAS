@@ -144,6 +144,11 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcustomers\s+(?:found|are\s+not\s+finding)\s+"
+        r"(?:the\s+)?(?:page|answer|faq\s+entr(?:y|ies))\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
         re.IGNORECASE,
     ),
@@ -480,12 +485,14 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\b(?:traffic|views?)\b[^.!?\n]{0,120}\bsuggests?\s+customers\s+"
-        r"are\s+finding\s+the\s+(?:page|answer|faq\s+entr(?:y|ies))\b",
+        r"(?:found|are\s+finding|are\s+not\s+finding)\s+"
+        r"(?:the\s+)?(?:page|answer|faq\s+entr(?:y|ies))\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\b(?:reveal|reveals|show|shows|indicate|indicates)\s+whether\s+"
-        r"customers\s+are\s+finding\s+(?:the\s+)?faq\s+entr(?:y|ies)\b",
+        r"customers\s+(?:are\s+finding|are\s+not\s+finding|found)\s+"
+        r"(?:the\s+)?faq\s+entr(?:y|ies)\b",
         re.IGNORECASE,
     ),
     re.compile(

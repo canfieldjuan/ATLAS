@@ -22,7 +22,8 @@ Slice phase: Robust testing
    false-green phrases.
 2. Tighten the support-ticket generated-content evaluator so those claims fail
    `support_ticket_outcome_claims_grounded`.
-3. Keep the change limited to deterministic evaluation; no prompt, live LLM, or
+3. Add a precision guard proving neutral measurement language still passes.
+4. Keep the change limited to deterministic evaluation; no prompt, live LLM, or
    fixture-promotion changes are included.
 
 ### Files touched
@@ -46,7 +47,9 @@ patterns for:
 
 The tests feed those exact reviewed claim shapes through the public
 `evaluate_support_ticket_generated_content(..., output="blog_post")` path and
-assert the outcome check fails with the expected unsupported claims.
+assert the outcome check fails with the expected unsupported claims. A paired
+near-miss test keeps neutral measurement wording allowed when it avoids
+discoverability or outcome causality.
 
 ## Intentional
 
@@ -70,7 +73,7 @@ assert the outcome check fails with the expected unsupported claims.
 ## Verification
 
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
-  - Passed, 50 tests.
+  - Passed, 54 tests after merging fresh main.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json --pretty
   - Passed; accepted fixture still reports `ok=true` and no unsupported claims.
 - Command: python -m pytest tests/test_support_ticket_saas_demo_generated_content_fixtures.py -q
