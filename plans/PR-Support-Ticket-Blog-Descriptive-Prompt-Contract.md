@@ -37,7 +37,7 @@ Slice phase: Functional validation
 
 `_blog_generation_prompts` already receives the enriched blueprint, including
 the support-ticket data context. This PR appends a small, explicit user prompt
-addendum when recomputing `support_ticket_descriptive_blog_contract()` says the
+addendum when recomputing the support-ticket descriptive blog contract says the
 context is questions-only support-ticket evidence.
 
 The addendum repeats the contract in plain instructions the model sees right
