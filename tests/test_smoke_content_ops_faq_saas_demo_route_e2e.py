@@ -43,6 +43,7 @@ def _fake_runner(
     *,
     route_ok: bool = True,
     route_artifact_ok: bool | None = None,
+    route_artifact_body: str | None = None,
     route_writes_artifact: bool = True,
     seed_faq_id: str = "faq-123",
 ):
@@ -94,7 +95,10 @@ def _fake_runner(
             return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
         if str(smoke.ROUTE_SCRIPT) in command:
             route_result = Path(command[command.index("--output-result") + 1])
-            if route_writes_artifact:
+            if route_artifact_body is not None:
+                route_result.parent.mkdir(parents=True, exist_ok=True)
+                route_result.write_text(route_artifact_body, encoding="utf-8")
+            elif route_writes_artifact:
                 _write_json(
                     route_result,
                     {
@@ -230,6 +234,22 @@ def test_main_fails_when_successful_route_omits_result_artifact(tmp_path, monkey
     assert len(payload["errors"]) == 1
     assert payload["errors"][0].startswith("route result could not be read:")
     assert str(tmp_path / "artifacts" / "route-result.json") in payload["errors"][0]
+    assert payload["cleanup"]["ok"] is True
+    assert len(calls) == 3
+
+
+def test_main_fails_when_successful_route_writes_malformed_artifact(tmp_path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls, route_artifact_body="{"))
+
+    code = smoke.main(_base_args(tmp_path))
+
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["route"]["ok"] is True
+    assert payload["route"]["result_artifact"]["available"] is False
+    assert payload["route"]["result_artifact"]["ok"] is False
+    assert payload["errors"] == ["route result must contain JSON: Expecting property name enclosed in double quotes"]
     assert payload["cleanup"]["ok"] is True
     assert len(calls) == 3
 
