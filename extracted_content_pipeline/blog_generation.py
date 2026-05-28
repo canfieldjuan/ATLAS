@@ -42,7 +42,7 @@ from extracted_quality_gate.types import QualityInput, QualityPolicy
 # tenant-scope concept.
 _BLOG_REASONING_TARGET_MODE = "blog_blueprint"
 _BLOG_FAILURE_EXCERPT_CHARS = 1500
-_SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS = 25
+_SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS = 50
 _SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS = 700
 _SMALL_SUPPORT_TICKET_BLOG_TARGET_WORDS = 1100
 _SUPPORT_TICKET_QUESTION_RE = re.compile(
@@ -70,6 +70,10 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
     "claims that unresolved questions delay activation or block workflows",
     "claims that FAQ entries create self-service options or search-result visibility",
     "claims that FAQ entries are discoverable, rank for keywords, or are working",
+    (
+        "fixed calendar windows, rolling periods, or future tracking intervals "
+        "when uploaded tickets are undated"
+    ),
     "prioritization by business impact, activation delay, workflow blocking, or friction reduction without evidence",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
 )
@@ -119,6 +123,10 @@ _SUPPORT_TICKET_MEASUREMENT_GUIDANCE = (
     "Track new tickets by the same observed cluster labels after publishing.",
     "Review FAQ page traffic and customer feedback as signals to inspect.",
     "Compare future tickets against the observed clusters without claiming causality.",
+    (
+        "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
+        "checkpoints unless the uploaded tickets include a dated source window."
+    ),
 )
 _SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS = 6
 _SUPPORT_TICKET_GENERIC_LABEL_WORDS = frozenset({

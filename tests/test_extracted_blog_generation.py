@@ -436,6 +436,11 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "claims that FAQ entries help customers find answers or avoid tickets"
         in contract["forbidden_claims"]
     )
+    assert (
+        "fixed calendar windows, rolling periods, or future tracking intervals "
+        "when uploaded tickets are undated"
+        in contract["forbidden_claims"]
+    )
     assert contract["draft_answer_guidance"].startswith("Draft answer -")
     assert [section["heading"] for section in contract["required_section_outline"]] == [
         "What the uploaded support tickets show",
@@ -465,6 +470,10 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "Track new tickets by the same observed cluster labels after publishing.",
         "Review FAQ page traffic and customer feedback as signals to inspect.",
         "Compare future tickets against the observed clusters without claiming causality.",
+        (
+            "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
+            "checkpoints unless the uploaded tickets include a dated source window."
+        ),
     ]
     assert support_ticket_descriptive_blog_contract({
         "source": "support_ticket_provider",
@@ -575,6 +584,46 @@ def test_small_support_ticket_blog_policy_preserves_explicit_thresholds() -> Non
     assert policy.thresholds["min_words"] == 20
     assert policy.thresholds["target_words"] == 30
     assert policy.thresholds["pass_score"] == 0
+
+
+def test_demo_sized_support_ticket_blog_context_uses_compact_quality_policy() -> None:
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 36,
+                "included_ticket_row_count": 36,
+                "has_measured_outcomes": False,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=None,
+    )
+
+    assert policy is not None
+    assert policy.thresholds["min_words"] == 700
+    assert policy.thresholds["target_words"] == 1100
+    assert policy.metadata["support_ticket_small_upload"] is True
+
+
+def test_support_ticket_blog_context_uses_compact_policy_when_included_count_is_small() -> None:
+    policy = _quality_policy_for_context(
+        {
+            "data_context": {
+                "source": "support_ticket_provider",
+                "source_row_count": 250,
+                "included_ticket_row_count": 30,
+                "has_measured_outcomes": False,
+                "support_ticket_resolution_evidence_present": False,
+            }
+        },
+        base_policy=None,
+    )
+
+    assert policy is not None
+    assert policy.thresholds["min_words"] == 700
+    assert policy.thresholds["target_words"] == 1100
+    assert policy.metadata["support_ticket_small_upload"] is True
 
 
 def test_small_support_ticket_blog_policy_does_not_apply_with_outcome_evidence() -> None:
