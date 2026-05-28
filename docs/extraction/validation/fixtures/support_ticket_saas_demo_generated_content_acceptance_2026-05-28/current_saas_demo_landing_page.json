@@ -1,0 +1,223 @@
+{
+  "count": 1,
+  "rows": [
+    {
+      "title": "Turn Support Tickets Into FAQ Answers Your Customers Need",
+      "slug": "support-ticket-faq-report",
+      "status": "draft",
+      "campaign_name": "FAQ Report",
+      "value_prop": "Turn repeat support tickets into clear FAQ answers customers can use before they email support",
+      "persona": "Small teams answering repeat support questions",
+      "hero": {
+        "cta_label": "Upload Ticket CSV \u2014 Free Analysis",
+        "cta_url": "/systems/ai-content-ops/intake",
+        "headline": "Stop answering the same support questions",
+        "subheadline": "Analyze your support tickets to identify repeat questions and turn them into clear FAQ answers customers can find before they email support."
+      },
+      "sections": [
+        {
+          "body_markdown": "Small teams answer the same support questions repeatedly because customers don't have a clear FAQ to check first. In the uploaded tickets, 35 of 36 questions clustered into just six repeat categories, showing the pattern is predictable and addressable.\n\nSmall teams spend hours each week answering repeat support questions\u2014the same questions about reporting exports, dashboard refreshes, permissions, and integrations. Each answer takes time away from harder problems. In the uploaded tickets we analyzed, 35 of 36 questions fell into just six repeat categories: reporting exports, dashboard freshness, SSO setup, permissions, API access, and integration sync issues.\n\nWithout a clear FAQ, customers keep emailing instead of finding answers themselves. Your team keeps typing the same responses. The cycle never breaks.",
+          "id": "repeat_questions_problem",
+          "metadata": {
+            "answer_summary": "Small teams answer the same support questions repeatedly because customers don't have a clear FAQ to check first. In the uploaded tickets, 35 of 36 questions clustered into just six repeat categories, showing the pattern is predictable and addressable.",
+            "kind": "problem",
+            "order": 1,
+            "primary_question": "Why do support teams spend so much time on repeat questions?"
+          },
+          "title": "Your support team is answering the same questions over and over"
+        },
+        {
+          "body_markdown": "The FAQ Report analyzes your support tickets to identify repeat questions and customer wording, so you can build FAQ answers grounded in real support evidence instead of guessing what to document.\n\nThe FAQ Report analyzes your uploaded support tickets to find the repeat questions your team is already answering. It surfaces the exact customer wording, groups similar questions, and shows you which topics matter most. You get a clear list of the questions your customers are asking\u2014in their own words\u2014so you can write FAQ answers that actually match what people search for.\n\nInstead of guessing what to document, you build your FAQ from real support evidence. Customers find answers before they email. Your team answers fewer repeat tickets.",
+          "id": "faq_solution",
+          "metadata": {
+            "answer_summary": "The FAQ Report analyzes your support tickets to identify repeat questions and customer wording, so you can build FAQ answers grounded in real support evidence instead of guessing what to document.",
+            "kind": "solution",
+            "order": 2,
+            "primary_question": "How do you build an FAQ that customers will actually use?"
+          },
+          "title": "Turn your support tickets into a working FAQ your customers actually use"
+        },
+        {
+          "body_markdown": "Upload your support tickets, the tool identifies repeat questions and customer wording, you review the results and draft FAQ answers, then publish them to your help center so customers find answers before emailing support.\n\n1. **Upload your support tickets.** Export your support ticket CSV and upload it to the FAQ Report tool.\n\n2. **We identify repeat questions.** The tool analyzes your tickets, groups similar questions, and shows you the top topics your team is answering.\n\n3. **Review the customer wording.** You see the exact phrases customers use when they ask for help\u2014not internal jargon, but real customer language.\n\n4. **Draft your FAQ answers.** Use the report to write clear, customer-focused FAQ answers for each repeat question.\n\n5. **Publish and track.** Add the answers to your help center or knowledge base. Your customers find answers before they email support.\n\nThe report gives your team the evidence you need to build an FAQ that works\u2014no guessing, no meetings about what to document.",
+          "id": "how_it_works",
+          "metadata": {
+            "answer_summary": "Upload your support tickets, the tool identifies repeat questions and customer wording, you review the results and draft FAQ answers, then publish them to your help center so customers find answers before emailing support.",
+            "kind": "how_it_works",
+            "order": 3,
+            "primary_question": "What is the step-by-step process?"
+          },
+          "title": "How the FAQ Report works"
+        },
+        {
+          "body_markdown": "The report identifies repeat questions from your actual support tickets. In the uploaded tickets, reporting exports and dashboard freshness were the top repeat categories, with the same questions appearing four times each.\n\nIn the uploaded tickets we analyzed, these questions appeared multiple times:\n\n- **Reporting exports:** \"How do I export attribution reports before our board meeting?\" \"Why is the campaign CSV export missing source and owner columns?\" \"Can I schedule a weekly attribution report export for finance?\" \"Why can analysts view dashboards but not export reports?\"\n\n- **Dashboard freshness:** \"Why has our pipeline dashboard not refreshed since yesterday?\" \"How do we check whether the warehouse sync is delayed?\"\n\nThese six customer questions represent four separate support tickets each. If your team is answering the same question four times, a single FAQ answer can prevent all four tickets. The report shows you exactly which questions repeat\u2014so you know where to focus first.",
+          "id": "real_repeat_questions",
+          "metadata": {
+            "answer_summary": "The report identifies repeat questions from your actual support tickets. In the uploaded tickets, reporting exports and dashboard freshness were the top repeat categories, with the same questions appearing four times each.",
+            "kind": "proof",
+            "order": 4,
+            "primary_question": "What kinds of repeat questions does the report find?"
+          },
+          "title": "Real repeat questions from support tickets"
+        },
+        {
+          "body_markdown": "Your team stays in full control. The report identifies repeat questions and customer wording; you review, edit, and decide what to publish. No automatic publishing, no special skills required, and your team reviews everything first.\n\n**Will this publish automatically?** No. The FAQ Report gives you a list of repeat questions and customer wording. Your team reviews the answers, adds your product details, and decides what to publish and where.\n\n**Do we need a full-time docs person?** No. The report surfaces the questions your team is already answering. You use the customer wording and repeat patterns to write FAQ answers faster\u2014no special documentation skills required.\n\n**Can our team review the answers first?** Yes. The report is a starting point for your team to review, edit, and verify before publishing. You control the final FAQ content.",
+          "id": "objections_and_setup",
+          "metadata": {
+            "answer_summary": "Your team stays in full control. The report identifies repeat questions and customer wording; you review, edit, and decide what to publish. No automatic publishing, no special skills required, and your team reviews everything first.",
+            "kind": "objection",
+            "order": 5,
+            "primary_question": "How much control does our team have over the FAQ?"
+          },
+          "title": "Your team stays in control"
+        },
+        {
+          "body_markdown": "Upload your support ticket CSV to get a free FAQ Report showing your repeat questions, customer wording, and FAQ opportunities. No credit card or setup required.\n\nUpload your support ticket CSV to get a free FAQ Report. You'll see which questions your team is answering most, the exact customer wording, and a clear list of FAQ opportunities.\n\nNo credit card required. No long setup. Just upload and see the repeat patterns in your support tickets.",
+          "id": "get_started",
+          "metadata": {
+            "answer_summary": "Upload your support ticket CSV to get a free FAQ Report showing your repeat questions, customer wording, and FAQ opportunities. No credit card or setup required.",
+            "kind": "conversion",
+            "order": 6,
+            "primary_question": "How do I get started?"
+          },
+          "title": "See your repeat questions in 5 minutes"
+        }
+      ],
+      "cta": {
+        "label": "Upload Ticket CSV \u2014 Free Analysis",
+        "url": "/systems/ai-content-ops/intake",
+        "variant": "primary"
+      },
+      "meta": {
+        "description": "Analyze support tickets to find repeat questions and build an FAQ customers use. Free FAQ Report for small support teams.",
+        "og_image_url": "",
+        "title_tag": "Support Ticket FAQ Report | Turn Tickets Into FAQ Answers"
+      },
+      "metadata": {
+        "campaign_name": "FAQ Report",
+        "generation_model": "anthropic/claude-haiku-4-5",
+        "source_context": {
+          "customer_wording_examples": [
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-001",
+              "source_title": "Attribution export blocked",
+              "text": "Attribution export blocked How do I export attribution reports before our board meeting?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-002",
+              "source_title": "CSV export missing fields",
+              "text": "CSV export missing fields Why is the campaign CSV export missing source and owner columns?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-003",
+              "source_title": "Export scheduled report",
+              "text": "Export scheduled report Can I schedule a weekly attribution report export for finance?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-004",
+              "source_title": "Dashboard export permissions",
+              "text": "Dashboard export permissions Why can analysts view dashboards but not export reports?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-005",
+              "source_title": "Dashboard stale data",
+              "text": "Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-006",
+              "source_title": "Warehouse sync lag",
+              "text": "Warehouse sync lag How do we check whether the warehouse sync is delayed?"
+            }
+          ],
+          "has_dated_window": false,
+          "has_measured_outcomes": false,
+          "included_ticket_row_count": 36,
+          "measured_outcome_count": 0,
+          "question_like_ticket_count": 35,
+          "skipped_ticket_row_count": 0,
+          "source_row_count": 36,
+          "support_ticket_resolution_evidence_count": 0,
+          "support_ticket_resolution_evidence_present": false,
+          "top_ticket_clusters": [
+            {
+              "count": 4,
+              "label": "reporting export"
+            },
+            {
+              "count": 4,
+              "label": "dashboard freshness"
+            },
+            {
+              "count": 4,
+              "label": "sso setup"
+            },
+            {
+              "count": 4,
+              "label": "permissions and seats"
+            },
+            {
+              "count": 4,
+              "label": "api and webhooks"
+            },
+            {
+              "count": 4,
+              "label": "integration sync"
+            },
+            {
+              "count": 12,
+              "label": "remaining"
+            }
+          ],
+          "truncated_ticket_row_count": 0
+        }
+      },
+      "seo_aeo_readiness": {
+        "checks": {
+          "answer_first_hero": true,
+          "audience_specificity": true,
+          "meta_description": true,
+          "metadata_consistency": true,
+          "objection_coverage": true,
+          "problem_solution_clarity": true,
+          "slug_quality": true,
+          "title_tag": true
+        },
+        "missing": [],
+        "passed": 8,
+        "status": "ready",
+        "total": 8
+      },
+      "geo_readiness": {
+        "checks": {
+          "answer_extractability": true,
+          "audience_entity_clarity": true,
+          "claim_safety": true,
+          "conversion_path_clarity": true,
+          "offer_entity_clarity": true,
+          "section_semantics": true,
+          "trust_signal_visibility": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "output_checks": {
+        "answer_first_hero": true,
+        "audience_specificity": true,
+        "meta_description": true,
+        "metadata_consistency": true,
+        "objection_coverage": true,
+        "problem_solution_clarity": true,
+        "slug_quality": true,
+        "title_tag": true
+      },
+      "passed_output_checks": 8
+    }
+  ]
+}

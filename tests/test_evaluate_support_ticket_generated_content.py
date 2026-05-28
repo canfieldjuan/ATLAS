@@ -246,6 +246,90 @@ def test_blog_export_fails_unsupported_uploaded_ticket_cadence() -> None:
     assert cadence_check["details"] == {"unsupported_cadences": ["per week"]}
 
 
+def test_blog_export_allows_source_backed_uploaded_ticket_cadence() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can I schedule a weekly attribution report export for finance?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded tickets include the customer question "
+            "\"Can I schedule a weekly attribution report export for finance?\" "
+            "That question should be reviewed as customer wording, not a "
+            "generated cadence claim."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is True
+    assert cadence_check["details"] == {"unsupported_cadences": []}
+
+
+def test_blog_export_still_blocks_unquoted_cadence_with_source_cadence_present() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can I schedule a weekly attribution report export for finance?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "Your team sees reporting questions weekly."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is False
+    assert cadence_check["details"] == {"unsupported_cadences": ["weekly"]}
+
+
+def test_blog_export_blocks_cadence_outside_source_quote_in_same_sentence() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can I schedule a weekly attribution report export for finance?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded ticket asked, "
+            "\"Can I schedule a weekly attribution report export for finance?\" "
+            "and the team gets these reporting questions weekly."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is False
+    assert cadence_check["details"] == {"unsupported_cadences": ["weekly"]}
+
+
 def test_landing_export_fails_unsupported_uploaded_ticket_cadence() -> None:
     result = evaluator.evaluate_support_ticket_generated_content(
         _landing_export(
@@ -761,6 +845,94 @@ def test_blog_export_fails_third_live_false_green_benefit_claims() -> None:
             "answer their own questions."
         ),
     ]
+
+
+def test_blog_export_fails_saas_demo_false_green_outcome_claims() -> None:
+    claims = [
+        (
+            "Each repeated question represents a support ticket that could have "
+            "been prevented by a clear FAQ entry."
+        ),
+        (
+            "A small FAQ effort could address two-thirds of your incoming "
+            "ticket volume."
+        ),
+        (
+            "Each FAQ entry you publish has the potential to address multiple "
+            "customer questions and reduce the number of tickets your team "
+            "must handle manually."
+        ),
+        (
+            "Each FAQ entry you publish represents a question your support team "
+            "will no longer need to answer repeatedly."
+        ),
+        (
+            "Each repeat question is an opportunity to move the answer into a "
+            "customer-facing FAQ and reduce support ticket volume by enabling "
+            "self-service."
+        ),
+        (
+            "These gaps in your customer-facing documentation are driving the "
+            "most inbound support volume."
+        ),
+        (
+            "A step-by-step SSO setup guide becomes a self-service resource "
+            "that reduces the need for support team intervention on "
+            "configuration questions."
+        ),
+        (
+            "A single FAQ entry can help your team handle future instances of "
+            "the same question more efficiently."
+        ),
+        (
+            "Addressing them will likely reduce your repeat-question volume "
+            "significantly, freeing your team to focus on complex issues."
+        ),
+        (
+            "A complete answer helps customers resolve their issue without "
+            "follow-up questions."
+        ),
+        "Answering one export question in an FAQ could prevent four similar tickets from arriving.",
+        "Addressing these issues will reduce your repeat-ticket volume.",
+        "FAQ titles and descriptions help customers find answers using the same phrasing.",
+        "Monitor your support queue to see whether the same questions stop appearing.",
+        "After 2-4 weeks, compare repeat ticket volume before and after publication.",
+        "Track FAQ page traffic and support ticket resolution time by cluster.",
+        (
+            "When you preserve the customer's own words in your FAQ entries, "
+            "future customers will recognize their situation and find the "
+            "answer faster."
+        ),
+        (
+            "When the same support ticket FAQ question appears 4 times in a "
+            "36-ticket sample, it signals the question is being asked much more "
+            "frequently across your full support queue."
+        ),
+        (
+            "These are configuration and integration questions typically asked "
+            "once per new customer."
+        ),
+        "These setup questions are asked by every customer at some point.",
+    ]
+    export = _blog_export(
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            + " ".join(claims)
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == claims
 
 
 def test_blog_export_fails_procedural_answer_steps_without_resolution_evidence() -> None:
