@@ -553,6 +553,18 @@ def _budget_summary(
         limit_value = round(float(max_case_error_rate), 6)
         for case_summary in case_summaries:
             case_index = int(case_summary.get("case_index") or 0)
+            if int(case_summary.get("requests") or 0) <= 0:
+                checks.append(
+                    {
+                        "metric": "case_error_rate",
+                        "case_index": case_index,
+                        "actual": None,
+                        "max": limit_value,
+                        "ok": False,
+                    }
+                )
+                failures.append(f"case_error_rate had no request samples for case {case_index}")
+                continue
             case_errors = case_summary.get("errors")
             actual = float(case_errors.get("rate") or 0.0) if isinstance(case_errors, Mapping) else 0.0
             ok = actual <= limit_value
