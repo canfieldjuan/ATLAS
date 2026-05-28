@@ -17,6 +17,16 @@ smoke = importlib.util.module_from_spec(SPEC)
 sys.modules["smoke_content_ops_faq_search_concurrency"] = smoke
 SPEC.loader.exec_module(smoke)
 
+CONTRACT_SCRIPT = ROOT / "scripts/check_content_ops_faq_search_route_contract.py"
+CONTRACT_SPEC = importlib.util.spec_from_file_location(
+    "check_content_ops_faq_search_route_contract_for_seed_test",
+    CONTRACT_SCRIPT,
+)
+assert CONTRACT_SPEC is not None and CONTRACT_SPEC.loader is not None
+contract = importlib.util.module_from_spec(CONTRACT_SPEC)
+sys.modules["check_content_ops_faq_search_route_contract_for_seed_test"] = contract
+CONTRACT_SPEC.loader.exec_module(contract)
+
 
 def _case(*, query: str = "export attribution report", expected_hit: bool = True):
     return smoke.SearchCase(
@@ -71,6 +81,19 @@ def test_documents_for_case_are_ranked_and_scoped() -> None:
     assert {document.status for document in documents} == {"approved"}
     assert {document.target_mode for document in documents} == {"support_account"}
     assert all("export attribution report" in document.search_text for document in documents)
+
+
+def test_items_for_case_match_detail_contract_shape() -> None:
+    items = smoke._items_for_case(_case(), documents_per_corpus=3)
+
+    assert len(items) == 1
+    assert items[0]["source_ids"] == [
+        "corpus-1-ticket-1",
+        "corpus-1-ticket-2",
+        "corpus-1-ticket-3",
+    ]
+    assert items[0]["ticket_count"] == 3
+    assert contract._validate_detail_item(items[0], index=0) == []
 
 
 def test_route_case_payload_carries_seeded_hit_and_miss_expectations() -> None:

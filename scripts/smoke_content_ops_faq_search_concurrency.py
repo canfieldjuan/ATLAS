@@ -259,6 +259,55 @@ def _documents_for_case(case: SearchCase, *, documents_per_corpus: int) -> tuple
     return tuple(documents)
 
 
+def _items_for_case(case: SearchCase, *, documents_per_corpus: int) -> list[dict[str, Any]]:
+    source_ids = [
+        f"{case.corpus_id}-ticket-{rank}" for rank in range(1, documents_per_corpus + 1)
+    ]
+    source_labels = [f"`{source_id}`" for source_id in source_ids]
+    return [
+        {
+            "topic": "reporting export",
+            "question": f"How do I export attribution reports for corpus {case.corpus_id}?",
+            "question_source": "customer_wording",
+            "summary": "Customers ask how to export attribution reports from the dashboard.",
+            "frequency": documents_per_corpus,
+            "weighted_frequency": sum(range(1, documents_per_corpus + 1)),
+            "ticket_count": documents_per_corpus,
+            "opportunity_score": documents_per_corpus,
+            "failure_risk_score": 1,
+            "failure_risk_signals": ["repeat_question"],
+            "answer": (
+                "Use the reporting export workflow and contact support if the CSV is missing."
+            ),
+            "steps": [
+                "Open the reporting dashboard.",
+                "Choose the attribution report export.",
+                "Contact support if the CSV is missing.",
+            ],
+            "action_items": [
+                "Open the reporting dashboard.",
+                "Choose the attribution report export.",
+                "Contact support if the CSV is missing.",
+            ],
+            "answer_evidence_status": "draft_needs_review",
+            "resolution_source_count": 0,
+            "when_to_contact_support": "Contact support if the exported CSV is missing.",
+            "evidence_quotes": [
+                f"`{source_ids[0]}`: export attribution report dashboard csv"
+            ],
+            "source_ids": source_ids,
+            "source_labels": source_labels,
+            "source_type_counts": {"support_ticket": documents_per_corpus},
+            "weighted_source_volume_by_type": {
+                "support_ticket": sum(range(1, documents_per_corpus + 1))
+            },
+            "term_mappings": [],
+            "evidence_count": documents_per_corpus,
+            "displayed_evidence_count": 1,
+        }
+    ]
+
+
 async def _apply_migrations(pool: Any) -> None:
     for relative in (
         "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql",
@@ -281,8 +330,8 @@ async def _seed(pool: Any, repo: PostgresTicketFAQSearchRepository, cases: Seque
                 warnings, metadata, status
             )
             VALUES (
-                $1::uuid, $2, $3, $4, $5, $6, '[]'::jsonb, $7, $7,
-                '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $8
+                $1::uuid, $2, $3, $4, $5, $6, $7::jsonb, $8, $8,
+                '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $9
             )
             """,
             case.faq_id,
@@ -291,6 +340,7 @@ async def _seed(pool: Any, repo: PostgresTicketFAQSearchRepository, cases: Seque
             SEEDED_FAQ_TARGET_MODE,
             SEEDED_FAQ_TITLE,
             SEEDED_FAQ_MARKDOWN,
+            json.dumps(_items_for_case(case, documents_per_corpus=documents_per_corpus)),
             documents_per_corpus,
             SEEDED_FAQ_STATUS,
         )
