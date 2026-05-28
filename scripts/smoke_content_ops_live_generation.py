@@ -698,6 +698,8 @@ def _support_ticket_blog_blueprint_payload(
         "included_ticket_row_count": included_row_count,
         "question_like_ticket_count": question_like_count,
         "top_clusters": top_clusters,
+        "faq_questions": faq_questions,
+        "customer_wording_examples": list(inputs.get("customer_wording_examples") or []),
         "_known_vendors": [],
         "total_reviews_analyzed": included_row_count,
         "deep_enriched_count": included_row_count,

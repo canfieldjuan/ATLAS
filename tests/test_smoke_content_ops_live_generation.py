@@ -1164,6 +1164,35 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert "allowed_claims" in payload["data_context"]
     assert "forbidden_claims" in payload["data_context"]
     assert payload["data_context"]["draft_answer_guidance"].startswith("Draft answer -")
+    assert [
+        section["heading"]
+        for section in payload["data_context"]["required_section_outline"]
+    ] == [
+        "What the uploaded support tickets show",
+        "Which FAQ gaps should be reviewed first",
+        "Draft FAQ shells to verify",
+        "What to measure after publishing",
+    ]
+    assert payload["data_context"]["draft_faq_shells"][0] == {
+        "cluster": "account",
+        "observed_ticket_count": 1,
+        "draft_question": "How do I change my login email?",
+        "answer_shell": (
+            "Draft answer - support team should add the verified resolution "
+            "before publishing."
+        ),
+        "verification_needed": [
+            "verified resolution",
+            "approved customer-facing wording",
+            "support owner review",
+        ],
+        "source_ids": ["ticket-login-1"],
+    }
+    assert payload["data_context"]["measurement_guidance"] == [
+        "Track new tickets by the same observed cluster labels after publishing.",
+        "Review FAQ page traffic and customer feedback as signals to inspect.",
+        "Compare future tickets against the observed clusters without claiming causality.",
+    ]
     assert "report_date" not in payload["data_context"]
     assert payload["data_context"]["included_ticket_row_count"] == 2
     assert payload["data_context"]["total_reviews_analyzed"] == 2
