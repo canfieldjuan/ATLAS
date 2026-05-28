@@ -56,6 +56,7 @@ def _blog_export(
     *,
     data_context: dict[str, Any] | None = None,
     content_override: str | None = None,
+    metadata_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     context = data_context if data_context is not None else _blog_context()
     content = content_override or (
@@ -73,6 +74,7 @@ def _blog_export(
             "tags": ["support tickets", "FAQ"],
             "charts": [{"title": "Top support-ticket clusters"}],
             "data_context": context,
+            "metadata": metadata_override or {},
         }],
     }
 
@@ -987,6 +989,139 @@ def test_blog_export_fails_final_saas_demo_false_green_outcome_claims() -> None:
     )
     assert outcome_check["passed"] is False
     assert outcome_check["details"]["unsupported_claims"] == claims
+
+
+def test_blog_export_fails_cluster_fixed_saas_demo_false_green_claims() -> None:
+    claims = [
+        (
+            "Blocker status — Which questions prevent customers from completing "
+            "critical workflows?"
+        ),
+        "Unresolved SSO questions can delay customer activation.",
+        "High traffic suggests customers are finding the answer.",
+        (
+            "Example: \"How do I export attribution reports?\" should appear "
+            "in search results after publication."
+        ),
+        "Each published FAQ entry gives customers a self-service option.",
+        (
+            "This phased approach lets a small team build FAQ coverage without "
+            "overwhelming the support queue."
+        ),
+    ]
+    export = _blog_export(
+        content_override=(
+            "The uploaded 36 support tickets show nine clusters with 4 tickets "
+            "each. " + " ".join(claims)
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == claims
+
+
+def test_blog_export_fails_second_cluster_fixed_saas_demo_false_green_claims() -> None:
+    claims = [
+        (
+            "Instead, prioritize by business impact: which questions block the "
+            "most customers from activation, cause the most repeat contact, "
+            "or affect your highest-value accounts?"
+        ),
+        (
+            "These questions suggest friction in your reporting workflow and "
+            "potential delays for finance or executive reviews."
+        ),
+        (
+            "The customer wording includes time-sensitive language: \"before "
+            "our board meeting\" and \"for finance,\" indicating these are "
+            "blocking workflows."
+        ),
+        (
+            "This is a high-friction onboarding blocker for enterprise "
+            "customers who cannot proceed with team setup until SSO is working."
+        ),
+        "Data Import -- Unblock new customer activation and onboarding.",
+        "SSO Setup -- Reduce enterprise onboarding friction and security delays.",
+        "Reporting Export -- Unblock finance and executive workflows.",
+        "API and Webhooks -- Reduce developer friction and integration delays.",
+        (
+            "This helps customers find related information without opening "
+            "another support ticket."
+        ),
+        (
+            "After publishing, verify that the FAQ entry appears in your help "
+            "center search and that the question text matches what customers "
+            "are searching for."
+        ),
+        (
+            "If customers continue to ask the same question in new tickets, "
+            "the FAQ entry may not be discoverable or may not match customer "
+            "language."
+        ),
+        (
+            "If traffic is low, the FAQ entry may not be discoverable or may "
+            "not rank for the keywords customers are using."
+        ),
+        (
+            "If so, the FAQ is being used as a support tool even if customers "
+            "did not find it first."
+        ),
+        (
+            "If repeat tickets on a topic do not decline, the FAQ answer may "
+            "be unclear, incomplete, hard to find, or may not match how "
+            "customers phrase the question."
+        ),
+        (
+            "And the post-publication metrics tell you whether the entry is "
+            "working or needs revision."
+        ),
+    ]
+    metadata_claim = (
+        "Start with the highest-volume clusters first. In this dataset, all "
+        "9 clusters tie at 4 tickets each, so prioritize based on business "
+        "impact: which questions block the most customers from activation, "
+        "cause the most repeat contact, or affect your highest-value accounts."
+    )
+    metadata_unsupported_claim = (
+        "In this dataset, all 9 clusters tie at 4 tickets each, so prioritize "
+        "based on business impact: which questions block the most customers "
+        "from activation, cause the most repeat contact, or affect your "
+        "highest-value accounts."
+    )
+    export = _blog_export(
+        content_override=(
+            "The uploaded 36 support tickets show nine clusters with 4 tickets "
+            "each. " + " ".join(claims)
+        ),
+        metadata_override={
+            "faq": [{"question": "How should we prioritize?", "answer": metadata_claim}]
+        },
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == (
+        claims + [metadata_unsupported_claim]
+    )
 
 
 def test_blog_export_fails_procedural_answer_steps_without_resolution_evidence() -> None:
