@@ -319,6 +319,9 @@ For hosted FAQ search go-live validation, use the seeded route e2e runbook at
 `docs/extraction/validation/content_ops_faq_seeded_route_e2e_runbook.md`. It
 seeds FAQ search rows, hits the deployed search route, hydrates generated FAQ
 detail, and cleans up the seeded rows in one probe.
+For the checked synthetic B2B SaaS demo artifact, use the route-case validation
+runbook at
+`docs/extraction/validation/content_ops_faq_saas_demo_route_case_runbook.md`.
 
 The source adapter copies `review_text`, `transcript`, `complaint`, `message`,
 `description`, `summary`, `notes`, `feedback`, `feedback_text`,
