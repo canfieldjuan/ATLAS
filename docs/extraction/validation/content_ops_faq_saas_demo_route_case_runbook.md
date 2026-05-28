@@ -121,6 +121,9 @@ Open `/tmp/faq-saas-demo-route-e2e-result.json` and inspect:
 - `route.result_artifact.requests`: hosted route request count.
 - `route.result_artifact.detail`: hydrated detail checks and failures.
 - `cleanup`: cleanup status, or `not_run_reason` when `--keep-data` is set.
+- `cleanup.result_artifact.account_id`: account used for cleanup.
+- `cleanup.result_artifact.deleted_faq_ids`: deleted FAQ rowcount.
+- `cleanup.result_artifact.delete_status`: raw Postgres delete status.
 
 Open `/tmp/faq-saas-demo-seed-result.json` and inspect:
 

@@ -94,7 +94,17 @@ def _fake_runner(calls: list[list[str]], *, route_ok: bool = True, seed_faq_id: 
             return {"ok": route_ok, "returncode": 0 if route_ok else 1, "stdout_tail": "", "stderr_tail": ""}
         if str(smoke.SEED_SCRIPT) in command and "--cleanup-faq-id" in command:
             cleanup_result = Path(command[command.index("--output-result") + 1])
-            _write_json(cleanup_result, {"ok": True, "phase": "cleanup", "faq_id": command[command.index("--cleanup-faq-id") + 1]})
+            _write_json(
+                cleanup_result,
+                {
+                    "ok": True,
+                    "phase": "cleanup",
+                    "account_id": "acct-1",
+                    "faq_id": command[command.index("--cleanup-faq-id") + 1],
+                    "deleted_faq_ids": 1,
+                    "delete_status": "DELETE 1",
+                },
+            )
             return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
         raise AssertionError(f"unexpected command: {command}")
 
@@ -164,6 +174,9 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch) -> None:
     assert payload["seed"]["result_artifact"]["faq_id"] == "faq-123"
     assert payload["route"]["result_artifact"]["detail"]["checked"] == 40
     assert payload["cleanup"]["result_artifact"]["faq_id"] == "faq-123"
+    assert payload["cleanup"]["result_artifact"]["account_id"] == "acct-1"
+    assert payload["cleanup"]["result_artifact"]["deleted_faq_ids"] == 1
+    assert payload["cleanup"]["result_artifact"]["delete_status"] == "DELETE 1"
     assert "--route-case-file-output" in calls[0]
     assert calls[1][calls[1].index("--case-file") + 1] == calls[0][calls[0].index("--route-case-file-output") + 1]
     assert calls[2][calls[2].index("--cleanup-faq-id") + 1] == "faq-123"
