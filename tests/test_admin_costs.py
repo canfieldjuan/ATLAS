@@ -1,11 +1,58 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+import sys
+import types
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+import atlas_brain
+
+
+def _install_package_shim(
+    name: str,
+    package_path: Path,
+    parent: object,
+    attribute: str,
+) -> types.ModuleType:
+    package = types.ModuleType(name)
+    package.__path__ = [str(package_path)]
+    package = sys.modules.setdefault(name, package)
+    setattr(parent, attribute, package)
+    return package
+
+
+# Keep this focused route test from importing aggregate package initializers.
+_ATLAS_BRAIN_ROOT = Path(__file__).resolve().parents[1] / "atlas_brain"
+api_package = _install_package_shim(
+    "atlas_brain.api",
+    _ATLAS_BRAIN_ROOT / "api",
+    atlas_brain,
+    "api",
+)
+services_package = _install_package_shim(
+    "atlas_brain.services",
+    _ATLAS_BRAIN_ROOT / "services",
+    atlas_brain,
+    "services",
+)
+scraping_package = _install_package_shim(
+    "atlas_brain.services.scraping",
+    _ATLAS_BRAIN_ROOT / "services" / "scraping",
+    services_package,
+    "scraping",
+)
+parsers_module = types.ModuleType("atlas_brain.services.scraping.parsers")
+parsers_module.get_all_parsers = lambda: {
+    "g2": types.SimpleNamespace(version="g2:3"),
+    "trustradius": types.SimpleNamespace(version="trustradius:1"),
+}
+parsers_module = sys.modules.setdefault("atlas_brain.services.scraping.parsers", parsers_module)
+setattr(scraping_package, "parsers", parsers_module)
 
 from atlas_brain.api.admin_costs import router
 from atlas_brain.auth.dependencies import AuthUser, require_auth
