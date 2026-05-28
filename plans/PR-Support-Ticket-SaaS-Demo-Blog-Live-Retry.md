@@ -74,7 +74,7 @@ without committing a current accepted blog fixture.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry/blog-post-draft.json --pretty
   - Passed.
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-saas-demo-blog-live-retry-pr-body.md
-  - Pending.
+  - Passed.
 
 ## Estimated diff size
 
