@@ -197,10 +197,14 @@ def test_saas_demo_faq_draft_projects_to_search_documents() -> None:
     assert "export" in first["question"].lower()
 
 
-def test_saas_demo_route_case_runbook_migration_command_matches_parser() -> None:
+def test_saas_demo_route_case_runbook_migration_command_matches_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     args = _runbook_command_args(
         "python scripts/run_extracted_content_pipeline_migrations.py"
     )
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     parsed = migration_cli._parse_args(args)
     doc = RUNBOOK_PATH.read_text(encoding="utf-8")
