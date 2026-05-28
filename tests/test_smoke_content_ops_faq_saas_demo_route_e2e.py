@@ -157,6 +157,128 @@ def test_validate_args_fails_closed_for_missing_host_inputs() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("base_url", "expected_error"),
+    [
+        (
+            "atlas.example.com",
+            "--base-url must be an absolute HTTP(S) URL for hosted proof",
+        ),
+        (
+            "ftp://atlas.example.com",
+            "--base-url must be an absolute HTTP(S) URL for hosted proof",
+        ),
+        (
+            "http://[::1",
+            "--base-url must be an absolute HTTP(S) URL for hosted proof",
+        ),
+        (
+            "http://localhost:8000",
+            "--base-url must point to a deployed host; local hosts are not accepted for hosted proof",
+        ),
+        (
+            "http://127.0.0.1:8000",
+            "--base-url must point to a deployed host; local hosts are not accepted for hosted proof",
+        ),
+        (
+            "http://0.0.0.0:8000",
+            "--base-url must point to a deployed host; local hosts are not accepted for hosted proof",
+        ),
+        (
+            "http://[::1]:8000",
+            "--base-url must point to a deployed host; local hosts are not accepted for hosted proof",
+        ),
+    ],
+)
+def test_validate_args_fails_closed_for_non_hosted_base_url(
+    base_url: str,
+    expected_error: str,
+) -> None:
+    args = smoke._build_parser().parse_args([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        base_url,
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+    ])
+
+    assert smoke._validate_args(args) == [expected_error]
+
+
+def test_main_local_base_url_writes_preflight_result_before_exit(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls))
+    result_path = tmp_path / "local-base-url-preflight.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "http://127.0.0.1:8000",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["phase"] == "preflight"
+    assert payload["preflight_errors"] == [
+        "--base-url must point to a deployed host; local hosts are not accepted for hosted proof"
+    ]
+    assert payload["required_inputs"]["base_url"] == {"present": True}
+    assert payload["seed"]["not_run_reason"] == "preflight_failed"
+    assert payload["route"]["not_run_reason"] == "preflight_failed"
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert calls == []
+
+
+def test_main_malformed_base_url_writes_preflight_result_before_exit(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls))
+    result_path = tmp_path / "malformed-base-url-preflight.json"
+
+    code = smoke.main([
+        "--database-url",
+        "postgresql://example/atlas",
+        "--base-url",
+        "http://[::1",
+        "--token",
+        "token-123",
+        "--account-id",
+        "acct-1",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["phase"] == "preflight"
+    assert payload["preflight_errors"] == [
+        "--base-url must be an absolute HTTP(S) URL for hosted proof"
+    ]
+    assert payload["seed"]["not_run_reason"] == "preflight_failed"
+    assert payload["route"]["not_run_reason"] == "preflight_failed"
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert calls == []
+
+
 def test_main_writes_preflight_result_before_exit(tmp_path, capsys) -> None:
     result_path = tmp_path / "preflight.json"
 

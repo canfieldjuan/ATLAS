@@ -12,7 +12,9 @@ coverage, use `content_ops_faq_seeded_route_e2e_runbook.md`.
 - `EXTRACTED_DATABASE_URL` or `DATABASE_URL`: Postgres database used by the
   deployed Atlas API.
 - `ATLAS_API_BASE_URL`: deployed Atlas API host, for example
-  `https://atlas-api.example.com`.
+  `https://atlas-api.example.com`. Hosted proof mode rejects local hosts such
+  as `localhost`, `127.*`, `0.0.0.0`, and `::1` because those targets cannot
+  prove deployed-route behavior.
 - `ATLAS_B2B_JWT` or `ATLAS_TOKEN`: bearer token for the account under test.
 - `ATLAS_FAQ_SEARCH_ACCOUNT_ID` or `ATLAS_ACCOUNT_ID`: account ID matching the
   bearer token. The seeder writes the demo FAQ under this account, and the
@@ -40,11 +42,12 @@ python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
   --output-result /tmp/faq-saas-demo-route-e2e-preflight.json
 ```
 
-Exit code `2` means one or more required inputs are missing. Inspect
-`preflight_errors` and `required_inputs` in the result artifact; the payload
-only reports present/missing booleans and does not include secret values. Exit
-code `0` means the blocker has moved from input availability to running the
-recommended one-command smoke below.
+Exit code `2` means one or more required inputs are missing or the configured
+base URL is not a deployed HTTP(S) API host. Inspect `preflight_errors` and
+`required_inputs` in the result artifact; the payload only reports
+present/missing booleans and does not include secret values. Exit code `0`
+means the blocker has moved from input availability to running the recommended
+one-command smoke below.
 
 ## Recommended One-Command Smoke
 
