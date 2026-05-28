@@ -32,15 +32,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
-### FAQ route concurrency result top-level query can disagree with case-file query
-- File/location: `scripts/smoke_content_ops_faq_search_route_concurrency.py` result payload summary
-- Description: A case-file run used the SaaS demo query, but the route result's top-level `query` field still reflected the default/env query.
-- Why it matters: The per-case summaries are correct, but the compact top-level artifact can mislead readers skimming a failed run.
-- Effort: S
-- Category: polish
-- Owner/session: content-ops/faq-search
-- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof
-
 ### Atlas startup migration check warns on missing b2b_campaigns.updated_at
 - File/location: `atlas_brain/storage/migrations/309_campaign_sequences_unique_active_recipient.sql`, Atlas startup migration check.
 - Description: Local API startup logged `column "updated_at" of relation "b2b_campaigns" does not exist` while checking pending host migrations.
