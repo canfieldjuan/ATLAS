@@ -28,7 +28,7 @@ python extracted_content_pipeline/storage/migration_runner.py --apply
 
 ```bash
 python scripts/smoke_content_ops_faq_search_seeded_route_e2e.py \
-  --database-url "$EXTRACTED_DATABASE_URL" \
+  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --base-url "$ATLAS_API_BASE_URL" \
   --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
   --account-id "$ATLAS_FAQ_SEARCH_ACCOUNT_ID" \

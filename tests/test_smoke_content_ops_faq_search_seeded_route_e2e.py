@@ -167,7 +167,7 @@ def test_validate_args_reports_missing_required_fields_and_bad_numbers():
 def test_seeded_route_e2e_runbook_command_matches_parser():
     parsed = smoke._build_parser().parse_args(_runbook_seeded_e2e_command_args())
 
-    assert parsed.database_url == "$EXTRACTED_DATABASE_URL"
+    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
     assert parsed.base_url == "$ATLAS_API_BASE_URL"
     assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
     assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
