@@ -177,9 +177,45 @@ def test_main_writes_preflight_result_before_exit(tmp_path, capsys) -> None:
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     assert code == 2
     assert payload["phase"] == "preflight"
+    assert payload["required_inputs"] == {
+        "database_url": {"present": False},
+        "base_url": {"present": False},
+        "token": {"present": False},
+        "account_id": {"present": False},
+    }
     assert payload["seed"]["not_run_reason"] == "preflight_failed"
     assert payload["route"]["not_run_reason"] == "preflight_failed"
     assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_main_preflight_only_reports_ready_inputs_without_running_children(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls))
+    result_path = tmp_path / "preflight-ready.json"
+
+    code = smoke.main([*_base_args(tmp_path), "--preflight-only", "--output-result", str(result_path), "--json"])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    stdout_payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["phase"] == "preflight"
+    assert payload["preflight_errors"] == []
+    assert payload["required_inputs"] == {
+        "database_url": {"present": True},
+        "base_url": {"present": True},
+        "token": {"present": True},
+        "account_id": {"present": True},
+    }
+    assert payload["seed"]["not_run_reason"] == "preflight_only"
+    assert payload["route"]["not_run_reason"] == "preflight_only"
+    assert payload["cleanup"]["not_run_reason"] == "preflight_only"
+    assert stdout_payload["required_inputs"] == payload["required_inputs"]
+    assert calls == []
 
 
 def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch) -> None:

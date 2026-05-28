@@ -108,9 +108,10 @@ def _generated_demo_faq():
     return rows, normalized, result
 
 
-def _runbook_command_args(marker: str) -> list[str]:
+def _runbook_command_args(marker: str, *, section: str | None = None) -> list[str]:
     doc = RUNBOOK_PATH.read_text(encoding="utf-8")
-    start = doc.index(marker)
+    search_from = doc.index(section) if section is not None else 0
+    start = doc.index(marker, search_from)
     end = doc.index("```", start)
     command = doc[start:end].replace("\\\n", " ")
     parts = shlex.split(command)
@@ -213,7 +214,8 @@ def test_saas_demo_route_case_runbook_migration_command_matches_parser() -> None
 
 def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
     args = _runbook_command_args(
-        "python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py"
+        "python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py",
+        section="## Recommended One-Command Smoke",
     )
 
     parsed = e2e_smoke._build_parser().parse_args(args)
@@ -221,7 +223,7 @@ def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
     assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
     assert parsed.base_url == "$ATLAS_API_BASE_URL"
     assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
-    assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
+    assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
     assert parsed.route_requests == 40
     assert parsed.concurrency == 8
     assert parsed.max_error_rate == 0
@@ -232,13 +234,32 @@ def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
     assert e2e_smoke._validate_args(parsed) == []
 
 
+def test_saas_demo_route_case_runbook_preflight_command_matches_parser() -> None:
+    args = _runbook_command_args(
+        "python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py",
+        section="## Hosted Run Blocker Preflight",
+    )
+
+    parsed = e2e_smoke._build_parser().parse_args(args)
+
+    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert parsed.base_url == "$ATLAS_API_BASE_URL"
+    assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
+    assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
+    assert parsed.preflight_only is True
+    assert parsed.json is True
+    assert parsed.artifact_dir is None
+    assert parsed.output_result == Path("/tmp/faq-saas-demo-route-e2e-preflight.json")
+    assert e2e_smoke._validate_args(parsed) == []
+
+
 def test_saas_demo_route_case_runbook_seed_command_matches_parser() -> None:
     args = _runbook_command_args("python scripts/seed_content_ops_faq_saas_demo.py")
 
     parsed = seeder._parse_args(args)
 
     assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
-    assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
+    assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
     assert parsed.route_case_file_output == Path("/tmp/faq-saas-demo-route-cases.json")
     assert parsed.output_result == Path("/tmp/faq-saas-demo-seed-result.json")
     assert parsed.cleanup_faq_id is None

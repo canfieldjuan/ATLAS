@@ -63,6 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--keep-data", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -110,6 +111,15 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
     return errors
+
+
+def _required_input_status(args: argparse.Namespace) -> dict[str, dict[str, bool]]:
+    return {
+        "database_url": {"present": bool(str(args.database_url or "").strip())},
+        "base_url": {"present": bool(str(args.base_url or "").strip())},
+        "token": {"present": bool(str(args.token or "").strip())},
+        "account_id": {"present": bool(str(args.account_id or "").strip())},
+    }
 
 
 def _seed_command(args: argparse.Namespace, *, case_file: Path, seed_result: Path) -> list[str]:
@@ -305,14 +315,22 @@ def _not_run(reason: str) -> dict[str, Any]:
     }
 
 
-def _preflight_summary(errors: Sequence[str], elapsed: float) -> dict[str, Any]:
+def _preflight_summary(
+    args: argparse.Namespace,
+    errors: Sequence[str],
+    elapsed: float,
+    *,
+    reason: str = "preflight_failed",
+) -> dict[str, Any]:
+    ok = not errors
     return {
-        "ok": False,
+        "ok": ok,
         "phase": "preflight",
         "preflight_errors": list(errors),
-        "seed": _not_run("preflight_failed"),
-        "route": _not_run("preflight_failed"),
-        "cleanup": {"ok": True, "skipped": True, "not_run_reason": "preflight_failed"},
+        "required_inputs": _required_input_status(args),
+        "seed": _not_run(reason),
+        "route": _not_run(reason),
+        "cleanup": {"ok": True, "skipped": True, "not_run_reason": reason},
         "elapsed_seconds": elapsed,
     }
 
@@ -405,10 +423,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     errors = _validate_args(args)
     if errors:
-        summary = _preflight_summary(errors, time.perf_counter() - start)
+        summary = _preflight_summary(args, errors, time.perf_counter() - start)
         _write_result(args.output_result, summary)
         _print_summary(summary, as_json=args.json)
         return 2
+    if args.preflight_only:
+        summary = _preflight_summary(
+            args,
+            (),
+            time.perf_counter() - start,
+            reason="preflight_only",
+        )
+        _write_result(args.output_result, summary)
+        _print_summary(summary, as_json=args.json)
+        return 0
 
     summary = run(args)
     _write_result(args.output_result, summary)
