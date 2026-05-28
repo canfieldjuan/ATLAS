@@ -425,6 +425,14 @@ def test_load_cases_rejects_case_empty_results_with_detail_required(tmp_path):
             [{"query": "x", "expected_first_faq_id": []}],
             "case[0].expected_first_faq_id must be a non-empty string",
         ),
+        (
+            [{"query": "x", "expected_detail_account_id": ""}],
+            "case[0].expected_detail_account_id must be a non-empty string",
+        ),
+        (
+            [{"query": "x", "expected_detail_target_id": 1}],
+            "case[0].expected_detail_target_id must be a non-empty string",
+        ),
     ],
 )
 def test_load_cases_rejects_bad_case_file_shapes(tmp_path, payload, expected_error):
@@ -453,6 +461,11 @@ def test_load_cases_accepts_seeded_expectations(tmp_path):
             "expected_first_account_id": "acct-1",
             "expected_first_corpus_id": "corpus-1",
             "expected_first_faq_id": "11111111-1111-1111-1111-111111111111",
+            "expected_detail_account_id": "acct-1",
+            "expected_detail_target_id": "support-corpus-1",
+            "expected_detail_target_mode": "support_account",
+            "expected_detail_title": "Seeded FAQ",
+            "expected_detail_status": "approved",
         }],
     )
 
@@ -463,6 +476,11 @@ def test_load_cases_accepts_seeded_expectations(tmp_path):
     assert cases[0]["expected_first_account_id"] == "acct-1"
     assert cases[0]["expected_first_corpus_id"] == "corpus-1"
     assert cases[0]["expected_first_faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert cases[0]["expected_detail_account_id"] == "acct-1"
+    assert cases[0]["expected_detail_target_id"] == "support-corpus-1"
+    assert cases[0]["expected_detail_target_mode"] == "support_account"
+    assert cases[0]["expected_detail_title"] == "Seeded FAQ"
+    assert cases[0]["expected_detail_status"] == "approved"
 
 
 def test_latency_and_error_summaries_are_compact():
@@ -1226,6 +1244,52 @@ def test_run_one_rejects_missing_expected_first_result(monkeypatch):
 
     assert result["ok"] is False
     assert result["errors"] == ["expected first result but none was returned"]
+
+
+def test_run_one_rejects_seeded_detail_expectation_drift(monkeypatch):
+    responses = iter([
+        _json_response(_valid_payload()),
+        _json_response(_valid_detail_payload()),
+    ])
+    monkeypatch.setattr(
+        smoke.time,
+        "perf_counter",
+        iter([1.0, 1.001, 1.002, 1.003, 1.004]).__next__,
+    )
+    monkeypatch.setattr(
+        smoke.contract.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    result = smoke._run_one(
+        0,
+        _args(require_detail=True),
+        {
+            "query": "mortgage dispute",
+            "corpus_id": "corpus-1",
+            "status": "",
+            "limit": 5,
+            "require_results": True,
+            "expected_first_faq_id": "11111111-1111-1111-1111-111111111111",
+            "expected_detail_account_id": "acct-2",
+            "expected_detail_target_id": "support-corpus-1",
+            "expected_detail_target_mode": "support_account",
+            "expected_detail_title": "Expected SaaS FAQ",
+            "expected_detail_status": "approved",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["detail_checked"] is True
+    assert result["errors"] == [
+        "detail.account_id expected 'acct-2' but got 'acct-1'",
+        "detail.target_id expected 'support-corpus-1' but got 'corpus-1'",
+        "detail.target_mode expected 'support_account' but got 'faq_report'",
+        "detail.title expected 'Expected SaaS FAQ' but got 'Mortgage servicing issues'",
+        "detail.status expected 'approved' but got 'published'",
+    ]
+    assert result["case"]["expected_detail_title"] == "Expected SaaS FAQ"
 
 
 def test_run_concurrent_sorts_results(monkeypatch):

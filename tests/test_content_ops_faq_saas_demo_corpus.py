@@ -201,6 +201,24 @@ def test_saas_demo_cleanup_args_skip_seed_only_required_values() -> None:
     assert errors == ["--cleanup-faq-id must be a non-empty FAQ id"]
 
 
+def test_saas_demo_route_case_output_is_seed_only() -> None:
+    errors = seeder._validate_args(
+        SimpleNamespace(
+            database_url="postgresql://example",
+            account_id="acct-demo",
+            cleanup_faq_id="11111111-1111-1111-1111-111111111111",
+            route_case_file_output=Path("route-cases.json"),
+            corpus_id="",
+            target_id="",
+            status="",
+            query="",
+            limit=0,
+        )
+    )
+
+    assert errors == ["--route-case-file-output is only available in seed mode"]
+
+
 def test_saas_demo_seed_preflight_writes_result_before_exit(tmp_path) -> None:
     result_path = tmp_path / "seed-preflight.json"
 
@@ -471,7 +489,10 @@ def test_saas_demo_cleanup_delete_status_parser() -> None:
 
 
 @pytest.mark.asyncio
-async def test_saas_demo_seeder_saves_approves_projects_and_searches(monkeypatch) -> None:
+async def test_saas_demo_seeder_saves_approves_projects_and_searches(
+    monkeypatch,
+    tmp_path,
+) -> None:
     class _Pool:
         draft = None
         scope = None
@@ -511,16 +532,43 @@ async def test_saas_demo_seeder_saves_approves_projects_and_searches(monkeypatch
         _Pool(),
         account_id="acct-demo",
         corpus_id="synthetic-b2b-saas-demo",
+        limit=7,
+        route_case_file_output=tmp_path / "route-cases.json",
     )
 
     assert payload["ok"] is True
     assert payload["errors"] == []
     assert payload["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["target_id"] == "support-synthetic-b2b-saas-demo"
+    assert payload["target_mode"] == "support_account"
+    assert payload["limit"] == 7
     assert payload["source_count"] >= MIN_ROWS
     assert payload["projected_documents"] == payload["generated_items"]
     assert payload["search"]["count"] >= 1
     assert payload["search"]["matched_seeded_faq"] is True
     assert payload["search"]["first_result"]["faq_id"] == payload["faq_id"]
+    assert payload["route_case_file"] == {
+        "ok": True,
+        "path": str(tmp_path / "route-cases.json"),
+        "cases": 1,
+    }
+    assert json.loads((tmp_path / "route-cases.json").read_text(encoding="utf-8")) == [
+        {
+            "corpus_id": "synthetic-b2b-saas-demo",
+            "expected_detail_account_id": "acct-demo",
+            "expected_detail_status": "approved",
+            "expected_detail_target_id": "support-synthetic-b2b-saas-demo",
+            "expected_detail_target_mode": "support_account",
+            "expected_detail_title": "Synthetic B2B SaaS Support FAQ Demo",
+            "expected_first_account_id": "acct-demo",
+            "expected_first_corpus_id": "synthetic-b2b-saas-demo",
+            "expected_first_faq_id": "11111111-1111-1111-1111-111111111111",
+            "limit": 7,
+            "query": "export attribution reports",
+            "require_results": True,
+            "status": "approved",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -562,6 +610,59 @@ async def test_saas_demo_seeder_rejects_search_results_for_different_faq(monkeyp
         "Seeded SaaS FAQ id was not present in verification search results"
     ]
     assert payload["search"]["matched_seeded_faq"] is False
+
+
+@pytest.mark.asyncio
+async def test_saas_demo_seeder_reports_route_case_write_failure(monkeypatch, tmp_path) -> None:
+    class _Response:
+        def as_dict(self):
+            return {
+                "query": "export attribution reports",
+                "count": 1,
+                "results": [{"faq_id": "11111111-1111-1111-1111-111111111111"}],
+            }
+
+    class _FAQRepo:
+        def __init__(self, _pool):
+            pass
+
+        async def save_drafts(self, _drafts, *, scope: TenantScope):
+            assert scope.account_id == "acct-demo"
+            return ("11111111-1111-1111-1111-111111111111",)
+
+        async def update_status(self, _faq_id, _status, *, scope: TenantScope):
+            assert scope.account_id == "acct-demo"
+            return True
+
+    class _SearchRepo:
+        def __init__(self, _pool):
+            pass
+
+        async def search(self, **_kwargs):
+            return _Response()
+
+    def _raise_write(_path, _payload):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(seeder, "PostgresTicketFAQRepository", _FAQRepo)
+    monkeypatch.setattr(seeder, "PostgresTicketFAQSearchRepository", _SearchRepo)
+    monkeypatch.setattr(seeder, "_write_route_case_file", _raise_write)
+
+    route_case_file = tmp_path / "route-cases.json"
+    payload = await seeder.seed_saas_demo_faq(
+        object(),
+        account_id="acct-demo",
+        route_case_file_output=route_case_file,
+    )
+
+    assert payload["ok"] is False
+    assert payload["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert payload["errors"] == ["route case file could not be written: disk full"]
+    assert payload["route_case_file"] == {
+        "ok": False,
+        "path": str(route_case_file),
+        "error": "disk full",
+    }
 
 
 @pytest.mark.asyncio

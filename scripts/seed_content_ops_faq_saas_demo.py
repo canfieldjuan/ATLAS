@@ -89,6 +89,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Delete one seeded FAQ id for this account instead of seeding.",
     )
+    parser.add_argument("--route-case-file-output", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -103,6 +104,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     if getattr(args, "cleanup_faq_id", None) is not None:
         if not str(args.cleanup_faq_id or "").strip():
             errors.append("--cleanup-faq-id must be a non-empty FAQ id")
+        if getattr(args, "route_case_file_output", None) is not None:
+            errors.append("--route-case-file-output is only available in seed mode")
         return errors
     if not str(args.corpus_id or "").strip():
         errors.append("--corpus-id is required")
@@ -184,6 +187,7 @@ async def seed_saas_demo_faq(
     status: str = DEFAULT_STATUS,
     query: str = DEFAULT_QUERY,
     limit: int = 5,
+    route_case_file_output: Path | None = None,
 ) -> dict[str, Any]:
     scope = TenantScope(account_id=account_id, user_id=user_id)
     draft = build_saas_demo_faq_draft(corpus_id=corpus_id, target_id=target_id)
@@ -222,14 +226,17 @@ async def seed_saas_demo_faq(
     )
     if not matched_seeded_faq:
         errors.append("Seeded SaaS FAQ id was not present in verification search results")
-    return {
+    payload = {
         "phase": "seed",
         "ok": not errors,
         "errors": errors,
         "account_id": account_id,
         "corpus_id": corpus_id,
+        "target_id": target_id,
+        "target_mode": DEFAULT_TARGET_MODE,
         "faq_id": faq_id,
         "status": status,
+        "limit": limit,
         "source_count": draft.source_count,
         "ticket_source_count": draft.ticket_source_count,
         "generated_items": len(draft.items),
@@ -245,6 +252,50 @@ async def seed_saas_demo_faq(
             ),
         },
     }
+    if route_case_file_output is not None and faq_id:
+        try:
+            _write_route_case_file(route_case_file_output, payload)
+        except OSError as exc:
+            payload["ok"] = False
+            payload["errors"].append(f"route case file could not be written: {exc}")
+            payload["route_case_file"] = {
+                "ok": False,
+                "path": str(route_case_file_output),
+                "error": str(exc),
+            }
+        else:
+            payload["route_case_file"] = {
+                "ok": True,
+                "path": str(route_case_file_output),
+                "cases": 1,
+            }
+    return payload
+
+
+def _route_case_payload(seed_result: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{
+        "query": seed_result["search"]["query"],
+        "corpus_id": seed_result["corpus_id"],
+        "status": seed_result["status"],
+        "limit": seed_result["limit"],
+        "require_results": True,
+        "expected_first_account_id": seed_result["account_id"],
+        "expected_first_corpus_id": seed_result["corpus_id"],
+        "expected_first_faq_id": seed_result["faq_id"],
+        "expected_detail_account_id": seed_result["account_id"],
+        "expected_detail_target_id": seed_result["target_id"],
+        "expected_detail_target_mode": seed_result["target_mode"],
+        "expected_detail_title": DEMO_TITLE,
+        "expected_detail_status": seed_result["status"],
+    }]
+
+
+def _write_route_case_file(path: Path, seed_result: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(_route_case_payload(seed_result), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _deleted_row_count(delete_status: Any) -> int | None:
@@ -311,6 +362,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
                 status=str(args.status),
                 query=str(args.query),
                 limit=int(args.limit),
+                route_case_file_output=args.route_case_file_output,
             )
     except Exception as exc:
         primary_error = exc

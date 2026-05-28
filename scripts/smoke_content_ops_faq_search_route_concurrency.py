@@ -36,6 +36,11 @@ def _case_snapshot(case: Mapping[str, Any]) -> dict[str, Any]:
         "expected_first_account_id",
         "expected_first_corpus_id",
         "expected_first_faq_id",
+        "expected_detail_account_id",
+        "expected_detail_target_id",
+        "expected_detail_target_mode",
+        "expected_detail_title",
+        "expected_detail_status",
     ):
         if key in case:
             snapshot[key] = case[key]
@@ -204,6 +209,22 @@ def _load_cases(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[st
             else:
                 expected_first[key] = value.strip()
 
+        expected_detail: dict[str, str] = {}
+        for key in (
+            "expected_detail_account_id",
+            "expected_detail_target_id",
+            "expected_detail_target_mode",
+            "expected_detail_title",
+            "expected_detail_status",
+        ):
+            if key not in item:
+                continue
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"case[{index}].{key} must be a non-empty string")
+            else:
+                expected_detail[key] = value.strip()
+
         if errors and any(error.startswith(f"case[{index}].") for error in errors):
             continue
 
@@ -217,8 +238,24 @@ def _load_cases(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[st
         if "expected_count" in item:
             case["expected_count"] = expected_count
         case.update(expected_first)
+        case.update(expected_detail)
         cases.append(case)
     return cases, errors
+
+
+def _expected_detail_from_case(case: Mapping[str, Any]) -> dict[str, str]:
+    mapping = {
+        "expected_detail_account_id": "account_id",
+        "expected_detail_target_id": "target_id",
+        "expected_detail_target_mode": "target_mode",
+        "expected_detail_title": "title",
+        "expected_detail_status": "status",
+    }
+    return {
+        detail_field: str(case[key])
+        for key, detail_field in mapping.items()
+        if key in case
+    }
 
 
 def _expected_case_errors(payload: Mapping[str, Any], case: Mapping[str, Any]) -> list[str]:
@@ -301,7 +338,11 @@ def _run_one(
                     )
                     detail_checked = True
                     detail_errors.extend(
-                        contract._validate_detail(detail_payload, faq_id=detail_faq_id)
+                        contract._validate_detail(
+                            detail_payload,
+                            faq_id=detail_faq_id,
+                            expected=_expected_detail_from_case(active_case),
+                        )
                     )
                 except (RuntimeError, OSError, TypeError, ValueError) as exc:
                     detail_errors.append(f"{type(exc).__name__}: {exc}")
