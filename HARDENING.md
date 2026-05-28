@@ -32,6 +32,15 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
+### Support-ticket SaaS demo blog still fails GEO entity clarity after descriptive contract
+- File/location: `extracted_quality_gate/blog_pack.py`, `extracted_content_pipeline/blog_generation.py`, live run in `tmp/support_ticket_saas_demo_blog_acceptance_20260528_retry2/blog-post-result.json`.
+- Description: After the support-ticket descriptive contract landed, the 36-row SaaS demo blog retry got past support-ticket outcome checks but failed `geo_entity_clarity_missing` after two repair attempts. The failed candidate title and target keyword both used "Support Ticket FAQ Gaps", so the next slice needs to inspect the prompt/quality-gate interaction rather than adding another live retry.
+- Why it matters: The SaaS demo blog path still cannot produce an accepted saved draft, so the accepted fixture and future regression gate remain blocked.
+- Effort: M
+- Category: correctness
+- Owner/session: content-ops/support-ticket-provider
+- Found during: PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture
+
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
 - Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.

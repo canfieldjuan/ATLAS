@@ -57,6 +57,7 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
     "future ticket reduction or deflection",
     "prevented tickets or fewer repeat questions",
     "churn, retention, upgrade, referral, ROI, or capacity outcomes",
+    "claims that FAQ entries help customers find answers or avoid tickets",
     "faster resolution or customers finding answers without opening tickets",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
 )
