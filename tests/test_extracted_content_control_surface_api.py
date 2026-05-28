@@ -2045,6 +2045,40 @@ async def test_execute_generation_route_runs_configured_services():
 
 
 @pytest.mark.asyncio
+async def test_execute_generation_route_returns_request_usage_summary():
+    service = _CampaignService()
+    usage_pool = _UsagePool()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
+        usage_pool_provider=lambda: usage_pool,
+        scope_provider=lambda: {"account_id": "acct-run-usage"},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {"target_account": "Acme", "offer": "Churn audit"},
+        }
+    )
+
+    assert payload["status"] == "completed"
+    assert payload["request_id"].startswith("content-ops-")
+    assert payload["usage_summary"]["filters"] == {
+        "asset_type": None,
+        "run_id": None,
+        "request_id": payload["request_id"],
+        "account_id": "acct-run-usage",
+    }
+    assert payload["usage_summary"]["summary"]["total_cost_usd"] == 1.234567
+    query, args = usage_pool.fetchrow_calls[0]
+    assert "metadata ->> 'account_id' = $2" in query
+    assert "metadata ->> 'request_id' = $3" in query
+    assert args == (1, "acct-run-usage", payload["request_id"])
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_blocks_account_usage_budget_before_generation():
     service = _CampaignService()
     provider_calls = {"count": 0}
@@ -2877,7 +2911,10 @@ async def test_execute_route_applies_cache_policy_default_to_trace_context():
         }
     )
 
-    assert campaign.calls[0]["trace_context"] == {
+    trace_context = campaign.calls[0]["trace_context"]
+    assert trace_context["request_id"].startswith("content-ops-")
+    del trace_context["request_id"]
+    assert trace_context == {
         "account_id": "acct-cache-default",
         "content_ops_cache_policy": "exact",
     }

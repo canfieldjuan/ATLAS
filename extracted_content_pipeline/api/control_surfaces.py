@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from uuid import uuid4
 
 try:
     from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
@@ -895,6 +896,7 @@ def create_content_ops_control_surface_router(
                     status_code=503,
                     detail="Content Ops execution services are not configured.",
                 )
+            request_id = f"content-ops-{uuid4().hex}"
             # PR-ControlSurfaces-Reasoning-Provider: resolve the optional
             # per-request reasoning provider and derive a reasoning-aware
             # bundle. The base services from execution_services_provider
@@ -933,11 +935,20 @@ def create_content_ops_control_surface_router(
                     payload_mapping,
                     services=services,
                     scope=scope,
+                    trace_metadata={"request_id": request_id},
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             result = _sanitize_execution_result(result)
             result = _with_input_provider_diagnostics(result, payload_mapping)
+            result["request_id"] = request_id
+            usage_summary = await _execute_usage_summary(
+                usage_pool_provider=usage_pool_provider,
+                scope=scope,
+                request_id=request_id,
+            )
+            if usage_summary is not None:
+                result["usage_summary"] = usage_summary
             if result["status"] == "blocked":
                 raise HTTPException(status_code=400, detail=result)
             if result["status"] == "failed":
@@ -1602,6 +1613,34 @@ async def _resolve_usage_pool(pool_provider: PoolProvider | None) -> Any:
             detail="Content Ops usage database is unavailable.",
         )
     return pool
+
+
+async def _execute_usage_summary(
+    *,
+    usage_pool_provider: PoolProvider | None,
+    scope: TenantScope,
+    request_id: str,
+) -> dict[str, Any] | None:
+    if usage_pool_provider is None:
+        return None
+    account_id = _clean(getattr(scope, "account_id", None))
+    if not account_id:
+        return None
+    try:
+        pool = await _resolve_usage_pool(usage_pool_provider)
+        return await summarize_content_ops_llm_usage(
+            pool,
+            days=1,
+            account_id=account_id,
+            request_id=request_id,
+        )
+    except Exception:
+        logger.warning(
+            "Content Ops execute usage summary unavailable",
+            exc_info=True,
+            extra={"request_id": request_id},
+        )
+        return None
 
 
 async def _evaluate_account_usage_budget(

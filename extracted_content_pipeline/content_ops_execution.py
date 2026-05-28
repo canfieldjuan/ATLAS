@@ -238,6 +238,7 @@ async def execute_content_ops_request(
     *,
     services: ContentOpsExecutionServices,
     scope: TenantScope | None = None,
+    trace_metadata: Mapping[str, Any] | None = None,
 ) -> ContentOpsExecutionResult:
     """Execute a runnable content-ops plan using host-provided services.
 
@@ -269,6 +270,7 @@ async def execute_content_ops_request(
             request=request,
             service=services.for_output(step.output),
             scope=resolved_scope,
+            trace_metadata=trace_metadata,
             filters=filters,
             reasoning_provider_configured=services.reasoning_provider_active_for(
                 step.output
@@ -302,6 +304,7 @@ async def _execute_step(
     request: ContentOpsRequest,
     service: Any | None,
     scope: TenantScope,
+    trace_metadata: Mapping[str, Any] | None,
     filters: Mapping[str, Any] | None,
     reasoning_provider_configured: bool,
 ) -> tuple[ContentOpsStepExecution, Mapping[str, Any] | None]:
@@ -317,7 +320,11 @@ async def _execute_step(
             error,
         )
     trace_context_token = set_content_ops_llm_trace_context(
-        _request_trace_metadata(scope=scope, request=request)
+        _request_trace_metadata(
+            scope=scope,
+            request=request,
+            extra=trace_metadata,
+        )
     )
     try:
         result = await _run_step(
@@ -373,6 +380,7 @@ def _request_trace_metadata(
     *,
     scope: TenantScope,
     request: ContentOpsRequest,
+    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     metadata = _scope_trace_metadata(scope)
     if request.content_ops_cache_policy:
@@ -382,6 +390,11 @@ def _request_trace_metadata(
             "source_type": SUPPORT_TICKET_SOURCE_MARKER,
             "input_provider": SUPPORT_TICKET_SOURCE,
         })
+    if isinstance(extra, Mapping):
+        for key, value in extra.items():
+            text = str(value or "").strip()
+            if text:
+                metadata.setdefault(str(key), text)
     return metadata
 
 
@@ -390,6 +403,7 @@ async def execute_content_ops_from_mapping(
     *,
     services: ContentOpsExecutionServices,
     scope: TenantScope | None = None,
+    trace_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Dict-friendly execution wrapper for host API routes."""
 
@@ -397,6 +411,7 @@ async def execute_content_ops_from_mapping(
         request_from_mapping(payload),
         services=services,
         scope=scope,
+        trace_metadata=trace_metadata,
     )
     return result.as_dict()
 

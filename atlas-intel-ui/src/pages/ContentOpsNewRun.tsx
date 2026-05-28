@@ -2614,6 +2614,11 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
         </div>
       </div>
 
+      <RunUsageSummary
+        requestId={result.requestId}
+        summary={result.usageSummary}
+      />
+
       <div className="space-y-3">
         {result.steps.map((step) => (
           <div
@@ -2667,6 +2672,44 @@ function ExecutionPanel({ result }: { result: ContentOpsExecutionResult }) {
 
       <InputProviderDiagnosticsSection diagnostics={result.inputProvider} />
     </section>
+  )
+}
+
+function RunUsageSummary({
+  requestId,
+  summary,
+}: {
+  requestId?: string
+  summary?: ContentOpsUsageSummary
+}) {
+  if (!requestId && !summary) return null
+  const totals = summary?.summary
+  return (
+    <div className="mb-4 rounded-md border border-slate-800 bg-slate-950/40 px-3 py-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          This run
+        </div>
+        {requestId && (
+          <span className="font-mono text-[11px] text-slate-600">
+            {requestId}
+          </span>
+        )}
+      </div>
+      {totals ? (
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <UsageMetric label="Spend" value={formatUsd(totals.totalCostUsd)} />
+          <UsageMetric label="Saved" value={formatUsd(totals.totalCacheSavingsUsd)} />
+          <UsageMetric label="Calls" value={formatCount(totals.totalCalls)} />
+          <UsageMetric label="Cache hits" value={formatCount(totals.cacheHitCalls)} />
+          <UsageMetric label="Tokens" value={formatCount(totals.totalTokens)} />
+        </div>
+      ) : (
+        <div className="text-xs text-slate-500">
+          Usage summary unavailable for this run.
+        </div>
+      )}
+    </div>
   )
 }
 

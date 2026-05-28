@@ -35,7 +35,7 @@ const {
   ],
 ])
 
-const { fromWireUsageSummary } = await loadTsModule(
+const { fromWireExecution, fromWireUsageSummary } = await loadTsModule(
   '../src/domain/contentOps/fromWire.ts',
 )
 
@@ -194,8 +194,43 @@ test('fromWireUsageSummary defaults missing cache diagnostics to empty list', ()
   assert.deepEqual(summary.byCacheStatus, [])
 })
 
+test('fromWireExecution maps run request id and usage summary', () => {
+  const execution = fromWireExecution({
+    status: 'completed',
+    request_id: 'content-ops-req-123',
+    usage_summary: usageSummaryPayload(),
+    plan: {
+      can_execute: true,
+      target_mode: 'vendor_retention',
+      limit: 1,
+      steps: [],
+      preview: {
+        can_run: true,
+        outputs: ['blog_post'],
+        estimated_cost_usd: 0.12,
+        missing_inputs: [],
+        blocked_outputs: [],
+        warnings: [],
+        normalized_request: null,
+      },
+    },
+    steps: [],
+    errors: [],
+  })
+
+  assert.equal(execution.requestId, 'content-ops-req-123')
+  assert.equal(execution.usageSummary.summary.totalCostUsd, 1.2345)
+  assert.equal(execution.usageSummary.summary.totalCacheSavingsUsd, 0.4321)
+})
+
 test('new run usage card exposes cache diagnostics section', () => {
   assert.ok(newRunSource.includes('Cache diagnostics'))
   assert.ok(newRunSource.includes('formatCacheDiagnosticLabel'))
   assert.ok(newRunSource.includes('byCacheStatus.slice(0, 3)'))
+})
+
+test('new run execution panel exposes run usage section', () => {
+  assert.ok(newRunSource.includes('function RunUsageSummary'))
+  assert.ok(newRunSource.includes('This run'))
+  assert.ok(newRunSource.includes('Usage summary unavailable for this run.'))
 })

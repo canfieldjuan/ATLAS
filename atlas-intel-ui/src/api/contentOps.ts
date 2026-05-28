@@ -373,6 +373,8 @@ export interface ContentOpsExecutionResult {
   plan: GenerationPlanResponse
   steps: ContentOpsStepExecution[]
   errors: Array<Record<string, unknown>>
+  request_id?: string
+  usage_summary?: ContentOpsUsageSummaryResponse
   input_provider?: ContentOpsInputProviderDiagnostics
 }
 
