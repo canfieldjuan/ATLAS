@@ -167,6 +167,10 @@ def _load_cases(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[st
         require_results = item.get("require_results", bool(args.require_results))
         if type(require_results) is not bool:
             errors.append(f"case[{index}].require_results must be a boolean")
+        elif bool(args.require_detail) and not require_results:
+            errors.append(
+                f"case[{index}].require_results cannot be false when --require-detail is set"
+            )
 
         expected_count = item.get("expected_count")
         if "expected_count" in item and (type(expected_count) is not int or expected_count < 0):

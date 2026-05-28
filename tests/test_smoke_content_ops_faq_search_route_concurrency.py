@@ -346,6 +346,20 @@ def test_load_cases_inherits_optional_cli_defaults(tmp_path):
     ]
 
 
+def test_load_cases_rejects_case_empty_results_with_detail_required(tmp_path):
+    case_file = _write_case_file(
+        tmp_path,
+        [{"query": "unknown billing workflow", "require_results": False}],
+    )
+
+    cases, errors = smoke._load_cases(_args(case_file=case_file, require_detail=True))
+
+    assert cases == []
+    assert errors == [
+        "case[0].require_results cannot be false when --require-detail is set"
+    ]
+
+
 @pytest.mark.parametrize(
     ("payload", "expected_error"),
     [
@@ -1161,6 +1175,43 @@ def test_main_rejects_detail_with_allowed_empty_results_before_network(tmp_path,
     assert payload["requests"]["total"] == 0
     assert payload["preflight_errors"] == [
         "--require-detail requires result rows; remove --allow-empty-results"
+    ]
+    assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
+
+
+def test_main_rejects_case_empty_results_with_detail_before_network(tmp_path, monkeypatch, capsys):
+    case_file = _write_case_file(
+        tmp_path,
+        [{"query": "unknown billing workflow", "require_results": False}],
+    )
+    result_path = tmp_path / "hosted-concurrency.json"
+
+    def _unexpected_urlopen(*_args, **_kwargs):
+        raise AssertionError("preflight failures must not issue route requests")
+
+    monkeypatch.setattr(smoke.contract.urllib.request, "urlopen", _unexpected_urlopen)
+
+    code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--case-file",
+        str(case_file),
+        "--require-detail",
+        "--output-result",
+        str(result_path),
+        "--json",
+    ])
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert code == 2
+    assert payload["ok"] is False
+    assert payload["phase"] == "preflight"
+    assert payload["require_detail"] is True
+    assert payload["cases"]["total"] == 0
+    assert payload["preflight_errors"] == [
+        "case[0].require_results cannot be false when --require-detail is set"
     ]
     assert json.loads(capsys.readouterr().out)["phase"] == "preflight"
 
