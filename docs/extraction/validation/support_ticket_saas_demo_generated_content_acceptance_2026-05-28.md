@@ -16,10 +16,10 @@ used by the current acceptance matrix.
 | Output | Status | Artifact | Notes |
 |---|---|---|---|
 | Landing page | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_landing_page.json` | Live generation saved a draft, export context matched the provider package, SEO/AEO and GEO readiness were ready, and the support-ticket generated-content evaluator passed. |
-| Blog post | Not accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | Earlier runs produced unsupported benefit/outcome language. After the descriptive contract, GEO repair guidance, and save-time/export citable-section alignment landed, the latest live retry correctly failed before save on `geo_citable_section_structure_missing` after two repair attempts. |
+| Blog post | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json` | After the descriptive contract, GEO repair guidance, save-time/export citable-section alignment, citable repair contract, and false-green outcome detector fixes landed, the final live retry saved a draft with generated-content evaluation passed, SEO/AEO ready, GEO ready, and manual truthfulness review accepted. |
 
-The landing path is accepted for this representative CSV shape. The blog path is
-not accepted for the 36-row SaaS demo shape yet.
+Both the landing page and blog post paths are accepted for this representative
+CSV shape.
 
 ## What Changed During Validation
 
@@ -54,12 +54,10 @@ The landing page stayed within the current support-ticket evidence contract:
 
 The blog generator no longer fails on the original unsupported outcome language
 for this CSV shape, and save-time validation now blocks drafts that would miss
-the exported GEO citable-section readiness bar. The remaining blocker is the
-repair contract: after two repair attempts, Haiku still did not produce two H2
-sections whose 40-120 word opening paragraphs contain the exact target keyword
-or required topic terms. The next slice should strengthen the repair guidance
-for `geo_citable_section_structure_missing` before another live acceptance
-retry.
+the exported GEO citable-section readiness bar. After the citable repair
+contract and false-green outcome detector fixes landed, the final live retry
+produced a draft that passed generated-content evaluation, SEO/AEO readiness,
+GEO readiness, and manual truthfulness review.
 
 ## Follow-up Retry After GEO Repair Guidance
 
@@ -113,6 +111,28 @@ This is progress in the gate behavior: the draft no longer saves and then fails
 export readiness. The remaining issue is that the repair loop needs more direct
 instructions for the stricter citable-section requirement.
 
+## Follow-up Retry After False-Green Outcome Fixes
+
+After `PR-Support-Ticket-Blog-False-Green-Outcome-Claims` landed, the live
+Haiku retry used the same 36-row SaaS demo CSV and generated-content evaluation
+settings.
+
+Result: accepted.
+
+The run saved a blog draft that passed all acceptance gates:
+
+- saved blog draft id: `4ff4f0fe-274e-46ad-9af2-e47475dd749b`
+- generated-content evaluation: passed
+- SEO/AEO readiness: ready
+- GEO readiness: ready
+- generation model: `anthropic/claude-haiku-4-5`
+- generation quality repair attempts: 2
+- manual truthfulness scan: accepted; no unsupported ticket-reduction,
+  resolution-time, churn, retention, ROI, support-capacity, or concrete
+  resolution-step claims found
+- accepted fixture:
+  `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json`
+
 ## Verification
 
 - Command: python scripts/smoke_content_ops_live_generation.py --output landing_page --account-id acct_support_ticket_saas_demo_acceptance_20260528_landing --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-draft.json --output-result tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-result.json --evaluate-generated-content --json
@@ -129,8 +149,12 @@ instructions for the stricter citable-section requirement.
   - Passed.
 - Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_after_citable --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_citable/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_citable/blog-post-result.json --evaluate-generated-content --json
   - Failed before save on `geo_citable_section_structure_missing` after two repair attempts; no saved draft export was produced.
+- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_final_retry --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_final_retry/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_final_retry/blog-post-result.json --evaluate-generated-content --json
+  - Saved draft `4ff4f0fe-274e-46ad-9af2-e47475dd749b`; generated-content evaluation passed; SEO/AEO ready; GEO ready.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json --pretty
+  - Passed.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
-  - Passed, 46 tests.
+  - Passed, 47 tests.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   - Passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
