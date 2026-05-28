@@ -16,10 +16,11 @@ used by the current acceptance matrix.
 | Output | Status | Artifact | Notes |
 |---|---|---|---|
 | Landing page | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_landing_page.json` | Live generation saved a draft, export context matched the provider package, SEO/AEO and GEO readiness were ready, and the support-ticket generated-content evaluator passed. |
-| Blog post | Not accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | After the false-green outcome detector fixes landed, review found the input package was collapsing three tied 4-ticket categories into `remaining`; the package now exposes all nine clusters. The latest cluster-correct retries still produced unsupported impact, discoverability, and self-service claims, so no accepted blog fixture is committed yet. |
+| Blog post | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json` | After the observed-shell contract landed, live generation saved a draft, generated-content evaluation passed, SEO/AEO and GEO readiness were ready, and the support-ticket context showed all nine 4-ticket clusters. |
+| Blog post | Known bad | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | Kept as a regression fixture for the earlier false-green unsupported outcome and answer-step class. |
 
-The landing page path is accepted for this representative CSV shape. The blog
-path is not accepted yet.
+The landing page and observed-shell blog paths are accepted for this
+representative CSV shape.
 
 ## What Changed During Validation
 
@@ -190,6 +191,26 @@ the answer. That is still an outcome claim not backed by the uploaded tickets.
 The next source fix should move from prompt-only constraints to a deterministic
 FAQ-shell or section-outline scaffold before generation.
 
+## Follow-up Retry After Observed-Shell Contract
+
+After `PR-Support-Ticket-Blog-Observed-Shell` landed, the live Haiku retry used
+the same 36-row SaaS demo CSV, the generated-content evaluator, and persisted
+usage telemetry checks.
+
+Result: accepted.
+
+- saved blog draft id: `4792bdf3-5520-40f9-bfb3-79e2112d5624`
+- generated-content evaluation: passed
+- SEO/AEO readiness: ready
+- GEO readiness: ready
+- generation model: `anthropic/claude-haiku-4-5`
+- generated content shape: 1,526 words, 5 H2 sections, 3 H3 sections
+- persisted usage telemetry matched saved draft generation metadata
+
+The accepted fixture keeps generated copy, source context, readiness summaries,
+and SEO/FAQ metadata from that live export while dropping run-specific ids,
+account scope, provider request ids, and token/cost telemetry.
+
 ## Verification
 
 - Command: python scripts/smoke_content_ops_live_generation.py --output landing_page --account-id acct_support_ticket_saas_demo_acceptance_20260528_landing --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-draft.json --output-result tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-result.json --evaluate-generated-content --json
@@ -224,6 +245,18 @@ FAQ-shell or section-outline scaffold before generation.
   - Saved draft `0efa47f7-c77b-4462-841e-990465fda1af`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it on an unsupported future-customer recognition claim.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry/blog-post-draft.json --pretty
   - Passed.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json --pretty
+  - Passed after the observed-shell live retry.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json --pretty
+  - Failed as expected on `support_ticket_outcome_claims_grounded`.
+- Command: python -m pytest tests/test_support_ticket_saas_demo_generated_content_fixtures.py -q
+  - Passed, 2 tests.
+- Command: python -m pytest tests/test_support_ticket_saas_demo_generated_content_fixtures.py tests/test_evaluate_support_ticket_generated_content.py -q
+  - Passed, 51 tests.
+- Command: python scripts/audit_extracted_pipeline_ci_enrollment.py
+  - Passed; 124 matching tests enrolled.
+- Command: python -m pytest tests/test_support_ticket_saas_demo_generated_content_fixtures.py tests/test_evaluate_support_ticket_generated_content.py tests/test_audit_extracted_pipeline_ci_enrollment.py -q
+  - Passed, 60 tests.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py tests/test_smoke_content_ops_support_ticket_package.py -q
   - Passed, 57 tests.
 - Command: python -m pytest tests/test_smoke_content_ops_support_ticket_package.py -q
