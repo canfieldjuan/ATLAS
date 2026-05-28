@@ -29,6 +29,8 @@ Slice phase: Functional validation
    blog fixture so the result can be rechecked from a fresh checkout.
 7. Tighten the support-ticket blog prompt and generated-content evaluator for
    the unsupported outcome phrasings found during the broader run.
+8. Keep source-backed cadence allowances scoped to the exact source phrase so a
+   generated cadence claim elsewhere in the same sentence still blocks.
 
 ### Files touched
 
@@ -108,7 +110,7 @@ instead of false-passing.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json --pretty
   - Failed as expected on `support_ticket_outcome_claims_grounded`.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
-  - Passed, 45 tests.
+  - Passed, 46 tests.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   - Passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
@@ -126,12 +128,12 @@ instead of false-passing.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~139 |
+| Plan doc | ~141 |
 | Validation doc | ~82 |
 | Fixture exports | ~438 |
-| Prompt/evaluator/tests | ~319 |
+| Prompt/evaluator/tests | ~354 |
 | Hardening notes | ~20 |
-| **Total** | **~998** |
+| **Total** | **~1037** |
 
 This is intentionally over the normal diff budget because durable validation
 fixtures are part of the acceptance evidence, and the broader run exposed

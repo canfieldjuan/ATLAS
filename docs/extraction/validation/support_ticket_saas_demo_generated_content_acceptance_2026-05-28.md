@@ -69,7 +69,7 @@ structural, not only prompt-enforced.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json --pretty
   - Failed as expected on `support_ticket_outcome_claims_grounded`.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
-  - Passed, 45 tests.
+  - Passed, 46 tests.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   - Passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline

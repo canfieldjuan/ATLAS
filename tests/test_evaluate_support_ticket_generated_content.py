@@ -302,6 +302,34 @@ def test_blog_export_still_blocks_unquoted_cadence_with_source_cadence_present()
     assert cadence_check["details"] == {"unsupported_cadences": ["weekly"]}
 
 
+def test_blog_export_blocks_cadence_outside_source_quote_in_same_sentence() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can I schedule a weekly attribution report export for finance?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded ticket asked, "
+            "\"Can I schedule a weekly attribution report export for finance?\" "
+            "and the team gets these reporting questions weekly."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    cadence_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_cadence_truthful"
+    )
+    assert cadence_check["passed"] is False
+    assert cadence_check["details"] == {"unsupported_cadences": ["weekly"]}
+
+
 def test_landing_export_fails_unsupported_uploaded_ticket_cadence() -> None:
     result = evaluator.evaluate_support_ticket_generated_content(
         _landing_export(

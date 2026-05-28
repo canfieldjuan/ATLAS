@@ -720,31 +720,40 @@ def _unsupported_uploaded_ticket_cadences(
 ) -> list[str]:
     unsupported: list[str] = []
     for sentence in _sentences(text):
-        hits = [
-            match.group(0).strip()
-            for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(sentence)
-        ]
-        if not hits:
-            continue
-        if _cadence_sentence_source_backed(sentence, source_context=source_context):
-            continue
-        unsupported.extend(hits)
+        source_backed_spans = _source_backed_cadence_spans(
+            sentence,
+            source_context=source_context,
+        )
+        for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(sentence):
+            if _span_within(match.span(), source_backed_spans):
+                continue
+            unsupported.append(match.group(0).strip())
     return _dedupe(unsupported)
 
 
-def _cadence_sentence_source_backed(
+def _source_backed_cadence_spans(
     sentence: str,
     *,
     source_context: Mapping[str, Any],
-) -> bool:
-    normalized_sentence = _normalize_source_phrase(sentence)
-    if not normalized_sentence:
-        return False
+) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    lowered_sentence = sentence.lower()
     for phrase in _source_cadence_phrases(source_context):
+        cleaned_phrase = phrase.strip()
         normalized_phrase = _normalize_source_phrase(phrase)
-        if len(normalized_phrase) >= 12 and normalized_phrase in normalized_sentence:
-            return True
-    return False
+        if len(normalized_phrase) < 12:
+            continue
+        lowered_phrase = cleaned_phrase.lower()
+        start = lowered_sentence.find(lowered_phrase)
+        while start >= 0:
+            spans.append((start, start + len(cleaned_phrase)))
+            start = lowered_sentence.find(lowered_phrase, start + 1)
+    return spans
+
+
+def _span_within(span: tuple[int, int], ranges: Sequence[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(range_start <= start and end <= range_end for range_start, range_end in ranges)
 
 
 def _source_cadence_phrases(source_context: Mapping[str, Any]) -> list[str]:
