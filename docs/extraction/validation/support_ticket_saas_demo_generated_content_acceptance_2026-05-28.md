@@ -164,6 +164,32 @@ next slice should tighten the descriptive support-ticket blog prompt so it
 avoids speculative prioritization and post-publication outcome language instead
 of relying only on the evaluator backstop.
 
+## Follow-up Retry After Descriptive Prompt Contract
+
+After `PR-Support-Ticket-Blog-Descriptive-Prompt-Contract` landed, the live
+Haiku retry used the same 36-row SaaS demo CSV and generated-content evaluator.
+
+Result: not accepted yet.
+
+The run saved a blog draft that passed automated gates:
+
+- saved blog draft id: `0efa47f7-c77b-4462-841e-990465fda1af`
+- generated-content evaluation: passed
+- SEO/AEO readiness: ready
+- GEO readiness: ready
+- generation model: `anthropic/claude-haiku-4-5`
+- generation quality repair attempts: 2
+
+Manual truthfulness review rejected the draft. The prompt change made the
+article much more descriptive and removed the prior activation, search-ranking,
+self-service, and ticket-reduction claims, but the draft still made a softer
+unsupported benefit claim: copying customer wording into FAQ questions would
+increase the likelihood that future customers recognize their own problem in
+the answer. That is still an outcome claim not backed by the uploaded tickets.
+
+The next source fix should move from prompt-only constraints to a deterministic
+FAQ-shell or section-outline scaffold before generation.
+
 ## Verification
 
 - Command: python scripts/smoke_content_ops_live_generation.py --output landing_page --account-id acct_support_ticket_saas_demo_acceptance_20260528_landing --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-draft.json --output-result tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/landing-page-result.json --evaluate-generated-content --json
@@ -192,6 +218,12 @@ of relying only on the evaluator backstop.
   - Saved draft `8adb720a-936b-462e-8659-daef8dbe5f4b`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it on unsupported impact and discoverability claims.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix_2/blog-post-draft.json --pretty
   - Failed as expected after the evaluator was tightened for the second cluster-correct false-green claims and metadata surface.
+- Command: mkdir -p tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry
+  - Passed.
+- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry_2 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry/blog-post-result.json --evaluate-generated-content --json
+  - Saved draft `0efa47f7-c77b-4462-841e-990465fda1af`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it on an unsupported future-customer recognition claim.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_descriptive_retry/blog-post-draft.json --pretty
+  - Passed.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py tests/test_smoke_content_ops_support_ticket_package.py -q
   - Passed, 57 tests.
 - Command: python -m pytest tests/test_smoke_content_ops_support_ticket_package.py -q
