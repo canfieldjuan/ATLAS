@@ -102,7 +102,9 @@ def test_blog_generation_prompt_trims_small_support_ticket_uploads() -> None:
         assert "exact `target_keyword`" in prompt
         assert "customers will or could find answers" in prompt
         assert "no repeated sections that explain the same cluster" in prompt
-        assert "Draft support ticket FAQ shells to verify" in prompt
+        assert "required_section_outline" in prompt
+        assert "draft_faq_shells" in prompt
+        assert "Do not add extra benefit, impact, search, or self-service sections" in prompt
 
 
 def test_host_skill_store_falls_back_to_packaged_skills() -> None:

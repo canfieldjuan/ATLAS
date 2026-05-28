@@ -45,6 +45,10 @@ _BLOG_FAILURE_EXCERPT_CHARS = 1500
 _SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS = 25
 _SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS = 700
 _SMALL_SUPPORT_TICKET_BLOG_TARGET_WORDS = 1100
+_SUPPORT_TICKET_QUESTION_RE = re.compile(
+    r"\b(can|could|do|does|how|is|should|what|when|where|why)\b[^?]*\?",
+    re.IGNORECASE,
+)
 SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE = "descriptive_no_outcome"
 _SUPPORT_TICKET_DESCRIPTIVE_ALLOWED_CLAIMS = (
     "observed support-ticket clusters and counts from the uploaded rows",
@@ -72,11 +76,70 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
     "Draft answer - support team should add the verified resolution before publishing."
 )
+_SUPPORT_TICKET_REQUIRED_SECTION_OUTLINE = (
+    {
+        "id": "observed-ticket-patterns",
+        "heading": "What the uploaded support tickets show",
+        "allowed_source_fields": (
+            "source_row_count",
+            "included_ticket_row_count",
+            "question_like_ticket_count",
+            "top_clusters",
+        ),
+        "claim_boundary": (
+            "Describe observed rows, repeated clusters, and customer wording only."
+        ),
+    },
+    {
+        "id": "faq-gap-review-order",
+        "heading": "Which FAQ gaps should be reviewed first",
+        "allowed_source_fields": ("top_clusters", "draft_faq_shells"),
+        "claim_boundary": (
+            "Order by observed ticket count only; do not infer business impact."
+        ),
+    },
+    {
+        "id": "draft-faq-shells",
+        "heading": "Draft FAQ shells to verify",
+        "allowed_source_fields": ("draft_faq_shells", "customer_wording_examples"),
+        "claim_boundary": (
+            "Use review-needed placeholders until support adds verified resolutions."
+        ),
+    },
+    {
+        "id": "post-publication-measurement",
+        "heading": "What to measure after publishing",
+        "allowed_source_fields": ("measurement_guidance",),
+        "claim_boundary": (
+            "Frame metrics as future signals to watch, not outcomes already caused."
+        ),
+    },
+)
+_SUPPORT_TICKET_MEASUREMENT_GUIDANCE = (
+    "Track new tickets by the same observed cluster labels after publishing.",
+    "Review FAQ page traffic and customer feedback as signals to inspect.",
+    "Compare future tickets against the observed clusters without claiming causality.",
+)
+_SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS = 6
+_SUPPORT_TICKET_GENERIC_LABEL_WORDS = frozenset({
+    "faq",
+    "issue",
+    "issues",
+    "question",
+    "questions",
+    "support",
+    "ticket",
+    "tickets",
+})
+_SUPPORT_TICKET_SYNTHETIC_CLUSTER_LABELS = frozenset({"remaining", "uncategorized"})
 _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
     "support_ticket_blog_mode",
     "allowed_claims",
     "forbidden_claims",
     "draft_answer_guidance",
+    "required_section_outline",
+    "draft_faq_shells",
+    "measurement_guidance",
 )
 
 
@@ -975,7 +1038,151 @@ def support_ticket_descriptive_blog_contract(
         "allowed_claims": list(_SUPPORT_TICKET_DESCRIPTIVE_ALLOWED_CLAIMS),
         "forbidden_claims": list(_SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS),
         "draft_answer_guidance": _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE,
+        "required_section_outline": _support_ticket_required_section_outline(),
+        "draft_faq_shells": _support_ticket_draft_faq_shells(data_context),
+        "measurement_guidance": list(_SUPPORT_TICKET_MEASUREMENT_GUIDANCE),
     }
+
+
+def _support_ticket_required_section_outline() -> list[dict[str, Any]]:
+    return [
+        {
+            **section,
+            "allowed_source_fields": list(section["allowed_source_fields"]),
+        }
+        for section in _SUPPORT_TICKET_REQUIRED_SECTION_OUTLINE
+    ]
+
+
+def _support_ticket_draft_faq_shells(
+    data_context: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    clusters = _mapping_list(
+        data_context.get("top_clusters") or data_context.get("top_ticket_clusters")
+    )
+    examples = _mapping_list(data_context.get("customer_wording_examples"))
+    questions = _string_list(data_context.get("faq_questions"))
+    shells: list[dict[str, Any]] = []
+    used_questions: set[str] = set()
+
+    for cluster in clusters:
+        if len(shells) >= _SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS:
+            break
+        label = str(cluster.get("label") or "").strip()
+        if not label or label.lower() in _SUPPORT_TICKET_SYNTHETIC_CLUSTER_LABELS:
+            continue
+        count = _positive_int_context(cluster.get("count"))
+        matching_examples = [
+            example
+            for example in examples
+            if str(example.get("pain_category") or "").strip().lower() == label.lower()
+        ]
+        question = _first_shell_question(
+            questions=_questions_matching_label(questions, label),
+            examples=matching_examples,
+            used_questions=used_questions,
+        )
+        shell: dict[str, Any] = {
+            "cluster": label,
+            "observed_ticket_count": count or 0,
+            "draft_question": question or f"What should the team verify for {label}?",
+            "answer_shell": _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE,
+            "verification_needed": [
+                "verified resolution",
+                "approved customer-facing wording",
+                "support owner review",
+            ],
+        }
+        source_ids = _source_ids_from_examples(matching_examples)
+        if source_ids:
+            shell["source_ids"] = source_ids
+        shells.append(shell)
+
+    if shells:
+        return shells
+    for question in questions[:_SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS]:
+        shells.append({
+            "cluster": "uncategorized",
+            "observed_ticket_count": 0,
+            "draft_question": question,
+            "answer_shell": _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE,
+            "verification_needed": [
+                "verified resolution",
+                "approved customer-facing wording",
+                "support owner review",
+            ],
+        })
+    return shells
+
+
+def _first_shell_question(
+    *,
+    questions: Sequence[str],
+    examples: Sequence[Mapping[str, Any]],
+    used_questions: set[str],
+) -> str:
+    for example in examples:
+        question = _question_from_text(example.get("text"))
+        if question:
+            key = question.lower()
+            if key not in used_questions:
+                used_questions.add(key)
+                return question
+    for question in questions:
+        key = question.lower()
+        if key not in used_questions:
+            used_questions.add(key)
+            return question
+    return ""
+
+
+def _questions_matching_label(
+    questions: Sequence[str],
+    label: str,
+) -> list[str]:
+    label_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9]+", label.lower())
+        if len(token) >= 4 and token not in _SUPPORT_TICKET_GENERIC_LABEL_WORDS
+    }
+    if not label_tokens:
+        return []
+    return [
+        question
+        for question in questions
+        if any(token in question.lower() for token in label_tokens)
+    ]
+
+
+def _question_from_text(value: Any) -> str:
+    text = str(value or "").strip()
+    match = _SUPPORT_TICKET_QUESTION_RE.search(text)
+    if match:
+        return match.group(0).strip()
+    return text if text.endswith("?") else ""
+
+
+def _source_ids_from_examples(
+    examples: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 3,
+) -> list[str]:
+    source_ids: list[str] = []
+    for example in examples:
+        source_id = str(example.get("source_id") or "").strip()
+        if source_id and source_id not in source_ids:
+            source_ids.append(source_id)
+        if len(source_ids) >= limit:
+            break
+    return source_ids
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _is_support_ticket_blog_context(data_context: Mapping[str, Any]) -> bool:
@@ -1033,6 +1240,9 @@ def _with_support_ticket_descriptive_prompt_addendum(
         "- If the blueprint lacks resolution evidence, keep answer content as "
         "draft placeholders for support-team review. Do not invent UI paths, "
         "setup steps, feature behavior, or exact resolutions.\n"
+        "- Use `data_context.required_section_outline` as the H2 section order "
+        "and use `data_context.draft_faq_shells` for every draft FAQ example. "
+        "Do not add extra benefit, impact, search, or self-service sections.\n"
         "- Measurement language must be observational only: say what to watch or "
         "compare after publishing, but do not say ticket volume will decline, "
         "the FAQ entry is working, customers will find it, search visibility will "

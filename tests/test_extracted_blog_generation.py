@@ -412,6 +412,21 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "included_ticket_row_count": 36,
         "has_measured_outcomes": False,
         "support_ticket_resolution_evidence_present": False,
+        "top_clusters": [
+            {"label": "account access", "count": 2},
+            {"label": "reporting export", "count": 1},
+        ],
+        "faq_questions": [
+            "How do I change the account email?",
+            "Why is the report export missing columns?",
+        ],
+        "customer_wording_examples": [
+            {
+                "source_id": "ticket-1",
+                "pain_category": "account access",
+                "text": "How do I change the account email?",
+            }
+        ],
     })
 
     assert contract["support_ticket_blog_mode"] == "descriptive_no_outcome"
@@ -422,6 +437,35 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         in contract["forbidden_claims"]
     )
     assert contract["draft_answer_guidance"].startswith("Draft answer -")
+    assert [section["heading"] for section in contract["required_section_outline"]] == [
+        "What the uploaded support tickets show",
+        "Which FAQ gaps should be reviewed first",
+        "Draft FAQ shells to verify",
+        "What to measure after publishing",
+    ]
+    assert contract["draft_faq_shells"][0] == {
+        "cluster": "account access",
+        "observed_ticket_count": 2,
+        "draft_question": "How do I change the account email?",
+        "answer_shell": (
+            "Draft answer - support team should add the verified resolution "
+            "before publishing."
+        ),
+        "verification_needed": [
+            "verified resolution",
+            "approved customer-facing wording",
+            "support owner review",
+        ],
+        "source_ids": ["ticket-1"],
+    }
+    assert contract["draft_faq_shells"][1]["draft_question"] == (
+        "Why is the report export missing columns?"
+    )
+    assert contract["measurement_guidance"] == [
+        "Track new tickets by the same observed cluster labels after publishing.",
+        "Review FAQ page traffic and customer feedback as signals to inspect.",
+        "Compare future tickets against the observed clusters without claiming causality.",
+    ]
     assert support_ticket_descriptive_blog_contract({
         "source": "support_ticket_provider",
         "has_measured_outcomes": True,
@@ -432,6 +476,60 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "has_measured_outcomes": False,
         "support_ticket_resolution_evidence_present": True,
     }) == {}
+
+
+def test_support_ticket_draft_shells_skip_aggregate_buckets_and_unrelated_examples() -> None:
+    contract = support_ticket_descriptive_blog_contract({
+        "source": "support_ticket_provider",
+        "source_row_count": 28,
+        "included_ticket_row_count": 28,
+        "has_measured_outcomes": False,
+        "support_ticket_resolution_evidence_present": False,
+        "top_clusters": [
+            {"label": "login issues", "count": 8},
+            {"label": "billing questions", "count": 5},
+            {"label": "remaining", "count": 9},
+            {"label": "uncategorized", "count": 6},
+            {"label": "shipping delays", "count": 4},
+        ],
+        "faq_questions": [
+            "How do I reset login access?",
+            "Why is shipping delayed?",
+        ],
+        "customer_wording_examples": [
+            {
+                "source_id": "ticket-login",
+                "pain_category": "login issues",
+                "text": "How do I reset login access?",
+            },
+            {
+                "source_id": "ticket-shipping",
+                "pain_category": "shipping delays",
+                "text": "Why is shipping delayed?",
+            },
+        ],
+    })
+
+    shells = contract["draft_faq_shells"]
+    assert [shell["cluster"] for shell in shells] == [
+        "login issues",
+        "billing questions",
+        "shipping delays",
+    ]
+    assert shells[1] == {
+        "cluster": "billing questions",
+        "observed_ticket_count": 5,
+        "draft_question": "What should the team verify for billing questions?",
+        "answer_shell": (
+            "Draft answer - support team should add the verified resolution "
+            "before publishing."
+        ),
+        "verification_needed": [
+            "verified resolution",
+            "approved customer-facing wording",
+            "support owner review",
+        ],
+    }
 
 
 def test_small_support_ticket_blog_context_uses_compact_quality_policy() -> None:
@@ -867,8 +965,15 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
     assert '"allowed_claims":' in user_prompt
     assert '"forbidden_claims":' in user_prompt
     assert '"draft_answer_guidance":' in user_prompt
+    assert '"required_section_outline":' in user_prompt
+    assert '"draft_faq_shells":' in user_prompt
+    assert '"measurement_guidance":' in user_prompt
     assert "Support-ticket descriptive mode instructions:" in user_prompt
     assert "Do not rank tied clusters by business impact" in user_prompt
+    assert (
+        "Use `data_context.required_section_outline` as the H2 section order"
+        in user_prompt
+    )
     assert "Measurement language must be observational only" in user_prompt
     assert "metadata, FAQ metadata, tags, and chart copy" in user_prompt
 
@@ -907,6 +1012,9 @@ async def test_generate_clears_stale_descriptive_contract_for_outcome_backed_con
         "allowed_claims": ["stale allowed"],
         "forbidden_claims": ["stale forbidden"],
         "draft_answer_guidance": "stale draft guidance",
+        "required_section_outline": [{"heading": "stale heading"}],
+        "draft_faq_shells": [{"draft_question": "stale question"}],
+        "measurement_guidance": ["stale measurement"],
     })
     service, _blueprints, blog_posts, llm, _skills = _service(
         rows=[blueprint],
@@ -927,10 +1035,19 @@ async def test_generate_clears_stale_descriptive_contract_for_outcome_backed_con
     assert "allowed_claims" not in draft.data_context
     assert "forbidden_claims" not in draft.data_context
     assert "draft_answer_guidance" not in draft.data_context
+    assert "required_section_outline" not in draft.data_context
+    assert "draft_faq_shells" not in draft.data_context
+    assert "measurement_guidance" not in draft.data_context
     assert "descriptive_no_outcome" not in system_prompt
     assert "descriptive_no_outcome" not in user_prompt
     assert "stale allowed" not in system_prompt
     assert "stale allowed" not in user_prompt
+    assert "stale heading" not in system_prompt
+    assert "stale heading" not in user_prompt
+    assert "stale question" not in system_prompt
+    assert "stale question" not in user_prompt
+    assert "stale measurement" not in system_prompt
+    assert "stale measurement" not in user_prompt
     assert "Support-ticket descriptive mode instructions:" not in user_prompt
 
 
@@ -967,6 +1084,10 @@ async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract()
     assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
     assert "Support-ticket descriptive mode instructions:" in retry_prompt
     assert "Do not rank tied clusters by business impact" in retry_prompt
+    assert (
+        "Use `data_context.required_section_outline` as the H2 section order"
+        in retry_prompt
+    )
 
 
 @pytest.mark.asyncio
