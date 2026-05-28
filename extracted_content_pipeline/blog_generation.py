@@ -989,17 +989,21 @@ def _blog_generation_prompts(
     topic: str = "",
 ) -> tuple[str, str]:
     blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
-    if "{blueprint_json}" in prompt_template:
-        system_prompt = prompt_template.replace("{blueprint_json}", blueprint_json)
-        base_user_prompt = "Generate one blog post from the blueprint above."
-    else:
-        system_prompt = prompt_template
-        base_user_prompt = f"Generate one blog post from this blueprint JSON:\n{blueprint_json}"
-    # PR-Blog-Topic-Per-Call: operator-supplied topic substitutes into
-    # the ``{topic}`` placeholder. Empty topic resolves to "" so hosts
-    # on the prior prompt (without ``{topic}``) are unaffected -- the
-    # ``replace()`` is a no-op when the placeholder isn't present.
-    system_prompt = system_prompt.replace("{topic}", topic)
+    system_prompt = (
+        prompt_template
+        .replace("{blueprint_json}", "the blueprint JSON supplied in the user message")
+        .replace("{topic}", "the operator-supplied topic provided in the user message")
+    )
+    base_user_prompt_parts = [
+        "Generate one blog post from this blueprint JSON:",
+        blueprint_json,
+    ]
+    if topic:
+        base_user_prompt_parts.extend((
+            "",
+            f"Operator-supplied topic focus: {topic}",
+        ))
+    base_user_prompt = "\n".join(base_user_prompt_parts)
     base_user_prompt = _with_support_ticket_descriptive_prompt_addendum(
         base_user_prompt,
         blueprint=blueprint,
