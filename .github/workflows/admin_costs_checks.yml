@@ -1,0 +1,35 @@
+name: Admin Costs Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/admin_costs_checks.yml"
+      - "atlas_brain/api/admin_costs.py"
+      - "tests/test_admin_costs.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/admin_costs_checks.yml"
+      - "atlas_brain/api/admin_costs.py"
+      - "tests/test_admin_costs.py"
+
+jobs:
+  admin-costs-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio fastapi httpx PyJWT pydantic-settings psutil markdown python-multipart
+
+      - name: Run admin costs tests
+        run: python -m pytest tests/test_admin_costs.py -q
