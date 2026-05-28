@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_seeded_route_e2e.py"
 RUNBOOK = ROOT / "docs/extraction/validation/content_ops_faq_seeded_route_e2e_runbook.md"
+HOST_RUNBOOK = ROOT / "extracted_content_pipeline/docs/host_install_runbook.md"
 SPEC = importlib.util.spec_from_file_location("smoke_content_ops_faq_search_seeded_route_e2e", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
@@ -184,6 +185,14 @@ def test_seeded_route_e2e_runbook_command_matches_parser():
     assert parsed.max_case_p95_ms == 1500.0
     assert parsed.max_case_single_request_ms == 3000.0
     assert str(parsed.output_result) == "/tmp/faq-search-seeded-route-e2e-result.json"
+
+
+def test_host_runbook_links_seeded_route_e2e_validation_runbook():
+    doc = HOST_RUNBOOK.read_text(encoding="utf-8")
+    relative_path = "docs/extraction/validation/content_ops_faq_seeded_route_e2e_runbook.md"
+
+    assert relative_path in doc
+    assert RUNBOOK.exists()
 
 
 def test_validate_args_rejects_invalid_case_budgets():
