@@ -32,6 +32,24 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
+### Atlas startup migration check warns on missing b2b_campaigns.updated_at
+- File/location: `atlas_brain/storage/migrations/309_campaign_sequences_unique_active_recipient.sql`, Atlas startup migration check.
+- Description: Local API startup logged `column "updated_at" of relation "b2b_campaigns" does not exist` while checking pending host migrations.
+- Why it matters: The FAQ route still starts and passes, but startup migration noise can hide real route-readiness issues and suggests local/host B2B campaign schema drift.
+- Effort: M
+- Category: correctness
+- Owner/session: content-ops/faq-search
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
+
+### Voice ASR auto-start blocks non-voice route validation on CUDA-less hosts
+- File/location: `atlas_brain/main.py` lifespan voice startup, `atlas_brain/config.py` voice defaults.
+- Description: Starting Atlas without voice overrides attempted to auto-start ASR on CUDA and failed because no CUDA GPU was available.
+- Why it matters: Non-voice route validation can waste time or appear broken unless operators know to set `ATLAS_VOICE_ENABLED=false ATLAS_VOICE_AUTO_START_ASR=false`.
+- Effort: S
+- Category: polish
+- Owner/session: content-ops/faq-search
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
+
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
 - Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.
