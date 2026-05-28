@@ -991,6 +991,47 @@ def test_blog_export_fails_final_saas_demo_false_green_outcome_claims() -> None:
     assert outcome_check["details"]["unsupported_claims"] == claims
 
 
+def test_blog_export_fails_help_center_discoverability_false_green_claims() -> None:
+    claims = [
+        (
+            "Support-ticket FAQ gaps emerge when customers ask the same questions "
+            "repeatedly without finding answers in your help center or knowledge "
+            "base."
+        ),
+        (
+            "High traffic to a reporting export entry suggests customers are "
+            "finding the page."
+        ),
+        (
+            "Low traffic may indicate the entry is not discoverable or does not "
+            "match how customers search for the answer."
+        ),
+        (
+            "Their frontline perspective can reveal whether customers are finding "
+            "the FAQ entries and what follow-up questions they ask."
+        ),
+    ]
+    export = _blog_export(
+        content_override=(
+            "The uploaded 36 support tickets show reporting and dashboard "
+            "clusters. " + " ".join(claims)
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == claims
+
+
 def test_blog_export_fails_cluster_fixed_saas_demo_false_green_claims() -> None:
     claims = [
         (

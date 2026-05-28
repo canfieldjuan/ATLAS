@@ -138,7 +138,16 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcustomers\s+are\s+finding\s+the\s+(?:page|faq\s+entr(?:y|ies))\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bquestions?\b[^.!?\n]{0,120}\bwithout\s+finding\s+answers?\s+in\s+"
+        r"(?:your\s+)?(?:help\s+center|knowledge\s+base|faq)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -460,6 +469,21 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bfaq\s+entry\b[^.!?\n]{0,120}\bmay\s+not\s+be\s+discoverable\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\blow\s+traffic\b[^.!?\n]{0,120}"
+        r"\b(?:entry|page|faq)\b[^.!?\n]{0,80}\bnot\s+discoverable\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:traffic|views?)\b[^.!?\n]{0,120}\bsuggests?\s+customers\s+"
+        r"are\s+finding\s+the\s+(?:page|answer|faq\s+entr(?:y|ies))\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:reveal|reveals|show|shows|indicate|indicates)\s+whether\s+"
+        r"customers\s+are\s+finding\s+(?:the\s+)?faq\s+entr(?:y|ies)\b",
         re.IGNORECASE,
     ),
     re.compile(
