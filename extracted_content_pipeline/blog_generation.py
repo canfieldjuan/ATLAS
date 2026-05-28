@@ -220,6 +220,12 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "`target_keyword` string from the previous JSON. Also repeat "
                 "that exact phrase naturally in the first 40-60 words of `content`."
             )
+            instructions.append(
+                "- Replace vague H2 headings such as `Overview`, `Introduction`, "
+                "`Conclusion`, `Summary`, `Final Thoughts`, and `Key Takeaways` "
+                "with specific question or answer headings that name the topic "
+                "or target keyword."
+            )
         elif code == "geo_citable_section_structure_missing":
             instructions.append(
                 "- Make at least two H2 sections independently citable. Each of "
