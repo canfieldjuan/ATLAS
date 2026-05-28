@@ -1,0 +1,37 @@
+name: Atlas Main Voice Startup Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_main_voice_startup_checks.yml"
+      - "atlas_brain/main.py"
+      - "tests/test_atlas_main_voice_startup.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_main_voice_startup_checks.yml"
+      - "atlas_brain/main.py"
+      - "tests/test_atlas_main_voice_startup.py"
+
+jobs:
+  atlas-main-voice-startup-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Atlas main voice startup tests
+        run: python -m pytest tests/test_atlas_main_voice_startup.py -q
