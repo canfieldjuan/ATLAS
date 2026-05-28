@@ -24,7 +24,36 @@ Run the FAQ search migrations before this smoke:
 python scripts/run_extracted_content_pipeline_migrations.py
 ```
 
-## Step 1: Seed The SaaS Demo And Write Route Cases
+## Recommended One-Command Smoke
+
+```bash
+python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
+  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
+  --base-url "$ATLAS_API_BASE_URL" \
+  --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
+  --account-id "$ATLAS_FAQ_SEARCH_ACCOUNT_ID" \
+  --route-requests 40 \
+  --concurrency 8 \
+  --max-error-rate 0 \
+  --max-case-error-rate 0 \
+  --max-p95-ms 1500 \
+  --max-single-request-ms 3000 \
+  --max-case-p95-ms 1500 \
+  --max-case-single-request-ms 3000 \
+  --max-detail-ms 2500 \
+  --output-result /tmp/faq-saas-demo-route-e2e-result.json
+```
+
+Use `--json` when stdout should be machine-readable. Without `--json`, stdout is
+a compact status line; the full proof lives in `--output-result`.
+
+The smoke writes a temporary route case file, validates the hosted search and
+detail path against it, then deletes the seeded FAQ unless `--keep-data` is set.
+
+## Manual Fallback: Seed The SaaS Demo And Write Route Cases
+
+Use the manual steps when you need to inspect or preserve the emitted route case
+file between seed and route validation.
 
 ```bash
 python scripts/seed_content_ops_faq_saas_demo.py \
@@ -49,7 +78,7 @@ and expected hydrated detail fields:
 - `expected_detail_title`
 - `expected_detail_status`
 
-## Step 2: Validate The Hosted Route Against The Seeded Case
+## Manual Fallback: Validate The Hosted Route Against The Seeded Case
 
 ```bash
 python scripts/smoke_content_ops_faq_search_route_concurrency.py \
@@ -83,6 +112,14 @@ a compact status line with aggregate and worst-case route signals.
 
 ## Result Checks
 
+Open `/tmp/faq-saas-demo-route-e2e-result.json` and inspect:
+
+- `ok`: seed, hosted route/detail, cleanup, and artifact-read status.
+- `seed.result_artifact.faq_id`: generated FAQ id used for route and cleanup.
+- `route.result_artifact.requests`: hosted route request count.
+- `route.result_artifact.detail`: hydrated detail checks and failures.
+- `cleanup`: cleanup status, or `not_run_reason` when `--keep-data` is set.
+
 Open `/tmp/faq-saas-demo-seed-result.json` and inspect:
 
 - `ok`: seed, approval, projection, verification search, and route-case write
@@ -102,8 +139,9 @@ Open `/tmp/faq-saas-demo-route-result.json` and inspect:
 
 ## Cleanup
 
-If the seeded FAQ should not remain in the host database, delete it with the FAQ
-id from the seed result:
+The recommended one-command smoke cleans up the seeded FAQ by default. If you
+use the manual fallback and the seeded FAQ should not remain in the host
+database, delete it with the FAQ id from the seed result:
 
 ```bash
 python scripts/seed_content_ops_faq_saas_demo.py \
