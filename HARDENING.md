@@ -41,15 +41,6 @@ register under `docs/technical-debt/`.
 - Owner/session: content-ops/faq-search
 - Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
 
-### Voice ASR auto-start blocks non-voice route validation on CUDA-less hosts
-- File/location: `atlas_brain/main.py` lifespan voice startup, `atlas_brain/config.py` voice defaults.
-- Description: Starting Atlas without voice overrides attempted to auto-start ASR on CUDA and failed because no CUDA GPU was available.
-- Why it matters: Non-voice route validation can waste time or appear broken unless operators know to set `ATLAS_VOICE_ENABLED=false ATLAS_VOICE_AUTO_START_ASR=false`.
-- Effort: S
-- Category: polish
-- Owner/session: content-ops/faq-search
-- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent

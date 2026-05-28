@@ -36,6 +36,35 @@ logging.basicConfig(
 logger = logging.getLogger("atlas.main")
 
 
+def _asr_autostart_blocked_reason(device: str) -> str | None:
+    normalized_device = str(device or "").strip().lower()
+    if not normalized_device.startswith("cuda"):
+        return None
+
+    try:
+        import torch
+    except Exception as exc:
+        return (
+            "Skipping ASR auto-start because device "
+            f"{device!r} requires CUDA but torch could not be imported: {exc}"
+        )
+
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        return (
+            "Skipping ASR auto-start because device "
+            f"{device!r} requires CUDA but CUDA availability could not be checked: {exc}"
+        )
+
+    if cuda_available:
+        return None
+    return (
+        "Skipping ASR auto-start because device "
+        f"{device!r} requires CUDA but CUDA is not available"
+    )
+
+
 async def _start_asr_server() -> subprocess.Popen | None:
     """Start the ASR server as a subprocess if not already running."""
     import sys
@@ -56,6 +85,12 @@ async def _start_asr_server() -> subprocess.Popen | None:
     except Exception:
         pass
 
+    device = settings.voice.asr_device
+    blocked_reason = _asr_autostart_blocked_reason(device)
+    if blocked_reason:
+        logger.warning("%s", blocked_reason)
+        return None
+
     # Find the asr_server.py script
     project_root = Path(__file__).parent.parent
     asr_script = project_root / "asr_server.py"
@@ -65,7 +100,6 @@ async def _start_asr_server() -> subprocess.Popen | None:
 
     port = parsed.port or 8081
     model = settings.voice.asr_model
-    device = settings.voice.asr_device
 
     logger.info("Starting ASR server: model=%s port=%d device=%s", model, port, device)
 
