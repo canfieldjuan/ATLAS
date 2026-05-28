@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -67,6 +68,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-error-rate", type=float, default=0.0)
     parser.add_argument("--max-p95-ms", type=float)
     parser.add_argument("--max-single-request-ms", type=float)
+    parser.add_argument("--max-case-error-rate", type=float)
+    parser.add_argument("--max-case-p95-ms", type=float)
+    parser.add_argument("--max-case-single-request-ms", type=float)
     parser.add_argument("--detail-route", default=os.getenv("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-result", type=Path)
@@ -96,11 +100,30 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     ):
         if int(getattr(args, name)) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
+    for name in (
+        "timeout",
+        "max_error_rate",
+        "max_p95_ms",
+        "max_single_request_ms",
+        "max_case_error_rate",
+        "max_case_p95_ms",
+        "max_case_single_request_ms",
+    ):
+        value = getattr(args, name)
+        if value is not None and not math.isfinite(float(value)):
+            errors.append(f"--{name.replace('_', '-')} must be finite")
     if float(args.timeout) <= 0:
         errors.append("--timeout must be positive")
     if not 0 <= float(args.max_error_rate) <= 1:
         errors.append("--max-error-rate must be between 0 and 1")
-    for name in ("max_p95_ms", "max_single_request_ms"):
+    if args.max_case_error_rate is not None and not 0 <= float(args.max_case_error_rate) <= 1:
+        errors.append("--max-case-error-rate must be between 0 and 1")
+    for name in (
+        "max_p95_ms",
+        "max_single_request_ms",
+        "max_case_p95_ms",
+        "max_case_single_request_ms",
+    ):
         value = getattr(args, name)
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
@@ -171,6 +194,9 @@ def _route_command(args: argparse.Namespace, *, case_file: Path, route_result: P
     for arg_name, flag in (
         ("max_p95_ms", "--max-p95-ms"),
         ("max_single_request_ms", "--max-single-request-ms"),
+        ("max_case_error_rate", "--max-case-error-rate"),
+        ("max_case_p95_ms", "--max-case-p95-ms"),
+        ("max_case_single_request_ms", "--max-case-single-request-ms"),
     ):
         value = getattr(args, arg_name)
         if value is not None:
