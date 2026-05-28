@@ -32,6 +32,15 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
+### Support-ticket SaaS demo blog still fails the GEO citable-section gate after repair
+- File/location: `extracted_content_pipeline/blog_generation.py`, `extracted_quality_gate/blog_pack.py`, live run in `tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_citable/blog-post-result.json`.
+- Description: After save-time/export citable-section validation was aligned, the 36-row SaaS demo blog retry failed before save on `geo_citable_section_structure_missing` after two repair attempts. The failed candidate had the target keyword in the title/opening, but the repaired H2 opening sections still did not produce two citable 40-120 word openings containing the exact target keyword or required topic terms.
+- Why it matters: The blog path now blocks correctly before save, but it still cannot produce an accepted SaaS demo fixture until the repair contract teaches the model to satisfy the stricter citable-section rule.
+- Effort: S
+- Category: correctness
+- Owner/session: content-ops/support-ticket-provider
+- Found during: PR-Support-Ticket-SaaS-Demo-Blog-Accepted-After-GEO
+
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
 - Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.
