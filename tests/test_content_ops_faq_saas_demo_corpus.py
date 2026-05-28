@@ -26,6 +26,7 @@ DEMO_FAQ_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_
 RUNBOOK_PATH = ROOT / "docs/extraction/validation/content_ops_faq_saas_demo_route_case_runbook.md"
 SEED_SCRIPT = ROOT / "scripts/seed_content_ops_faq_saas_demo.py"
 ROUTE_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
+E2E_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_saas_demo_route_e2e.py"
 SEED_SPEC = importlib.util.spec_from_file_location(
     "seed_content_ops_faq_saas_demo",
     SEED_SCRIPT,
@@ -41,6 +42,13 @@ ROUTE_SPEC = importlib.util.spec_from_file_location(
 assert ROUTE_SPEC is not None and ROUTE_SPEC.loader is not None
 route_smoke = importlib.util.module_from_spec(ROUTE_SPEC)
 ROUTE_SPEC.loader.exec_module(route_smoke)
+E2E_SPEC = importlib.util.spec_from_file_location(
+    "smoke_content_ops_faq_saas_demo_route_e2e_for_saas_demo_test",
+    E2E_SCRIPT,
+)
+assert E2E_SPEC is not None and E2E_SPEC.loader is not None
+e2e_smoke = importlib.util.module_from_spec(E2E_SPEC)
+E2E_SPEC.loader.exec_module(e2e_smoke)
 
 EXPECTED_LABEL = "synthetic_b2b_saas_demo"
 MIN_ROWS = 36
@@ -178,6 +186,26 @@ def test_saas_demo_faq_draft_projects_to_search_documents() -> None:
     assert first["account_id"] == "acct-demo"
     assert first["corpus_id"] == "synthetic-b2b-saas-demo"
     assert "export" in first["question"].lower()
+
+
+def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
+    args = _runbook_command_args(
+        "python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py"
+    )
+
+    parsed = e2e_smoke._build_parser().parse_args(args)
+
+    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert parsed.base_url == "$ATLAS_API_BASE_URL"
+    assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
+    assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
+    assert parsed.route_requests == 40
+    assert parsed.concurrency == 8
+    assert parsed.max_error_rate == 0
+    assert parsed.max_case_error_rate == 0
+    assert parsed.max_detail_ms == 2500
+    assert parsed.output_result == Path("/tmp/faq-saas-demo-route-e2e-result.json")
+    assert e2e_smoke._validate_args(parsed) == []
 
 
 def test_saas_demo_route_case_runbook_seed_command_matches_parser() -> None:
