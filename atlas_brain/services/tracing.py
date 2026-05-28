@@ -44,6 +44,11 @@ _TRACE_BUSINESS_KEYS = (
     "subscription_id",
 )
 
+_LLM_USAGE_ACCOUNT_ID_MISSING_TEXT = (
+    'column "account_id" of relation "llm_usage" does not exist'
+)
+_POSTGRES_UNDEFINED_COLUMN_SQLSTATE = "42703"
+
 
 def _metadata_text_value(metadata: object, key: str) -> str | None:
     if not isinstance(metadata, dict):
@@ -65,6 +70,93 @@ def _metadata_text_value(metadata: object, key: str) -> str | None:
     if isinstance(business, dict):
         return _normalize(business.get(key))
     return None
+
+
+def _is_missing_llm_usage_account_id(exc: Exception) -> bool:
+    sqlstate = str(
+        getattr(exc, "sqlstate", "")
+        or getattr(exc, "pgcode", "")
+        or ""
+    )
+    if sqlstate and sqlstate != _POSTGRES_UNDEFINED_COLUMN_SQLSTATE:
+        return False
+    return _LLM_USAGE_ACCOUNT_ID_MISSING_TEXT in str(exc)
+
+
+def _llm_usage_insert_statement(
+    payload: dict[str, Any],
+    *,
+    vendor_name: str | None,
+    run_id: str | None,
+    source_name: str | None,
+    event_type: str | None,
+    entity_type: str | None,
+    entity_id: str | None,
+    account_id: str,
+    include_account_id: bool,
+) -> tuple[str, tuple[Any, ...]]:
+    columns = [
+        "span_name",
+        "operation_type",
+        "model_name",
+        "model_provider",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_usd",
+        "duration_ms",
+        "ttft_ms",
+        "inference_time_ms",
+        "queue_time_ms",
+        "tokens_per_second",
+        "billable_input_tokens",
+        "cached_tokens",
+        "cache_write_tokens",
+        "api_endpoint",
+        "provider_request_id",
+        "status",
+        "metadata",
+        "vendor_name",
+        "run_id",
+        "source_name",
+        "event_type",
+        "entity_type",
+        "entity_id",
+    ]
+    args: list[Any] = [
+        payload.get("span_name", ""),
+        payload.get("operation_type", "llm_call"),
+        payload.get("model_name"),
+        payload.get("model_provider"),
+        payload.get("input_tokens", 0),
+        payload.get("output_tokens", 0),
+        payload.get("total_tokens", 0),
+        payload.get("cost_usd", 0),
+        payload.get("duration_ms", 0),
+        payload.get("ttft_ms"),
+        payload.get("inference_time_ms"),
+        payload.get("queue_time_ms"),
+        payload.get("tokens_per_second"),
+        payload.get("billable_input_tokens", payload.get("input_tokens", 0)),
+        payload.get("cached_tokens", 0),
+        payload.get("cache_write_tokens", 0),
+        payload.get("api_endpoint"),
+        payload.get("provider_request_id"),
+        payload.get("status", "completed"),
+        json.dumps(payload.get("metadata", {})),
+        vendor_name,
+        run_id,
+        source_name,
+        event_type,
+        entity_type,
+        entity_id,
+    ]
+    if include_account_id:
+        columns.append("account_id")
+        args.append(account_id)
+    placeholders = ",".join(f"${index}" for index in range(1, len(args) + 1))
+    query = f"INSERT INTO llm_usage ({','.join(columns)}) VALUES ({placeholders})"
+    return query, tuple(args)
 
 
 @dataclass
@@ -511,52 +603,39 @@ class FTLTracingClient:
             # LLM Gateway router) or sentinel for atlas's internal
             # pipeline.
             account_id = account_id_str or "00000000-0000-0000-0000-000000000000"
-            query = """INSERT INTO llm_usage
-                       (span_name, operation_type, model_name, model_provider,
-                        input_tokens, output_tokens, total_tokens, cost_usd,
-                        duration_ms, ttft_ms, inference_time_ms, queue_time_ms,
-                        tokens_per_second, billable_input_tokens, cached_tokens,
-                        cache_write_tokens, api_endpoint, provider_request_id,
-                        status, metadata, vendor_name, run_id, source_name,
-                        event_type, entity_type, entity_id, account_id)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)"""
-            args = (
-                payload.get("span_name", ""),
-                payload.get("operation_type", "llm_call"),
-                payload.get("model_name"),
-                payload.get("model_provider"),
-                payload.get("input_tokens", 0),
-                payload.get("output_tokens", 0),
-                payload.get("total_tokens", 0),
-                payload.get("cost_usd", 0),
-                payload.get("duration_ms", 0),
-                payload.get("ttft_ms"),
-                payload.get("inference_time_ms"),
-                payload.get("queue_time_ms"),
-                payload.get("tokens_per_second"),
-                payload.get("billable_input_tokens", payload.get("input_tokens", 0)),
-                payload.get("cached_tokens", 0),
-                payload.get("cache_write_tokens", 0),
-                payload.get("api_endpoint"),
-                payload.get("provider_request_id"),
-                payload.get("status", "completed"),
-                json.dumps(payload.get("metadata", {})),
-                vendor_name,
-                run_id,
-                source_name,
-                event_type,
-                entity_type,
-                entity_id,
-                account_id,
+            query, args = _llm_usage_insert_statement(
+                payload,
+                vendor_name=vendor_name,
+                run_id=run_id,
+                source_name=source_name,
+                event_type=event_type,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                account_id=account_id,
+                include_account_id=True,
             )
-            if use_shared_pool:
-                await pool.execute(query, *args)
-                return
-            conn = await pool.acquire_raw()
+            executor = pool if use_shared_pool else await pool.acquire_raw()
             try:
-                await conn.execute(query, *args)
+                try:
+                    await executor.execute(query, *args)
+                except Exception as exc:
+                    if not _is_missing_llm_usage_account_id(exc):
+                        raise
+                    fallback_query, fallback_args = _llm_usage_insert_statement(
+                        payload,
+                        vendor_name=vendor_name,
+                        run_id=run_id,
+                        source_name=source_name,
+                        event_type=event_type,
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        account_id=account_id,
+                        include_account_id=False,
+                    )
+                    await executor.execute(fallback_query, *fallback_args)
             finally:
-                await conn.close()
+                if not use_shared_pool:
+                    await executor.close()
         except Exception as exc:
             logger.warning("_store_local failed for span=%s: %s", payload.get("span_name"), exc)
 

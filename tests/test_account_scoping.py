@@ -230,12 +230,11 @@ def test_tracing_store_local_insert_includes_account_id_column():
     /api/v1/llm/usage``) return the right numbers."""
     from atlas_brain.services import tracing
 
-    src = inspect.getsource(tracing.FTLTracingClient._store_local)
+    src = inspect.getsource(tracing._llm_usage_insert_statement)
     assert "INSERT INTO llm_usage" in src
-    # Column list must include account_id
-    assert "account_id)" in src
-    # 27 placeholders (was 26 + new account_id)
-    assert "$27" in src
+    assert 'columns.append("account_id")' in src
+    assert 'args.append(account_id)' in src
+    assert 'f"${index}"' in src
 
 
 def test_tracing_store_local_reads_account_id_from_metadata():
@@ -326,5 +325,7 @@ def test_extracted_tracing_synced_with_account_id():
         / "tracing.py"
     )
     src = extracted_path.read_text(encoding="utf-8")
-    assert "$27" in src  # the new account_id placeholder
+    assert "def _llm_usage_insert_statement(" in src
+    assert 'columns.append("account_id")' in src
+    assert 'args.append(account_id)' in src
     assert '_metadata_text_value(meta, "account_id")' in src

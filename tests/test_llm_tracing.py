@@ -1,3 +1,5 @@
+import logging
+
 from atlas_brain.config import ModelPricingConfig
 from atlas_brain.pipelines.llm import trace_llm_call
 from atlas_brain.services.tracing import FTLTracingClient
@@ -11,6 +13,20 @@ class _FakePool:
     async def execute(self, query, *args):
         self.calls.append((query, args))
         return "INSERT 0 1"
+
+
+class _MissingAccountIdColumn(Exception):
+    sqlstate = "42703"
+
+    def __str__(self):
+        return 'column "account_id" of relation "llm_usage" does not exist'
+
+
+class _DifferentUndefinedColumn(Exception):
+    sqlstate = "42703"
+
+    def __str__(self):
+        return 'column "provider_request_id" of relation "llm_usage" does not exist'
 
 
 async def test_store_local_persists_cache_breakdown(monkeypatch):
@@ -47,6 +63,99 @@ async def test_store_local_persists_cache_breakdown(monkeypatch):
     assert args[15] == 1000
     assert args[16] == "https://openrouter.ai/api/v1/chat/completions"
     assert args[17] == "req_456"
+
+
+async def test_store_local_retries_without_account_id_column(monkeypatch):
+    class _LegacyPool:
+        is_initialized = True
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, query, *args):
+            self.calls.append((query, args))
+            if len(self.calls) == 1:
+                raise _MissingAccountIdColumn()
+            return "INSERT 0 1"
+
+    pool = _LegacyPool()
+    monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", lambda: pool)
+    tracer = FTLTracingClient()
+    await tracer._store_local(
+        {
+            "span_name": "content_ops.llm.complete",
+            "operation_type": "llm_call",
+            "model_name": "anthropic/claude-haiku-4-5",
+            "model_provider": "openrouter",
+            "input_tokens": 27257,
+            "output_tokens": 9282,
+            "total_tokens": 36539,
+            "cost_usd": 0.021,
+            "duration_ms": 1200,
+            "billable_input_tokens": 9,
+            "cached_tokens": 9814,
+            "cache_write_tokens": 17434,
+            "api_endpoint": "https://openrouter.ai/api/v1/chat/completions",
+            "provider_request_id": "req_cache",
+            "status": "completed",
+            "metadata": {
+                "account_id": "12345678-1234-4234-8234-123456789abc",
+                "asset_type": "blog_post",
+                "request_id": "req-support-ticket",
+            },
+        }
+    )
+
+    assert len(pool.calls) == 2
+    modern_query, modern_args = pool.calls[0]
+    legacy_query, legacy_args = pool.calls[1]
+    assert "account_id" in modern_query
+    assert modern_args[26] == "12345678-1234-4234-8234-123456789abc"
+    assert "account_id" not in legacy_query
+    assert legacy_args[13] == 9
+    assert legacy_args[14] == 9814
+    assert legacy_args[15] == 17434
+    metadata = legacy_args[19]
+    assert '"account_id": "12345678-1234-4234-8234-123456789abc"' in metadata
+
+
+async def test_store_local_does_not_fallback_for_other_write_failures(monkeypatch, caplog):
+    class _BrokenPool:
+        is_initialized = True
+
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, query, *args):
+            self.calls.append((query, args))
+            raise _DifferentUndefinedColumn()
+
+    pool = _BrokenPool()
+    monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", lambda: pool)
+    tracer = FTLTracingClient()
+
+    with caplog.at_level(logging.WARNING, logger="atlas.tracing"):
+        await tracer._store_local(
+            {
+                "span_name": "content_ops.llm.complete",
+                "operation_type": "llm_call",
+                "model_name": "anthropic/claude-haiku-4-5",
+                "model_provider": "openrouter",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "cached_tokens": 40,
+                "cache_write_tokens": 10,
+                "metadata": {
+                    "account_id": "12345678-1234-4234-8234-123456789abc",
+                },
+            }
+        )
+
+    assert len(pool.calls) == 1
+    assert "account_id" in pool.calls[0][0]
+    assert "_store_local failed for span=content_ops.llm.complete" in caplog.text
+    assert "provider_request_id" in caplog.text
 
 
 async def test_store_local_promotes_business_attribution_fields(monkeypatch):
