@@ -71,6 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-case-error-rate", type=float)
     parser.add_argument("--max-case-p95-ms", type=float)
     parser.add_argument("--max-case-single-request-ms", type=float)
+    parser.add_argument("--max-detail-ms", type=float)
     parser.add_argument("--detail-route", default=os.getenv("ATLAS_FAQ_DETAIL_ROUTE", ""))
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output-result", type=Path)
@@ -108,6 +109,7 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         "max_case_error_rate",
         "max_case_p95_ms",
         "max_case_single_request_ms",
+        "max_detail_ms",
     ):
         value = getattr(args, name)
         if value is not None and not math.isfinite(float(value)):
@@ -123,10 +125,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         "max_single_request_ms",
         "max_case_p95_ms",
         "max_case_single_request_ms",
+        "max_detail_ms",
     ):
         value = getattr(args, name)
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
+    if args.max_detail_ms is not None and bool(args.skip_detail_check):
+        errors.append("--max-detail-ms requires detail checks; remove --skip-detail-check")
     return errors
 
 
@@ -290,6 +295,8 @@ def _detail_command(
         command.extend(["--status", str(detail_case["status"])])
     if str(args.detail_route or "").strip():
         command.extend(["--detail-route", str(args.detail_route)])
+    if args.max_detail_ms is not None:
+        command.extend(["--max-detail-ms", str(args.max_detail_ms)])
     for key, flag in (
         ("expected_detail_account_id", "--expected-detail-account-id"),
         ("expected_detail_target_id", "--expected-detail-target-id"),
@@ -405,6 +412,7 @@ def _compact_child_result_artifact(path: Path, *, kind: str) -> dict[str, Any]:
             "search_elapsed_ms",
             "detail_elapsed_ms",
             "total_elapsed_ms",
+            "max_detail_ms",
             "errors",
         ):
             if key in payload:

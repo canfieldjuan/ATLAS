@@ -44,6 +44,7 @@ python scripts/smoke_content_ops_faq_search_seeded_route_e2e.py \
   --max-single-request-ms 3000 \
   --max-case-p95-ms 1500 \
   --max-case-single-request-ms 3000 \
+  --max-detail-ms 2500 \
   --output-result /tmp/faq-search-seeded-route-e2e-result.json
 ```
 
@@ -75,7 +76,7 @@ Open the result artifact and inspect:
   case file.
 - `route.result_artifact.budgets`: aggregate and per-case route budget checks.
 - `detail.result_artifact`: detail contract status, hydrated FAQ ID, and search
-  plus detail timings.
+  plus detail timings, including the applied `max_detail_ms` budget when set.
 - `cleanup.requested_faq_ids` and `cleanup.deleted_faq_ids`: cleanup row-count
   proof for seeded FAQ drafts.
 - `artifact_cleanup`: whether temporary child artifacts were removed after the
@@ -90,6 +91,8 @@ Open the result artifact and inspect:
 - A route aggregate error budget can pass while one query/corpus case fails. Use
   `--max-case-error-rate`, `--max-case-p95-ms`, and
   `--max-case-single-request-ms` to fail closed per case.
+- `--max-detail-ms` fails the run when the hydrated FAQ detail request exceeds
+  the configured budget.
 - Cleanup failure makes the run fail unless `--keep-data` is set. Use
   `--keep-data` only when you intentionally want to inspect seeded rows after
   the run.
