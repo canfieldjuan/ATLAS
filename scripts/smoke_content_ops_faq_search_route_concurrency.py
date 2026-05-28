@@ -78,6 +78,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-single-request-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_SINGLE_REQUEST_MS") or None)
     parser.add_argument("--max-detail-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_DETAIL_MS") or None)
     parser.add_argument("--max-case-error-rate", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_CASE_ERROR_RATE") or None)
+    parser.add_argument("--max-case-p95-ms", type=float, default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_CASE_P95_MS") or None)
+    parser.add_argument(
+        "--max-case-single-request-ms",
+        type=float,
+        default=os.environ.get("ATLAS_FAQ_SEARCH_MAX_CASE_SINGLE_REQUEST_MS") or None,
+    )
     parser.set_defaults(require_results=True)
     parser.add_argument("--require-results", action="store_true")
     parser.add_argument("--allow-empty-results", action="store_false", dest="require_results")
@@ -106,6 +112,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         "max_single_request_ms",
         "max_detail_ms",
         "max_case_error_rate",
+        "max_case_p95_ms",
+        "max_case_single_request_ms",
     ):
         value = getattr(args, name)
         if value is not None and not math.isfinite(float(value)):
@@ -120,7 +128,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("--require-detail requires result rows; remove --allow-empty-results")
     if args.max_detail_ms is not None and not bool(args.require_detail):
         errors.append("--max-detail-ms requires --require-detail")
-    for name in ("max_p95_ms", "max_single_request_ms", "max_detail_ms"):
+    for name in (
+        "max_p95_ms",
+        "max_single_request_ms",
+        "max_detail_ms",
+        "max_case_p95_ms",
+        "max_case_single_request_ms",
+    ):
         value = getattr(args, name)
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
@@ -493,6 +507,8 @@ def _budget_summary(
     max_p95_ms: float | None,
     max_single_request_ms: float | None,
     max_detail_ms: float | None,
+    max_case_p95_ms: float | None,
+    max_case_single_request_ms: float | None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     failures: list[str] = []
@@ -551,6 +567,41 @@ def _budget_summary(
             )
             if not ok:
                 failures.append(f"case_error_rate exceeded {limit_value} for case {case_index}")
+    for metric, latency_key, limit in (
+        ("case_p95_ms", "p95_ms", max_case_p95_ms),
+        ("case_max_ms", "max_ms", max_case_single_request_ms),
+    ):
+        if limit is None:
+            continue
+        limit_value = round(float(limit), 6)
+        for case_summary in case_summaries:
+            case_index = int(case_summary.get("case_index") or 0)
+            case_latency = case_summary.get("latency")
+            if not isinstance(case_latency, Mapping) or int(case_latency.get("count") or 0) <= 0:
+                checks.append(
+                    {
+                        "metric": metric,
+                        "case_index": case_index,
+                        "actual": None,
+                        "max": limit_value,
+                        "ok": False,
+                    }
+                )
+                failures.append(f"{metric} had no latency samples for case {case_index}")
+                continue
+            actual = float(case_latency.get(latency_key) or 0.0)
+            ok = actual <= limit_value
+            checks.append(
+                {
+                    "metric": metric,
+                    "case_index": case_index,
+                    "actual": actual,
+                    "max": limit_value,
+                    "ok": ok,
+                }
+            )
+            if not ok:
+                failures.append(f"{metric} exceeded {limit_value} for case {case_index}")
     return {"ok": not failures, "checks": checks, "failures": failures}
 
 
@@ -581,6 +632,8 @@ def _summary_payload(
         max_p95_ms=args.max_p95_ms,
         max_single_request_ms=args.max_single_request_ms,
         max_detail_ms=args.max_detail_ms,
+        max_case_p95_ms=args.max_case_p95_ms,
+        max_case_single_request_ms=args.max_case_single_request_ms,
     )
     return {
         "ok": not preflight_errors and budgets["ok"],

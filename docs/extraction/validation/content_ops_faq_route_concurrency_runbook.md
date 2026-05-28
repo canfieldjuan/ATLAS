@@ -41,6 +41,8 @@ python scripts/smoke_content_ops_faq_search_route_concurrency.py \
   --max-case-error-rate 0 \
   --max-p95-ms 1500 \
   --max-single-request-ms 3000 \
+  --max-case-p95-ms 1500 \
+  --max-case-single-request-ms 3000 \
   --max-detail-ms 1000 \
   --output-result /tmp/faq-route-concurrency-result.json
 ```
@@ -57,6 +59,8 @@ python scripts/smoke_content_ops_faq_search_route_concurrency.py \
   --concurrency 4 \
   --max-error-rate 0 \
   --max-case-error-rate 0 \
+  --max-case-p95-ms 1500 \
+  --max-case-single-request-ms 3000 \
   --output-result /tmp/faq-route-miss-result.json
 ```
 

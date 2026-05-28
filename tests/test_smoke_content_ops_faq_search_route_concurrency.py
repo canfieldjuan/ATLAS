@@ -50,6 +50,8 @@ def _args(**overrides):
         "max_single_request_ms": None,
         "max_detail_ms": None,
         "max_case_error_rate": None,
+        "max_case_p95_ms": None,
+        "max_case_single_request_ms": None,
         "require_results": True,
         "require_detail": False,
         "case_file": None,
@@ -179,6 +181,15 @@ def test_validate_args_rejects_case_error_budget_outside_rate_range():
     ]
 
 
+def test_validate_args_rejects_non_positive_case_latency_budgets():
+    assert smoke._validate_args(_args(max_case_p95_ms=0.0)) == [
+        "--max-case-p95-ms must be positive"
+    ]
+    assert smoke._validate_args(_args(max_case_single_request_ms=-1.0)) == [
+        "--max-case-single-request-ms must be positive"
+    ]
+
+
 def test_parser_requires_results_by_default_and_allows_explicit_liveness_probe():
     required = smoke._build_parser().parse_args([
         "--base-url",
@@ -241,6 +252,22 @@ def test_parser_accepts_case_error_rate_budget():
     assert parsed.max_case_error_rate == 0.25
 
 
+def test_parser_accepts_case_latency_budgets():
+    parsed = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-123",
+        "--max-case-p95-ms",
+        "1500",
+        "--max-case-single-request-ms",
+        "3000",
+    ])
+
+    assert parsed.max_case_p95_ms == 1500.0
+    assert parsed.max_case_single_request_ms == 3000.0
+
+
 def test_route_concurrency_runbook_documents_current_budget_flags():
     text = RUNBOOK.read_text(encoding="utf-8")
     expected_flags = [
@@ -249,6 +276,8 @@ def test_route_concurrency_runbook_documents_current_budget_flags():
         "--max-case-error-rate",
         "--max-p95-ms",
         "--max-single-request-ms",
+        "--max-case-p95-ms",
+        "--max-case-single-request-ms",
         "--max-detail-ms",
         "--output-result",
     ]
@@ -281,6 +310,10 @@ def test_route_concurrency_runbook_documents_current_budget_flags():
         "1500",
         "--max-single-request-ms",
         "3000",
+        "--max-case-p95-ms",
+        "1500",
+        "--max-case-single-request-ms",
+        "3000",
         "--max-detail-ms",
         "1000",
         "--output-result",
@@ -289,6 +322,8 @@ def test_route_concurrency_runbook_documents_current_budget_flags():
 
     assert parsed.require_detail is True
     assert parsed.max_case_error_rate == 0.0
+    assert parsed.max_case_p95_ms == 1500.0
+    assert parsed.max_case_single_request_ms == 3000.0
     assert parsed.max_detail_ms == 1000.0
 
 
@@ -679,6 +714,8 @@ def test_budget_summary_reports_error_and_latency_failures():
         max_p95_ms=40.0,
         max_single_request_ms=100.0,
         max_detail_ms=20.0,
+        max_case_p95_ms=None,
+        max_case_single_request_ms=None,
     )
 
     assert summary == {
@@ -723,6 +760,8 @@ def test_budget_summary_fails_closed_when_detail_budget_has_no_detail_rows():
         max_p95_ms=None,
         max_single_request_ms=None,
         max_detail_ms=20.0,
+        max_case_p95_ms=None,
+        max_case_single_request_ms=None,
     )
 
     assert summary == {
@@ -732,6 +771,123 @@ def test_budget_summary_fails_closed_when_detail_budget_has_no_detail_rows():
             {"metric": "detail_max_ms", "actual": None, "max": 20.0, "ok": False},
         ],
         "failures": ["detail_max_ms had no checked detail rows"],
+    }
+
+
+def test_budget_summary_reports_case_latency_failures_when_aggregate_passes():
+    summary = smoke._budget_summary(
+        latency={"p95_ms": 80.0, "max_ms": 100.0},
+        detail_latency={"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+        case_summaries=[
+            {
+                "case_index": 0,
+                "errors": {"rate": 0.0},
+                "latency": {"count": 1, "p95_ms": 50.0, "max_ms": 60.0},
+            },
+            {
+                "case_index": 1,
+                "errors": {"rate": 0.0},
+                "latency": {"count": 1, "p95_ms": 120.0, "max_ms": 180.0},
+            },
+        ],
+        errors={"rate": 0.0},
+        max_error_rate=0.0,
+        max_case_error_rate=None,
+        max_p95_ms=200.0,
+        max_single_request_ms=200.0,
+        max_detail_ms=None,
+        max_case_p95_ms=100.0,
+        max_case_single_request_ms=150.0,
+    )
+
+    assert summary == {
+        "ok": False,
+        "checks": [
+            {"metric": "error_rate", "actual": 0.0, "max": 0.0, "ok": True},
+            {"metric": "p95_ms", "actual": 80.0, "max": 200.0, "ok": True},
+            {"metric": "max_ms", "actual": 100.0, "max": 200.0, "ok": True},
+            {
+                "metric": "case_p95_ms",
+                "case_index": 0,
+                "actual": 50.0,
+                "max": 100.0,
+                "ok": True,
+            },
+            {
+                "metric": "case_p95_ms",
+                "case_index": 1,
+                "actual": 120.0,
+                "max": 100.0,
+                "ok": False,
+            },
+            {
+                "metric": "case_max_ms",
+                "case_index": 0,
+                "actual": 60.0,
+                "max": 150.0,
+                "ok": True,
+            },
+            {
+                "metric": "case_max_ms",
+                "case_index": 1,
+                "actual": 180.0,
+                "max": 150.0,
+                "ok": False,
+            },
+        ],
+        "failures": [
+            "case_p95_ms exceeded 100.0 for case 1",
+            "case_max_ms exceeded 150.0 for case 1",
+        ],
+    }
+
+
+def test_budget_summary_fails_case_latency_budget_without_samples():
+    summary = smoke._budget_summary(
+        latency={"p95_ms": 50.0, "max_ms": 75.0},
+        detail_latency={"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+        case_summaries=[
+            {
+                "case_index": 0,
+                "errors": {"rate": 0.0},
+                "latency": {"count": 1, "p95_ms": 50.0, "max_ms": 75.0},
+            },
+            {
+                "case_index": 1,
+                "errors": {"rate": 0.0},
+                "latency": {"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+            },
+        ],
+        errors={"rate": 0.0},
+        max_error_rate=0.0,
+        max_case_error_rate=None,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        max_detail_ms=None,
+        max_case_p95_ms=100.0,
+        max_case_single_request_ms=None,
+    )
+
+    assert summary == {
+        "ok": False,
+        "checks": [
+            {"metric": "error_rate", "actual": 0.0, "max": 0.0, "ok": True},
+            {
+                "metric": "case_p95_ms",
+                "case_index": 0,
+                "actual": 50.0,
+                "max": 100.0,
+                "ok": True,
+            },
+            {
+                "metric": "case_p95_ms",
+                "case_index": 1,
+                "actual": None,
+                "max": 100.0,
+                "ok": False,
+            },
+        ],
+        "failures": ["case_p95_ms had no latency samples for case 1"],
     }
 
 
