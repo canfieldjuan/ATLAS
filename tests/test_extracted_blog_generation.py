@@ -846,10 +846,15 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
 
     assert result.generated == 1
     system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
     assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
     assert '"allowed_claims":' in system_prompt
     assert '"forbidden_claims":' in system_prompt
     assert '"draft_answer_guidance":' in system_prompt
+    assert "Support-ticket descriptive mode instructions:" in user_prompt
+    assert "Do not rank tied clusters by business impact" in user_prompt
+    assert "Measurement language must be observational only" in user_prompt
+    assert "metadata, FAQ metadata, tags, and chart copy" in user_prompt
 
 
 @pytest.mark.asyncio
@@ -882,6 +887,8 @@ async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract()
     retry_prompt = llm.calls[1]["messages"][1].content
     assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in repair_system_prompt
     assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
+    assert "Support-ticket descriptive mode instructions:" in retry_prompt
+    assert "Do not rank tied clusters by business impact" in retry_prompt
 
 
 @pytest.mark.asyncio

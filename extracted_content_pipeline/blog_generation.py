@@ -991,7 +991,42 @@ def _blog_generation_prompts(
     # on the prior prompt (without ``{topic}``) are unaffected -- the
     # ``replace()`` is a no-op when the placeholder isn't present.
     system_prompt = system_prompt.replace("{topic}", topic)
+    base_user_prompt = _with_support_ticket_descriptive_prompt_addendum(
+        base_user_prompt,
+        blueprint=blueprint,
+    )
     return system_prompt, base_user_prompt
+
+
+def _with_support_ticket_descriptive_prompt_addendum(
+    prompt: str,
+    *,
+    blueprint: Mapping[str, Any],
+) -> str:
+    data_context = _mapping_dict(blueprint.get("data_context"))
+    if data_context.get("support_ticket_blog_mode") != SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "Support-ticket descriptive mode instructions:\n"
+        "- Write a descriptive support-ticket FAQ planning brief, not a "
+        "persuasive ROI article.\n"
+        "- Use only observed ticket counts, observed clusters, copied customer "
+        "wording, and review-needed FAQ shells from the blueprint.\n"
+        "- If clusters have the same count, say they are tied. Do not rank tied "
+        "clusters by business impact, activation risk, workflow blocking, "
+        "friction reduction, deal impact, or customer value unless the blueprint "
+        "contains measured outcome evidence for that ranking.\n"
+        "- If the blueprint lacks resolution evidence, keep answer content as "
+        "draft placeholders for support-team review. Do not invent UI paths, "
+        "setup steps, feature behavior, or exact resolutions.\n"
+        "- Measurement language must be observational only: say what to watch or "
+        "compare after publishing, but do not say ticket volume will decline, "
+        "the FAQ entry is working, customers will find it, search visibility will "
+        "improve, or the entry will rank for keywords.\n"
+        "- Apply the same limits to title, description, metadata, FAQ metadata, "
+        "tags, and chart copy."
+    )
 
 
 def _public_blog_json(parsed: Mapping[str, Any]) -> str:
