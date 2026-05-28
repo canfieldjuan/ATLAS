@@ -41,15 +41,6 @@ register under `docs/technical-debt/`.
 - Owner/session: content-ops/faq-search
 - Found during: PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof
 
-### LLM usage storage schema mismatch hides per-run cost telemetry
-- File/location: `atlas_brain/observability` LLM usage storage path, local `llm_usage` table schema.
-- Description: Live support-ticket blog generation logged LLM usage storage failures, including `column "account_id" of relation "llm_usage" does not exist` and `pool is closing`.
-- Why it matters: Generation can still run, but per-run model/cost telemetry is incomplete and warning noise can hide other live-generation issues.
-- Effort: M
-- Category: tech-debt
-- Owner/session: content-ops/support-ticket-provider
-- Found during: PR-Support-Ticket-Blog-Observed-Shell-Live-Retry
-
 ### Atlas startup migration check warns on missing b2b_campaigns.updated_at
 - File/location: `atlas_brain/storage/migrations/309_campaign_sequences_unique_active_recipient.sql`, Atlas startup migration check.
 - Description: Local API startup logged `column "updated_at" of relation "b2b_campaigns" does not exist` while checking pending host migrations.
