@@ -27,6 +27,7 @@ RUNBOOK_PATH = ROOT / "docs/extraction/validation/content_ops_faq_saas_demo_rout
 SEED_SCRIPT = ROOT / "scripts/seed_content_ops_faq_saas_demo.py"
 ROUTE_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
 E2E_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_saas_demo_route_e2e.py"
+MIGRATION_SCRIPT = ROOT / "scripts/run_extracted_content_pipeline_migrations.py"
 SEED_SPEC = importlib.util.spec_from_file_location(
     "seed_content_ops_faq_saas_demo",
     SEED_SCRIPT,
@@ -49,6 +50,13 @@ E2E_SPEC = importlib.util.spec_from_file_location(
 assert E2E_SPEC is not None and E2E_SPEC.loader is not None
 e2e_smoke = importlib.util.module_from_spec(E2E_SPEC)
 E2E_SPEC.loader.exec_module(e2e_smoke)
+MIGRATION_SPEC = importlib.util.spec_from_file_location(
+    "run_extracted_content_pipeline_migrations_for_saas_demo_test",
+    MIGRATION_SCRIPT,
+)
+assert MIGRATION_SPEC is not None and MIGRATION_SPEC.loader is not None
+migration_cli = importlib.util.module_from_spec(MIGRATION_SPEC)
+MIGRATION_SPEC.loader.exec_module(migration_cli)
 
 EXPECTED_LABEL = "synthetic_b2b_saas_demo"
 MIN_ROWS = 36
@@ -186,6 +194,21 @@ def test_saas_demo_faq_draft_projects_to_search_documents() -> None:
     assert first["account_id"] == "acct-demo"
     assert first["corpus_id"] == "synthetic-b2b-saas-demo"
     assert "export" in first["question"].lower()
+
+
+def test_saas_demo_route_case_runbook_migration_command_matches_parser() -> None:
+    args = _runbook_command_args(
+        "python scripts/run_extracted_content_pipeline_migrations.py"
+    )
+
+    parsed = migration_cli._parse_args(args)
+    doc = RUNBOOK_PATH.read_text(encoding="utf-8")
+
+    assert parsed.database_url is None
+    assert parsed.dry_run is False
+    assert parsed.json is False
+    assert "extracted_content_pipeline/storage/migration_runner.py --apply" not in doc
+    assert MIGRATION_SCRIPT.exists()
 
 
 def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
