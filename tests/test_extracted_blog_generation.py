@@ -13,6 +13,7 @@ from extracted_content_pipeline.blog_generation import (
     _normalize_blog_metadata,
     _quality_policy_for_context,
     parse_blog_post_response,
+    support_ticket_descriptive_blog_contract,
 )
 from extracted_content_pipeline.blog_ports import BlogPostDraft
 from extracted_content_pipeline.campaign_ports import (
@@ -401,6 +402,31 @@ def test_support_ticket_blog_context_detection_rejects_false_positives(
     data_context: dict[str, object],
 ) -> None:
     assert _is_support_ticket_blog_context(data_context) is False
+
+
+def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolution_evidence() -> None:
+    contract = support_ticket_descriptive_blog_contract({
+        "source": "support_ticket_provider",
+        "source_row_count": 36,
+        "included_ticket_row_count": 36,
+        "has_measured_outcomes": False,
+        "support_ticket_resolution_evidence_present": False,
+    })
+
+    assert contract["support_ticket_blog_mode"] == "descriptive_no_outcome"
+    assert "observed support-ticket clusters" in contract["allowed_claims"][0]
+    assert "future ticket reduction or deflection" in contract["forbidden_claims"]
+    assert contract["draft_answer_guidance"].startswith("Draft answer -")
+    assert support_ticket_descriptive_blog_contract({
+        "source": "support_ticket_provider",
+        "has_measured_outcomes": True,
+        "support_ticket_resolution_evidence_present": False,
+    }) == {}
+    assert support_ticket_descriptive_blog_contract({
+        "source": "support_ticket_provider",
+        "has_measured_outcomes": False,
+        "support_ticket_resolution_evidence_present": True,
+    }) == {}
 
 
 def test_small_support_ticket_blog_context_uses_compact_quality_policy() -> None:
@@ -796,6 +822,61 @@ async def test_generate_saves_descriptive_support_ticket_blog_without_outcome_or
     draft = blog_posts.saved[0]["drafts"][0]
     assert not draft.data_context.get("support_ticket_resolution_evidence_present")
     assert not draft.data_context.get("has_measured_outcomes")
+    assert draft.data_context["support_ticket_blog_mode"] == "descriptive_no_outcome"
+    assert "forbidden_claims" in draft.data_context
+
+
+@pytest.mark.asyncio
+async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> None:
+    service, _blueprints, _blog_posts, llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[_valid_support_ticket_blog_json()],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
+    assert '"allowed_claims":' in system_prompt
+    assert '"forbidden_claims":' in system_prompt
+    assert '"draft_answer_guidance":' in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract() -> None:
+    bad_content = _valid_support_ticket_content(
+        "These answers can reduce repeat tickets by 30-45%."
+    )
+    service, _blueprints, _blog_posts, llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(content=bad_content),
+            _valid_support_ticket_blog_json(),
+        ],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            )
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    repair_system_prompt = llm.calls[1]["messages"][0].content
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in repair_system_prompt
+    assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
 
 
 @pytest.mark.asyncio
