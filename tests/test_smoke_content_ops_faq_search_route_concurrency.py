@@ -705,8 +705,8 @@ def test_budget_summary_reports_error_and_latency_failures():
         latency={"p95_ms": 50.0, "max_ms": 75.0},
         detail_latency={"count": 2, "p95_ms": 25.0, "max_ms": 30.0},
         case_summaries=[
-            {"case_index": 0, "errors": {"rate": 0.0}},
-            {"case_index": 1, "errors": {"rate": 0.5}},
+            {"case_index": 0, "requests": 2, "errors": {"rate": 0.0}},
+            {"case_index": 1, "requests": 2, "errors": {"rate": 0.5}},
         ],
         errors={"rate": 0.25},
         max_error_rate=0.0,
@@ -771,6 +771,47 @@ def test_budget_summary_fails_closed_when_detail_budget_has_no_detail_rows():
             {"metric": "detail_max_ms", "actual": None, "max": 20.0, "ok": False},
         ],
         "failures": ["detail_max_ms had no checked detail rows"],
+    }
+
+
+def test_budget_summary_fails_case_error_budget_without_request_samples():
+    summary = smoke._budget_summary(
+        latency={"p95_ms": 50.0, "max_ms": 75.0},
+        detail_latency={"count": 0, "p95_ms": 0.0, "max_ms": 0.0},
+        case_summaries=[
+            {"case_index": 0, "requests": 1, "errors": {"rate": 0.0}},
+            {"case_index": 1, "requests": 0, "errors": {"rate": 0.0}},
+        ],
+        errors={"rate": 0.0},
+        max_error_rate=0.0,
+        max_case_error_rate=0.0,
+        max_p95_ms=None,
+        max_single_request_ms=None,
+        max_detail_ms=None,
+        max_case_p95_ms=None,
+        max_case_single_request_ms=None,
+    )
+
+    assert summary == {
+        "ok": False,
+        "checks": [
+            {"metric": "error_rate", "actual": 0.0, "max": 0.0, "ok": True},
+            {
+                "metric": "case_error_rate",
+                "case_index": 0,
+                "actual": 0.0,
+                "max": 0.0,
+                "ok": True,
+            },
+            {
+                "metric": "case_error_rate",
+                "case_index": 1,
+                "actual": None,
+                "max": 0.0,
+                "ok": False,
+            },
+        ],
+        "failures": ["case_error_rate had no request samples for case 1"],
     }
 
 
