@@ -41,11 +41,13 @@ python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
   --max-case-p95-ms 1500 \
   --max-case-single-request-ms 3000 \
   --max-detail-ms 2500 \
+  --artifact-dir /tmp/faq-saas-demo-route-e2e-artifacts \
   --output-result /tmp/faq-saas-demo-route-e2e-result.json
 ```
 
 Use `--json` when stdout should be machine-readable. Without `--json`, stdout is
-a compact status line; the full proof lives in `--output-result`.
+a compact status line; the full proof lives in `--output-result`, with child
+seed, route, cleanup, and route-case artifacts preserved in `--artifact-dir`.
 
 The smoke writes a temporary route case file, validates the hosted search and
 detail path against it, then deletes the seeded FAQ unless `--keep-data` is set.
