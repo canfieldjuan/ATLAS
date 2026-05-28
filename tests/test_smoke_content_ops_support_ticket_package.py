@@ -218,11 +218,37 @@ def test_support_ticket_package_smoke_reports_cluster_rollup_and_truncation(
         {"label": "category-4", "count": 1},
         {"label": "category-5", "count": 1},
         {"label": "category-6", "count": 1},
-        {"label": "remaining", "count": 2},
+        {"label": "category-7", "count": 1},
+        {"label": "category-8", "count": 1},
         {"label": "uncategorized", "count": 1},
     ]
     assert summary["warning_count"] == 1
     assert summary["warnings"][0]["code"] == "ticket_rows_truncated"
+
+
+def test_support_ticket_package_smoke_rolls_up_only_after_twelve_clusters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "tickets.csv"
+    rows = [
+        {
+            "ticket_id": f"ticket-{index}",
+            "description": f"How do I fix issue {index}?",
+            "pain_category": f"category-{index}",
+        }
+        for index in range(1, 15)
+    ]
+    _write_csv(path, rows)
+
+    summary = build_support_ticket_package_smoke_summary(path)
+
+    assert summary["top_ticket_clusters"] == [
+        *[
+            {"label": f"category-{index}", "count": 1}
+            for index in range(1, 13)
+        ],
+        {"label": "remaining", "count": 2},
+    ]
 
 
 def test_support_ticket_package_smoke_main_writes_json(

@@ -84,6 +84,11 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bquestions?\b[^.!?\n]{0,120}\bprevent\s+customers?\s+from\s+"
+        r"completing\s+critical\s+workflows\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bdeflect\s+future\s+(?:support\s+)?tickets\b",
         re.IGNORECASE,
     ),
@@ -93,6 +98,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bsupport\s+queue\s+will\s+(?:shrink|drop|fall)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\boverwhelming\s+the\s+support\s+queue\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -125,6 +134,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcustomers\s+are\s+finding\s+the\s+answer\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
         re.IGNORECASE,
     ),
@@ -142,6 +155,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bfind\s+(?:the\s+)?answer\b[^.!?\n]{0,80}\bwithout\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfind\s+related\s+information\s+without\s+opening\s+another\s+support\s+ticket\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -223,6 +240,39 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bcustomers\b[^.!?\n]{0,120}\bresolve\b[^.!?\n]{0,120}\bfaster\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bunresolved\b[^.!?\n]{0,120}\bcan\s+delay\s+customer\s+activation\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bquestions?\b[^.!?\n]{0,120}\bblock\s+the\s+most\s+customers?\s+from\s+activation\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bquestions?\b[^.!?\n]{0,120}\bcause\s+the\s+most\s+repeat\s+contact\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bblocking\s+workflows\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bonboarding\s+blocker\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:delay|delays|delayed|delaying)\b[^.!?\n]{0,120}"
+        r"\b(?:activation|onboarding|workflows?|reviews?|renewals?|deal\s+closure)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bunblock\b[^.!?\n]{0,120}\b(?:activation|workflows?|onboarding)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduce\b[^.!?\n]{0,120}\b(?:friction|delays?)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -397,6 +447,41 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bfaq\s+entries\b[^.!?\n]{0,120}\bappear\s+in\s+search\s+results\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bshould\s+appear\s+in\s+search\s+results\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaq\s+entry\b[^.!?\n]{0,120}\bappears\s+in\s+your\s+help\s+center\s+search\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaq\s+entry\b[^.!?\n]{0,120}\bmay\s+not\s+be\s+discoverable\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bmay\s+not\s+rank\s+for\s+the\s+keywords\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+did\s+not\s+find\s+it\s+first\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bpublished\s+faq\s+entry\b[^.!?\n]{0,120}"
+        r"\bself-service\s+option\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\brepeat\s+tickets?\b[^.!?\n]{0,80}\bdo\s+not\s+decline\b"
+        r"[^.!?\n]{0,160}\bfaq\b[^.!?\n]{0,120}"
+        r"\b(?:unclear|incomplete|hard\s+to\s+find)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bif\s+repeat\s+tickets?\b[^.!?\n]{0,160}\bdecline\b"
         r"[^.!?\n]{0,160}\bfaq\s+entry\b[^.!?\n]{0,120}"
         r"\b(?:being\s+found|being\s+used|working)\b",
@@ -410,6 +495,11 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     re.compile(
         r"\b(?:declining|lower)\s+repeat\s+tickets\b[^.!?\n]{0,120}"
         r"\bprove\b[^.!?\n]{0,120}\bfaq\s+entry\s+is\s+working\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bpost[-\s]?publication\s+metrics\b[^.!?\n]{0,120}"
+        r"\btell\s+you\s+whether\s+the\s+entry\s+is\s+working\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -632,6 +722,7 @@ def _generated_text(row: Mapping[str, Any], *, output: str) -> str:
             row.get("content"),
             row.get("tags"),
             row.get("charts"),
+            row.get("metadata"),
         )
     return ""
 

@@ -8,7 +8,7 @@ repo's 36-row SaaS demo CSV:
 `extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv`
 
 The CSV has 36 synthetic support-ticket rows, 35 direct customer questions, and
-7 observed clusters. It is broader than the packaged 4-row support-ticket CSV
+9 observed clusters. It is broader than the packaged 4-row support-ticket CSV
 used by the current acceptance matrix.
 
 ## Result
@@ -16,10 +16,10 @@ used by the current acceptance matrix.
 | Output | Status | Artifact | Notes |
 |---|---|---|---|
 | Landing page | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_landing_page.json` | Live generation saved a draft, export context matched the provider package, SEO/AEO and GEO readiness were ready, and the support-ticket generated-content evaluator passed. |
-| Blog post | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json` | After the descriptive contract, GEO repair guidance, save-time/export citable-section alignment, citable repair contract, and false-green outcome detector fixes landed, the final live retry saved a draft with generated-content evaluation passed, SEO/AEO ready, GEO ready, and manual truthfulness review accepted. |
+| Blog post | Not accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | After the false-green outcome detector fixes landed, review found the input package was collapsing three tied 4-ticket categories into `remaining`; the package now exposes all nine clusters. The latest cluster-correct retries still produced unsupported impact, discoverability, and self-service claims, so no accepted blog fixture is committed yet. |
 
-Both the landing page and blog post paths are accepted for this representative
-CSV shape.
+The landing page path is accepted for this representative CSV shape. The blog
+path is not accepted yet.
 
 ## What Changed During Validation
 
@@ -38,10 +38,16 @@ Subsequent runs exposed unsupported outcome claims in several forms:
 - the team would handle future instances more efficiently
 - customers would find answers faster or resolve without follow-up
 - fixed 2-4 week measurement windows or resolution-time improvements were implied
+- FAQ entries would be discoverable, appear in help-center search, rank for
+  keywords, or prove they were working based on later metrics
+- unsupported prioritization by activation delay, workflow blocking, friction
+  reduction, or repeat-contact impact
 
 Those forms now have focused negative fixtures in
 `tests/test_evaluate_support_ticket_generated_content.py`, and the blog prompt
-now names those forbidden claims explicitly.
+now names those forbidden claims explicitly. The evaluator also checks generated
+blog metadata so SEO/FAQ fields cannot carry unsupported claims that the body
+avoids.
 
 ## Acceptance Notes
 
@@ -54,10 +60,11 @@ The landing page stayed within the current support-ticket evidence contract:
 
 The blog generator no longer fails on the original unsupported outcome language
 for this CSV shape, and save-time validation now blocks drafts that would miss
-the exported GEO citable-section readiness bar. After the citable repair
-contract and false-green outcome detector fixes landed, the final live retry
-produced a draft that passed generated-content evaluation, SEO/AEO readiness,
-GEO readiness, and manual truthfulness review.
+the exported GEO citable-section readiness bar. The latest source issue was the
+support-ticket package cluster rollup: the CSV has nine tied 4-ticket
+categories, but the package exposed only six and collapsed the other three into
+`remaining`. That is now fixed, but the cluster-correct live retries still need
+prompt work before the blog path can be accepted.
 
 ## Follow-up Retry After GEO Repair Guidance
 
@@ -117,9 +124,10 @@ After `PR-Support-Ticket-Blog-False-Green-Outcome-Claims` landed, the live
 Haiku retry used the same 36-row SaaS demo CSV and generated-content evaluation
 settings.
 
-Result: accepted.
+Result: not accepted.
 
-The run saved a blog draft that passed all acceptance gates:
+The run saved a blog draft that passed automated gates but failed manual
+truthfulness review:
 
 - saved blog draft id: `4ff4f0fe-274e-46ad-9af2-e47475dd749b`
 - generated-content evaluation: passed
@@ -127,11 +135,34 @@ The run saved a blog draft that passed all acceptance gates:
 - GEO readiness: ready
 - generation model: `anthropic/claude-haiku-4-5`
 - generation quality repair attempts: 2
-- manual truthfulness scan: accepted; no unsupported ticket-reduction,
-  resolution-time, churn, retention, ROI, support-capacity, or concrete
-  resolution-step claims found
-- accepted fixture:
-  `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json`
+- manual truthfulness scan: rejected. The support-ticket package exposed only
+  six named clusters plus `remaining: 12`, which caused the draft to describe
+  three tied 4-ticket categories as lower-frequency or one-off.
+
+## Follow-up Retry After Cluster Rollup Fix
+
+After the support-ticket input package was changed to expose up to 12 named
+clusters, the SaaS demo CSV correctly produced nine 4-ticket clusters:
+reporting export, dashboard freshness, SSO setup, permissions and seats, API
+and webhooks, integration sync, data import, workflow automation, and billing
+and plan management.
+
+Result: not accepted yet.
+
+The first cluster-correct retry saved draft
+`7b587228-7cf6-4bfd-b33e-1689810153e6`. Automated generated-content
+evaluation passed, but manual review found unsupported claims about activation
+delay, search visibility, self-service options, and support queue load. Those
+claim shapes are now covered by evaluator tests.
+
+The second cluster-correct retry saved draft
+`8adb720a-936b-462e-8659-daef8dbe5f4b`. Automated generated-content
+evaluation passed, but manual review still found unsupported impact and
+discoverability claims in the article and metadata. Those claim shapes are now
+covered by evaluator tests, and replaying the same draft fails as expected. The
+next slice should tighten the descriptive support-ticket blog prompt so it
+avoids speculative prioritization and post-publication outcome language instead
+of relying only on the evaluator backstop.
 
 ## Verification
 
@@ -150,11 +181,21 @@ The run saved a blog draft that passed all acceptance gates:
 - Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_after_citable --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_citable/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_citable/blog-post-result.json --evaluate-generated-content --json
   - Failed before save on `geo_citable_section_structure_missing` after two repair attempts; no saved draft export was produced.
 - Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_final_retry --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_final_retry/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_final_retry/blog-post-result.json --evaluate-generated-content --json
-  - Saved draft `4ff4f0fe-274e-46ad-9af2-e47475dd749b`; generated-content evaluation passed; SEO/AEO ready; GEO ready.
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json --pretty
-  - Passed.
-- Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
-  - Passed, 47 tests.
+  - Saved draft `4ff4f0fe-274e-46ad-9af2-e47475dd749b`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it because the package collapsed three tied clusters into `remaining`.
+- Command: python scripts/smoke_content_ops_support_ticket_package.py extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --pretty
+  - Passed; after the cluster rollup fix, output includes all nine 4-ticket clusters and no `remaining` bucket.
+- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix/blog-post-result.json --evaluate-generated-content --json
+  - Saved draft `7b587228-7cf6-4bfd-b33e-1689810153e6`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it on unsupported impact, discoverability, and self-service claims.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix/blog-post-draft.json --pretty
+  - Failed as expected after the evaluator was tightened for the cluster-correct false-green claims.
+- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix_2 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix_2/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix_2/blog-post-result.json --evaluate-generated-content --json
+  - Saved draft `8adb720a-936b-462e-8659-daef8dbe5f4b`; generated-content evaluation passed; SEO/AEO ready; GEO ready; manual review rejected it on unsupported impact and discoverability claims.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_cluster_fix_2/blog-post-draft.json --pretty
+  - Failed as expected after the evaluator was tightened for the second cluster-correct false-green claims and metadata surface.
+- Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py tests/test_smoke_content_ops_support_ticket_package.py -q
+  - Passed, 57 tests.
+- Command: python -m pytest tests/test_smoke_content_ops_support_ticket_package.py -q
+  - Passed, 8 tests.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   - Passed.
 - Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline

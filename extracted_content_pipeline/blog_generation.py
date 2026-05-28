@@ -63,6 +63,10 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
     "claims that FAQ entries reduce how often the team answers a question",
     "claims that FAQ entries perform better in search without measured evidence",
     "claims that lower repeat tickets prove an FAQ entry is working",
+    "claims that unresolved questions delay activation or block workflows",
+    "claims that FAQ entries create self-service options or search-result visibility",
+    "claims that FAQ entries are discoverable, rank for keywords, or are working",
+    "prioritization by business impact, activation delay, workflow blocking, or friction reduction without evidence",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
 )
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
@@ -255,7 +259,10 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "customers will or could find answers without opening support tickets. "
                 "Do not say FAQ entries reduce support load, reduce how often the "
                 "team answers a question, perform better in search, or prove they "
-                "are working when repeat tickets decline."
+                "are working when repeat tickets decline. Do not say unresolved "
+                "questions delay activation, block workflows, create self-service "
+                "options, make FAQ entries appear in search results, rank for "
+                "keywords, or prove they are discoverable or working."
             )
             instructions.append(
                 "- If `data_context.support_ticket_blog_mode` is "

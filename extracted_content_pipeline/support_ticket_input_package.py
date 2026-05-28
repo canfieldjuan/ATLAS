@@ -368,7 +368,7 @@ def _question_like_ticket_count(rows: Sequence[Mapping[str, Any]]) -> int:
 def _top_ticket_clusters(
     rows: Sequence[Mapping[str, Any]],
     *,
-    limit: int = 6,
+    limit: int = 12,
 ) -> list[dict[str, Any]]:
     counts: Counter[str] = Counter()
     labels: dict[str, str] = {}
