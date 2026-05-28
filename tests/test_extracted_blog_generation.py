@@ -416,6 +416,10 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
     assert contract["support_ticket_blog_mode"] == "descriptive_no_outcome"
     assert "observed support-ticket clusters" in contract["allowed_claims"][0]
     assert "future ticket reduction or deflection" in contract["forbidden_claims"]
+    assert (
+        "claims that FAQ entries help customers find answers or avoid tickets"
+        in contract["forbidden_claims"]
+    )
     assert contract["draft_answer_guidance"].startswith("Draft answer -")
     assert support_ticket_descriptive_blog_contract({
         "source": "support_ticket_provider",
