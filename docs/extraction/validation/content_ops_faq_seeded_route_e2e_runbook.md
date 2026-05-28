@@ -21,7 +21,7 @@ concurrency smoke, detail contract checker, and cleanup guard.
 Run the FAQ search migrations before this smoke:
 
 ```bash
-python extracted_content_pipeline/storage/migration_runner.py --apply
+python scripts/run_extracted_content_pipeline_migrations.py
 ```
 
 ## Recommended Seeded E2E Smoke
