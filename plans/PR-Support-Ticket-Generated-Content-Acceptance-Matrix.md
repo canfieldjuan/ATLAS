@@ -25,7 +25,9 @@ Slice phase: Functional validation
    the detector still catches unsupported outcome claims.
 3. Record a compact acceptance matrix with artifact paths, output type,
    evaluator result, and any manual audit notes.
-4. Leave live LLM generation, FAQ generation, and new generated-copy tuning out
+4. Commit minimal fixture copies of the evaluated exports so the matrix can be
+   reproduced from a fresh checkout.
+5. Leave live LLM generation, FAQ generation, and new generated-copy tuning out
    of scope unless the accepted artifacts fail.
 
 ### Files touched
@@ -34,6 +36,9 @@ Slice phase: Functional validation
 |---|---|
 | `plans/PR-Support-Ticket-Generated-Content-Acceptance-Matrix.md` | Plan doc for this validation slice. |
 | `docs/extraction/validation/support_ticket_generated_content_acceptance_matrix_2026-05-28.md` | Acceptance matrix for current support-ticket generated artifacts. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_landing_page.json` | Minimal accepted landing-page export fixture. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_compact_blog_post.json` | Minimal accepted compact blog export fixture. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/known_bad_blog_post.json` | Minimal known-bad blog export fixture. |
 
 ## Mechanism
 
@@ -47,6 +52,11 @@ The matrix separates current accepted artifacts from older regression artifacts.
 Accepted artifacts must pass. Known-bad artifacts are allowed to fail, and their
 failure must be the expected unsupported generated-content class.
 
+The committed fixtures keep only the fields the evaluator and matrix need:
+generated copy, source context, and readiness summaries. They omit database ids,
+account filters, token usage, and other run metadata from the original local
+exports.
+
 ## Intentional
 
 - This is a validation slice, not a new generator prompt slice.
@@ -54,6 +64,8 @@ failure must be the expected unsupported generated-content class.
   the route, DB save, export, and evaluator path from previous live slices.
 - This does not touch FAQ generation. FAQ ownership remains in the parallel FAQ
   lane.
+- This commits minimized synthetic fixtures instead of the raw local exports so
+  the validation is reproducible without preserving run-specific metadata.
 
 ## Deferred
 
@@ -67,11 +79,11 @@ failure must be the expected unsupported generated-content class.
 
 ## Verification
 
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output landing_page tmp/support_ticket_evidence_contract_live_validation_20260526/landing-page-draft.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output landing_page docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_landing_page.json --pretty
   - Passed.
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_blog_small_upload_live_validation_20260526_policy/blog-post-draft.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_compact_blog_post.json --pretty
   - Passed.
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_live_blog_gate_20260525/blog-post-draft-cadence2.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/known_bad_blog_post.json --pretty
   - Failed as expected on `support_ticket_outcome_claims_grounded` and
     `support_ticket_answer_steps_grounded`.
 - Command: Python JSON export scanner over the three artifacts.
@@ -85,6 +97,12 @@ failure must be the expected unsupported generated-content class.
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~80 |
+| Plan doc | ~90 |
 | Validation doc | ~120 |
-| **Total** | **~200** |
+| Fixture exports | ~390 |
+| **Total** | **~600** |
+
+This is intentionally over the normal diff budget because the review feedback
+made the fixtures part of the validation contract. The large portion is
+minimized JSON generated from synthetic support-ticket artifacts, not product
+logic.

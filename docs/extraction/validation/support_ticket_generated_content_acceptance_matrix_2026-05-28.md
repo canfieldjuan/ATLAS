@@ -9,17 +9,22 @@ descriptive blog, and compact small-upload blog slices landed.
 The goal is to separate current accepted outputs from older known-bad regression
 artifacts before the next product slice.
 
+The JSON artifacts below are committed minimal fixtures derived from the saved
+live exports. They keep generated copy, source context, and readiness summaries,
+and omit run-specific ids, account filters, token usage, and other database
+metadata from the original local exports.
+
 ## Matrix
 
 | Artifact | Output | Status | Evaluator result | Shape notes |
 |---|---|---|---|---|
-| `tmp/support_ticket_evidence_contract_live_validation_20260526/landing-page-draft.json` | landing page | Current accepted | Passed | 908 generated-copy words across hero/sections/meta/CTA; SEO/AEO and GEO were recorded ready in the saved export. |
-| `tmp/support_ticket_blog_small_upload_live_validation_20260526_policy/blog-post-draft.json` | blog post | Current accepted | Passed | 1,111 generated-content words by this tokenizer, 4 H2 sections, 0 H3 sections; the prior validation recorded 1,095 words and ready SEO/AEO + GEO. |
-| `tmp/support_ticket_live_blog_gate_20260525/blog-post-draft-cadence2.json` | blog post | Known-bad regression artifact | Failed as expected | 1,585 generated-content words, 7 H2 sections, 0 H3 sections. Fails on unsupported outcome claims and concrete answer steps without resolution evidence. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_landing_page.json` | landing page | Current accepted | Passed | 908 generated-copy words across hero/sections/meta/CTA; SEO/AEO and GEO were recorded ready in the saved export. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_compact_blog_post.json` | blog post | Current accepted | Passed | 1,111 generated-content words by this tokenizer, 4 H2 sections, 0 H3 sections; the prior validation recorded 1,095 words and ready SEO/AEO + GEO. |
+| `docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/known_bad_blog_post.json` | blog post | Known-bad regression artifact | Failed as expected | 1,585 generated-content words, 7 H2 sections, 0 H3 sections. Fails on unsupported outcome claims and concrete answer steps without resolution evidence. |
 
-The current accepted artifacts are the latest saved outputs that previous live
-validation slices marked as passing after the prompt, quality-policy, and
-generated-content evaluator fixes.
+The current accepted artifacts are fixture copies of the latest saved outputs
+that previous live validation slices marked as passing after the prompt,
+quality-policy, and generated-content evaluator fixes.
 
 The known-bad artifact is intentionally included to prove the detector still
 fires on the old failure mode. It is not a candidate output.
@@ -61,11 +66,11 @@ arbitrary customer CSVs yet.
 
 ## Verification
 
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output landing_page tmp/support_ticket_evidence_contract_live_validation_20260526/landing-page-draft.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output landing_page docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_landing_page.json --pretty
   - Passed.
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_blog_small_upload_live_validation_20260526_policy/blog-post-draft.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/current_compact_blog_post.json --pretty
   - Passed.
-- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_live_blog_gate_20260525/blog-post-draft-cadence2.json --pretty
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_generated_content_acceptance_2026-05-28/known_bad_blog_post.json --pretty
   - Failed as expected on `support_ticket_outcome_claims_grounded` and `support_ticket_answer_steps_grounded`.
 - Shape summary command: Python JSON export scanner over the three artifacts.
   - Current landing: 908 generated-copy words.
