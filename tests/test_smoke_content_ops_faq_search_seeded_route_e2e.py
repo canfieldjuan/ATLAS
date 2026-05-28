@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_seeded_route_e2e.py"
+RUNBOOK = ROOT / "docs/extraction/validation/content_ops_faq_seeded_route_e2e_runbook.md"
 SPEC = importlib.util.spec_from_file_location("smoke_content_ops_faq_search_seeded_route_e2e", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
@@ -50,6 +52,20 @@ def _args(**overrides):
 
 def _write_cases(path: Path, payload) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _runbook_seeded_e2e_command_args() -> list[str]:
+    doc = RUNBOOK.read_text(encoding="utf-8")
+    marker = "python scripts/smoke_content_ops_faq_search_seeded_route_e2e.py"
+    start = doc.index(marker)
+    end = doc.index("```", start)
+    command = doc[start:end].replace("\\\n", " ")
+    parts = shlex.split(command)
+    assert parts[:2] == [
+        "python",
+        "scripts/smoke_content_ops_faq_search_seeded_route_e2e.py",
+    ]
+    return parts[2:]
 
 
 def _write_child_result(command, *, ok: bool = True) -> None:
@@ -146,6 +162,28 @@ def test_validate_args_reports_missing_required_fields_and_bad_numbers():
         "--max-error-rate must be between 0 and 1",
         "--max-p95-ms must be positive",
     ]
+
+
+def test_seeded_route_e2e_runbook_command_matches_parser():
+    parsed = smoke._build_parser().parse_args(_runbook_seeded_e2e_command_args())
+
+    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert parsed.base_url == "$ATLAS_API_BASE_URL"
+    assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
+    assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
+    assert parsed.corpora_per_account == 2
+    assert parsed.documents_per_corpus == 3
+    assert parsed.seed_iterations == 12
+    assert parsed.route_requests == 40
+    assert parsed.concurrency == 8
+    assert parsed.pool_size == 2
+    assert parsed.max_error_rate == 0.0
+    assert parsed.max_case_error_rate == 0.0
+    assert parsed.max_p95_ms == 1500.0
+    assert parsed.max_single_request_ms == 3000.0
+    assert parsed.max_case_p95_ms == 1500.0
+    assert parsed.max_case_single_request_ms == 3000.0
+    assert str(parsed.output_result) == "/tmp/faq-search-seeded-route-e2e-result.json"
 
 
 def test_validate_args_rejects_invalid_case_budgets():
