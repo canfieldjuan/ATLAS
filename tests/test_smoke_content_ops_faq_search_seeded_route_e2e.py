@@ -41,6 +41,7 @@ def _args(**overrides):
         "max_case_error_rate": None,
         "max_case_p95_ms": None,
         "max_case_single_request_ms": None,
+        "max_detail_ms": None,
         "detail_route": "",
         "artifact_dir": None,
         "output_result": None,
@@ -135,6 +136,15 @@ def _write_child_result(command, *, ok: bool = True) -> None:
                 "search_elapsed_ms": 7.0,
                 "detail_elapsed_ms": 8.0,
                 "total_elapsed_ms": 15.0,
+                **(
+                    {
+                        "max_detail_ms": float(
+                            command[command.index("--max-detail-ms") + 1]
+                        )
+                    }
+                    if "--max-detail-ms" in command
+                    else {}
+                ),
                 "errors": [] if ok else ["detail failed"],
             },
         )
@@ -185,6 +195,7 @@ def test_seeded_route_e2e_runbook_command_matches_parser():
     assert parsed.max_single_request_ms == 3000.0
     assert parsed.max_case_p95_ms == 1500.0
     assert parsed.max_case_single_request_ms == 3000.0
+    assert parsed.max_detail_ms == 2500.0
     assert str(parsed.output_result) == "/tmp/faq-search-seeded-route-e2e-result.json"
 
 
@@ -222,6 +233,18 @@ def test_validate_args_rejects_invalid_case_budgets():
     ]
     assert smoke._validate_args(_args(max_p95_ms=float("inf"))) == [
         "--max-p95-ms must be finite"
+    ]
+
+
+def test_validate_args_rejects_invalid_detail_budget():
+    assert smoke._validate_args(_args(max_detail_ms=0.0)) == [
+        "--max-detail-ms must be positive"
+    ]
+    assert smoke._validate_args(_args(max_detail_ms=float("inf"))) == [
+        "--max-detail-ms must be finite"
+    ]
+    assert smoke._validate_args(_args(max_detail_ms=2500, skip_detail_check=True)) == [
+        "--max-detail-ms requires detail checks; remove --skip-detail-check"
     ]
 
 
@@ -373,7 +396,7 @@ def test_detail_case_from_route_cases_reports_unreadable_file():
 
 
 def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
-    args = _args(detail_route="/api/v2/faqs/{faq_id}/full")
+    args = _args(detail_route="/api/v2/faqs/{faq_id}/full", max_detail_ms=2500)
     detail_result = tmp_path / "detail.json"
 
     command = smoke._detail_command(
@@ -400,6 +423,7 @@ def test_detail_command_uses_contract_checker_and_seeded_case(tmp_path):
     assert "--require-results" in command
     assert "--require-detail" in command
     assert command[command.index("--detail-route") + 1] == "/api/v2/faqs/{faq_id}/full"
+    assert command[command.index("--max-detail-ms") + 1] == "2500"
     assert command[command.index("--expected-detail-account-id") + 1] == "acct-1"
     assert command[command.index("--expected-detail-target-id") + 1] == "support-corp-1"
     assert command[command.index("--expected-detail-target-mode") + 1] == "support_account"
@@ -447,6 +471,32 @@ def test_compact_child_result_artifact_summarizes_route_without_full_case_items(
         "case_file": "route-cases.json",
         "truncated": False,
     }
+
+
+def test_compact_child_result_artifact_keeps_detail_budget(tmp_path):
+    artifact = tmp_path / "detail-result.json"
+    _write_cases(
+        artifact,
+        {
+            "ok": True,
+            "phase": "contract",
+            "count": 1,
+            "detail_checked": True,
+            "detail_faq_id": "11111111-1111-1111-1111-111111111111",
+            "search_elapsed_ms": 7.0,
+            "detail_elapsed_ms": 8.0,
+            "total_elapsed_ms": 15.0,
+            "max_detail_ms": 2500.0,
+            "errors": [],
+        },
+    )
+
+    payload = smoke._compact_child_result_artifact(artifact, kind="detail")
+
+    assert payload["ok"] is True
+    assert payload["detail_checked"] is True
+    assert payload["detail_elapsed_ms"] == 8.0
+    assert payload["max_detail_ms"] == 2500.0
 
 
 def test_compact_child_result_artifact_rejects_non_boolean_ok(tmp_path):
@@ -785,6 +835,8 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
         "acct-1",
         "--artifact-dir",
         str(tmp_path / "artifacts"),
+        "--max-detail-ms",
+        "2500",
         "--output-result",
         str(result_path),
     ])
@@ -795,6 +847,7 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch):
     assert payload["seed"]["result_artifact"]["run_id"] == "seed-run-1"
     assert payload["route"]["result_artifact"]["requests"]["total"] == 12
     assert payload["detail"]["result_artifact"]["detail_checked"] is True
+    assert payload["detail"]["result_artifact"]["max_detail_ms"] == 2500.0
     assert payload["detail"]["ok"] is True
     assert payload["artifacts"]["detail_result"].endswith("detail-result.json")
     assert payload["cleanup"]["deleted_faq_ids"] == 1
