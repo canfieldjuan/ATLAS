@@ -13,12 +13,14 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from urllib.parse import urlparse
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED_SCRIPT = ROOT / "scripts/seed_content_ops_faq_saas_demo.py"
 ROUTE_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
+LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 
 try:
     from dotenv import load_dotenv
@@ -78,6 +80,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
     ):
         if not str(getattr(args, name) or "").strip():
             errors.append(message)
+    if str(args.base_url or "").strip():
+        errors.extend(_base_url_preflight_errors(str(args.base_url)))
     for name in ("route_requests", "concurrency"):
         if int(getattr(args, name)) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
@@ -111,6 +115,21 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         if value is not None and float(value) <= 0:
             errors.append(f"--{name.replace('_', '-')} must be positive")
     return errors
+
+
+def _base_url_preflight_errors(base_url: str) -> list[str]:
+    try:
+        parsed = urlparse(base_url.strip())
+    except ValueError:
+        return ["--base-url must be an absolute HTTP(S) URL for hosted proof"]
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return ["--base-url must be an absolute HTTP(S) URL for hosted proof"]
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return ["--base-url must include a host for hosted proof"]
+    if host in LOCAL_BASE_URL_HOSTS or host.startswith("127."):
+        return ["--base-url must point to a deployed host; local hosts are not accepted for hosted proof"]
+    return []
 
 
 def _required_input_status(args: argparse.Namespace) -> dict[str, dict[str, bool]]:
