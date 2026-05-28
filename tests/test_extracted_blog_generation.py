@@ -1048,6 +1048,9 @@ async def test_generate_quality_repair_prompt_explains_known_blockers() -> None:
     assert "Expand `content` to at least 1500 words" in retry_prompt
     assert "include the exact current `target_keyword` string" in retry_prompt
     assert "repeat that exact phrase naturally" in retry_prompt
+    assert "Replace vague H2 headings" in retry_prompt
+    assert "`Summary`" in retry_prompt
+    assert "specific question or answer headings" in retry_prompt
     assert "Make at least two H2 sections independently citable" in retry_prompt
 
 
