@@ -38,7 +38,17 @@ def _base_args(tmp_path: Path) -> list[str]:
     ]
 
 
-def _fake_runner(calls: list[list[str]], *, route_ok: bool = True, seed_faq_id: str = "faq-123"):
+def _fake_runner(
+    calls: list[list[str]],
+    *,
+    route_ok: bool = True,
+    route_artifact_ok: bool | None = None,
+    route_writes_artifact: bool = True,
+    seed_faq_id: str = "faq-123",
+):
+    if route_artifact_ok is None:
+        route_artifact_ok = route_ok
+
     def _run(command):
         calls.append(list(command))
         if str(smoke.SEED_SCRIPT) in command and "--cleanup-faq-id" not in command:
@@ -84,18 +94,19 @@ def _fake_runner(calls: list[list[str]], *, route_ok: bool = True, seed_faq_id: 
             return {"ok": True, "returncode": 0, "stdout_tail": "", "stderr_tail": ""}
         if str(smoke.ROUTE_SCRIPT) in command:
             route_result = Path(command[command.index("--output-result") + 1])
-            _write_json(
-                route_result,
-                {
-                    "ok": route_ok,
-                    "phase": "complete",
-                    "requests": {"total": 40, "concurrency": 8},
-                    "cases": {"total": 1, "summaries": []},
-                    "detail": {"checked": 40, "failures": 0 if route_ok else 1},
-                    "budgets": {"ok": route_ok, "failures": [] if route_ok else ["detail failed"]},
-                    "errors": [] if route_ok else ["detail failed"],
-                },
-            )
+            if route_writes_artifact:
+                _write_json(
+                    route_result,
+                    {
+                        "ok": route_artifact_ok,
+                        "phase": "complete",
+                        "requests": {"total": 40, "concurrency": 8},
+                        "cases": {"total": 1, "summaries": []},
+                        "detail": {"checked": 40, "failures": 0 if route_ok else 1},
+                        "budgets": {"ok": route_ok, "failures": [] if route_ok else ["detail failed"]},
+                        "errors": [] if route_ok else ["detail failed"],
+                    },
+                )
             return {"ok": route_ok, "returncode": 0 if route_ok else 1, "stdout_tail": "", "stderr_tail": ""}
         if str(smoke.SEED_SCRIPT) in command and "--cleanup-faq-id" in command:
             cleanup_result = Path(command[command.index("--output-result") + 1])
@@ -202,6 +213,39 @@ def test_main_cleans_up_when_route_fails(tmp_path, monkeypatch) -> None:
     payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert code == 1
     assert payload["route"]["ok"] is False
+    assert payload["cleanup"]["ok"] is True
+    assert len(calls) == 3
+
+
+def test_main_fails_when_successful_route_omits_result_artifact(tmp_path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls, route_writes_artifact=False))
+
+    code = smoke.main(_base_args(tmp_path))
+
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["route"]["ok"] is True
+    assert payload["route"]["result_artifact"]["available"] is False
+    assert len(payload["errors"]) == 1
+    assert payload["errors"][0].startswith("route result could not be read:")
+    assert str(tmp_path / "artifacts" / "route-result.json") in payload["errors"][0]
+    assert payload["cleanup"]["ok"] is True
+    assert len(calls) == 3
+
+
+def test_main_fails_when_successful_route_artifact_reports_not_ok(tmp_path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(smoke, "_run_command", _fake_runner(calls, route_artifact_ok=False))
+
+    code = smoke.main(_base_args(tmp_path))
+
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert code == 1
+    assert payload["route"]["ok"] is True
+    assert payload["route"]["result_artifact"]["available"] is True
+    assert payload["route"]["result_artifact"]["ok"] is False
+    assert payload["errors"] == ["route result artifact ok was not true"]
     assert payload["cleanup"]["ok"] is True
     assert len(calls) == 3
 

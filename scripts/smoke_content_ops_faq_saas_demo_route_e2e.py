@@ -268,6 +268,25 @@ def _faq_id_from_seed_result(seed_result: Path) -> tuple[str, list[str]]:
     return faq_id.strip(), []
 
 
+def _artifact_status_errors(
+    artifacts: Sequence[tuple[str, Mapping[str, Any] | None]],
+) -> list[str]:
+    errors: list[str] = []
+    for label, artifact in artifacts:
+        if artifact is None:
+            continue
+        if artifact.get("available") is not True:
+            artifact_errors = artifact.get("errors")
+            if isinstance(artifact_errors, list) and artifact_errors:
+                errors.extend(str(error) for error in artifact_errors[:10])
+            else:
+                errors.append(f"{label} result artifact could not be read")
+            continue
+        if artifact.get("ok") is not True:
+            errors.append(f"{label} result artifact ok was not true")
+    return errors
+
+
 def _write_result(path: Path | None, payload: Mapping[str, Any]) -> None:
     if path is None:
         return
@@ -348,8 +367,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not cleanup.get("skipped")
             else None
         )
+        artifact_errors = _artifact_status_errors((
+            ("seed", seed_artifact),
+            ("route", route_artifact),
+            ("cleanup", cleanup_artifact),
+        ))
+        all_errors = [*errors, *artifact_errors]
         summary = {
-            "ok": bool(seed["ok"]) and bool(route["ok"]) and bool(cleanup["ok"]) and not errors,
+            "ok": bool(seed["ok"]) and bool(route["ok"]) and bool(cleanup["ok"]) and not all_errors,
             "phase": "complete",
             "artifacts": {
                 "directory": str(artifact_dir),
@@ -369,7 +394,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if cleanup_artifact is not None
                 else cleanup
             ),
-            "errors": errors,
+            "errors": all_errors,
             "elapsed_seconds": time.perf_counter() - start,
         }
         return summary
