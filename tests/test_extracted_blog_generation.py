@@ -142,7 +142,8 @@ def _valid_content() -> str:
         "proof that every buyer has the same problem. The useful pattern is that "
         "customers keep using similar wording about budget pressure, contract terms, "
         "and alternative comparisons when they explain why pricing has become harder "
-        "to justify."
+        "to justify, so HubSpot pricing pressure stays visible in the section's "
+        "answer before the supporting details continue."
     )
     return body + "\n\n{{chart:pricing}}\n"
 
