@@ -34,6 +34,9 @@ def _args(**overrides):
         "max_error_rate": 0.0,
         "max_p95_ms": None,
         "max_single_request_ms": None,
+        "max_case_error_rate": None,
+        "max_case_p95_ms": None,
+        "max_case_single_request_ms": None,
         "detail_route": "",
         "artifact_dir": None,
         "output_result": None,
@@ -145,6 +148,27 @@ def test_validate_args_reports_missing_required_fields_and_bad_numbers():
     ]
 
 
+def test_validate_args_rejects_invalid_case_budgets():
+    assert smoke._validate_args(_args(max_case_error_rate=-0.1)) == [
+        "--max-case-error-rate must be between 0 and 1"
+    ]
+    assert smoke._validate_args(_args(max_case_error_rate=1.1)) == [
+        "--max-case-error-rate must be between 0 and 1"
+    ]
+    assert smoke._validate_args(_args(max_case_p95_ms=0.0)) == [
+        "--max-case-p95-ms must be positive"
+    ]
+    assert smoke._validate_args(_args(max_case_single_request_ms=-1.0)) == [
+        "--max-case-single-request-ms must be positive"
+    ]
+    assert smoke._validate_args(_args(max_case_p95_ms=float("inf"))) == [
+        "--max-case-p95-ms must be finite"
+    ]
+    assert smoke._validate_args(_args(max_p95_ms=float("inf"))) == [
+        "--max-p95-ms must be finite"
+    ]
+
+
 def test_seed_command_keeps_data_and_writes_route_cases(tmp_path):
     args = _args(account_id="hosted-acct", artifact_dir=tmp_path)
     case_file = tmp_path / "cases.json"
@@ -167,7 +191,13 @@ def test_seed_command_keeps_data_and_writes_route_cases(tmp_path):
 
 
 def test_route_command_uses_seeded_case_file_and_budgets(tmp_path):
-    args = _args(max_p95_ms=50, max_single_request_ms=80)
+    args = _args(
+        max_p95_ms=50,
+        max_single_request_ms=80,
+        max_case_error_rate=0.25,
+        max_case_p95_ms=25,
+        max_case_single_request_ms=40,
+    )
     case_file = tmp_path / "cases.json"
     route_result = tmp_path / "route.json"
 
@@ -177,6 +207,34 @@ def test_route_command_uses_seeded_case_file_and_budgets(tmp_path):
     assert command[command.index("--case-file") + 1] == str(case_file)
     assert command[command.index("--max-p95-ms") + 1] == "50"
     assert command[command.index("--max-single-request-ms") + 1] == "80"
+    assert command[command.index("--max-case-error-rate") + 1] == "0.25"
+    assert command[command.index("--max-case-p95-ms") + 1] == "25"
+    assert command[command.index("--max-case-single-request-ms") + 1] == "40"
+
+
+def test_parser_accepts_case_budgets():
+    parsed = smoke._build_parser().parse_args(
+        [
+            "--database-url",
+            "postgresql://example/atlas",
+            "--base-url",
+            "https://atlas.example.com",
+            "--token",
+            "token-123",
+            "--account-id",
+            "acct-1",
+            "--max-case-error-rate",
+            "0",
+            "--max-case-p95-ms",
+            "1500",
+            "--max-case-single-request-ms",
+            "3000",
+        ]
+    )
+
+    assert parsed.max_case_error_rate == 0.0
+    assert parsed.max_case_p95_ms == 1500.0
+    assert parsed.max_case_single_request_ms == 3000.0
 
 
 def test_detail_case_from_route_cases_selects_first_hit_case(tmp_path):
