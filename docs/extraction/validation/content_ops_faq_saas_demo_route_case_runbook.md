@@ -118,6 +118,8 @@ Open `/tmp/faq-saas-demo-route-e2e-result.json` and inspect:
 
 - `ok`: seed, hosted route/detail, cleanup, and artifact-read status.
 - `seed.result_artifact.faq_id`: generated FAQ id used for route and cleanup.
+- `seed.result_artifact.route_case_file`: route-case write status, path, and
+  case count.
 - `route.result_artifact.requests`: hosted route request count.
 - `route.result_artifact.detail`: hydrated detail checks and failures.
 - `cleanup`: cleanup status, or `not_run_reason` when `--keep-data` is set.

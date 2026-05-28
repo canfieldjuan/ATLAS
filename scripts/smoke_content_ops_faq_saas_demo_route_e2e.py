@@ -237,6 +237,14 @@ def _compact_artifact(path: Path, *, label: str) -> dict[str, Any]:
             "count": search.get("count"),
             "matched_seeded_faq": search.get("matched_seeded_faq"),
         }
+    if isinstance(payload.get("route_case_file"), Mapping):
+        route_case_file = payload["route_case_file"]
+        summary["route_case_file"] = {
+            "ok": route_case_file.get("ok"),
+            "path": route_case_file.get("path"),
+            "cases": route_case_file.get("cases"),
+            "error": route_case_file.get("error"),
+        }
     if isinstance(payload.get("requests"), Mapping):
         summary["requests"] = payload["requests"]
     if isinstance(payload.get("cases"), Mapping):

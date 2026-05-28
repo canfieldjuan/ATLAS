@@ -60,6 +60,11 @@ def _fake_runner(calls: list[list[str]], *, route_ok: bool = True, seed_faq_id: 
                         "count": 1,
                         "matched_seeded_faq": True,
                     },
+                    "route_case_file": {
+                        "ok": True,
+                        "path": str(case_file),
+                        "cases": 1,
+                    },
                 },
             )
             _write_json(
@@ -172,6 +177,12 @@ def test_main_runs_seed_route_and_cleanup(tmp_path, monkeypatch) -> None:
     assert code == 0
     assert payload["ok"] is True
     assert payload["seed"]["result_artifact"]["faq_id"] == "faq-123"
+    assert payload["seed"]["result_artifact"]["route_case_file"] == {
+        "ok": True,
+        "path": calls[0][calls[0].index("--route-case-file-output") + 1],
+        "cases": 1,
+        "error": None,
+    }
     assert payload["route"]["result_artifact"]["detail"]["checked"] == 40
     assert payload["cleanup"]["result_artifact"]["faq_id"] == "faq-123"
     assert payload["cleanup"]["result_artifact"]["account_id"] == "acct-1"
