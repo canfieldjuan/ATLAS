@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CORE_CAMPAIGN_MIGRATIONS = {
     "066_b2b_campaigns.sql",
+    "067_b2b_campaigns_updated_at.sql",
     "068_campaign_sequences.sql",
     "069_campaign_analytics.sql",
     "070_campaign_suppressions.sql",

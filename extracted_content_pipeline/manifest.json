@@ -93,6 +93,10 @@
       "target": "extracted_content_pipeline/storage/migrations/066_b2b_campaigns.sql"
     },
     {
+      "source": "atlas_brain/storage/migrations/067_b2b_campaigns_updated_at.sql",
+      "target": "extracted_content_pipeline/storage/migrations/067_b2b_campaigns_updated_at.sql"
+    },
+    {
       "source": "atlas_brain/storage/migrations/068_campaign_sequences.sql",
       "target": "extracted_content_pipeline/storage/migrations/068_campaign_sequences.sql"
     },

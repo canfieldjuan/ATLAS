@@ -1,0 +1,62 @@
+name: Atlas B2B Campaign Migration Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_b2b_campaign_migration_checks.yml"
+      - "atlas_brain/storage/migrations/**"
+      - "extracted_content_pipeline/storage/migrations/**"
+      - "extracted_content_pipeline/manifest.json"
+      - "tests/test_atlas_b2b_campaign_migrations.py"
+      - "tests/test_extracted_campaign_manifest.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_b2b_campaign_migration_checks.yml"
+      - "atlas_brain/storage/migrations/**"
+      - "extracted_content_pipeline/storage/migrations/**"
+      - "extracted_content_pipeline/manifest.json"
+      - "tests/test_atlas_b2b_campaign_migrations.py"
+      - "tests/test_extracted_campaign_manifest.py"
+
+jobs:
+  atlas-b2b-campaign-migration-checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_migration_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas_migration_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install asyncpg pytest pytest-asyncio
+
+      - name: Run B2B campaign migration tests
+        run: |
+          python -m pytest \
+            tests/test_atlas_b2b_campaign_migrations.py \
+            tests/test_extracted_campaign_manifest.py \
+            -q
