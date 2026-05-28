@@ -72,6 +72,12 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
     "Draft answer - support team should add the verified resolution before publishing."
 )
+_SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
+    "support_ticket_blog_mode",
+    "allowed_claims",
+    "forbidden_claims",
+    "draft_answer_guidance",
+)
 
 
 @dataclass(frozen=True)
@@ -939,13 +945,16 @@ def _blueprint_with_support_ticket_blog_contract(
     blueprint: Mapping[str, Any],
 ) -> Mapping[str, Any]:
     data_context = _mapping_dict(blueprint.get("data_context"))
-    contract = support_ticket_descriptive_blog_contract(data_context)
-    if not contract:
+    if not _is_support_ticket_blog_context(data_context):
         return blueprint
+    contract = support_ticket_descriptive_blog_contract(data_context)
     enriched = dict(blueprint)
     merged = dict(data_context)
-    for key, value in contract.items():
-        merged.setdefault(key, value)
+    for key in _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS:
+        merged.pop(key, None)
+    merged.update(contract)
+    if merged == data_context:
+        return blueprint
     enriched["data_context"] = merged
     return enriched
 
@@ -991,7 +1000,42 @@ def _blog_generation_prompts(
     # on the prior prompt (without ``{topic}``) are unaffected -- the
     # ``replace()`` is a no-op when the placeholder isn't present.
     system_prompt = system_prompt.replace("{topic}", topic)
+    base_user_prompt = _with_support_ticket_descriptive_prompt_addendum(
+        base_user_prompt,
+        blueprint=blueprint,
+    )
     return system_prompt, base_user_prompt
+
+
+def _with_support_ticket_descriptive_prompt_addendum(
+    prompt: str,
+    *,
+    blueprint: Mapping[str, Any],
+) -> str:
+    data_context = _mapping_dict(blueprint.get("data_context"))
+    if not support_ticket_descriptive_blog_contract(data_context):
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "Support-ticket descriptive mode instructions:\n"
+        "- Write a descriptive support-ticket FAQ planning brief, not a "
+        "persuasive ROI article.\n"
+        "- Use only observed ticket counts, observed clusters, copied customer "
+        "wording, and review-needed FAQ shells from the blueprint.\n"
+        "- If clusters have the same count, say they are tied. Do not rank tied "
+        "clusters by business impact, activation risk, workflow blocking, "
+        "friction reduction, deal impact, or customer value unless the blueprint "
+        "contains measured outcome evidence for that ranking.\n"
+        "- If the blueprint lacks resolution evidence, keep answer content as "
+        "draft placeholders for support-team review. Do not invent UI paths, "
+        "setup steps, feature behavior, or exact resolutions.\n"
+        "- Measurement language must be observational only: say what to watch or "
+        "compare after publishing, but do not say ticket volume will decline, "
+        "the FAQ entry is working, customers will find it, search visibility will "
+        "improve, or the entry will rank for keywords.\n"
+        "- Apply the same limits to title, description, metadata, FAQ metadata, "
+        "tags, and chart copy."
+    )
 
 
 def _public_blog_json(parsed: Mapping[str, Any]) -> str:

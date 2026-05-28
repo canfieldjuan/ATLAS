@@ -846,10 +846,72 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
 
     assert result.generated == 1
     system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
     assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
     assert '"allowed_claims":' in system_prompt
     assert '"forbidden_claims":' in system_prompt
     assert '"draft_answer_guidance":' in system_prompt
+    assert "Support-ticket descriptive mode instructions:" in user_prompt
+    assert "Do not rank tied clusters by business impact" in user_prompt
+    assert "Measurement language must be observational only" in user_prompt
+    assert "metadata, FAQ metadata, tags, and chart copy" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_recomputes_stale_support_ticket_descriptive_contract() -> None:
+    blueprint = _support_ticket_blueprint()
+    blueprint["data_context"]["support_ticket_blog_mode"] = "stale_non_descriptive"
+    service, _blueprints, _blog_posts, llm, _skills = _service(
+        rows=[blueprint],
+        responses=[_valid_support_ticket_blog_json()],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in system_prompt
+    assert "stale_non_descriptive" not in system_prompt
+    assert "Support-ticket descriptive mode instructions:" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_clears_stale_descriptive_contract_for_outcome_backed_context() -> None:
+    blueprint = _support_ticket_blueprint()
+    blueprint["data_context"].update({
+        "has_measured_outcomes": True,
+        "support_ticket_blog_mode": "descriptive_no_outcome",
+        "allowed_claims": ["stale allowed"],
+        "forbidden_claims": ["stale forbidden"],
+        "draft_answer_guidance": "stale draft guidance",
+    })
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        rows=[blueprint],
+        responses=[_valid_support_ticket_blog_json()],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert "support_ticket_blog_mode" not in draft.data_context
+    assert "allowed_claims" not in draft.data_context
+    assert "forbidden_claims" not in draft.data_context
+    assert "draft_answer_guidance" not in draft.data_context
+    assert "descriptive_no_outcome" not in system_prompt
+    assert "stale allowed" not in system_prompt
+    assert "Support-ticket descriptive mode instructions:" not in user_prompt
 
 
 @pytest.mark.asyncio
@@ -882,6 +944,8 @@ async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract()
     retry_prompt = llm.calls[1]["messages"][1].content
     assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in repair_system_prompt
     assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
+    assert "Support-ticket descriptive mode instructions:" in retry_prompt
+    assert "Do not rank tied clusters by business impact" in retry_prompt
 
 
 @pytest.mark.asyncio
