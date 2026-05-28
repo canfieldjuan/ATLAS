@@ -32,15 +32,6 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
-### Support-ticket blog generation needs contract-level descriptive mode before SaaS demo acceptance
-- File/location: `atlas_brain/skills/digest/blog_post_generation.md`, `extracted_content_pipeline/blog_generation.py`, support-ticket blog live runs in `tmp/support_ticket_saas_demo_generated_content_acceptance_20260528/`.
-- Description: The 36-row SaaS demo CSV repeatedly drove Haiku blog output toward unsupported benefit/outcome language even after prompt and evaluator tightening. The final retry is now caught as known-bad, but no accepted SaaS demo blog fixture is committed in this slice.
-- Why it matters: The small 4-row blog path is accepted, but the broader support-ticket blog path still needs a stronger contract than prompt prohibitions plus pattern blockers before it can be treated as production-accepted.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/support-ticket-provider
-- Found during: PR-Support-Ticket-SaaS-Demo-Generated-Content-Acceptance
-
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `content_ops.llm.complete` usage-storage path, live smoke stderr during `scripts/smoke_content_ops_live_generation.py`.
 - Description: Live landing/blog generation succeeded, but each LLM call logged `_store_local failed for span=content_ops.llm.complete: column "account_id" of relation "llm_usage" does not exist`.

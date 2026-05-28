@@ -1157,6 +1157,13 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert payload["data_context"]["has_measured_outcomes"] is False
     assert payload["data_context"]["measured_outcome_count"] == 0
     assert payload["data_context"]["measured_outcome_examples"] == []
+    assert payload["data_context"]["support_ticket_resolution_evidence_present"] is False
+    assert payload["data_context"]["support_ticket_resolution_evidence_count"] == 0
+    assert payload["data_context"]["support_ticket_resolution_examples"] == []
+    assert payload["data_context"]["support_ticket_blog_mode"] == "descriptive_no_outcome"
+    assert "allowed_claims" in payload["data_context"]
+    assert "forbidden_claims" in payload["data_context"]
+    assert payload["data_context"]["draft_answer_guidance"].startswith("Draft answer -")
     assert "report_date" not in payload["data_context"]
     assert payload["data_context"]["included_ticket_row_count"] == 2
     assert payload["data_context"]["total_reviews_analyzed"] == 2
@@ -1174,7 +1181,10 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     }
     assert "2 support-ticket rows" in first_section["data_summary"]
     assert "2 rows were included for generation" in first_section["data_summary"]
-    assert "source_window_days" not in payload["sections"][2]["key_stats"]
+    process_section = payload["sections"][2]
+    assert "source_window_days" not in process_section["key_stats"]
+    assert process_section["heading"] == "How should old tickets become review-ready FAQ shells?"
+    assert "review-needed shell" in process_section["data_summary"]
 
 
 def test_support_ticket_blog_blueprint_payload_uses_package_included_counts() -> None:
@@ -1245,6 +1255,7 @@ def test_support_ticket_blog_blueprint_payload_threads_measured_outcomes() -> No
 
     assert payload["data_context"]["has_measured_outcomes"] is True
     assert payload["data_context"]["measured_outcome_count"] == 2
+    assert "support_ticket_blog_mode" not in payload["data_context"]
     assert payload["data_context"]["measured_outcome_examples"] == [
         {
             "source_id": "ticket-1",

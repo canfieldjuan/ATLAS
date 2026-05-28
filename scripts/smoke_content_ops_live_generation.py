@@ -664,6 +664,9 @@ def _default_blog_blueprint_payload() -> dict[str, Any]:
 def _support_ticket_blog_blueprint_payload(
     rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    from extracted_content_pipeline.blog_generation import (  # noqa: PLC0415
+        support_ticket_descriptive_blog_contract,
+    )
     from extracted_content_pipeline.support_ticket_input_package import (  # noqa: PLC0415
         build_support_ticket_input_package,
     )
@@ -681,6 +684,9 @@ def _support_ticket_blog_blueprint_payload(
         inputs.get("source_period") or UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
     )
     has_valid_date_window = bool(inputs.get("has_dated_window"))
+    resolution_evidence_present = bool(
+        inputs.get("support_ticket_resolution_evidence_present")
+    )
     review_period = (
         SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD
         if has_valid_date_window
@@ -703,7 +709,15 @@ def _support_ticket_blog_blueprint_payload(
         "has_measured_outcomes": bool(inputs.get("has_measured_outcomes")),
         "measured_outcome_count": int(inputs.get("measured_outcome_count") or 0),
         "measured_outcome_examples": list(inputs.get("measured_outcome_examples") or []),
+        "support_ticket_resolution_evidence_present": resolution_evidence_present,
+        "support_ticket_resolution_evidence_count": int(
+            inputs.get("support_ticket_resolution_evidence_count") or 0
+        ),
+        "support_ticket_resolution_examples": list(
+            inputs.get("support_ticket_resolution_examples") or []
+        ),
     }
+    data_context.update(support_ticket_descriptive_blog_contract(data_context))
     if has_valid_date_window:
         data_context["report_date"] = "2026-05-23"
     return {
@@ -749,10 +763,11 @@ def _support_ticket_blog_blueprint_payload(
             },
             {
                 "id": "publishable-answer-process",
-                "heading": "How should old tickets become customer-ready answers?",
+                "heading": "How should old tickets become review-ready FAQ shells?",
                 "goal": (
                     "Show the operational path from CSV upload to clustered "
-                    "questions, customer wording, draft answers, and review."
+                    "questions, customer wording, review-needed draft answer "
+                    "shells, and support-team verification."
                 ),
                 "key_stats": {
                     "source_rows": source_row_count,
@@ -765,9 +780,15 @@ def _support_ticket_blog_blueprint_payload(
                 "data_summary": (
                     f"The uploaded ticket CSV can produce up to {draft_faq_entries} "
                     "first-pass FAQ entries from observed customer wording. "
-                    "Each answer should preserve customer language, summarize "
-                    "the support team's resolution, and stay in review until "
-                    "the team approves it."
+                    + (
+                        "Each answer should preserve customer language, use the "
+                        "support team's verified resolution evidence, and stay in "
+                        "review until the team approves it."
+                        if resolution_evidence_present
+                        else "Without resolution evidence, each answer should preserve "
+                        "customer language, stay as a review-needed shell, and wait "
+                        "for the support team to add the verified resolution."
+                    )
                 ),
             },
         ],

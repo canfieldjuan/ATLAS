@@ -45,6 +45,24 @@ _BLOG_FAILURE_EXCERPT_CHARS = 1500
 _SMALL_SUPPORT_TICKET_BLOG_MAX_ROWS = 25
 _SMALL_SUPPORT_TICKET_BLOG_MIN_WORDS = 700
 _SMALL_SUPPORT_TICKET_BLOG_TARGET_WORDS = 1100
+SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE = "descriptive_no_outcome"
+_SUPPORT_TICKET_DESCRIPTIVE_ALLOWED_CLAIMS = (
+    "observed support-ticket clusters and counts from the uploaded rows",
+    "customer wording copied from the uploaded tickets",
+    "review-needed draft FAQ shells",
+    "support-team verification work before publishing",
+    "metrics to watch after publishing, without claiming those metrics improved",
+)
+_SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
+    "future ticket reduction or deflection",
+    "prevented tickets or fewer repeat questions",
+    "churn, retention, upgrade, referral, ROI, or capacity outcomes",
+    "faster resolution or customers finding answers without opening tickets",
+    "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
+)
+_SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
+    "Draft answer - support team should add the verified resolution before publishing."
+)
 
 
 @dataclass(frozen=True)
@@ -220,6 +238,12 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "blueprint. Do not invent calendar windows, ticket-reduction "
                 "percentages, ROI math, future impact claims, or claims that "
                 "customers will or could find answers without opening support tickets."
+            )
+            instructions.append(
+                "- If `data_context.support_ticket_blog_mode` is "
+                f"`{SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE}`, follow its "
+                "`allowed_claims`, `forbidden_claims`, and `draft_answer_guidance` "
+                "instead of writing benefit or outcome claims."
             )
     if not instructions:
         instructions.append(
@@ -405,6 +429,7 @@ class BlogPostGenerationService:
                 blueprint=dict(row),
             )
             blueprint = _blueprint_with_data_context(blueprint, trusted_data_context)
+            blueprint = _blueprint_with_support_ticket_blog_contract(blueprint)
             blueprint_id = _blueprint_id(blueprint)
             try:
                 parsed = await self._generate_one(
@@ -883,6 +908,40 @@ def _blueprint_with_data_context(
     merged.update(override)
     enriched["data_context"] = merged
     return enriched
+
+
+def _blueprint_with_support_ticket_blog_contract(
+    blueprint: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    data_context = _mapping_dict(blueprint.get("data_context"))
+    contract = support_ticket_descriptive_blog_contract(data_context)
+    if not contract:
+        return blueprint
+    enriched = dict(blueprint)
+    merged = dict(data_context)
+    for key, value in contract.items():
+        merged.setdefault(key, value)
+    enriched["data_context"] = merged
+    return enriched
+
+
+def support_ticket_descriptive_blog_contract(
+    data_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return prompt contract fields for support-ticket blogs without outcomes."""
+
+    if not _is_support_ticket_blog_context(data_context):
+        return {}
+    if _truthy_context(data_context.get("has_measured_outcomes")):
+        return {}
+    if _truthy_context(data_context.get("support_ticket_resolution_evidence_present")):
+        return {}
+    return {
+        "support_ticket_blog_mode": SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE,
+        "allowed_claims": list(_SUPPORT_TICKET_DESCRIPTIVE_ALLOWED_CLAIMS),
+        "forbidden_claims": list(_SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS),
+        "draft_answer_guidance": _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE,
+    }
 
 
 def _is_support_ticket_blog_context(data_context: Mapping[str, Any]) -> bool:
