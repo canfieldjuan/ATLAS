@@ -938,12 +938,14 @@ def test_blog_export_fails_saas_demo_false_green_outcome_claims() -> None:
 def test_blog_export_fails_final_saas_demo_false_green_outcome_claims() -> None:
     claims = [
         "A single FAQ entry answers it once, and customers can find it themselves.",
+        "Customers can find answers themselves because the FAQ exists.",
         "Fixing the FAQ gap addresses the root cause of repeated support requests.",
         "FAQ entries are force multipliers.",
         (
             "Each FAQ entry you publish reduces the number of times your team "
             "must answer that question."
         ),
+        "FAQ entries reduce how often your support team answers that question.",
         (
             "Customers search for answers using their own language, so FAQ "
             "entries that match customer wording perform better in search and "
@@ -957,6 +959,8 @@ def test_blog_export_fails_final_saas_demo_false_green_outcome_claims() -> None:
             "If a cluster shows declining repeat tickets and high FAQ views, "
             "that FAQ entry is working."
         ),
+        "Declining repeat tickets prove an FAQ entry is working.",
+        "Lower repeat tickets prove an FAQ entry is working.",
         (
             "This prioritized, measurement-focused approach ensures your FAQ "
             "work addresses the highest-volume customer questions first and "

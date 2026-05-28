@@ -45,6 +45,11 @@ the specific uncovered claim shapes:
 - Publishing FAQ entries reducing support load over time.
 - Customer-wording FAQ entries performing better in search without evidence.
 
+Reviewer follow-up tightened the same categories for direct variants: customers
+finding answers themselves, FAQ entries reducing how often the support team
+answers a question, and lower or declining repeat tickets proving an FAQ entry
+works.
+
 The blog prompt's descriptive support-ticket contract gets matching forbidden
 language so the generator is told not to produce those claims in the first place.
 
@@ -81,7 +86,7 @@ language so the generator is told not to produce those claims in the first place
 - Command: bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline
   - Passed; extracted package refreshed from atlas_brain sources.
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-blog-false-green-outcome-claims-pr-body.md
-  - Passed.
+  - Passed after the initial push and again after the review-comment fix.
 
 ## Estimated diff size
 
@@ -91,4 +96,4 @@ language so the generator is told not to produce those claims in the first place
 | Prompt contract | ~10 |
 | Tests | ~45 |
 | Plan doc | ~75 |
-| Total | ~175 |
+| Total | ~195 |
