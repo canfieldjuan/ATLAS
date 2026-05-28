@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header
 from fastapi.testclient import TestClient
 
+from atlas_brain._content_ops_scope import (
+    build_content_ops_scope,
+    set_current_auth_user,
+)
 from extracted_content_pipeline.api.faq_search import (
     FAQDeflectionSearchApiConfig,
     create_faq_deflection_search_router,
@@ -362,7 +368,7 @@ def test_faq_deflection_search_route_queries_real_postgres_projection_and_detail
             "target_mode": "support_account",
             "title": "Support FAQ",
             "markdown": "# Support FAQ",
-            "items": [],
+            "items": [_postgres_faq_item(corpus_id=corpus_id)],
             "source_count": 1,
             "ticket_source_count": 1,
             "output_checks": {},
@@ -373,6 +379,128 @@ def test_faq_deflection_search_route_queries_real_postgres_projection_and_detail
         }
         assert cross_tenant_detail_response.status_code == 404
         assert cross_tenant_detail_response.json()["detail"] == "FAQ not found"
+    finally:
+        _run_async(
+            _cleanup_faq_search_route_projection(
+                asyncpg,
+                database_url,
+                account_ids=(account_a, account_b),
+            )
+        )
+
+
+@pytest.mark.integration
+def test_faq_deflection_search_route_keeps_concurrent_context_scopes_isolated() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    account_a = f"acct-a-{uuid4().hex}"
+    account_b = f"acct-b-{uuid4().hex}"
+    corpus_id = f"shared-corpus-{uuid4().hex}"
+    faq_a = str(uuid4())
+    faq_b = str(uuid4())
+    pool_provider = _RoutePoolProvider(asyncpg, database_url)
+
+    _run_async(
+        _seed_faq_search_route_projection(
+            asyncpg,
+            database_url,
+            account_id=account_a,
+            corpus_id=corpus_id,
+            faq_id=faq_a,
+            target_id="support-account-a",
+        )
+    )
+    _run_async(
+        _seed_faq_search_route_projection(
+            asyncpg,
+            database_url,
+            account_id=account_b,
+            corpus_id=corpus_id,
+            faq_id=faq_b,
+            target_id="support-account-b",
+        )
+    )
+
+    async def _capture_test_auth_user(
+        x_test_account_id: str = Header(...),
+    ):
+        user = SimpleNamespace(
+            account_id=x_test_account_id,
+            user_id=f"user-{x_test_account_id}",
+        )
+        set_current_auth_user(user)
+        try:
+            yield user
+        finally:
+            set_current_auth_user(None)
+
+    app = FastAPI()
+    app.add_event_handler("shutdown", pool_provider.close)
+    app.include_router(
+        create_faq_deflection_search_router(
+            pool_provider=pool_provider,
+            scope_provider=build_content_ops_scope,
+            dependencies=[Depends(_capture_test_auth_user)],
+        )
+    )
+
+    expected = {
+        account_a: {"faq_id": faq_a, "target_id": "support-account-a"},
+        account_b: {"faq_id": faq_b, "target_id": "support-account-b"},
+    }
+
+    try:
+        with TestClient(app) as client:
+            warmup = client.get(
+                "/content-ops/faq-deflection-search"
+                f"?q=password%20reset&corpus_id={corpus_id}&limit=5",
+                headers={"x-test-account-id": account_a},
+            )
+            assert warmup.status_code == 200
+
+            def _request(account_id: str) -> dict[str, object]:
+                headers = {"x-test-account-id": account_id}
+                search = client.get(
+                    "/content-ops/faq-deflection-search"
+                    f"?q=password%20reset&corpus_id={corpus_id}&limit=5",
+                    headers=headers,
+                )
+                assert search.status_code == 200
+                search_payload = search.json()
+                first = search_payload["results"][0]
+                detail = client.get(
+                    f"/content-ops/faq-deflection-search/{first['faq_id']}",
+                    headers=headers,
+                )
+                assert detail.status_code == 200
+                return {
+                    "account_id": account_id,
+                    "search": search_payload,
+                    "detail": detail.json(),
+                }
+
+            request_accounts = [account_a, account_b] * 6
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                responses = list(executor.map(_request, request_accounts))
+
+        assert len(responses) == 12
+        for response in responses:
+            account_id = str(response["account_id"])
+            search_payload = response["search"]
+            detail_payload = response["detail"]
+            assert search_payload["count"] == 1
+            first = search_payload["results"][0]
+            assert first["account_id"] == account_id
+            assert first["corpus_id"] == corpus_id
+            assert first["faq_id"] == expected[account_id]["faq_id"]
+            assert first["target_id"] == expected[account_id]["target_id"]
+            assert detail_payload["account_id"] == account_id
+            assert detail_payload["id"] == expected[account_id]["faq_id"]
+            assert detail_payload["target_id"] == expected[account_id]["target_id"]
+            assert detail_payload["items"] == [_postgres_faq_item(corpus_id=corpus_id)]
     finally:
         _run_async(
             _cleanup_faq_search_route_projection(
@@ -413,6 +541,7 @@ async def _seed_faq_search_route_projection(
     account_id: str,
     corpus_id: str,
     faq_id: str,
+    target_id: str = "support-account-1",
 ) -> None:
     root = Path(__file__).resolve().parents[1]
     pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
@@ -427,13 +556,15 @@ async def _seed_faq_search_route_projection(
                 warnings, metadata, status
             )
             VALUES (
-                $1::uuid, $2, 'support-account-1', 'support_account',
-                'Support FAQ', '# Support FAQ', '[]'::jsonb, 1, 1,
-                '{}'::jsonb, '[]'::jsonb, $3::jsonb, 'approved'
+                $1::uuid, $2, $3, 'support_account',
+                'Support FAQ', '# Support FAQ', $4::jsonb, 1, 1,
+                '{}'::jsonb, '[]'::jsonb, $5::jsonb, 'approved'
             )
             """,
             faq_id,
             account_id,
+            target_id,
+            json.dumps([_postgres_faq_item(corpus_id=corpus_id)]),
             json.dumps({"corpus_id": corpus_id}),
         )
         await PostgresTicketFAQSearchRepository(pool).replace_documents([
@@ -441,7 +572,7 @@ async def _seed_faq_search_route_projection(
                 account_id=account_id,
                 corpus_id=corpus_id,
                 faq_id=faq_id,
-                target_id="support-account-1",
+                target_id=target_id,
                 target_mode="support_account",
                 status="approved",
                 rank=1,
@@ -455,6 +586,16 @@ async def _seed_faq_search_route_projection(
         ])
     finally:
         await pool.close()
+
+
+def _postgres_faq_item(*, corpus_id: str) -> dict[str, object]:
+    return {
+        "topic": "password reset",
+        "question": "How do I reset my password?",
+        "answer": "Use the password reset email.",
+        "source_ids": [f"{corpus_id}-ticket-1"],
+        "ticket_count": 1,
+    }
 
 
 async def _cleanup_faq_search_route_projection(
