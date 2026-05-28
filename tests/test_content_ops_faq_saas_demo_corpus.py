@@ -3,6 +3,7 @@ from dataclasses import replace
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -22,7 +23,9 @@ from extracted_content_pipeline.ticket_faq_search import (
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv"
 DEMO_FAQ_PATH = ROOT / "extracted_content_pipeline/examples/support_ticket_saas_demo_faq.md"
+RUNBOOK_PATH = ROOT / "docs/extraction/validation/content_ops_faq_saas_demo_route_case_runbook.md"
 SEED_SCRIPT = ROOT / "scripts/seed_content_ops_faq_saas_demo.py"
+ROUTE_SCRIPT = ROOT / "scripts/smoke_content_ops_faq_search_route_concurrency.py"
 SEED_SPEC = importlib.util.spec_from_file_location(
     "seed_content_ops_faq_saas_demo",
     SEED_SCRIPT,
@@ -31,6 +34,13 @@ assert SEED_SPEC is not None and SEED_SPEC.loader is not None
 seeder = importlib.util.module_from_spec(SEED_SPEC)
 sys.modules["seed_content_ops_faq_saas_demo"] = seeder
 SEED_SPEC.loader.exec_module(seeder)
+ROUTE_SPEC = importlib.util.spec_from_file_location(
+    "smoke_content_ops_faq_search_route_concurrency_for_saas_demo_test",
+    ROUTE_SCRIPT,
+)
+assert ROUTE_SPEC is not None and ROUTE_SPEC.loader is not None
+route_smoke = importlib.util.module_from_spec(ROUTE_SPEC)
+ROUTE_SPEC.loader.exec_module(route_smoke)
 
 EXPECTED_LABEL = "synthetic_b2b_saas_demo"
 MIN_ROWS = 36
@@ -80,6 +90,16 @@ def _generated_demo_faq():
         support_contact="https://example.com/support",
     )
     return rows, normalized, result
+
+
+def _runbook_command_args(marker: str) -> list[str]:
+    doc = RUNBOOK_PATH.read_text(encoding="utf-8")
+    start = doc.index(marker)
+    end = doc.index("```", start)
+    command = doc[start:end].replace("\\\n", " ")
+    parts = shlex.split(command)
+    assert parts[:2] == ["python", marker.removeprefix("python ")]
+    return parts[2:]
 
 
 def test_saas_demo_corpus_is_labeled_and_domain_clean() -> None:
@@ -158,6 +178,52 @@ def test_saas_demo_faq_draft_projects_to_search_documents() -> None:
     assert first["account_id"] == "acct-demo"
     assert first["corpus_id"] == "synthetic-b2b-saas-demo"
     assert "export" in first["question"].lower()
+
+
+def test_saas_demo_route_case_runbook_seed_command_matches_parser() -> None:
+    args = _runbook_command_args("python scripts/seed_content_ops_faq_saas_demo.py")
+
+    parsed = seeder._parse_args(args)
+
+    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert parsed.account_id == "$ATLAS_FAQ_SEARCH_ACCOUNT_ID"
+    assert parsed.route_case_file_output == Path("/tmp/faq-saas-demo-route-cases.json")
+    assert parsed.output_result == Path("/tmp/faq-saas-demo-seed-result.json")
+    assert parsed.cleanup_faq_id is None
+    assert seeder._validate_args(parsed) == []
+
+
+def test_saas_demo_route_case_runbook_route_command_matches_parser() -> None:
+    args = _runbook_command_args(
+        "python scripts/smoke_content_ops_faq_search_route_concurrency.py"
+    )
+
+    parsed = route_smoke._build_parser().parse_args(args)
+
+    assert parsed.base_url == "$ATLAS_API_BASE_URL"
+    assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
+    assert parsed.case_file == Path("/tmp/faq-saas-demo-route-cases.json")
+    assert parsed.require_detail is True
+    assert parsed.max_error_rate == 0
+    assert parsed.max_case_error_rate == 0
+    assert parsed.max_detail_ms == 2500
+    assert parsed.output_result == Path("/tmp/faq-saas-demo-route-result.json")
+    assert route_smoke._validate_args(parsed) == []
+
+
+def test_saas_demo_route_case_runbook_commands_share_case_file() -> None:
+    seed_args = seeder._parse_args(
+        _runbook_command_args("python scripts/seed_content_ops_faq_saas_demo.py")
+    )
+    route_args = route_smoke._build_parser().parse_args(
+        _runbook_command_args(
+            "python scripts/smoke_content_ops_faq_search_route_concurrency.py"
+        )
+    )
+
+    assert seed_args.route_case_file_output == route_args.case_file
+    assert route_args.require_detail is True
+    assert route_args.max_case_single_request_ms == 3000
 
 
 def test_saas_demo_seed_args_fail_closed_for_missing_required_values() -> None:
