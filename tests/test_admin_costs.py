@@ -1126,6 +1126,7 @@ def test_scraping_summary_quality_uses_canonical_reviews(monkeypatch):
     body = res.json()
     assert body["throughput_basis"] == "raw_scrape_log"
     assert body["quality_basis"] == "canonical_reviews"
+    assert body["today"]["saved_calls"] == 0
     assert "duplicate_of_review_id IS NULL" in pool.last_fetch_query
 
 
@@ -1208,6 +1209,7 @@ def test_scraping_summary_exposes_source_tier_operational_state_and_maintenance(
     assert body["maintenance"]["enabled"] is True
     assert body["maintenance"]["run_max_pages"] == 3
     assert "trustradius" in body["maintenance"]["sources"]
+    assert body["today"]["saved_calls"] == 0
     throughput = body["throughput"][0]
     assert throughput["source_tier"] == "high_yield"
     assert throughput["operational_status"] == "active"
