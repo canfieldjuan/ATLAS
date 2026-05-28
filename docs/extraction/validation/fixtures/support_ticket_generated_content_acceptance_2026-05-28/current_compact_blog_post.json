@@ -1,0 +1,118 @@
+{
+  "count": 1,
+  "rows": [
+    {
+      "charts": [],
+      "content": "# Support-Ticket Questions Customers Keep Asking: What Your Uploaded Tickets Reveal\n\n## What do repeat support tickets reveal?\n\nYour uploaded support tickets show two clear clusters of repeated customer questions: email and profile updates (2 tickets), and reporting friction (2 tickets). These patterns emerge from 4 support-ticket rows included in this analysis. When customers ask the same question multiple times, it signals a gap in your customer-facing documentation\u2014an opportunity to move answers out of the support queue and into a self-service FAQ or help center. Support ticket FAQ gaps occur when the same customer question appears across multiple tickets, revealing that your current help documentation does not address that need.\n\nThe 4 uploaded tickets contain 2 direct customer questions that can become FAQ entries. The first cluster centers on account management: customers need to change their login email and update account email addresses. The second cluster focuses on data export: customers want to export campaign attribution data and reporting dashboards, but report friction in doing so. Identifying these clusters is the first step toward building a customer-facing FAQ that addresses the most common support requests.\n\n## Which FAQ gaps should a small team fix first?\n\nPrioritize FAQ work by observed ticket volume in your uploaded support tickets. In your data, the highest-volume clusters are tied: email and profile updates (2 tickets), and reporting friction (2 tickets). Both clusters should be reviewed before lower-volume or one-off questions.\n\n**Email and profile updates** (2 tickets) is the most immediate priority. Customers are asking how to change their login email and update account email addresses. These are foundational account-management tasks that should have clear, discoverable answers. The customer wording is direct: \"Change login email. How do I change my login email?\" and \"Update account email. I need to update the email on my account.\" Your FAQ should mirror this language so customers recognize themselves in the answer.\n\n**Reporting friction** (2 tickets) is equally important. Customers want to export campaign attribution data before renewal and export reporting dashboards for analyst review. Both requests suggest that your product's export functionality is either unclear or hard to find. The customer wording reflects this need: \"How do we export campaign attribution data before renewal?\" and \"We cannot export the reporting dashboard for analysts.\" Before publishing an FAQ answer, your support team should verify whether this export is available in your current product version and what the exact steps are.\n\nBoth clusters have equal weight (2 tickets each), so your team can tackle them in parallel or in order of implementation ease. The email and profile updates cluster may be faster to document if the process is straightforward; the reporting friction cluster may require product clarification first.\n\n## How should old tickets become customer-ready answers?\n\nThe operational path from uploaded CSV to published FAQ is straightforward: cluster, extract customer wording, draft answers, and review.\n\n**Step 1: Cluster the tickets.** Your 4 uploaded support tickets naturally group into 2 clusters: email and profile updates (2 tickets), and reporting friction (2 tickets). Clustering reveals which questions repeat and which are one-offs. Repeat clusters become FAQ priorities; one-off questions stay in the support backlog.\n\n**Step 2: Extract customer wording.** Preserve the exact language customers use when they ask the question. Your uploaded tickets contain these customer phrases:\n\n- \"Change login email. How do I change my login email?\"\n- \"Update account email. I need to update the email on my account.\"\n- \"Export campaign reports. How do we export campaign attribution data before renewal?\"\n- \"Reporting dashboard export. We cannot export the reporting dashboard for analysts.\"\n\nWhen you draft FAQ answers, use this wording in your question headings and opening sentences. Customers will recognize their own language and trust that the answer is relevant to them.\n\n**Step 3: Draft answers from support resolution.** For each clustered question, your support team should write a short answer (2-3 sentences) that summarizes how they resolved the ticket. Your uploaded tickets do not include documented resolutions\u2014only the customer questions. This means each draft answer should be a placeholder: \"Draft answer - support team should add the verified resolution before publishing.\"\n\nBefore publishing, your team should:\n\n- Verify the capability exists in your product (e.g., can users change their login email? Can they export reporting dashboards?)\n- Document the exact steps or menu path\n- Note any permission, plan-level, or browser requirements\n- Test the steps yourself to ensure they work\n- Preserve customer wording in the final answer\n\n**Step 4: Review and publish.** Once the support team has verified and written each answer, route it to a product or documentation owner for final review. Check that the answer is accurate, complete, and uses clear language. Then publish to your help center or FAQ page.\n\n**Tracking after publication.** After you publish these FAQ entries, you can track whether the same questions continue to appear in new support tickets. You can measure this by:\n\n- Tagging new support tickets with the same cluster labels (email and profile updates, reporting friction)\n- Counting how many new tickets arrive in each cluster after FAQ publication\n- Noting whether customers mention they found the FAQ answer before opening a ticket\n\nThis tracking will show whether your FAQ work is addressing the repeated questions and inform your next round of FAQ priorities.\n\n## Next steps for your support team\n\nYour uploaded tickets reveal 2 clear FAQ opportunities. The support team should:\n\n1. **Review the email and profile updates cluster.** Verify that the capability exists to change login email and update account email addresses. Document the exact steps, any verification requirements, and any plan-level restrictions. Draft a FAQ answer using the customer wording: \"How do I change my login email?\" and \"How do I update the email on my account?\"\n\n2. **Review the reporting friction cluster.** Verify whether the capability exists to export campaign attribution data and reporting dashboards. If the feature exists, document the steps and any permission requirements. If the feature is missing or limited, clarify what the support team should communicate to customers. Draft FAQ answers using the customer wording: \"How do we export campaign attribution data?\" and \"How do we export the reporting dashboard?\"\n\n3. **Publish and tag.** Once answers are verified, publish them to your help center or FAQ page. Tag new incoming support tickets with the same cluster labels so you can track whether FAQ publication changes the volume of repeat questions.\n\n4. **Iterate.** After publication, review new support tickets in these clusters. If the same questions continue to appear, the answer may need clarification or the feature may need product changes. Use this feedback to refine your FAQ and inform your next round of support-ticket analysis.",
+      "data_context": {
+        "_known_vendors": [],
+        "category": "support tickets",
+        "customer_wording_examples": [
+          {
+            "pain_category": "email and profile updates",
+            "source_id": "ticket-acme-1",
+            "source_title": "Change login email",
+            "text": "Change login email How do I change my login email?"
+          },
+          {
+            "pain_category": "email and profile updates",
+            "source_id": "ticket-acme-2",
+            "source_title": "Update account email",
+            "text": "Update account email I need to update the email on my account."
+          },
+          {
+            "pain_category": "reporting friction",
+            "source_id": "ticket-northstar-1",
+            "source_title": "Export campaign reports",
+            "text": "Export campaign reports How do we export campaign attribution data before renewal?"
+          },
+          {
+            "pain_category": "reporting friction",
+            "source_id": "ticket-northstar-2",
+            "source_title": "Reporting dashboard export",
+            "text": "Reporting dashboard export We cannot export the reporting dashboard for analysts."
+          }
+        ],
+        "deep_enriched_count": 4,
+        "faq_questions": [
+          "How do I change my login email?",
+          "How do we export campaign attribution data before renewal?"
+        ],
+        "has_dated_window": false,
+        "has_measured_outcomes": false,
+        "included_ticket_row_count": 4,
+        "measured_outcome_count": 0,
+        "measured_outcome_examples": [],
+        "question_like_ticket_count": 2,
+        "review_period": "uploaded tickets",
+        "scope": {
+          "account_id": "acct_support_ticket_blog_small_upload_live_validation_20260526_policy",
+          "user_id": ""
+        },
+        "source": "support_ticket_provider",
+        "source_period": "Uploaded support tickets",
+        "source_row_count": 4,
+        "support_ticket_resolution_evidence_count": 0,
+        "support_ticket_resolution_evidence_present": false,
+        "top_clusters": [
+          {
+            "count": 2,
+            "label": "email and profile updates"
+          },
+          {
+            "count": 2,
+            "label": "reporting friction"
+          }
+        ],
+        "top_ticket_clusters": [
+          {
+            "count": 2,
+            "label": "email and profile updates"
+          },
+          {
+            "count": 2,
+            "label": "reporting friction"
+          }
+        ],
+        "topic": "Support-ticket questions customers keep asking",
+        "total_reviews_analyzed": 4
+      },
+      "description": "Discover what your uploaded support tickets reveal about repeated customer questions and which FAQ gaps your team should prioritize first.",
+      "geo_readiness": {
+        "checks": {
+          "answer_first_sections": true,
+          "citable_section_structure": true,
+          "citation_safety": true,
+          "entity_clarity": true,
+          "evidence_specificity": true,
+          "faq_coverage": true,
+          "freshness_context": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "seo_aeo_readiness": {
+        "checks": {
+          "aeo_structure_detected": true,
+          "faq_ready": true,
+          "secondary_keywords_present": true,
+          "seo_description_ready": true,
+          "seo_title_ready": true,
+          "target_keyword_present": true
+        },
+        "missing": [],
+        "passed": 6,
+        "status": "ready",
+        "total": 6
+      },
+      "tags": [
+        "customer support questions",
+        "FAQ from support tickets",
+        "support ticket analysis"
+      ],
+      "title": "Support-Ticket Questions Customers Keep Asking: What Your Uploaded Tickets Reveal"
+    }
+  ]
+}

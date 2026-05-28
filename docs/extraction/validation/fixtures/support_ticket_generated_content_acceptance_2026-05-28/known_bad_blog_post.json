@@ -1,0 +1,112 @@
+{
+  "count": 1,
+  "rows": [
+    {
+      "charts": [],
+      "content": "# Support-Ticket Questions Customers Keep Asking: A Data-Driven FAQ Roadmap\n\n## What do repeat support tickets reveal?\n\nUploaded support tickets show exactly what customers are asking your team\u2014and where your help center or FAQ is silent. Support ticket FAQ gaps emerge when the same question arrives multiple times without a published answer. In the uploaded tickets analyzed here, 4 support-ticket rows were included for generation, with 2 rows containing direct customer questions. Rather than treating each ticket as a one-off, clustering them by topic reveals the real gaps: **email and profile updates** (2 tickets) and **reporting friction** (2 tickets) emerged as the two dominant clusters. These patterns are the foundation for a data-backed FAQ strategy.\n\nWhen the same question appears twice in your uploaded tickets, it signals a missing answer. The uploaded tickets show that customers are asking about account email changes and data export workflows\u2014questions that should live in a self-service knowledge base, not in your support queue. Each repeat question represents a support ticket that could have been prevented with a clear, discoverable FAQ entry.\n\nThe clustering approach transforms raw ticket data into actionable priorities. Instead of a backlog of 4 individual tickets, you now see 2 distinct customer needs. This clarity lets a small team focus effort where it matters most.\n\n## Which FAQ gaps should a small team fix first?\n\nPrioritize FAQ work by observed ticket volume in your uploaded data. Support ticket FAQ gaps should be ranked by how many times the same question appears. In this uploaded ticket set, the highest-volume clusters are **email and profile updates** (2 tickets) and **reporting friction** (2 tickets). Both clusters are tied at 2 tickets each, making them equally urgent. A small support team should tackle both clusters rather than waiting for additional repeat tickets to justify the effort.\n\nHere's the operational logic: if 2 customers asked about email updates in the uploaded tickets, the pattern will repeat with future customers. Writing one clear FAQ entry now prevents future support tickets on the same topic. The reporting friction cluster\u2014customers asking how to export campaign attribution data and access the reporting dashboard\u2014is equally critical because it blocks customer workflows at renewal time, when churn risk is highest.\n\nStart with these two clusters. If your team is very small (1\u20132 people), tackle email and profile updates first because account access issues are blockers for all customers. Reporting friction can follow in the next sprint. Both clusters deserve immediate attention because they represent core customer workflows.\n\n## How should old tickets become customer-ready answers?\n\nThe path from uploaded CSV to published FAQ is straightforward: **cluster \u2192 preserve customer wording \u2192 draft answer \u2192 review \u2192 publish**.\n\nThe uploaded ticket CSV contains 4 rows that can produce 2 first-pass FAQ entries from observed customer wording. Here's the process:\n\n**1. Extract customer language directly from tickets**\n\nCustomers wrote:\n- \"Change login email. How do I change my login email?\" (ticket-acme-1)\n- \"I need to update the email on my account.\" (ticket-acme-2)\n- \"How do we export campaign attribution data before renewal?\" (ticket-northstar-1)\n- \"We cannot export the reporting dashboard for analysts.\" (ticket-northstar-2)\n\nNotice the phrasing: \"change my login email,\" \"update the email on my account,\" \"export campaign attribution data,\" \"export the reporting dashboard.\" These are the exact words your customers use. Your FAQ should mirror this language so search (both internal and external) matches customer intent. When customers search your help center for \"export campaign data,\" they'll find the answer because you used their words, not internal jargon.\n\n**2. Summarize the support team's resolution**\n\nFor each cluster, your support team has already solved these issues. Extract the resolution steps from your ticket history:\n- Email updates: account settings \u2192 email field \u2192 confirmation link \u2192 done.\n- Reporting exports: reporting dashboard \u2192 select date range \u2192 choose format \u2192 download.\n\nWrite the answer in the same tone and detail level your team used in the ticket replies. Preserve the operational clarity. If your support team wrote \"navigate to account settings,\" use that exact phrase in the FAQ. Consistency between support replies and FAQ entries builds trust and reduces confusion.\n\n**3. Draft the FAQ entry**\n\nCombine customer wording + team resolution into a single, self-contained answer (2\u20134 sentences). Example:\n\n**Q: How do I change my login email?**\n**A:** To change your login email, navigate to your account settings and select the email update option. Verify the new email address through the confirmation link sent to your inbox. Your login credentials will update immediately after verification.\n\n**Q: How do we export campaign attribution data before renewal?**\n**A:** Campaign attribution data can be exported from the reporting dashboard. Select your desired date range, choose the export format (CSV or PDF), and download the file. For bulk exports or custom reports, contact support for assistance with data extraction.\n\nEach answer should be independently understandable. A customer should be able to read the answer without needing context from other FAQ entries or documentation.\n\n**4. Route to review**\n\nBefore publishing, the FAQ entry should be reviewed by:\n- The support team member who handled the original tickets (accuracy check)\n- A product or customer success lead (completeness check)\n- Optionally, a customer (clarity check)\n\nReview should take 15\u201330 minutes per entry. Flag any answers that reference deprecated features or outdated workflows. If your product has changed since the original ticket was submitted, update the answer to reflect current functionality.\n\n**5. Publish and measure**\n\nOnce approved, publish the FAQ entry to your help center, knowledge base, or support portal. Track whether ticket volume for that topic drops after publication. If the same question still arrives from new customers, the answer may need clarification or the FAQ link may not be discoverable in your help center navigation.\n\n## Why clustering support tickets matters\n\nSupport ticket clustering transforms individual complaints into strategic insights. The uploaded tickets show 4 rows, but they represent only 2 distinct customer problems. Without clustering, a small team might spend time writing 4 separate answers. With clustering, they write 2 comprehensive answers that address multiple customer variations of the same underlying need.\n\nThe email and profile updates cluster includes both \"change login email\" and \"update account email\"\u2014slightly different phrasings, but the same customer need. A single FAQ entry with clear steps handles both variations. Similarly, the reporting friction cluster includes both \"export campaign attribution data\" and \"export the reporting dashboard\"\u2014both answered by the same reporting dashboard export workflow.\n\nThis efficiency matters for small teams. Every hour spent on FAQ work is an hour not spent on other support tasks. Clustering ensures that FAQ effort targets the highest-impact gaps.\n\n## Building a sustainable FAQ workflow\n\nFor a small team, the ticket-to-FAQ process should be repeatable and low-friction:\n\n1. **Export support tickets** from your ticketing system (CSV or API export).\n2. **Upload to this analysis tool** to auto-cluster by topic and extract customer wording.\n3. **Draft 2\u20133 FAQ entries** from the highest-volume clusters (1\u20132 hours of work).\n4. **Review with the team** (30 minutes).\n5. **Publish and monitor** for impact.\n\nThe uploaded tickets in this analysis represent a real snapshot: 4 tickets, 2 clusters, 2 FAQ opportunities. Running this analysis on your uploaded tickets ensures your help center stays aligned with actual customer questions.\n\nThe key is consistency. Don't write FAQ entries once and forget them. Use your uploaded ticket data to identify gaps, write answers, publish them, and then repeat the process with your next batch of tickets. Over time, your FAQ will become more comprehensive and your support queue will shrink.\n\n## Measuring FAQ impact\n\nAfter publishing FAQ entries based on your uploaded tickets, track these metrics:\n\n- **Repeat ticket rate**: How many times does the same question arrive after the FAQ entry is published?\n- **Help center traffic**: Do more customers visit the FAQ page after publication?\n- **Support time per ticket**: Does your team spend less time on tickets related to the FAQ topic after publication?\n\nIf the email and profile updates FAQ entry is published, you should see fewer tickets about account email changes in your next batch of uploaded tickets. If the reporting friction FAQ entry is published, you should see fewer questions about data export workflows.\n\nThese metrics validate the FAQ strategy and justify continued investment in this process. A small team with limited resources needs to know that FAQ work is reducing support burden, not just creating documentation for its own sake.\n\n## Why this matters for retention and team efficiency\n\nCustomers who find answers in your FAQ stay longer and churn less. They don't feel abandoned, and your support team spends less time on repetitive questions. The uploaded tickets show that customers are asking about core workflows\u2014email management and data export\u2014that directly impact their ability to use your product. Closing these FAQ gaps is a retention lever.\n\nFor your support team, FAQ entries are force multipliers. Each published answer handles multiple future tickets without additional support effort. The 2 FAQ entries derived from your uploaded tickets will prevent future support interactions on the same topics. That's time your team can spend on complex issues, feature requests, or strategic customer conversations.\n\nStart with the 2 clusters identified in your uploaded tickets. Publish 2 FAQ entries based on the customer wording and support team resolutions documented above. Measure the impact in your next batch of uploaded tickets. Repeat the analysis with new ticket uploads. Over time, your FAQ will become the first place customers look, and your support queue will shrink accordingly.",
+      "data_context": {
+        "_known_vendors": [],
+        "category": "support tickets",
+        "customer_wording_examples": [
+          {
+            "pain_category": "email and profile updates",
+            "source_id": "ticket-acme-1",
+            "source_title": "Change login email",
+            "text": "Change login email How do I change my login email?"
+          },
+          {
+            "pain_category": "email and profile updates",
+            "source_id": "ticket-acme-2",
+            "source_title": "Update account email",
+            "text": "Update account email I need to update the email on my account."
+          },
+          {
+            "pain_category": "reporting friction",
+            "source_id": "ticket-northstar-1",
+            "source_title": "Export campaign reports",
+            "text": "Export campaign reports How do we export campaign attribution data before renewal?"
+          },
+          {
+            "pain_category": "reporting friction",
+            "source_id": "ticket-northstar-2",
+            "source_title": "Reporting dashboard export",
+            "text": "Reporting dashboard export We cannot export the reporting dashboard for analysts."
+          }
+        ],
+        "deep_enriched_count": 4,
+        "faq_questions": [
+          "How do I change my login email?",
+          "How do we export campaign attribution data before renewal?"
+        ],
+        "included_ticket_row_count": 4,
+        "question_like_ticket_count": 2,
+        "review_period": "uploaded tickets",
+        "scope": {
+          "account_id": "acct_support_ticket_live_blog_gate_20260525_cadence2",
+          "user_id": ""
+        },
+        "source": "support_ticket_provider",
+        "source_period": "Uploaded support tickets",
+        "source_row_count": 4,
+        "top_clusters": [
+          {
+            "count": 2,
+            "label": "email and profile updates"
+          },
+          {
+            "count": 2,
+            "label": "reporting friction"
+          }
+        ],
+        "top_ticket_clusters": [
+          {
+            "count": 2,
+            "label": "email and profile updates"
+          },
+          {
+            "count": 2,
+            "label": "reporting friction"
+          }
+        ],
+        "topic": "Support-ticket questions customers keep asking",
+        "total_reviews_analyzed": 4
+      },
+      "description": "Analyze uploaded support tickets to identify high-volume customer questions and prioritize FAQ entries that reduce repeat tickets.",
+      "geo_readiness": {
+        "checks": {
+          "answer_first_sections": true,
+          "citable_section_structure": true,
+          "citation_safety": true,
+          "entity_clarity": true,
+          "evidence_specificity": true,
+          "faq_coverage": true,
+          "freshness_context": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "seo_aeo_readiness": {
+        "checks": {
+          "aeo_structure_detected": true,
+          "faq_ready": true,
+          "secondary_keywords_present": true,
+          "seo_description_ready": true,
+          "seo_title_ready": true,
+          "target_keyword_present": true
+        },
+        "missing": [],
+        "passed": 6,
+        "status": "ready",
+        "total": 6
+      },
+      "tags": [
+        "reduce support tickets with FAQ",
+        "customer support knowledge base",
+        "support ticket clustering"
+      ],
+      "title": "Support-Ticket Questions Customers Keep Asking: A Data-Driven FAQ Roadmap"
+    }
+  ]
+}
