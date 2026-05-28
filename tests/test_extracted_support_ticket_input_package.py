@@ -325,6 +325,24 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
     assert rows[2]["contact_email"] == "founder@example.test"
 
 
+def test_support_ticket_input_package_keeps_customer_message_before_latest_reply() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Ticket ID": "fd-201",
+            "Ticket Subject": "Report export",
+            "Message": "Where do I export my monthly report?",
+            "Latest message": "Agent reply: use the Export button.",
+        },
+    ])
+
+    assert package.inputs["source_material"][0]["text"] == (
+        "Report export Where do I export my monthly report?"
+    )
+    assert package.inputs["faq_questions"] == [
+        "Where do I export my monthly report?"
+    ]
+
+
 def test_support_ticket_clusters_do_not_use_synthetic_ticket_ids() -> None:
     package = build_support_ticket_input_package([
         {"description": "How do I export data?"},

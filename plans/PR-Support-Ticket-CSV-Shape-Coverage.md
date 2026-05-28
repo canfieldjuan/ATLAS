@@ -36,7 +36,9 @@ The support-ticket input package already normalizes keys by stripping
 punctuation/case, so this only extends the existing alias tuples. The new test
 feeds three representative dict rows through `build_support_ticket_input_package`
 and asserts the normalized `source_material`, FAQ questions, dated-window flag,
-and contact emails are preserved.
+and contact emails are preserved. A focused precedence test also keeps
+customer-authored `message` fields ahead of reply-style `latest_message` fields
+when both appear in the same export.
 
 ## Intentional
 
@@ -58,7 +60,7 @@ and contact emails are preserved.
 
 - Focused support-ticket CSV shape pytest - 1 passed.
 - Python compile over the support-ticket input package and test file - passed.
-- Full support-ticket input package/provider pytest - 34 passed.
+- Full support-ticket input package/provider pytest - 35 passed.
 - Whitespace check - passed.
 - Existing deferred references to broader customer CSV/live validation remain
   intentionally because this slice adds deterministic normalization coverage,
