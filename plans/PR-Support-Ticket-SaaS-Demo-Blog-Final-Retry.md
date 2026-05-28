@@ -33,11 +33,10 @@ Slice phase: Functional validation
    SEO/FAQ metadata cannot carry unsupported claims past the gate.
 4. Update the SaaS demo validation note to reject the bad accepted fixture and
    record the latest cluster-correct retry results.
-5. Remove the invalid accepted blog fixture from the validation fixtures.
+5. Leave no accepted blog fixture committed for this validation date.
 
 ### Files touched
 
-- `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_blog_post.json` - delete the invalid accepted blog draft export.
 - `docs/extraction/validation/support_ticket_saas_demo_generated_content_acceptance_2026-05-28.md` - final retry status and verification.
 - `extracted_content_pipeline/blog_generation.py` - support-ticket descriptive prompt forbidden-claim contract.
 - `extracted_content_pipeline/support_ticket_generated_content_eval.py` - support-ticket generated-content evaluator coverage.
@@ -66,7 +65,7 @@ names the same forbidden claim families so generation and validation stay
 aligned.
 
 The validation note keeps the accepted landing page and known-bad blog fixture,
-removes the invalid current blog fixture, and records that the latest
+does not commit a current accepted blog fixture, and records that the latest
 cluster-correct blog retries still failed manual review.
 
 ## Intentional
@@ -116,13 +115,12 @@ cluster-correct blog retries still failed manual review.
 
 | Area | Estimated LOC |
 |---|---:|
-| Fixture deletion | ~264 |
 | Validation note | ~83 |
 | Cluster rollup fix + tests | ~30 |
 | Evaluator and prompt contract | ~235 |
-| Plan doc | ~119 |
-| Total | ~731 |
+| Plan doc | ~136 |
+| Total | ~484 |
 
-Over the 400-LOC soft cap because the invalid accepted fixture deletion is
-~264 LOC by itself, and the same PR needs to record the rejection, fix the
-source rollup, and pin the evaluator false-green that made the fixture unsafe.
+Over the 400-LOC soft cap because the same PR needs to record the rejection,
+fix the source rollup, and pin the evaluator false-green that made the fixture
+unsafe.
