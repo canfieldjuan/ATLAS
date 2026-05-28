@@ -1,7 +1,9 @@
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -2076,6 +2078,135 @@ async def test_execute_generation_route_returns_request_usage_summary():
     assert "metadata ->> 'account_id' = $2" in query
     assert "metadata ->> 'request_id' = $3" in query
     assert args == (1, "acct-run-usage", payload["request_id"])
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_execute_generation_route_usage_summary_isolates_account_against_postgres(
+    monkeypatch,
+):
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    class _FixedUuid:
+        hex = "routeusageisolation0000000000000000"
+
+    root = Path(__file__).resolve().parents[1]
+    request_id = f"content-ops-{_FixedUuid.hex}"
+    account_a = "acct-route-usage-a"
+    account_b = "acct-route-usage-b"
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    monkeypatch.setattr(api_module, "uuid4", lambda: _FixedUuid())
+
+    try:
+        await pool.execute((root / "atlas_brain/storage/migrations/127_llm_usage.sql").read_text())
+        await pool.execute((root / "atlas_brain/storage/migrations/252_llm_usage_cache_breakdown.sql").read_text())
+        await pool.execute((root / "atlas_brain/storage/migrations/253_llm_usage_vendor_and_run_id.sql").read_text())
+        await pool.execute(
+            "DELETE FROM llm_usage WHERE metadata ->> 'request_id' = $1",
+            request_id,
+        )
+        await pool.executemany(
+            """
+            INSERT INTO llm_usage (
+                span_name, operation_type, model_name, model_provider,
+                input_tokens, output_tokens, total_tokens, billable_input_tokens,
+                cached_tokens, cache_write_tokens, cost_usd, duration_ms, status,
+                metadata, run_id
+            )
+            VALUES (
+                $1, 'llm_call', $2, $3,
+                $4, $5, $6, $7,
+                $8, $9, $10, $11, $12,
+                $13::jsonb, $14
+            )
+            """,
+            [
+                (
+                    "content_ops.llm.complete",
+                    "anthropic/claude-haiku-4-5",
+                    "openrouter",
+                    100,
+                    40,
+                    140,
+                    90,
+                    10,
+                    5,
+                    Decimal("0.100000"),
+                    120,
+                    "completed",
+                    json.dumps({
+                        "product": "content_ops",
+                        "account_id": account_a,
+                        "asset_type": "email_campaign",
+                        "request_id": request_id,
+                    }),
+                    "run-route-a",
+                ),
+                (
+                    "content_ops.llm.complete",
+                    "anthropic/claude-haiku-4-5",
+                    "openrouter",
+                    900,
+                    90,
+                    990,
+                    900,
+                    0,
+                    0,
+                    Decimal("9.000000"),
+                    180,
+                    "completed",
+                    json.dumps({
+                        "product": "content_ops",
+                        "account_id": account_b,
+                        "asset_type": "email_campaign",
+                        "request_id": request_id,
+                    }),
+                    "run-route-b",
+                ),
+            ],
+        )
+        router = create_content_ops_control_surface_router(
+            config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+            execution_services_provider=lambda: ContentOpsExecutionServices(
+                campaign=_CampaignService()
+            ),
+            usage_pool_provider=lambda: pool,
+            scope_provider=lambda: {"account_id": account_a},
+        )
+
+        route = _route(router, "/ops/execute", "POST")
+        payload = await route.endpoint(
+            {
+                "outputs": ["email_campaign"],
+                "inputs": {"target_account": "Acme", "offer": "Churn audit"},
+            }
+        )
+
+        assert payload["request_id"] == request_id
+        assert payload["usage_summary"]["filters"]["account_id"] == account_a
+        assert payload["usage_summary"]["filters"]["request_id"] == request_id
+        assert payload["usage_summary"]["summary"]["total_cost_usd"] == 0.1
+        assert payload["usage_summary"]["summary"]["total_calls"] == 1
+        assert payload["usage_summary"]["summary"]["input_tokens"] == 100
+        assert payload["usage_summary"]["by_asset_type"] == [
+            {
+                "asset_type": "email_campaign",
+                "cost_usd": 0.1,
+                "cache_savings_usd": 0.0,
+                "calls": 1,
+                "input_tokens": 100,
+                "output_tokens": 40,
+            }
+        ]
+    finally:
+        await pool.execute(
+            "DELETE FROM llm_usage WHERE metadata ->> 'request_id' = $1",
+            request_id,
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
