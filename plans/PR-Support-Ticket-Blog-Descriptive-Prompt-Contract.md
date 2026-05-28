@@ -75,7 +75,7 @@ repair attempts.
 - Command: python -m pytest tests/test_extracted_blog_generation.py::test_generate_puts_support_ticket_descriptive_contract_in_prompt tests/test_extracted_blog_generation.py::test_generate_recomputes_stale_support_ticket_descriptive_contract tests/test_extracted_blog_generation.py::test_generate_clears_stale_descriptive_contract_for_outcome_backed_context tests/test_extracted_blog_generation.py::test_quality_repair_prompt_keeps_support_ticket_descriptive_contract -q
   - Passed, 4 tests.
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-blog-descriptive-prompt-contract-pr-body.md
-  - Pending.
+  - Passed.
 
 ## Estimated diff size
 
