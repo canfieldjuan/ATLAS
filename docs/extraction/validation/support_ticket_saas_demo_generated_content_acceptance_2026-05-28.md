@@ -16,7 +16,7 @@ used by the current acceptance matrix.
 | Output | Status | Artifact | Notes |
 |---|---|---|---|
 | Landing page | Accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/current_saas_demo_landing_page.json` | Live generation saved a draft, export context matched the provider package, SEO/AEO and GEO readiness were ready, and the support-ticket generated-content evaluator passed. |
-| Blog post | Not accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | The broader SaaS demo blog repeatedly produced unsupported benefit/outcome language. This slice tightened the prompt and evaluator so the final observed bad artifact now fails instead of false-passing. |
+| Blog post | Not accepted | `docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json` | Earlier runs produced unsupported benefit/outcome language. After the descriptive contract and GEO repair guidance landed, the live retry saved and passed support-ticket truthfulness evaluation, but exported GEO readiness still reported `needs_review` for missing `citable_section_structure`. |
 
 The landing path is accepted for this representative CSV shape. The blog path is
 not accepted for the 36-row SaaS demo shape yet.
@@ -52,11 +52,43 @@ The landing page stayed within the current support-ticket evidence contract:
 - mentioned observed ticket clusters and customer wording
 - avoided unsupported outcome, cadence, and resolution-step claims
 
-The blog generator still needs a deeper contract change. Pattern blockers now
-catch the observed bad artifacts, but the broader run shows Haiku keeps trying
-to turn observed support-ticket clusters into promised support outcomes. The
-next slice should make the no-outcome descriptive support-ticket blog mode
-structural, not only prompt-enforced.
+The blog generator no longer fails on the original unsupported outcome language
+for this CSV shape. The remaining blocker is now a validator alignment issue:
+the save-time blog quality gate passed the saved draft, while the exported blog
+readiness checker reported GEO `needs_review` because only one H2 section met
+the stricter citable-section requirement. The next slice should align save-time
+GEO citable-section validation with export readiness before an accepted SaaS
+demo blog fixture is committed.
+
+## Follow-up Retry After GEO Repair Guidance
+
+After `PR-Support-Ticket-Blog-GEO-Clarity-Repair` landed, the live Haiku retry
+used the same 36-row SaaS demo CSV and the same generated-content evaluator.
+
+Result: not accepted yet.
+
+The run did make progress:
+
+- saved blog draft id: `4e0a7748-4247-4e34-b20f-81b5f19e8c01`
+- generated-content evaluation: passed
+- SEO/AEO readiness: ready
+- GEO readiness: `needs_review`
+- missing GEO check: `citable_section_structure`
+
+The exported H2 headings were specific and no vague `## Summary` heading
+remained:
+
+- `What do repeat support tickets reveal?`
+- `Which FAQ gaps should a small team fix first?`
+- `How should old tickets become review-ready FAQ shells?`
+- `What to measure after publishing`
+- `Building a sustainable FAQ process`
+- `Next steps for your team`
+
+Diagnostic replay showed the save-time quality pack passed the same draft with
+only a `methodology_disclaimer_missing_self_selected` warning. The source issue
+is that save-time GEO citable-section validation and export GEO readiness are
+not using equivalent self-contained-section rules.
 
 ## Verification
 
@@ -68,6 +100,10 @@ structural, not only prompt-enforced.
   - Passed.
 - Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post docs/extraction/validation/fixtures/support_ticket_saas_demo_generated_content_acceptance_2026-05-28/known_bad_saas_demo_blog_post.json --pretty
   - Failed as expected on `support_ticket_outcome_claims_grounded`.
+- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_after_geo --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_geo/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_geo/blog-post-result.json --evaluate-generated-content --json
+  - Saved draft `4e0a7748-4247-4e34-b20f-81b5f19e8c01`; generated-content evaluation passed; SEO/AEO ready; GEO `needs_review` on missing `citable_section_structure`.
+- Command: python scripts/evaluate_support_ticket_generated_content.py --output blog_post tmp/support_ticket_saas_demo_blog_acceptance_20260528_after_geo/blog-post-draft.json --pretty
+  - Passed.
 - Command: python -m pytest tests/test_evaluate_support_ticket_generated_content.py -q
   - Passed, 46 tests.
 - Command: bash scripts/validate_extracted_content_pipeline.sh
