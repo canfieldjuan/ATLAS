@@ -117,6 +117,14 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcustomers\s+can\s+find\s+it\s+themselves\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcustomers\s+can\s+find\s+answers\s+themselves\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
         re.IGNORECASE,
     ),
@@ -150,6 +158,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\breduces?\s+support\s+load\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaq\b[^.!?\n]{0,120}\breduc(?:e|es|ing)\s+support\s+load\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -269,6 +281,16 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\breduces?\s+the\s+number\s+of\s+times\b[^.!?\n]{0,120}"
+        r"\b(?:team|support\s+team)\b[^.!?\n]{0,80}\banswers?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduces?\s+how\s+often\b[^.!?\n]{0,120}"
+        r"\b(?:team|support\s+team)\b[^.!?\n]{0,80}\banswers?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\breduce\s+the\s+number\s+of\s+tickets\b",
         re.IGNORECASE,
     ),
@@ -356,6 +378,38 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bsame\s+questions\s+stop\s+appearing\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\ba\s+single\s+faq\s+entry\s+answers\s+it\s+once\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfixing\s+the\s+faq\s+gap\s+addresses\s+the\s+root\s+cause\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaq\s+entries\s+are\s+force\s+multipliers\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfaq\s+entries\b[^.!?\n]{0,120}\bperform\s+better\s+in\s+search\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bif\s+repeat\s+tickets?\b[^.!?\n]{0,160}\bdecline\b"
+        r"[^.!?\n]{0,160}\bfaq\s+entry\b[^.!?\n]{0,120}"
+        r"\b(?:being\s+found|being\s+used|working)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bif\s+a\s+cluster\s+shows\s+declining\s+repeat\s+tickets\b"
+        r"[^.!?\n]{0,160}\bfaq\s+entry\s+is\s+working\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:declining|lower)\s+repeat\s+tickets\b[^.!?\n]{0,120}"
+        r"\bprove\b[^.!?\n]{0,120}\bfaq\s+entry\s+is\s+working\b",
         re.IGNORECASE,
     ),
     re.compile(

@@ -935,6 +935,60 @@ def test_blog_export_fails_saas_demo_false_green_outcome_claims() -> None:
     assert outcome_check["details"]["unsupported_claims"] == claims
 
 
+def test_blog_export_fails_final_saas_demo_false_green_outcome_claims() -> None:
+    claims = [
+        "A single FAQ entry answers it once, and customers can find it themselves.",
+        "Customers can find answers themselves because the FAQ exists.",
+        "Fixing the FAQ gap addresses the root cause of repeated support requests.",
+        "FAQ entries are force multipliers.",
+        (
+            "Each FAQ entry you publish reduces the number of times your team "
+            "must answer that question."
+        ),
+        "FAQ entries reduce how often your support team answers that question.",
+        (
+            "Customers search for answers using their own language, so FAQ "
+            "entries that match customer wording perform better in search and "
+            "feel more natural to readers."
+        ),
+        (
+            "If repeat tickets in a cluster decline, the FAQ entry is being "
+            "found and used."
+        ),
+        (
+            "If a cluster shows declining repeat tickets and high FAQ views, "
+            "that FAQ entry is working."
+        ),
+        "Declining repeat tickets prove an FAQ entry is working.",
+        "Lower repeat tickets prove an FAQ entry is working.",
+        (
+            "This prioritized, measurement-focused approach ensures your FAQ "
+            "work addresses the highest-volume customer questions first and "
+            "that you can track whether the FAQ is reducing support load over "
+            "time."
+        ),
+    ]
+    export = _blog_export(
+        content_override=(
+            "The uploaded 36 support tickets show reporting and dashboard "
+            "clusters. " + " ".join(claims)
+        )
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    outcome_check = next(
+        check for check in result["checks"]
+        if check["name"] == "support_ticket_outcome_claims_grounded"
+    )
+    assert outcome_check["passed"] is False
+    assert outcome_check["details"]["unsupported_claims"] == claims
+
+
 def test_blog_export_fails_procedural_answer_steps_without_resolution_evidence() -> None:
     export = _blog_export(
         content_override=(
