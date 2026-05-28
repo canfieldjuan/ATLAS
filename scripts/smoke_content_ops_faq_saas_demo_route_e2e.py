@@ -216,7 +216,18 @@ def _compact_artifact(path: Path, *, label: str) -> dict[str, Any]:
         "ok": payload.get("ok") is True,
         "path": str(path),
     }
-    for key in ("phase", "faq_id", "corpus_id", "target_id", "status", "source_count", "generated_items"):
+    for key in (
+        "phase",
+        "account_id",
+        "faq_id",
+        "corpus_id",
+        "target_id",
+        "status",
+        "source_count",
+        "generated_items",
+        "deleted_faq_ids",
+        "delete_status",
+    ):
         if key in payload:
             summary[key] = payload[key]
     if isinstance(payload.get("search"), Mapping):
