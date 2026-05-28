@@ -36,6 +36,7 @@ pytest \
   tests/test_smoke_content_ops_faq_saas_demo_route_e2e.py \
   tests/test_check_content_ops_faq_search_route_contract.py \
   tests/test_evaluate_support_ticket_generated_content.py \
+  tests/test_support_ticket_saas_demo_generated_content_fixtures.py \
   tests/test_smoke_content_ops_faq_scale_run.py \
   tests/test_smoke_content_ops_faq_lifecycle.py \
   tests/test_smoke_content_ops_faq_lifecycle_run.py \
