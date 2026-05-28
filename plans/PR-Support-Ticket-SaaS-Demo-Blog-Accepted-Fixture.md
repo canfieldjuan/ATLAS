@@ -2,115 +2,90 @@
 
 ## Why this slice exists
 
-PR-Support-Ticket-SaaS-Demo-Generated-Content-Acceptance accepted the 36-row
-SaaS demo landing-page path but left the blog path unaccepted because Haiku kept
-turning observed support-ticket clusters into unsupported outcome claims.
-PR-Support-Ticket-Blog-Descriptive-Contract then added the structural
-`descriptive_no_outcome` contract that should steer no-outcome/no-resolution
-support-ticket blogs before the evaluator has to catch them.
+The 36-row SaaS demo support-ticket blog path has been blocked by two source
+issues: unsupported outcome phrasing and then `geo_entity_clarity_missing`
+repair guidance that did not address vague H2 headings. The descriptive
+contract and GEO repair guidance have now landed. This slice reruns the real
+Haiku-backed Content Ops blog path and records whether the representative SaaS
+demo CSV can finally produce a saved, evaluator-passing blog draft.
 
-This slice tests that fix against the same 36-row SaaS demo CSV with a live
-Haiku retry. If the generated blog passes the deterministic support-ticket
-generated-content evaluator, this PR commits a minimized accepted blog fixture.
-If it still fails, this PR records the failure and parks only the next source
-gap.
+This is the live proof point deferred by
+`PR-Support-Ticket-Blog-GEO-Clarity-Repair`.
 
 ## Scope (this PR)
 
 Ownership lane: content-ops/support-ticket-provider
 Slice phase: Functional validation
 
-1. Run a live Haiku `blog_post` generation through
-   `scripts/smoke_content_ops_live_generation.py` using
-   `extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv`.
-2. Export the saved draft and smoke result to `tmp/`.
-3. Re-run the deterministic evaluator against the exported draft.
-4. Add the small contract forbidden-claim fix exposed by the first retry.
-5. Add a short validation report documenting the command, evaluator result, and
-   fixture shape.
-6. Park the remaining source blocker if the blog path is still not accepted.
+1. Run one live Haiku blog-post smoke against the 36-row SaaS demo support-ticket
+   CSV with saved draft export and generated-content evaluation enabled.
+2. Do not commit a fixture unless the saved draft passes support-ticket
+   truthfulness evaluation and exported SEO/AEO plus GEO readiness.
+3. Update the SaaS demo generated-content validation report with the exact run
+   result.
+4. If the run still fails or exposes a validator mismatch, do not chase another
+   source fix in this slice; record the blocker and park the next source issue.
 
 ### Files touched
 
-- `plans/PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture.md` - Plan doc for this validation slice.
-- `docs/extraction/validation/support_ticket_saas_demo_blog_acceptance_2026-05-28.md` - Validation report for the post-contract live blog retry.
-- `extracted_content_pipeline/blog_generation.py` - Tighten the descriptive contract's forbidden claims for the unsupported "help customers find answers" phrasing exposed by the first retry.
-- `tests/test_extracted_blog_generation.py` - Focused assertion that the structural contract includes the forbidden customer-answer outcome phrasing.
-- `HARDENING.md` - Park the remaining GEO entity clarity blocker exposed by the second retry.
+- `plans/PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture.md` - Plan doc for the live validation slice.
+- `docs/extraction/validation/support_ticket_saas_demo_generated_content_acceptance_2026-05-28.md` - SaaS demo acceptance status update.
+- `HARDENING.md` - Park the validator mismatch exposed by the live retry.
 
 ## Mechanism
 
-The live command uses the existing smoke harness, real support-ticket provider
-packaging, real DB save/export, and the Haiku model routing env:
+The smoke command uses the existing live harness:
 
-```bash
-python scripts/smoke_content_ops_live_generation.py \
-  --output blog_post \
-  --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528 \
-  --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv \
-  --env-file /home/juan-canfield/Desktop/Atlas/.env \
-  --env-file /home/juan-canfield/Desktop/Atlas/.env.local \
-  --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env \
-  --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528/blog-post-draft.json \
-  --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528/blog-post-result.json \
-  --evaluate-generated-content \
-  --json
-```
+python scripts/smoke_content_ops_live_generation.py --output blog_post
+--support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv
+--evaluate-generated-content --export-saved-draft <tmp export path>
 
-Attempt 1 failed before save on unsupported "help customers find answers"
-outcome language. That phrasing is already blocked by the deterministic
-evaluator, so this PR adds it to the structural descriptive contract's
-`forbidden_claims` and pins it with a focused test. Attempt 2 then failed before
-save on `geo_entity_clarity_missing`, so no accepted fixture is committed.
+The command loads the Atlas env files plus the existing Haiku override env file,
+packages the CSV through the support-ticket input provider, seeds the blog
+blueprint, routes the LLM through the configured provider, saves the draft, and
+runs deterministic generated-content evaluation against the saved export.
+
+Acceptance requires all three signals to be true:
+
+- the draft saves through the real Content Ops execution path;
+- deterministic support-ticket generated-content evaluation passes;
+- exported SEO/AEO and GEO readiness are both `ready`.
 
 ## Intentional
 
-- This is a bounded Haiku acceptance retry, not another prompt-tuning loop.
-- The only generation code change is the small structural contract mismatch
-  exposed by attempt 1.
-- This stays out of FAQ Markdown/article ownership.
-- This does not resolve the cost telemetry schema mismatch; that remains parked.
+- This uses Haiku for validation spend, not Sonnet.
+- This does not alter prompts, detectors, repair guidance, or readiness
+  validators. If live generation exposes a source issue, this slice records it
+  instead of patching another symptom inline.
+- This does not touch FAQ article generation or FAQ report ownership.
 
 ## Deferred
 
-- Future PR: inspect and fix the support-ticket blog
-  `geo_entity_clarity_missing` failure before another live acceptance retry.
-- Future PR: commit an accepted SaaS demo blog fixture after the GEO blocker is
-  fixed and the live retry saves a passing draft.
-- Future PR: add a scripted regression gate after the accepted fixture exists.
-- Future PR: validate the same shape against a sanitized real customer export.
+- Future PR: align save-time blog GEO citable-section validation with export
+  readiness before accepting the SaaS demo blog fixture.
+- Future PR: add a scripted regression gate once the accepted SaaS demo blog
+  fixture exists and the current run proves the fixture shape.
 - Parked hardening:
-  - Support-ticket SaaS demo blog still fails GEO entity clarity after
-    descriptive contract.
+  - Blog save-time GEO gate and export readiness disagree on citable sections.
 
 ## Verification
 
-- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528/blog-post-result.json --evaluate-generated-content --json
-  - Failed before save on unsupported "help customers find answers" outcome language.
-- Command: python -m pytest tests/test_extracted_blog_generation.py tests/test_smoke_content_ops_live_generation.py -q
-  - Passed, 102 tests.
-- Command: bash scripts/validate_extracted_content_pipeline.sh
-  - Passed.
-- Command: python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline
-  - Passed.
-- Command: python scripts/audit_extracted_standalone.py --fail-on-debt
-  - Passed.
-- Command: bash scripts/check_ascii_python.sh
-  - Passed.
-- Command: python scripts/smoke_content_ops_live_generation.py --output blog_post --account-id acct_support_ticket_saas_demo_blog_acceptance_20260528_retry2 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --env-file tmp/support_ticket_live_haiku_eval_20260525/haiku.env --export-saved-draft tmp/support_ticket_saas_demo_blog_acceptance_20260528_retry2/blog-post-draft.json --output-result tmp/support_ticket_saas_demo_blog_acceptance_20260528_retry2/blog-post-result.json --evaluate-generated-content --json
-  - Failed before save on `geo_entity_clarity_missing`.
-- Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/support-ticket-saas-demo-blog-accepted-fixture-pr-body.md
-  - Passed.
+- Live Haiku blog smoke against the 36-row SaaS demo CSV - saved draft
+  `4e0a7748-4247-4e34-b20f-81b5f19e8c01`; generated-content evaluation passed;
+  exported SEO/AEO readiness was ready; exported GEO readiness was
+  `needs_review` because `citable_section_structure` was missing.
+- Direct support-ticket generated-content evaluator CLI against the saved draft
+  export - passed.
+- Diagnostic quality-pack replay against the saved draft - save-time quality
+  passed with only `methodology_disclaimer_missing_self_selected` warning,
+  confirming the mismatch is between save-time and export GEO citable checks.
+- Local PR review with the support-ticket SaaS demo blog fixture PR body - passed.
 
 ## Estimated diff size
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan doc | ~116 |
-| Validation report | ~61 |
-| Contract test/fix | ~5 |
-| HARDENING note | ~9 |
-| **Total** | **~191** |
-
-This stays focused on validation evidence and avoids changing generator code in
-the same slice unless the run proves a small source-level correctness issue.
+| Plan doc | ~90 |
+| Validation report update | ~100 |
+| HARDENING entry | ~9 |
+| **Total** | **~202** |
