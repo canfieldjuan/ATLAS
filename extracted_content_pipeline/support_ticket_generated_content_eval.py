@@ -68,6 +68,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bcould\s+prevent\b[^.!?\n]{0,120}\btickets?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\b(?:prevent|prevents|preventing|reduce|reduces|reducing|cut|cuts|"
         r"cutting|eliminate|eliminates|shrinks?|drops?)\b[^.!?\n]{0,120}"
         r"\b(?:support\s+(?:tickets|interactions|volume)|ticket\s+volume|"
@@ -84,6 +88,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bdriv(?:e|es|ing)\b[^.!?\n]{0,120}\binbound\s+support\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bsupport\s+queue\s+will\s+(?:shrink|drop|fall)\b",
         re.IGNORECASE,
     ),
@@ -97,11 +105,23 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\b(?:reduce|reduces|reducing)\s+support\s+ticket\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:reduce|reduces|reducing)\s+(?:repeat\s+)?ticket\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bcustomers\s+find\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
         re.IGNORECASE,
     ),
     re.compile(
         r"\bfind\s+answers\s+without\s+opening\s+a\s+(?:support\s+)?ticket\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bhelp\s+customers\s+find\s+answers\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -141,6 +161,10 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\breduces?\s+the\s+need\s+for\s+support\s+team\s+intervention\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfrees?\s+up\s+support\s+capacity\b",
         re.IGNORECASE,
     ),
@@ -177,11 +201,29 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bfreeing\s+your\s+team\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bhandle\s+future\s+instances\b[^.!?\n]{0,120}"
+        r"\bmore\s+efficiently\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bcustomers\b[^.!?\n]{0,120}\bresolve\b[^.!?\n]{0,120}\bfaster\b",
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bhelps?\s+customers\s+resolve\b[^.!?\n]{0,120}"
+        r"\bwithout\s+follow-up\s+questions\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\bfuture\s+customers\b[^.!?\n]{0,120}\bfind\s+answers\s+faster\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bfuture\s+customers\b[^.!?\n]{0,120}\bfind\s+the\s+answer\s+faster\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -211,6 +253,28 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bcould\s+have\s+been\s+(?:answered\s+by\s+)?(?:a\s+)?self-service\s+faq\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcould\s+have\s+been\s+prevented\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bcould\s+address\b[^.!?\n]{0,80}"
+        r"\b(?:incoming\s+)?(?:ticket|support)\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduces?\s+the\s+number\s+of\s+tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\breduce\s+the\s+number\s+of\s+tickets\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:team|support\s+team)\b[^.!?\n]{0,80}"
+        r"\b(?:will\s+)?no\s+longer\s+need\s+to\s+answer\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -257,6 +321,16 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
+        r"\bwill\s+likely\s+reduce\b[^.!?\n]{0,120}"
+        r"\b(?:volume|tickets?|questions?|workload|load)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwill\s+reduce\b[^.!?\n]{0,120}"
+        r"\brepeat[-\s]?ticket\s+volume\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
         r"\breduces?\s+the\s+most\s+repeat\s+work\b",
         re.IGNORECASE,
     ),
@@ -278,6 +352,31 @@ _UNSUPPORTED_SUPPORT_OUTCOME_CLAIM_PATTERNS = (
     ),
     re.compile(
         r"\bnew\s+customers\s+will\s+likely\s+ask\s+the\s+same\s+question\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsame\s+questions\s+stop\s+appearing\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bafter\s+\d+\s*[-\u2013\u2014]\s*\d+\s+weeks\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsupport\s+ticket\s+resolution\s+time\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:same\s+)?question\b[^.!?\n]{0,120}"
+        r"\bmuch\s+more\s+frequently\s+across\s+your\s+full\s+support\s+queue\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\basked\s+by\s+every\s+customer\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\btypically\s+asked\s+once\s+per\s+new\s+customer\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -597,11 +696,9 @@ def _check_uploaded_ticket_cadence_truthfulness(
             "details": {"applicable": False},
         })
         return
-    unsupported_hits = _dedupe(
-        [
-            match.group(0).strip()
-            for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(text)
-        ]
+    unsupported_hits = _unsupported_uploaded_ticket_cadences(
+        text,
+        source_context=source_context,
     )
     checks.append({
         "name": "uploaded_ticket_cadence_truthful",
@@ -614,6 +711,70 @@ def _check_uploaded_ticket_cadence_truthfulness(
             "generated text claims a recurring cadence for an undated "
             "uploaded-ticket source: " + ", ".join(unsupported_hits)
         )
+
+
+def _unsupported_uploaded_ticket_cadences(
+    text: str,
+    *,
+    source_context: Mapping[str, Any],
+) -> list[str]:
+    unsupported: list[str] = []
+    for sentence in _sentences(text):
+        hits = [
+            match.group(0).strip()
+            for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(sentence)
+        ]
+        if not hits:
+            continue
+        if _cadence_sentence_source_backed(sentence, source_context=source_context):
+            continue
+        unsupported.extend(hits)
+    return _dedupe(unsupported)
+
+
+def _cadence_sentence_source_backed(
+    sentence: str,
+    *,
+    source_context: Mapping[str, Any],
+) -> bool:
+    normalized_sentence = _normalize_source_phrase(sentence)
+    if not normalized_sentence:
+        return False
+    for phrase in _source_cadence_phrases(source_context):
+        normalized_phrase = _normalize_source_phrase(phrase)
+        if len(normalized_phrase) >= 12 and normalized_phrase in normalized_sentence:
+            return True
+    return False
+
+
+def _source_cadence_phrases(source_context: Mapping[str, Any]) -> list[str]:
+    phrases = [
+        value
+        for value in _source_text_values(source_context)
+        if _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.search(value)
+    ]
+    return _dedupe(phrases)
+
+
+def _source_text_values(value: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if cleaned:
+            values.append(cleaned)
+        return values
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            values.extend(_source_text_values(nested))
+        return values
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        for nested in value:
+            values.extend(_source_text_values(nested))
+    return values
+
+
+def _normalize_source_phrase(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.lower()))
 
 
 def _check_unsupported_percentage_claims(
