@@ -170,6 +170,41 @@ def test_blog_export_fails_unsupported_uploaded_ticket_timeframe() -> None:
     }
 
 
+def test_blog_export_fails_unsupported_uploaded_ticket_future_interval() -> None:
+    future_intervals = (
+        "next 30, 60, and 90 days",
+        "next 30/60/90 days",
+        "next 30,60,and 90 days",
+    )
+
+    for interval in future_intervals:
+        export = _blog_export(
+            content_override=(
+                "The uploaded 2 support tickets show account and reporting clusters. "
+                f"Compare future tickets against observed clusters over the {interval}."
+            )
+        )
+
+        result = evaluator.evaluate_support_ticket_generated_content(
+            export,
+            output="blog_post",
+        )
+
+        assert result["ok"] is False
+        assert any(
+            "undated uploaded-ticket source" in error
+            for error in result["errors"]
+        )
+        timeframe_check = next(
+            check for check in result["checks"]
+            if check["name"] == "uploaded_ticket_timeframe_truthful"
+        )
+        assert timeframe_check["passed"] is False
+        assert timeframe_check["details"] == {
+            "unsupported_timeframes": [interval]
+        }
+
+
 def test_landing_export_fails_unsupported_uploaded_ticket_timeframe() -> None:
     result = evaluator.evaluate_support_ticket_generated_content(
         _landing_export(
@@ -220,6 +255,66 @@ def test_blog_export_allows_timeframe_when_source_period_supplies_it() -> None:
     )
     assert timeframe_check["passed"] is True
     assert timeframe_check["details"] == {"applicable": False}
+
+
+def test_blog_export_allows_source_backed_uploaded_ticket_future_interval() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can we compare renewal tickets over the next 30 days?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded 2 support tickets show account and reporting clusters. "
+            "The customer asked, "
+            "\"Can we compare renewal tickets over the next 30 days?\" "
+            "That question should be reviewed as customer wording, not a "
+            "generated measurement window."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is True
+    timeframe_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_timeframe_truthful"
+    )
+    assert timeframe_check["passed"] is True
+    assert timeframe_check["details"] == {"unsupported_timeframes": []}
+
+
+def test_blog_export_blocks_timeframe_outside_source_quote_in_same_sentence() -> None:
+    context = _blog_context()
+    context["faq_questions"] = [
+        "Can we compare renewal tickets over the next 30 days?"
+    ]
+    export = _blog_export(
+        data_context=context,
+        content_override=(
+            "The uploaded ticket asked, "
+            "\"Can we compare renewal tickets over the next 30 days?\" "
+            "and the team should evaluate the draft over the next 30 days."
+        ),
+    )
+
+    result = evaluator.evaluate_support_ticket_generated_content(
+        export,
+        output="blog_post",
+    )
+
+    assert result["ok"] is False
+    timeframe_check = next(
+        check for check in result["checks"]
+        if check["name"] == "uploaded_ticket_timeframe_truthful"
+    )
+    assert timeframe_check["passed"] is False
+    assert timeframe_check["details"] == {
+        "unsupported_timeframes": ["over the next 30 days"]
+    }
 
 
 def test_blog_export_fails_unsupported_uploaded_ticket_cadence() -> None:

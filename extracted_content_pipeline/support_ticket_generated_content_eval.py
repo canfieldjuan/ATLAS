@@ -39,6 +39,8 @@ _UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE = re.compile(
     r"between\s+(?:january|february|march|april|may|june|july|august|"
     r"september|october|november|december)\s+\d{4}\s+and|"
     r"(?:over|in|during)\s+the\s+(?:last|past)\s+\d+\s+days|"
+    r"(?:over|in|during)\s+the\s+next\s+\d+\s+days|"
+    r"next\s+\d+(?:(?:\s*,\s*|/)\d+)*(?:\s*,?\s*and\s*\d+)?\s+days|"
     r"(?:last|past)\s+\d+\s+days|"
     r"last\s+90\s+days"
     r")\b",
@@ -830,11 +832,9 @@ def _check_uploaded_ticket_timeframe_truthfulness(
             "details": {"applicable": False},
         })
         return
-    unsupported_hits = _dedupe(
-        [
-            match.group(0).strip()
-            for match in _UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE.finditer(text)
-        ]
+    unsupported_hits = _unsupported_uploaded_ticket_timeframes(
+        text,
+        source_context=source_context,
     )
     passed = not unsupported_hits
     checks.append({
@@ -848,6 +848,25 @@ def _check_uploaded_ticket_timeframe_truthfulness(
             "generated text claims a calendar or rolling time window for an "
             "undated uploaded-ticket source: " + ", ".join(unsupported_hits)
         )
+
+
+def _unsupported_uploaded_ticket_timeframes(
+    text: str,
+    *,
+    source_context: Mapping[str, Any],
+) -> list[str]:
+    unsupported: list[str] = []
+    for sentence in _sentences(text):
+        source_backed_spans = _source_backed_pattern_spans(
+            sentence,
+            source_context=source_context,
+            pattern=_UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE,
+        )
+        for match in _UNSUPPORTED_UPLOADED_TICKET_TIMEFRAME_RE.finditer(sentence):
+            if _span_within(match.span(), source_backed_spans):
+                continue
+            unsupported.append(match.group(0).strip())
+    return _dedupe(unsupported)
 
 
 def _check_uploaded_ticket_cadence_truthfulness(
@@ -889,9 +908,10 @@ def _unsupported_uploaded_ticket_cadences(
 ) -> list[str]:
     unsupported: list[str] = []
     for sentence in _sentences(text):
-        source_backed_spans = _source_backed_cadence_spans(
+        source_backed_spans = _source_backed_pattern_spans(
             sentence,
             source_context=source_context,
+            pattern=_UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE,
         )
         for match in _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.finditer(sentence):
             if _span_within(match.span(), source_backed_spans):
@@ -900,14 +920,15 @@ def _unsupported_uploaded_ticket_cadences(
     return _dedupe(unsupported)
 
 
-def _source_backed_cadence_spans(
+def _source_backed_pattern_spans(
     sentence: str,
     *,
     source_context: Mapping[str, Any],
+    pattern: re.Pattern[str],
 ) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     lowered_sentence = sentence.lower()
-    for phrase in _source_cadence_phrases(source_context):
+    for phrase in _source_pattern_phrases(source_context, pattern=pattern):
         cleaned_phrase = phrase.strip()
         normalized_phrase = _normalize_source_phrase(phrase)
         if len(normalized_phrase) < 12:
@@ -925,11 +946,15 @@ def _span_within(span: tuple[int, int], ranges: Sequence[tuple[int, int]]) -> bo
     return any(range_start <= start and end <= range_end for range_start, range_end in ranges)
 
 
-def _source_cadence_phrases(source_context: Mapping[str, Any]) -> list[str]:
+def _source_pattern_phrases(
+    source_context: Mapping[str, Any],
+    *,
+    pattern: re.Pattern[str],
+) -> list[str]:
     phrases = [
         value
         for value in _source_text_values(source_context)
-        if _UNSUPPORTED_UPLOADED_TICKET_CADENCE_RE.search(value)
+        if pattern.search(value)
     ]
     return _dedupe(phrases)
 

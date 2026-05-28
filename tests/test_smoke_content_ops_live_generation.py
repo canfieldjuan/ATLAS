@@ -1192,6 +1192,10 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "Track new tickets by the same observed cluster labels after publishing.",
         "Review FAQ page traffic and customer feedback as signals to inspect.",
         "Compare future tickets against the observed clusters without claiming causality.",
+        (
+            "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
+            "checkpoints unless the uploaded tickets include a dated source window."
+        ),
     ]
     assert "report_date" not in payload["data_context"]
     assert payload["data_context"]["included_ticket_row_count"] == 2

@@ -92,7 +92,7 @@ def test_blog_generation_prompt_trims_small_support_ticket_uploads() -> None:
         prompt = path.read_text(encoding="utf-8")
         assert "data_context.source_row_count" in prompt
         assert "data_context.included_ticket_row_count" in prompt
-        assert "25 or fewer" in prompt
+        assert "50 or fewer" in prompt
         assert "short FAQ review brief instead of a full article" in prompt
         assert "700-1100 words" in prompt
         assert "3-4 H2 sections" in prompt

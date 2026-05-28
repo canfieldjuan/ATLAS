@@ -32,6 +32,24 @@ register under `docs/technical-debt/`.
 
 ## 2026-05-28
 
+### FAQ hosted route proof preflight accepts local API URLs
+- File/location: `scripts/smoke_content_ops_faq_saas_demo_route_e2e.py` preflight and `docs/extraction/validation/content_ops_faq_saas_demo_route_case_runbook.md`
+- Description: The hosted FAQ route proof preflight passed with `ATLAS_API_BASE_URL` set to a local HTTP host with a port, then the route phase failed all requests with connection refused.
+- Why it matters: Operators can think the deployed-host proof is ready while the configured URL only points to a stopped local server.
+- Effort: S
+- Category: correctness
+- Owner/session: content-ops/faq-search
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof
+
+### FAQ route concurrency result top-level query can disagree with case-file query
+- File/location: `scripts/smoke_content_ops_faq_search_route_concurrency.py` result payload summary
+- Description: A case-file run used the SaaS demo query, but the route result's top-level `query` field still reflected the default/env query.
+- Why it matters: The per-case summaries are correct, but the compact top-level artifact can mislead readers skimming a failed run.
+- Effort: S
+- Category: polish
+- Owner/session: content-ops/faq-search
+- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof
+
 ### LLM usage storage schema mismatch hides per-run cost telemetry
 - File/location: `atlas_brain/observability` LLM usage storage path, local `llm_usage` table schema.
 - Description: Live support-ticket blog generation logged LLM usage storage failures, including `column "account_id" of relation "llm_usage" does not exist` and `pool is closing`.
