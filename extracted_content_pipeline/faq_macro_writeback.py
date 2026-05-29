@@ -172,15 +172,15 @@ def build_macro_writeback_preview(
 
 
 def _macro_body(item: Mapping[str, Any]) -> str:
-    for key in ("resolution_text", "answer"):
-        value = _clean_text(item.get(key))
-        if value:
-            return value
+    resolution_text = _clean_text(item.get("resolution_text"))
+    if resolution_text:
+        return resolution_text
 
     steps = _string_tuple(item.get("steps"))
-    if not steps:
-        return ""
-    return "\n".join(f"{index}. {step}" for index, step in enumerate(steps, start=1))
+    if steps:
+        return "\n".join(f"{index}. {step}" for index, step in enumerate(steps, start=1))
+
+    return _clean_text(item.get("answer"))
 
 
 def _item_id(

@@ -75,7 +75,7 @@ provider port but returns `dry_run` results only.
 ## Verification
 
 - `python -m py_compile extracted_content_pipeline/faq_macro_writeback.py tests/test_extracted_ticket_faq_macro_writeback.py` -- passed.
-- `python -m pytest tests/test_extracted_ticket_faq_macro_writeback.py -q` -- 5 passed.
+- `python -m pytest tests/test_extracted_ticket_faq_macro_writeback.py -q` -- 6 passed.
 - `python scripts/audit_extracted_pipeline_ci_enrollment.py` -- passed, 127 matching tests enrolled.
 - `bash scripts/validate_extracted_content_pipeline.sh` -- passed.
 - `bash scripts/check_ascii_python.sh` -- passed.
@@ -92,6 +92,6 @@ provider port but returns `dry_run` results only.
 |---|---:|
 | Plan | ~97 |
 | Macro writeback module | ~230 |
-| Tests | ~180 |
+| Tests | ~212 |
 | Runner enrollment | ~1 |
-| Total | ~508 |
+| Total | ~540 |

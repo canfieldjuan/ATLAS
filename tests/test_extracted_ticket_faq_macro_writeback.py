@@ -7,6 +7,7 @@ from extracted_content_pipeline.faq_macro_writeback import (
     DryRunMacroPublishProvider,
     build_macro_writeback_preview,
 )
+from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 
 
@@ -116,6 +117,7 @@ def test_macro_writeback_preview_falls_back_to_numbered_steps() -> None:
             items=(
                 {
                     "question": "How do I reset my password?",
+                    "answer": "Customers mention: reset access. Evidence comes from 1 ticket source(s).",
                     "steps": ("Open Settings.", "Choose Reset password."),
                     "answer_evidence_status": "resolution_evidence",
                 },
@@ -127,6 +129,36 @@ def test_macro_writeback_preview_falls_back_to_numbered_steps() -> None:
         "1. Open Settings.\n"
         "2. Choose Reset password."
     )
+
+
+def test_macro_writeback_preview_uses_real_faq_generator_resolution_steps() -> None:
+    generated = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Double charge",
+            "source_id": "ticket-1",
+            "evidence": [{
+                "text": "Why was I charged twice this month?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Billing, review the invoice history, and compare "
+                    "pending authorizations with settled charges."
+                ),
+            }],
+        }]
+    )
+    preview = build_macro_writeback_preview([
+        _draft(items=tuple(dict(item) for item in generated.items))
+    ])
+
+    macro = preview.macros[0]
+    assert "Customers mention:" in generated.items[0]["answer"]
+    assert "Customers mention:" not in macro.body
+    assert macro.body.startswith(
+        "1. Use the uploaded resolution evidence: Open Billing, review the invoice history"
+    )
+    assert "pending authorizations with settled charges" in macro.body
 
 
 def test_macro_writeback_preview_reports_missing_customer_facing_fields() -> None:
