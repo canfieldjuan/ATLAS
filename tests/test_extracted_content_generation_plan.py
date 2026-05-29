@@ -552,6 +552,33 @@ def test_plan_maps_faq_deflection_report_to_report_service():
     }
 
 
+def test_plan_threads_custom_faq_intent_rules_to_deflection_report():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 4,
+            "inputs": {
+                "source_material": [
+                    {
+                        "source_type": "ticket",
+                        "text": "The warehouse sync is delayed.",
+                    }
+                ],
+                "faq_intent_rules": [
+                    "data freshness=warehouse sync,connector lag"
+                ],
+            },
+        }
+    )
+
+    rules = plan["steps"][0]["config"]["intent_rules"]
+    assert rules[0] == {
+        "topic": "data freshness",
+        "keywords": ["warehouse sync", "connector lag"],
+    }
+    assert any(rule["topic"] == "integration setup" for rule in rules)
+
+
 def test_plan_rejects_faq_as_of_date_without_window_days():
     with pytest.raises(ValueError, match="faq_as_of_date requires faq_window_days"):
         build_generation_plan_from_mapping(

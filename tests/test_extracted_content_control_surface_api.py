@@ -348,6 +348,17 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert input_contracts["secondary_keywords"]["type"] == "string_list"
     assert input_contracts["cta_url"]["asset"] == "landing_page"
     assert input_contracts["cta_url"]["placeholder"] == "/systems/ai-content-ops/intake"
+    assert input_contracts["faq_intent_rules"] == {
+        "key": "faq_intent_rules",
+        "label": "Intent rules",
+        "type": "string_list",
+        "placeholder": (
+            "data freshness=warehouse sync,connector lag\n"
+            "access setup=invite link,new user"
+        ),
+        "asset": "faq_markdown",
+        "group": "intent_mapping",
+    }
     assert input_contracts["faq_documentation_terms"] == {
         "key": "faq_documentation_terms",
         "label": "Documentation terms",

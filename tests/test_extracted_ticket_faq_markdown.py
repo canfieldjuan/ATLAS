@@ -18,6 +18,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
     build_ticket_faq_markdown,
+    normalize_intent_rules,
     weighted_source_volume_by_group,
 )
 
@@ -1171,6 +1172,38 @@ def test_build_ticket_faq_markdown_accepts_host_intent_rules() -> None:
 
     assert [item["topic"] for item in result.items] == ["data freshness"]
     assert result.items[0]["evidence_count"] == 2
+
+
+def test_normalize_intent_rules_accepts_line_and_object_shapes() -> None:
+    assert normalize_intent_rules(
+        [
+            "data freshness=warehouse sync,connector lag",
+            {"topic": "access setup", "keywords": ["invite link", "new user"]},
+        ],
+        label="faq_intent_rules",
+    ) == (
+        ("data freshness", ("warehouse sync", "connector lag")),
+        ("access setup", ("invite link", "new user")),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rules", "message"),
+    [
+        ("bad", "faq_intent_rules must be an array"),
+        (["bad"], "faq_intent_rules[1] must use topic=keyword,keyword"),
+        ([{"topic": "data freshness", "keywords": []}], "faq_intent_rules[1]"),
+        ([{"topic": "data freshness", "keywords": "sync"}], "faq_intent_rules[1]"),
+        ([[None, ["sync"]]], "faq_intent_rules[1]"),
+    ],
+)
+def test_normalize_intent_rules_rejects_invalid_shapes(
+    rules: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError) as exc:
+        normalize_intent_rules(rules, label="faq_intent_rules")  # type: ignore[arg-type]
+    assert message in str(exc.value)
 
 
 def test_build_ticket_faq_markdown_keeps_total_volume_when_display_is_capped() -> None:

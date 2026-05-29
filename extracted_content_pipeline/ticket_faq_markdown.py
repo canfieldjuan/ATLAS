@@ -327,7 +327,7 @@ class TicketFAQMarkdownService:
             else self.config.source_types
         )
         resolved_intent_rules = (
-            tuple((topic, tuple(keywords)) for topic, keywords in intent_rules)
+            normalize_intent_rules(intent_rules)
             if intent_rules is not None
             else self.config.intent_rules
         )
@@ -861,6 +861,52 @@ def normalize_vocabulary_gap_rules(
 
 def _custom_vocabulary_gap_rules(custom_rules: Sequence[Sequence[str]]) -> tuple[tuple[str, ...], ...]:
     return normalize_vocabulary_gap_rules(custom_rules)
+
+
+def normalize_intent_rules(
+    custom_rules: Sequence[Any],
+    *,
+    label: str = "intent_rules",
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Normalize caller-supplied FAQ intent mapping rules."""
+
+    if not isinstance(custom_rules, Sequence) or isinstance(
+        custom_rules,
+        (str, bytes, bytearray),
+    ):
+        raise ValueError(f"{label} must be an array of intent rules")
+
+    rules: list[tuple[str, tuple[str, ...]]] = []
+    for index, raw_rule in enumerate(custom_rules, start=1):
+        topic: Any
+        keywords: Any
+        if isinstance(raw_rule, str):
+            topic, separator, raw_keywords = raw_rule.partition("=")
+            if not separator:
+                raise ValueError(f"{label}[{index}] must use topic=keyword,keyword")
+            keywords = raw_keywords.split(",")
+        elif isinstance(raw_rule, Mapping):
+            topic = raw_rule.get("topic")
+            keywords = raw_rule.get("keywords")
+        elif isinstance(raw_rule, Sequence) and not isinstance(
+            raw_rule,
+            (bytes, bytearray),
+        ):
+            values = tuple(raw_rule)
+            if len(values) != 2:
+                raise ValueError(f"{label}[{index}] must include topic and keywords")
+            topic, keywords = values
+        else:
+            raise ValueError(f"{label}[{index}] must be an intent rule")
+
+        cleaned_topic = _clean(topic)
+        cleaned_keywords = _clean_terms(_list(keywords))
+        if not cleaned_topic or not cleaned_keywords:
+            raise ValueError(
+                f"{label}[{index}] must include topic and at least one keyword"
+            )
+        rules.append((cleaned_topic, cleaned_keywords))
+    return tuple(rules)
 
 
 def _zero_result_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -1659,5 +1705,6 @@ __all__ = [
     "TicketFAQMarkdownResult",
     "TicketFAQMarkdownService",
     "build_ticket_faq_markdown",
+    "normalize_intent_rules",
     "normalize_vocabulary_gap_rules",
 ]

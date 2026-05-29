@@ -34,7 +34,9 @@ from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
 from .ticket_faq_markdown import (
+    DEFAULT_INTENT_RULES,
     TicketFAQMarkdownConfig,
+    normalize_intent_rules,
     normalize_vocabulary_gap_rules,
 )
 
@@ -211,6 +213,7 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
     defaults = TicketFAQMarkdownConfig()
     window_days = _positive_int_input(request.inputs, "faq_window_days")
     as_of_date = _text_input(request.inputs, "faq_as_of_date")
+    custom_intent_rules = _intent_rules_input(request.inputs, "faq_intent_rules")
     if as_of_date is not None and window_days is None:
         raise ValueError("faq_as_of_date requires faq_window_days")
     if as_of_date is not None:
@@ -235,6 +238,11 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
         as_of_date=as_of_date,
         support_contact=_text_input(request.inputs, "faq_support_contact")
         or defaults.support_contact,
+        intent_rules=(
+            (*custom_intent_rules, *DEFAULT_INTENT_RULES)
+            if custom_intent_rules
+            else defaults.intent_rules
+        ),
         documentation_terms=(
             _text_sequence_input(request.inputs, "faq_documentation_terms")
             or defaults.documentation_terms
@@ -287,6 +295,16 @@ def _nested_text_sequence_input(
     if raw is None:
         return None
     return normalize_vocabulary_gap_rules(raw, label=key) or None
+
+
+def _intent_rules_input(
+    inputs: Mapping[str, Any],
+    key: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...] | None:
+    raw = inputs.get(key)
+    if raw is None:
+        return None
+    return normalize_intent_rules(raw, label=key) or None
 
 
 def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanStep:
@@ -407,6 +425,11 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             step_config["as_of_date"] = config.as_of_date
         if config.support_contact:
             step_config["support_contact"] = config.support_contact
+        if config.intent_rules != DEFAULT_INTENT_RULES:
+            step_config["intent_rules"] = [
+                {"topic": topic, "keywords": list(keywords)}
+                for topic, keywords in config.intent_rules
+            ]
         if config.documentation_terms:
             step_config["documentation_terms"] = list(config.documentation_terms)
         if config.vocabulary_gap_rules:

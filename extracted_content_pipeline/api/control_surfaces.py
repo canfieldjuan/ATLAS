@@ -71,7 +71,7 @@ from ..reasoning_policy import (
     resolve_reasoning_policy,
 )
 from ..reasoning_signals import reasoning_validation_blocked_reason
-from ..ticket_faq_input_contract import ticket_faq_vocabulary_gap_input_contracts
+from ..ticket_faq_input_contract import ticket_faq_input_contracts
 
 ExecutionServicesProvider = Callable[
     [],
@@ -201,7 +201,7 @@ def _build_static_catalog_payload() -> Mapping[str, Any]:
         "input_contracts": {
             LANDING_PAGE_QUALITY_REPAIR_INPUT: landing_page_quality_repair_input_contract(),
             **landing_page_seo_geo_aeo_input_contracts(),
-            **ticket_faq_vocabulary_gap_input_contracts(),
+            **ticket_faq_input_contracts(),
         },
     }
 

@@ -30,7 +30,10 @@ from .support_ticket_context_contract import (
     is_support_ticket_context,
     is_support_ticket_topic_type,
 )
-from .ticket_faq_markdown import normalize_vocabulary_gap_rules
+from .ticket_faq_markdown import (
+    normalize_intent_rules,
+    normalize_vocabulary_gap_rules,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -629,6 +632,7 @@ async def _dispatch_faq_markdown(
         window_days=_step_config_int(step.config, "window_days"),
         as_of_date=_step_config_text(step.config, "as_of_date"),
         support_contact=_step_config_text(step.config, "support_contact"),
+        intent_rules=_step_config_intent_rules(step.config, "intent_rules"),
         documentation_terms=_step_config_sequence(step.config, "documentation_terms"),
         vocabulary_gap_rules=_step_config_nested_sequence(
             step.config,
@@ -659,6 +663,7 @@ async def _dispatch_faq_deflection_report(
         window_days=_step_config_int(step.config, "window_days"),
         as_of_date=_step_config_text(step.config, "as_of_date"),
         support_contact=_step_config_text(step.config, "support_contact"),
+        intent_rules=_step_config_intent_rules(step.config, "intent_rules"),
         documentation_terms=_step_config_sequence(step.config, "documentation_terms"),
         vocabulary_gap_rules=_step_config_nested_sequence(
             step.config,
@@ -799,6 +804,18 @@ def _step_config_nested_sequence(
     if raw is None:
         return None
     return normalize_vocabulary_gap_rules(raw, label=key) or None
+
+
+def _step_config_intent_rules(
+    config: Mapping[str, Any],
+    key: str,
+) -> tuple[tuple[str, tuple[str, ...]], ...] | None:
+    if not isinstance(config, Mapping):
+        return None
+    raw = config.get(key)
+    if raw is None:
+        return None
+    return normalize_intent_rules(raw, label=key) or None
 
 
 def _filters_from_inputs(inputs: Mapping[str, Any]) -> Mapping[str, Any] | None:
