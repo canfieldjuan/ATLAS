@@ -83,6 +83,18 @@ BLOCKED_CONSUMER_FINANCE_TERMS = {
 }
 
 
+def _clear_atlas_db_env(monkeypatch) -> None:
+    for name in (
+        "ATLAS_DB_HOST",
+        "ATLAS_DB_PORT",
+        "ATLAS_DB_DATABASE",
+        "ATLAS_DB_USER",
+        "ATLAS_DB_PASSWORD",
+        "ATLAS_DB_SOCKET_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _rows() -> list[dict[str, str]]:
     with DEMO_PATH.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
@@ -327,6 +339,37 @@ def test_saas_demo_seed_args_fail_closed_for_missing_required_values() -> None:
         "--query is required",
         "--limit must be positive",
     ]
+
+
+def test_saas_demo_seed_default_database_url_prefers_url_env(monkeypatch) -> None:
+    monkeypatch.setenv("EXTRACTED_DATABASE_URL", "postgresql://env/atlas")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://database-url/atlas")
+
+    assert seeder._default_database_url() == "postgresql://env/atlas"
+
+
+def test_saas_demo_seed_default_database_url_falls_back_to_atlas_db_settings(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ATLAS_DB_HOST", "settings-host")
+    monkeypatch.setenv("ATLAS_DB_PORT", "6543")
+    monkeypatch.setenv("ATLAS_DB_DATABASE", "atlas_settings")
+    monkeypatch.setenv("ATLAS_DB_USER", "atlas_user")
+    monkeypatch.setenv("ATLAS_DB_PASSWORD", "atlas_pass")
+    monkeypatch.delenv("ATLAS_DB_SOCKET_PATH", raising=False)
+
+    assert (
+        seeder._default_database_url()
+        == "postgresql://atlas_user:atlas_pass@settings-host:6543/atlas_settings"
+    )
+
+
+def test_saas_demo_seed_default_database_url_ignores_implicit_atlas_db_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
+
+    assert seeder._default_database_url() == ""
 
 
 def test_saas_demo_cleanup_args_skip_seed_only_required_values() -> None:

@@ -10,7 +10,10 @@ coverage, use `content_ops_faq_seeded_route_e2e_runbook.md`.
 ## Required Inputs
 
 - `EXTRACTED_DATABASE_URL` or `DATABASE_URL`: Postgres database used by the
-  deployed Atlas API.
+  deployed Atlas API. If neither is set, the scripts fall back to
+  `atlas_brain.storage.config.db_settings.dsn` only when an explicit
+  `ATLAS_DB_HOST` or `ATLAS_DB_SOCKET_PATH` target setting is present. Atlas'
+  localhost defaults do not satisfy hosted proof preflight by themselves.
 - `ATLAS_API_BASE_URL`: deployed Atlas API host, for example
   `https://atlas-api.example.com`. Hosted proof mode rejects local hosts such
   as `localhost`, `127.*`, `0.0.0.0`, and `::1` because those targets cannot
