@@ -1,7 +1,7 @@
 # AI Content Ops Deferred Backlog
 
 Created: 2026-05-11
-Last updated: 2026-05-23
+Last updated: 2026-05-29
 
 ## Purpose
 
@@ -263,3 +263,25 @@ intent classification, add mortgage-servicing policy, and keep mortgage
 classification anchored to mortgage-specific source language. This is still
 not a CFPB-specific branch; CFPB is the real public fixture that exposed the
 generic source-context gap.
+
+**FAQ recurring-product direction:** The defensible subscription version is
+not "rerun the same FAQ report each month." Treat ongoing FAQ work as a future
+operations workflow: ingest new tickets, search logs, chat transcripts, and
+sales objections; compare new intent/vocabulary signals against the existing
+FAQ inventory; and output only the deltas that need review:
+
+- new FAQ opportunity detected,
+- existing FAQ needs an update,
+- stale FAQ can be retired,
+- customer vocabulary shifted enough to require heading/synonym updates.
+
+The review artifact should stay evidence-backed: frequency, failure-risk
+signals, source IDs, customer wording, changed term mappings, and draft answer
+updates when resolution evidence exists. This is the shape that can support a
+monthly service because the value is monitoring and maintenance, not repeated
+generation.
+
+Do not start this implementation until it fits naturally after the one-time FAQ
+report/search path, hosted SaaS FAQ proof, and existing FAQ inventory/detail
+surfaces are stable enough to support recurring comparison. Until then, keep it
+as product direction, not active scope.
