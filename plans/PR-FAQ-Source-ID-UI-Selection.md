@@ -22,7 +22,9 @@ Slice phase: Vertical slice
    selected.
 3. Write selected IDs to `inputs.source_faq_ids` and remove the key when the
    selection is empty.
-4. Add a focused source-level UI test so the control and request key do not
+4. Keep selected IDs visible and removable even if they are filtered out of the
+   recent draft response.
+5. Add a focused source-level UI test so the control and request key do not
    drift.
 
 ### Files touched
@@ -40,6 +42,10 @@ selected, the page renders those drafts as checkboxes. Toggling a checkbox calls
 the same JSON-update pattern used by the existing landing-page and FAQ controls:
 parse the current inputs JSON, update one key, serialize it back, and mark the
 preview/plan stale.
+
+Selected IDs that are not present in the current recent draft response are
+rendered as checked warning rows. That keeps stale or filtered IDs visible and
+lets the operator remove them without hand-editing raw JSON.
 
 The request key is `source_faq_ids`, matching #1116. The selector is additive:
 it does not change raw JSON editing, generation services, or review/export
@@ -67,7 +73,7 @@ screens.
 Ran locally:
 
 - Command: node --test atlas-intel-ui/scripts/content-ops-faq-source-selection.test.mjs
-  - 3 passed
+  - 4 passed
 - Command: npm --prefix atlas-intel-ui run build
   - passed
 - Command: npm --prefix atlas-intel-ui run lint
@@ -79,8 +85,8 @@ Ran locally:
 
 | Area | Estimated LOC |
 |---|---:|
-| New Run selector | ~220 |
-| UI source test | ~30 |
+| New Run selector | ~260 |
+| UI source test | ~40 |
 | package script | ~5 |
 | Plan doc | ~85 |
-| **Total** | **~340** |
+| **Total** | **~390** |

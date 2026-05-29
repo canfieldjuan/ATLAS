@@ -27,3 +27,10 @@ test('saved FAQ source selector uses existing generated-asset drafts API', () =>
   assert.ok(newRunSource.includes('Saved FAQ report sources'))
   assert.ok(newRunSource.includes('No draft FAQ reports found yet.'))
 })
+
+test('saved FAQ source selector keeps filtered selected IDs removable', () => {
+  assert.ok(newRunSource.includes('function missingSelectedFaqSourceIds'))
+  assert.ok(newRunSource.includes('Selected FAQ report not in recent list'))
+  assert.ok(newRunSource.includes('Still included in'))
+  assert.ok(newRunSource.includes('Uncheck to remove.'))
+})

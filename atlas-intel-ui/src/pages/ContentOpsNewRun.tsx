@@ -1638,6 +1638,8 @@ function FaqSourceSelector({
   onRefresh: () => void
   onToggle: (draftId: string, checked: boolean) => void
 }) {
+  const missingSelectedIds = missingSelectedFaqSourceIds(drafts, selectedIds)
+
   return (
     <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1685,7 +1687,37 @@ function FaqSourceSelector({
         </div>
       )}
 
-      {!disabled && !loading && !error && drafts.length === 0 && (
+      {!disabled && !loading && missingSelectedIds.length > 0 && (
+        <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {missingSelectedIds.map((id) => (
+            <label
+              key={id}
+              className="flex cursor-pointer items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 transition hover:border-amber-400/70"
+            >
+              <input
+                type="checkbox"
+                checked
+                onChange={(event) => onToggle(id, event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-amber-500"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-amber-100">
+                  Selected FAQ report not in recent list
+                </span>
+                <span className="mt-0.5 block break-all font-mono text-xs text-amber-200/80">
+                  {id}
+                </span>
+                <span className="mt-1 block text-xs text-amber-100/75">
+                  Still included in <span className="font-mono">{SOURCE_FAQ_IDS_INPUT}</span>.
+                  Uncheck to remove.
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {!disabled && !loading && !error && drafts.length === 0 && missingSelectedIds.length === 0 && (
         <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
           No draft FAQ reports found yet.
         </div>
@@ -2442,6 +2474,18 @@ function scalarDraftValue(value: unknown): string {
 
 function generatedAssetId(row: GeneratedAssetDraft): string {
   return typeof row.id === 'string' ? row.id.trim() : ''
+}
+
+function missingSelectedFaqSourceIds(
+  drafts: GeneratedAssetDraft[],
+  selectedIds: string[],
+): string[] {
+  const visibleIds = new Set<string>()
+  for (const draft of drafts) {
+    const id = generatedAssetId(draft)
+    if (id) visibleIds.add(id)
+  }
+  return selectedIds.filter((id) => !visibleIds.has(id))
 }
 
 function faqDraftTitle(row: GeneratedAssetDraft): string {
