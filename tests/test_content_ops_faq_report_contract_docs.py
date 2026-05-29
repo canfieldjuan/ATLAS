@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from extracted_content_pipeline.faq_deflection_report import (
+    build_deflection_snapshot,
     build_deflection_report_artifact,
 )
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
@@ -12,6 +13,9 @@ DOC_PATH = ROOT / "docs/frontend/content_ops_faq_report_contract.md"
 EXAMPLE_PATH = ROOT / "docs/frontend/content_ops_faq_report_example.json"
 DEFLECTION_EXAMPLE_PATH = (
     ROOT / "docs/frontend/content_ops_faq_deflection_report_example.json"
+)
+DEFLECTION_SNAPSHOT_EXAMPLE_PATH = (
+    ROOT / "docs/frontend/content_ops_faq_deflection_snapshot_example.json"
 )
 
 
@@ -157,11 +161,43 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert "## No Proven Answer Yet" in payload["markdown"]
 
 
+def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() -> None:
+    payload = json.loads(DEFLECTION_SNAPSHOT_EXAMPLE_PATH.read_text(encoding="utf-8"))
+    producer_payload = build_deflection_snapshot(
+        _producer_deflection_report_payload(),
+        top_n=2,
+    ).as_dict()
+    encoded = json.dumps(payload, sort_keys=True)
+
+    assert payload == producer_payload
+    assert set(payload) == {"summary", "top_questions"}
+    assert set(payload["summary"]) == {
+        "generated",
+        "drafted_answer_count",
+        "no_proven_answer_count",
+    }
+    for question in payload["top_questions"]:
+        assert set(question) == {
+            "rank",
+            "question",
+            "weighted_frequency",
+            "customer_wording",
+        }
+    assert "markdown" not in encoded
+    assert "faq_result" not in encoded
+    assert "steps" not in encoded
+    assert "evidence" not in encoded
+    assert "source_ids" not in encoded
+
+
 def test_content_ops_faq_report_contract_links_example() -> None:
     doc = DOC_PATH.read_text(encoding="utf-8")
 
     assert "content_ops_faq_report_example.json" in doc
     assert "content_ops_faq_deflection_report_example.json" in doc
+    assert "content_ops_faq_deflection_snapshot_example.json" in doc
+    assert "type DeflectionSnapshot" in doc
     assert "account_id: string;" in doc
     assert EXAMPLE_PATH.exists()
     assert DEFLECTION_EXAMPLE_PATH.exists()
+    assert DEFLECTION_SNAPSHOT_EXAMPLE_PATH.exists()
