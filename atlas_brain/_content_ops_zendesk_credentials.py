@@ -12,10 +12,10 @@ from extracted_content_pipeline.faq_macro_writeback_zendesk import (
     ZendeskMacroCredentials,
 )
 
-from ..auth.encryption import decrypt_secret, encrypt_secret
+from .auth.encryption import decrypt_secret, encrypt_secret
 
 
-logger = logging.getLogger("atlas.services.content_ops_zendesk_credentials")
+logger = logging.getLogger("atlas.content_ops_zendesk_credentials")
 
 TOKEN_PREFIX_LEN = 8
 

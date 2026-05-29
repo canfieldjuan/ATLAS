@@ -7,8 +7,8 @@ macro mappings, but hosted credentials are still process-level config. That is
 not enough for real multi-customer use: one tenant's macro publish path must
 resolve that tenant's Zendesk credentials, not a shared deployment credential.
 This slice adds encrypted, tenant-scoped Zendesk credential storage and wires
-macro writeback to prefer it while preserving the existing config fallback for
-local/single-tenant operation.
+macro writeback to prefer it while preserving the existing config fallback only
+for unscoped local/single-tenant operation.
 
 ## Scope (this PR)
 
@@ -19,8 +19,7 @@ Slice phase: Production hardening
 2. Add an Atlas service that encrypts Zendesk API tokens using the existing
    BYOK Fernet KEK helpers and decrypts them on tenant-scoped lookup.
 3. Add a host credentials provider that resolves tenant credentials from the
-   DB first, then falls back to existing centralized config when no tenant row
-   exists.
+   DB first, and fails closed for tenant-scoped publishes when no row exists.
 4. Wire the macro publish provider to use the tenant-aware credentials source.
 5. Add tests for migration shape, encrypted storage behavior, lookup
    scoping/decryption, and provider fallback order.
@@ -29,7 +28,7 @@ Slice phase: Production hardening
 
 - `plans/PR-FAQ-Macro-Writeback-Tenant-Credentials.md` — plan for this slice.
 - `atlas_brain/storage/migrations/330_content_ops_zendesk_credentials.sql` — credential storage.
-- `atlas_brain/services/content_ops_zendesk_credentials.py` — encrypted credential service.
+- `atlas_brain/_content_ops_zendesk_credentials.py` — encrypted credential service.
 - `atlas_brain/_content_ops_macro_writeback.py` — tenant-aware provider wiring.
 - `scripts/run_extracted_pipeline_checks.sh` — CI enrollment for the new credential test.
 - `tests/test_content_ops_zendesk_credentials.py` — service and migration coverage.
@@ -49,11 +48,11 @@ decrypts the API token with `decrypt_secret`, and returns
 but decrypt fails, it also returns `None` so the publish path does not use a
 broken credential.
 
-`TenantZendeskMacroCredentialsProvider` asks the tenant store first when a pool
-and account id are available. If no tenant credential exists, it uses the
-existing `ConfigZendeskMacroCredentialsProvider` as a local/single-tenant
-fallback. This keeps current deployments working while adding the production
-multi-tenant path.
+`TenantZendeskMacroCredentialsProvider` asks the tenant store when an account id
+is available. If no tenant credential exists, it returns `None` so tenant-scoped
+publish attempts fail closed instead of borrowing deployment-level Zendesk
+credentials. The existing `ConfigZendeskMacroCredentialsProvider` remains
+available only for unscoped local/single-tenant calls.
 
 ## Intentional
 
@@ -61,8 +60,9 @@ multi-tenant path.
   adds the storage and resolver foundation the API can call next.
 - API tokens never appear in display DTOs or logs; tests assert display rows do
   not carry plaintext or ciphertext.
-- Config fallback is only used when no tenant credential resolves. It preserves
-  existing single-tenant operation and keeps this slice backward compatible.
+- Config fallback is only used when the scope has no account id. Tenant-scoped
+  publishes fail closed without a tenant credential to avoid cross-tenant
+  writes.
 - The service uses the existing BYOK KEK instead of introducing a second
   encryption secret.
 
@@ -77,8 +77,8 @@ Parked hardening: none
 
 ## Verification
 
-- python -m pytest tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py -q — 13 passed.
-- python -m py_compile atlas_brain/services/content_ops_zendesk_credentials.py atlas_brain/_content_ops_macro_writeback.py tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py — passed.
+- python -m pytest tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py -q — 14 passed.
+- python -m py_compile atlas_brain/_content_ops_zendesk_credentials.py atlas_brain/_content_ops_macro_writeback.py tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py — passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py — passed.
 - bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-faq-macro-writeback-tenant-credentials.md — passed.
 
@@ -88,9 +88,9 @@ Parked hardening: none
 |---|---:|
 | Plan | ~95 |
 | Migration | ~34 |
-| Service / wiring / CI | ~283 |
-| Tests | ~259 |
-| Total | ~673 |
+| Service / wiring / CI | ~284 |
+| Tests | ~280 |
+| Total | ~695 |
 
 This is over the 400 LOC soft cap because credential storage must ship with the
 encryption boundary, scoped lookup, provider wiring, and tests together. A

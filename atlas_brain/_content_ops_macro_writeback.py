@@ -48,16 +48,14 @@ class TenantZendeskMacroCredentialsProvider:
         scope: TenantScope,
     ) -> ZendeskMacroCredentials | None:
         if scope.account_id:
-            from .services.content_ops_zendesk_credentials import (
+            from ._content_ops_zendesk_credentials import (
                 lookup_zendesk_credentials,
             )
 
-            credentials = await lookup_zendesk_credentials(
+            return await lookup_zendesk_credentials(
                 self.pool,
                 account_id=scope.account_id,
             )
-            if credentials is not None:
-                return credentials
         return await self.fallback_provider.credentials_for_scope(scope)
 
 

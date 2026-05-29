@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from atlas_brain.services import content_ops_zendesk_credentials as service
+from atlas_brain import _content_ops_zendesk_credentials as service
 
 
 MIGRATION = (
