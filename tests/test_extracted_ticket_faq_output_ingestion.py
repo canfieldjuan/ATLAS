@@ -67,6 +67,11 @@ def test_faq_output_rows_normalize_into_campaign_opportunities() -> None:
     assert rows[0]["faq_draft_id"] == "faq-draft-1"
     assert rows[1]["faq_draft_id"] == "faq-draft-1"
     assert rows[0]["source_title"] == "Why was I charged twice?"
+    assert rows[0]["resolution_text"] == (
+        "Check whether the second charge is a pending authorization. "
+        "Confirm the invoice date and subscription workspace."
+    )
+    assert "resolution_text" not in rows[1]
     assert rows[0]["faq_source_ticket_ids"] == ["ticket-1", "ticket-2"]
     assert rows[0]["faq_customer_language"] == [
         "Why was I charged twice?",
@@ -118,6 +123,9 @@ def test_source_material_to_source_rows_accepts_ticket_faq_result_dict() -> None
     assert len(rows) == 1
     assert rows[0]["source_type"] == FAQ_OUTPUT_SOURCE_TYPE
     assert rows[0]["faq_answer_evidence_status"] == "resolution_evidence"
+    assert rows[0]["resolution_text"].startswith(
+        "Use the uploaded resolution evidence: Open Billing"
+    )
     assert "Why was I charged twice this month?" in rows[0]["text"]
     warning_codes = [warning.code for warning in loaded.warnings]
     assert "missing_source_text" not in warning_codes

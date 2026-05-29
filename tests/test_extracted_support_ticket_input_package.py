@@ -165,6 +165,57 @@ def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() ->
     assert package.metadata["support_ticket_resolution_evidence_count"] == 1
 
 
+def test_support_ticket_input_package_counts_faq_output_resolution_evidence() -> None:
+    package = build_support_ticket_input_package({
+        "generated": 2,
+        "markdown": "# FAQ Report",
+        "saved_ids": ["faq-draft-1"],
+        "items": [
+            {
+                "topic": "billing confusion",
+                "question": "Why was I charged twice?",
+                "summary": "Customers ask why duplicate-looking invoices appear.",
+                "steps": [
+                    "Check whether the second charge is a pending authorization.",
+                    "Confirm the invoice date and subscription workspace.",
+                ],
+                "answer_evidence_status": "resolution_evidence",
+                "source_ids": ["ticket-1", "ticket-2"],
+            },
+            {
+                "topic": "export setup",
+                "question": "How do I export the report?",
+                "summary": "Customers ask where report exports live.",
+                "steps": ["Draft answer - support team should add the verified resolution."],
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ["ticket-3"],
+            },
+        ],
+    })
+
+    assert package.inputs["source_material"][0]["source_type"] == "faq_output"
+    assert package.inputs["source_material"][0]["source_id"] == "faq-draft-1:item-1"
+    assert package.inputs["source_material"][0]["resolution_text"] == (
+        "Check whether the second charge is a pending authorization. "
+        "Confirm the invoice date and subscription workspace."
+    )
+    assert "resolution_text" not in package.inputs["source_material"][1]
+    assert package.inputs["support_ticket_resolution_evidence_present"] is True
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 1
+    assert package.inputs["support_ticket_resolution_examples"] == [
+        {
+            "source_id": "faq-draft-1:item-1",
+            "source_title": "Why was I charged twice?",
+            "text": (
+                "Check whether the second charge is a pending authorization. "
+                "Confirm the invoice date and subscription workspace."
+            ),
+        }
+    ]
+    assert package.metadata["support_ticket_resolution_evidence_present"] is True
+    assert package.metadata["support_ticket_resolution_evidence_count"] == 1
+
+
 def test_support_ticket_input_package_surfaces_measured_outcome_evidence() -> None:
     package = build_support_ticket_input_package([
         {
