@@ -38,6 +38,8 @@ from ..landing_page_postgres import (
     PostgresLandingPageRepository,
 )
 from ..landing_page_ports import LandingPageDraft, LandingPageSection
+from ..faq_macro_writeback import MacroPublishProvider
+from ..faq_macro_writeback_publish import FAQMacroWritebackPublishService
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
 from ..sales_brief_export import export_sales_brief_drafts
@@ -50,6 +52,10 @@ PoolProvider = Callable[[], Any | Awaitable[Any]]
 LLMProvider = Callable[[], LLMClient | Awaitable[LLMClient]]
 ScopeProvider = Callable[[], TenantScope | Mapping[str, Any] | None | Awaitable[Any]]
 SkillsProvider = Callable[[], SkillStore | Awaitable[SkillStore]]
+MacroPublishProviderFactory = Callable[
+    [],
+    MacroPublishProvider | Awaitable[MacroPublishProvider],
+]
 
 ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
 logger = logging.getLogger(__name__)
@@ -250,6 +256,7 @@ def create_generated_asset_router(
     scope_provider: ScopeProvider | None = None,
     llm_provider: LLMProvider | None = None,
     skills_provider: SkillsProvider | None = None,
+    macro_publish_provider: MacroPublishProviderFactory | None = None,
     config: GeneratedAssetApiConfig | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
@@ -363,6 +370,40 @@ def create_generated_asset_router(
             "id": asset_id,
             "status": status,
             "updated": bool(updated),
+        }
+
+    @router.post("/{asset}/drafts/{draft_id}/publish-macros")
+    async def publish_faq_macros(
+        asset: str,
+        draft_id: str,
+    ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
+        if asset_name != "faq_markdown":
+            raise HTTPException(
+                status_code=400,
+                detail="only faq_markdown drafts can publish macros",
+            )
+        try:
+            faq_id = str(UUID(draft_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="FAQ draft not found") from None
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = _tenant_scope(scope)
+        provider = await _resolve_required_provider(
+            macro_publish_provider,
+            detail="FAQ macro publish provider unavailable",
+        )
+        summary = await FAQMacroWritebackPublishService(
+            faq_repository=PostgresTicketFAQRepository(pool),
+            provider=provider,
+        ).publish_faq_draft(faq_id, scope=tenant)
+        if not summary.found:
+            raise HTTPException(status_code=404, detail="FAQ draft not found")
+        return {
+            "account_id": tenant.account_id,
+            "asset": asset_name,
+            **summary.as_dict(),
         }
 
     @router.post("/{asset}/drafts/review-batch")
