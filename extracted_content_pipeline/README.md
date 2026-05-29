@@ -242,6 +242,30 @@ overrides win when multiple rules match. Rule-file values use the same CLI
 delimiter guardrails: intent topics cannot contain `=` or `,`, and keywords or
 vocabulary aliases cannot contain `,`.
 
+To build the customer-facing Support Ticket Deflection Report deliverable from
+the same support-ticket rows, use the report CLI. It writes the full Markdown
+report, a compact summary JSON, and a result JSON with resolved rule config,
+output checks, and item-level proof metadata:
+
+```bash
+python scripts/build_content_ops_deflection_report.py \
+  extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv \
+  --source-format csv \
+  --documentation-term "Single sign-on setup" \
+  --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
+  --require-output-checks \
+  --result-output deflection-report-result.json \
+  --summary-output deflection-report-summary.json \
+  --output deflection-report.md
+```
+
+The report CLI uses the same JSON rule-file contract and precedence as the FAQ
+CLI: explicit `--intent-rule` and `--vocabulary-gap-rule` values are evaluated
+before file-loaded rules, and default intent rules are evaluated last. When
+`--require-output-checks` is present and a check fails, the result JSON is still
+written for diagnostics, but the customer-facing Markdown and summary files are
+not written.
+
 For large-upload validation, compare the scale smoke `run_summary.json` against
 the checked-in failure profiles:
 
