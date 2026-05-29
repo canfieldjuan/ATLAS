@@ -8,6 +8,7 @@ routes through the hosted API surface.
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
 
 import pytest
@@ -62,6 +63,29 @@ def test_generated_asset_routes_use_shared_content_ops_auth_scope_and_pool() -> 
     assert closure["pool_provider"].__name__ == "get_db_pool"
     assert closure["scope_provider"].__name__ == "build_content_ops_scope"
     assert "_capture_content_ops_auth_user" in dependency_names
+
+
+def test_generated_asset_publish_macros_route_uses_host_provider_wiring() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(
+        api_pkg,
+        "/content-assets/{asset}/drafts/{draft_id}/publish-macros",
+    )
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+    provider_factory = closure["macro_publish_provider"]
+
+    provider = provider_factory()
+
+    assert provider_factory.__name__ == "<lambda>"
+    assert inspect.iscoroutine(provider)
+    assert provider.cr_code.co_name == "build_content_ops_macro_publish_provider"
+    assert provider.cr_frame is not None
+    provider.close()
 
 
 def test_faq_deflection_search_route_uses_shared_content_ops_auth_scope_and_pool() -> None:

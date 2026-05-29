@@ -7,7 +7,7 @@ Configuration is loaded from environment variables with sensible defaults.
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .config_defaults import DEFAULT_INVOICING_READONLY_PORT
@@ -4746,6 +4746,38 @@ class B2BCampaignConfig(BaseSettings):
             "per-run default; set ATLAS_B2B_CAMPAIGN_CONTENT_OPS_CACHE_POLICY_DEFAULT "
             "to exact-cache or no-store to default hosted runs."
         ),
+    )
+    content_ops_zendesk_email: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ATLAS_CONTENT_OPS_ZENDESK_EMAIL",
+            "ZENDESK_EMAIL",
+        ),
+        description="Zendesk API user email for hosted Content Ops FAQ macro writeback.",
+    )
+    content_ops_zendesk_api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ATLAS_CONTENT_OPS_ZENDESK_API_TOKEN",
+            "ZENDESK_API_TOKEN",
+        ),
+        description="Zendesk API token for hosted Content Ops FAQ macro writeback.",
+    )
+    content_ops_zendesk_subdomain: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ATLAS_CONTENT_OPS_ZENDESK_SUBDOMAIN",
+            "ZENDESK_SUBDOMAIN",
+        ),
+        description="Zendesk subdomain for hosted Content Ops FAQ macro writeback.",
+    )
+    content_ops_zendesk_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "ATLAS_CONTENT_OPS_ZENDESK_BASE_URL",
+            "ZENDESK_BASE_URL",
+        ),
+        description="Zendesk base URL override for hosted Content Ops FAQ macro writeback.",
     )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],

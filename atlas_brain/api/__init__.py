@@ -172,6 +172,9 @@ try:
         build_content_ops_llm_client,
         build_content_ops_skill_store,
     )
+    from .._content_ops_macro_writeback import (
+        build_content_ops_macro_publish_provider,
+    )
     from .._content_ops_services import build_content_ops_execution_services
     from .._content_ops_scope import (
         build_content_ops_scope,
@@ -247,6 +250,9 @@ try:
         scope_provider=build_content_ops_scope,
         llm_provider=build_content_ops_llm_client,
         skills_provider=build_content_ops_skill_store,
+        macro_publish_provider=lambda: build_content_ops_macro_publish_provider(
+            pool_provider=get_db_pool,
+        ),
         dependencies=[Depends(_capture_content_ops_auth_user)],
     )
     router.include_router(content_assets_router)
