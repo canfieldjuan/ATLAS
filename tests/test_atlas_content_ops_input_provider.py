@@ -279,6 +279,50 @@ def test_atlas_content_ops_input_provider_expands_selected_faq_output() -> None:
     assert preview.can_run is True
 
 
+def test_atlas_content_ops_input_provider_expands_faq_output_inside_source_lists() -> None:
+    provider = build_content_ops_input_provider()
+
+    package = provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-1",
+                        "subject": "How do I update billing?",
+                        "description": "I cannot find the billing page.",
+                    },
+                    {
+                        "id": "faq-draft-42",
+                        "markdown": "# Saved FAQ report",
+                        "ticket_source_count": 2,
+                        "items": [
+                            {
+                                "topic": "billing confusion",
+                                "question": "Why was I charged twice?",
+                                "summary": (
+                                    "Customers ask why duplicate-looking invoices "
+                                    "appear."
+                                ),
+                                "steps": ("Check invoice history.",),
+                                "answer_evidence_status": "resolution_evidence",
+                            },
+                        ],
+                    },
+                ]
+            }
+        },
+    )
+
+    assert package.metadata["included_row_count"] == 2
+    assert package.inputs["source_material"][0]["source_type"] == "support_ticket"
+    assert package.inputs["source_material"][1]["source_type"] == "faq_output"
+    assert package.inputs["source_material"][1]["source_id"] == "faq-draft-42"
+    assert package.inputs["source_material"][1]["faq_draft_id"] == "faq-draft-42"
+    assert package.inputs["support_ticket_resolution_evidence_present"] is True
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 1
+
+
 def test_atlas_content_ops_input_provider_expands_subject_body_ticket_rows() -> None:
     provider = build_content_ops_input_provider()
 

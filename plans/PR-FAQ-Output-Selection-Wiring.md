@@ -21,14 +21,18 @@ Slice phase: Vertical slice
    `TicketFAQDraft.as_dict()`-shaped bundle without `saved_ids`.
 2. Teach the Atlas Content Ops input provider to accept FAQ output bundles and
    `faq_output` rows as support-ticket-derived source material.
-3. Preserve FAQ output provenance fields when the support-ticket input package
+3. Expand selected FAQ output bundles inside list-shaped `source_material` so
+   mixed selections such as `[ticket_row, saved_faq_output]` keep the selected
+   FAQ report.
+4. Preserve FAQ output provenance fields when the support-ticket input package
    normalizes selected FAQ source rows.
-4. Add focused tests proving a selected FAQ draft payload flows through the
+5. Add focused tests proving a selected FAQ draft payload flows through the
    provider with `faq_output` provenance, draft traceability, and resolution
    evidence intact.
 
 ### Files touched
 
+- `extracted_content_pipeline/campaign_source_adapters.py`
 - `extracted_content_pipeline/faq_output_ingestion.py`
 - `extracted_content_pipeline/support_ticket_input_package.py`
 - `atlas_brain/_content_ops_input_provider.py`
@@ -55,6 +59,10 @@ there the existing `SupportTicketInputProvider` and
 `build_support_ticket_input_package(...)` own normalization, output defaults,
 resolution evidence, and request merge behavior.
 
+The shared source-material adapter expands FAQ output bundles even when they
+appear inside list-shaped `source_material`, which keeps mixed selections from
+silently dropping selected FAQ reports.
+
 The support-ticket input package keeps FAQ provenance fields such as
 `faq_draft_id`, `faq_rank`, `faq_question`, and `faq_answer_evidence_status`
 while normalizing selected source rows so generation and later diagnostics can
@@ -79,9 +87,9 @@ trace the selected report.
 
 Ran locally:
 
-- Command: python -m pytest tests/test_extracted_ticket_faq_output_ingestion.py tests/test_atlas_content_ops_input_provider.py tests/test_extracted_support_ticket_input_package.py -q
-  - 43 passed, 1 warning
-- Command: python -m py_compile extracted_content_pipeline/faq_output_ingestion.py extracted_content_pipeline/support_ticket_input_package.py atlas_brain/_content_ops_input_provider.py tests/test_extracted_ticket_faq_output_ingestion.py tests/test_atlas_content_ops_input_provider.py
+- Command: python -m pytest tests/test_extracted_ticket_faq_output_ingestion.py tests/test_atlas_content_ops_input_provider.py tests/test_extracted_campaign_source_adapters.py tests/test_extracted_support_ticket_input_package.py -q
+  - 114 passed, 1 warning
+- Command: python -m py_compile extracted_content_pipeline/campaign_source_adapters.py extracted_content_pipeline/faq_output_ingestion.py extracted_content_pipeline/support_ticket_input_package.py atlas_brain/_content_ops_input_provider.py tests/test_extracted_ticket_faq_output_ingestion.py tests/test_atlas_content_ops_input_provider.py
   - passed
 - Command: bash scripts/validate_extracted_content_pipeline.sh
   - passed
@@ -101,8 +109,9 @@ Ran locally:
 | Area | Estimated LOC |
 |---|---:|
 | FAQ adapter draft-ID fallback | ~15 |
+| Source-material list expansion | ~15 |
 | Atlas provider detection | ~20 |
 | Support-ticket provenance passthrough | ~20 |
-| Focused tests | ~95 |
-| Plan doc | ~90 |
-| **Total** | **~240** |
+| Focused tests | ~125 |
+| Plan doc | ~95 |
+| **Total** | **~290** |

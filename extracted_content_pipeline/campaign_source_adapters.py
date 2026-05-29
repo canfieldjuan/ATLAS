@@ -436,7 +436,13 @@ def source_material_to_source_rows(source_material: Any) -> list[Any]:
         source_material,
         (str, bytes, bytearray),
     ):
-        return list(source_material)
+        rows: list[Any] = []
+        for item in source_material:
+            if isinstance(item, Mapping) and is_faq_output_bundle(item):
+                rows.extend(faq_output_to_source_rows(item))
+            else:
+                rows.append(item)
+        return rows
     return []
 
 

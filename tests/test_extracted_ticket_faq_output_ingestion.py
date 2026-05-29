@@ -170,6 +170,36 @@ def test_faq_output_adapter_uses_top_level_draft_id_when_saved_ids_are_absent() 
     assert "resolution_text" not in rows[1]
 
 
+def test_source_material_to_source_rows_expands_faq_output_inside_lists() -> None:
+    rows = source_material_to_source_rows([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I update billing?",
+            "description": "I cannot find the billing page.",
+        },
+        {
+            "id": "faq-draft-42",
+            "markdown": "# Saved FAQ report",
+            "ticket_source_count": 2,
+            "items": [
+                {
+                    "topic": "billing confusion",
+                    "question": "Why was I charged twice?",
+                    "summary": "Customers ask why duplicate-looking invoices appear.",
+                    "steps": ("Check invoice history.",),
+                    "answer_evidence_status": "resolution_evidence",
+                },
+            ],
+        },
+    ])
+
+    assert rows[0]["ticket_id"] == "ticket-1"
+    assert rows[1]["source_type"] == FAQ_OUTPUT_SOURCE_TYPE
+    assert rows[1]["source_id"] == "faq-draft-42"
+    assert rows[1]["faq_draft_id"] == "faq-draft-42"
+    assert rows[1]["resolution_text"] == "Check invoice history."
+
+
 def test_faq_output_adapter_ignores_non_faq_and_empty_items() -> None:
     assert is_faq_output_bundle({"generated": 0, "items": []})
     assert faq_output_to_source_rows({"generated": 0, "items": []}) == []
