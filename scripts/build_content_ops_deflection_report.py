@@ -24,6 +24,7 @@ from extracted_content_pipeline.faq_deflection_report import (  # noqa: E402
     build_deflection_report_artifact,
 )
 from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
+    DEFAULT_INTENT_RULES,
     DEFAULT_TITLE,
     build_ticket_faq_markdown,
 )
@@ -112,6 +113,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Comma-separated customer/documentation aliases. Repeat for multiple rules.",
     )
+    parser.add_argument(
+        "--intent-rule",
+        action="append",
+        default=[],
+        help="Custom intent mapping shaped as topic=keyword,keyword. Repeat for multiple rules.",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--summary-output", type=Path)
     parser.add_argument("--result-output", type=Path)
@@ -125,6 +132,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_report(args: argparse.Namespace):
+    custom_intent_rules = _parse_intent_rules(args.intent_rule)
+    args.custom_intent_rules = custom_intent_rules
+    intent_rules = (*custom_intent_rules, *DEFAULT_INTENT_RULES)
     loaded = load_source_campaign_opportunities_from_file(
         args.path,
         file_format=args.source_format,
@@ -139,6 +149,7 @@ def build_report(args: argparse.Namespace):
         window_days=args.window_days,
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
+        intent_rules=intent_rules,
         documentation_terms=tuple(args.documentation_term or ()),
         vocabulary_gap_rules=_parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
     )
@@ -157,6 +168,33 @@ def _parse_vocabulary_gap_rules(values: list[str]) -> tuple[tuple[str, ...], ...
             raise SystemExit("--vocabulary-gap-rule must contain at least two comma-separated terms")
         rules.append(parts)
     return tuple(rules)
+
+
+def _parse_intent_rules(values: list[str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    rules: list[tuple[str, tuple[str, ...]]] = []
+    for value in values or ():
+        topic, separator, raw_keywords = str(value).partition("=")
+        topic = topic.strip()
+        keywords = _parse_intent_rule_keywords(raw_keywords)
+        if not separator or not topic or not keywords:
+            raise SystemExit(
+                "--intent-rule must use topic=keyword,keyword with at least one keyword"
+            )
+        rules.append((topic, keywords))
+    return tuple(rules)
+
+
+def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for part in value.split(","):
+        keyword = part.strip()
+        key = keyword.lower()
+        if not keyword or key in seen:
+            continue
+        seen.add(key)
+        keywords.append(keyword)
+    return tuple(keywords)
 
 
 def _failed_output_checks(output_checks: Mapping[str, Any]) -> list[str]:
@@ -194,6 +232,10 @@ def _result_payload(
             "documentation_terms": list(args.documentation_term or ()),
             "vocabulary_gap_rules": [
                 list(rule) for rule in _parse_vocabulary_gap_rules(args.vocabulary_gap_rule)
+            ],
+            "custom_intent_rules": [
+                {"topic": topic, "keywords": list(keywords)}
+                for topic, keywords in getattr(args, "custom_intent_rules", ())
             ],
         },
         "summary": dict(artifact.summary),
