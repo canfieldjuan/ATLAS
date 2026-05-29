@@ -265,6 +265,84 @@ def test_support_ticket_input_package_derives_faq_source_types_from_rows() -> No
     assert package.inputs["faq_source_types"] == ["ticket", "support_ticket"]
 
 
+def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Id": "zd-100",
+            "Subject": "How do I reset MFA?",
+            "Description": "I cannot get the login code on my new phone.",
+            "Created at": "2026-05-01T09:00:00Z",
+            "Requester email": "maya@example.test",
+        },
+        {
+            "Ticket ID": "fd-200",
+            "Ticket Subject": "Where do I update billing?",
+            "Ticket Description": "Why was I charged twice this month?",
+            "Created time": "2026-05-02 10:15:00",
+            "Contact email address": "ops@example.test",
+        },
+        {
+            "Conversation ID": "ic-300",
+            "Conversation title": "Cancellation before renewal",
+            "Conversation body": "How do I cancel my account before it renews?",
+            "Conversation created at": "2026-05-03",
+            "User email": "founder@example.test",
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+
+    assert package.inputs["has_dated_window"] is True
+    assert package.inputs["source_period"] == "Last 90 days of support tickets"
+    assert package.inputs["faq_questions"] == [
+        "How do I reset MFA?",
+        "Where do I update billing?",
+        "How do I cancel my account before it renews?",
+    ]
+    assert rows[0] == {
+        "source_id": "zd-100",
+        "source_type": "support_ticket",
+        "source_title": "How do I reset MFA?",
+        "text": (
+            "How do I reset MFA? I cannot get the login code on my new phone."
+        ),
+        "created_at": "2026-05-01T09:00:00Z",
+        "contact_email": "maya@example.test",
+    }
+    assert rows[1]["source_id"] == "fd-200"
+    assert rows[1]["source_title"] == "Where do I update billing?"
+    assert rows[1]["text"] == (
+        "Where do I update billing? Why was I charged twice this month?"
+    )
+    assert rows[1]["created_at"] == "2026-05-02 10:15:00"
+    assert rows[1]["contact_email"] == "ops@example.test"
+    assert rows[2]["source_id"] == "ic-300"
+    assert rows[2]["source_title"] == "Cancellation before renewal"
+    assert rows[2]["text"] == (
+        "Cancellation before renewal How do I cancel my account before it renews?"
+    )
+    assert rows[2]["created_at"] == "2026-05-03"
+    assert rows[2]["contact_email"] == "founder@example.test"
+
+
+def test_support_ticket_input_package_keeps_customer_message_before_latest_reply() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Ticket ID": "fd-201",
+            "Ticket Subject": "Report export",
+            "Message": "Where do I export my monthly report?",
+            "Latest message": "Agent reply: use the Export button.",
+        },
+    ])
+
+    assert package.inputs["source_material"][0]["text"] == (
+        "Report export Where do I export my monthly report?"
+    )
+    assert package.inputs["faq_questions"] == [
+        "Where do I export my monthly report?"
+    ]
+
+
 def test_support_ticket_clusters_do_not_use_synthetic_ticket_ids() -> None:
     package = build_support_ticket_input_package([
         {"description": "How do I export data?"},

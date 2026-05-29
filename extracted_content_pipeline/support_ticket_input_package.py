@@ -58,13 +58,26 @@ _QUESTION_STARTS = (
 )
 
 _SOURCE_ID_KEYS = ("source_id", "ticket_id", "id", "case_id", "conversation_id")
-_SOURCE_TITLE_KEYS = ("source_title", "subject", "title", "summary")
+_SOURCE_TITLE_KEYS = (
+    "source_title",
+    "subject",
+    "ticket_subject",
+    "request_subject",
+    "conversation_title",
+    "title",
+    "summary",
+)
 _TEXT_KEYS = (
     "text",
     "body",
     "description",
+    "ticket_description",
+    "conversation_body",
+    "initial_message",
+    "question",
     "message",
     "content",
+    "latest_message",
     "complaint",
     "notes",
     "summary",
@@ -101,11 +114,26 @@ _MEASURED_OUTCOME_KEYS = (
     "impact_metric",
     "result_metric",
 )
-_DATE_KEYS = ("created_at", "submitted_at", "updated_at", "date")
+_DATE_KEYS = (
+    "created_at",
+    "created_time",
+    "created",
+    "conversation_created_at",
+    "submitted_at",
+    "updated_at",
+    "date",
+)
 _URL_KEYS = ("source_url", "ticket_url", "url", "link")
 _COMPANY_KEYS = ("company_name", "account_name", "company", "account")
 _VENDOR_KEYS = ("vendor_name", "product_name", "vendor", "product")
-_CONTACT_EMAIL_KEYS = ("contact_email", "email", "customer_email")
+_CONTACT_EMAIL_KEYS = (
+    "contact_email",
+    "contact_email_address",
+    "requester_email",
+    "user_email",
+    "email",
+    "customer_email",
+)
 _PAIN_KEYS = ("pain_category", "category", "intent", "topic")
 
 
