@@ -71,6 +71,13 @@ export { inputContractDisplay } from './inputDisplay'
 export type { ContentOpsInputDisplayFallback } from './inputDisplay'
 
 export {
+  FAQ_CONFIGURATION_OUTPUTS,
+  FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
+  FAQ_MARKDOWN_OUTPUT,
+  faqConfigurationInputsSelected,
+} from './faqConfigurationInputs'
+
+export {
   FAQ_DEFLECTION_REPORT_OUTPUT,
   FAQ_RESOLUTION_EVIDENCE_STATUS,
   faqDeflectionReportAnswerSteps,

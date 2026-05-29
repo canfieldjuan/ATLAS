@@ -55,6 +55,9 @@ jobs:
       - name: Test Content Ops deflection report UI
         run: npm run test:content-ops-deflection-report-ui
 
+      - name: Test Content Ops FAQ configuration inputs
+        run: npm run test:content-ops-faq-configuration-inputs
+
       - name: Build
         run: npm run build
 
