@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 from pathlib import Path
@@ -880,6 +881,107 @@ async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
         item["answer_evidence_status"] == "draft_needs_review"
         for item in faq_result["items"]
     )
+
+
+async def test_live_execute_route_handles_concurrent_faq_deflection_reports() -> None:
+    class _BarrierFAQDeflectionReportService:
+        def __init__(self, *, expected: int) -> None:
+            self._inner = FAQDeflectionReportService()
+            self._expected = expected
+            self._lock = asyncio.Lock()
+            self._all_started = asyncio.Event()
+            self.started = 0
+            self.max_waiting = 0
+
+        async def generate(self, **kwargs: Any) -> Any:
+            async with self._lock:
+                self.started += 1
+                self.max_waiting = max(self.max_waiting, self.started)
+                if self.started == self._expected:
+                    self._all_started.set()
+            await self._all_started.wait()
+            await asyncio.sleep(0)
+            return await self._inner.generate(**kwargs)
+
+    service = _BarrierFAQDeflectionReportService(expected=4)
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(execute_max_concurrency=4),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=service,
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+    route = _route(router, "/content-ops/execute", "POST")
+
+    async def run_case(case_index: int) -> dict[str, Any]:
+        export_tickets = [
+            {
+                "ticket_id": f"ticket-export-concurrent-{case_index}-{index}",
+                "source_type": "support_ticket",
+                "subject": "Export attribution report",
+                "message": "How do I export attribution reports?",
+                "pain_category": "exports",
+                "resolution_text": (
+                    "Open Analytics, choose Attribution, then select Download report."
+                ),
+            }
+            for index in range(175)
+        ]
+        sso_tickets = [
+            {
+                "ticket_id": f"ticket-sso-concurrent-{case_index}-{index}",
+                "source_type": "support_ticket",
+                "subject": "SSO setup",
+                "message": "How do I enable SSO for my team?",
+                "pain_category": "authentication",
+            }
+            for index in range(75)
+        ]
+        return await route.endpoint({
+            "target_mode": "vendor_retention",
+            "outputs": ["faq_deflection_report"],
+            "limit": 5,
+            "require_quality_gates": False,
+            "inputs": {
+                "deflection_report_title": (
+                    f"Hosted FAQ Deflection Concurrent Smoke {case_index}"
+                ),
+                "faq_title": f"Hosted FAQ Deflection Concurrent Source {case_index}",
+                "source_material": {"support_tickets": export_tickets + sso_tickets},
+            },
+        })
+
+    responses = await asyncio.gather(*(run_case(index) for index in range(4)))
+
+    assert service.max_waiting == 4
+
+    for case_index, payload in enumerate(responses):
+        assert payload["status"] == "completed"
+        step = payload["steps"][0]
+        assert step["output"] == "faq_deflection_report"
+        assert step["status"] == "completed"
+
+        result = step["result"]
+        assert result["summary"]["source_count"] == 250
+        assert result["summary"]["ticket_source_count"] == 250
+        assert result["summary"]["drafted_answer_count"] >= 1
+        assert result["summary"]["no_proven_answer_count"] >= 1
+        assert "## Drafted Answers With Proven Solutions" in result["markdown"]
+        assert "## No Proven Answer Yet" in result["markdown"]
+        assert f"ticket-export-concurrent-{case_index}-0" in result["markdown"]
+
+        faq_result = result["faq_result"]
+        assert faq_result["source_count"] == 250
+        assert faq_result["ticket_source_count"] == 250
+        assert all(faq_result["output_checks"].values())
+        assert any(
+            item["answer_evidence_status"] == "resolution_evidence"
+            for item in faq_result["items"]
+        )
+        assert any(
+            item["answer_evidence_status"] == "draft_needs_review"
+            for item in faq_result["items"]
+        )
 
 
 async def test_live_execute_route_handles_bulk_faq_source_material() -> None:
