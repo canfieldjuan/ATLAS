@@ -100,6 +100,12 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _normalize_args(args: argparse.Namespace) -> argparse.Namespace:
+    if not str(args.database_url or "").strip():
+        args.database_url = _default_database_url()
+    return args
+
+
 def _validate_args(args: argparse.Namespace) -> list[str]:
     errors: list[str] = []
     for name, message in (
@@ -469,7 +475,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     start = time.perf_counter()
-    args = _build_parser().parse_args(argv)
+    args = _normalize_args(_build_parser().parse_args(argv))
     errors = _validate_args(args)
     if errors:
         summary = _preflight_summary(args, errors, time.perf_counter() - start)
