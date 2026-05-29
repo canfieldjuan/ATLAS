@@ -32,7 +32,9 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     build_ticket_faq_markdown,
 )
 from content_ops_faq_cli_rules import (  # noqa: E402
+    DOCUMENTATION_TERM_FORMATS,
     load_rule_files,
+    parse_documentation_terms,
     parse_intent_rules,
     parse_vocabulary_gap_rules,
 )
@@ -116,6 +118,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Existing documentation term or heading. Repeat to provide multiple terms.",
     )
     parser.add_argument(
+        "--documentation-term-file",
+        action="append",
+        default=[],
+        type=Path,
+        help="UTF-8 text, JSON, JSONL, or CSV file with documentation terms.",
+    )
+    parser.add_argument(
+        "--documentation-term-format",
+        choices=DOCUMENTATION_TERM_FORMATS,
+        default="auto",
+        help="Format for documentation-term files. Defaults to suffix detection.",
+    )
+    parser.add_argument(
         "--vocabulary-gap-rule",
         action="append",
         default=[],
@@ -147,6 +162,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_report(args: argparse.Namespace):
+    documentation_terms = parse_documentation_terms(
+        args.documentation_term,
+        args.documentation_term_file,
+        args.documentation_term_format,
+    )
+    args.documentation_terms = documentation_terms
     file_rules = load_rule_files(args.rule_file)
     vocabulary_gap_rules = (
         *parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
@@ -174,7 +195,7 @@ def build_report(args: argparse.Namespace):
         as_of_date=args.as_of_date,
         support_contact=args.support_contact,
         intent_rules=intent_rules,
-        documentation_terms=tuple(args.documentation_term or ()),
+        documentation_terms=documentation_terms,
         vocabulary_gap_rules=vocabulary_gap_rules,
     )
     return build_deflection_report_artifact(
@@ -217,7 +238,11 @@ def _result_payload(
             "require_output_checks": bool(args.require_output_checks),
             "support_contact": args.support_contact,
             "rule_files": [str(path) for path in args.rule_file],
-            "documentation_terms": list(args.documentation_term or ()),
+            "documentation_term_files": [
+                str(path) for path in args.documentation_term_file
+            ],
+            "documentation_term_format": args.documentation_term_format,
+            "documentation_terms": list(getattr(args, "documentation_terms", ())),
             "vocabulary_gap_rules": [
                 list(rule) for rule in getattr(args, "vocabulary_gap_rules", ())
             ],
