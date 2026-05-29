@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
 import uuid
 
 import pytest
@@ -9,12 +14,34 @@ fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from atlas_brain._content_ops_zendesk_credentials import ContentOpsZendeskCredentialRecord
-from atlas_brain.api import content_ops_zendesk_credentials as api
 from atlas_brain.auth.dependencies import AuthUser
 
 
+API_MODULE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain"
+    / "api"
+    / "content_ops_zendesk_credentials.py"
+)
 ACCOUNT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 CREDENTIAL_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+api = None
+
+
+def setup_module() -> None:
+    global api
+    api = _load_api_module()
+
+
+def _load_api_module():
+    spec = importlib.util.spec_from_file_location(
+        "atlas_brain.api.content_ops_zendesk_credentials_for_test",
+        API_MODULE_PATH,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 class _Pool:
@@ -190,3 +217,38 @@ def test_zendesk_credential_routes_fail_when_database_unavailable() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Database not ready"
+
+
+def test_zendesk_credential_api_import_does_not_require_asyncpg() -> None:
+    script = textwrap.dedent("""
+import sys
+
+class BlockAsyncpg:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'asyncpg' or fullname.startswith('asyncpg.'):
+            raise ModuleNotFoundError(\"No module named 'asyncpg'\")
+        return None
+
+sys.meta_path.insert(0, BlockAsyncpg())
+import importlib.util
+from pathlib import Path
+
+path = Path('atlas_brain/api/content_ops_zendesk_credentials.py').resolve()
+spec = importlib.util.spec_from_file_location(
+    'atlas_brain.api.content_ops_zendesk_credentials_block_asyncpg_test',
+    path,
+)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+print(module.ZendeskCredentialView.__name__)
+""")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ZendeskCredentialView" in result.stdout

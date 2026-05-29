@@ -36,9 +36,11 @@ Slice phase: Vertical slice
 The new router is host-owned rather than extracted because it touches Atlas auth,
 Postgres pool access, and encrypted host credential storage. A factory accepts a
 `pool_provider` and `auth_dependency`, mirroring the existing Content Ops host
-mount style. Each route resolves the authenticated `AuthUser`, parses
-`user.account_id` as a UUID, checks database readiness, and calls the credential
-service using that account id.
+mount style. The default pool provider lazy-loads Atlas database access so the
+route module stays importable in the lean extracted CI environment. Each route
+resolves the authenticated `AuthUser`, parses `user.account_id` as a UUID,
+checks database readiness, and calls the credential service using that account
+id.
 
 `POST /content-ops/zendesk-credentials` accepts Zendesk email, API token,
 subdomain or base URL, and an optional label. The service validates the endpoint,
@@ -68,7 +70,7 @@ Parked hardening: none
 
 ## Verification
 
-- python -m pytest tests/test_content_ops_zendesk_credentials_api.py tests/test_atlas_content_ops_generated_assets_api.py -q — 18 passed, 1 warning.
+- python -m pytest tests/test_content_ops_zendesk_credentials_api.py tests/test_atlas_content_ops_generated_assets_api.py -q — 19 passed, 1 warning.
 - python -m py_compile atlas_brain/api/content_ops_zendesk_credentials.py tests/test_content_ops_zendesk_credentials_api.py tests/test_atlas_content_ops_generated_assets_api.py — passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py — passed.
 
@@ -77,9 +79,9 @@ Parked hardening: none
 | Area | Estimated LOC |
 |---|---:|
 | Plan | ~70 |
-| API route / mount / CI | ~156 |
-| Tests | ~220 |
-| Total | ~464 |
+| API route / mount / CI | ~160 |
+| Tests | ~313 |
+| Total | ~535 |
 
 This is slightly over the 400 LOC soft cap because the API surface needs scoped
 create/list/revoke behavior and auth/mount coverage in the same vertical slice.

@@ -16,7 +16,6 @@ from .._content_ops_zendesk_credentials import (
     upsert_zendesk_credentials,
 )
 from ..auth.dependencies import AuthUser
-from ..storage.database import get_db_pool
 
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
@@ -44,9 +43,15 @@ class ZendeskCredentialView(BaseModel):
     revoked_at: str | None = None
 
 
+def _default_pool_provider() -> Any:
+    from ..storage.database import get_db_pool
+
+    return get_db_pool()
+
+
 def create_content_ops_zendesk_credentials_router(
     *,
-    pool_provider: PoolProvider = get_db_pool,
+    pool_provider: PoolProvider = _default_pool_provider,
     auth_dependency: AuthDependency,
 ) -> APIRouter:
     """Create tenant-scoped Content Ops Zendesk credential routes."""
