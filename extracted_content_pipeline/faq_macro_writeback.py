@@ -76,6 +76,7 @@ class MacroWritebackMapping:
     faq_item_id: str
     external_id: str
     external_url: str = ""
+    publish_status: str = "published"
     metadata: JsonDict = field(default_factory=dict)
 
     def as_dict(self) -> JsonDict:
@@ -136,6 +137,14 @@ class MacroWritebackMappingRepository(Protocol):
         scope: TenantScope,
     ) -> MacroWritebackMapping:
         """Create or update the external macro mapping for one FAQ item."""
+
+    async def reserve_mapping(
+        self,
+        mapping: MacroWritebackMapping,
+        *,
+        scope: TenantScope,
+    ) -> MacroWritebackMapping:
+        """Reserve one FAQ item before creating an external macro."""
 
 
 class DryRunMacroPublishProvider:
