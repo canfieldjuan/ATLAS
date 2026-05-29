@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-05-29
+
+### atlas-intel-ui npm audit vulnerabilities
+- File/location: `atlas-intel-ui/package-lock.json`
+- Description: `npm ci` reports 6 dependency audit findings (2 moderate, 4 high).
+- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this UI rendering slice.
+- Effort: M
+- Category: security
+- Owner/session: Codex FAQ deflection report UI slice
+- Found during: PR-FAQ-Deflection-Report-UI-Readonly
+
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent

@@ -69,3 +69,18 @@ export {
 
 export { inputContractDisplay } from './inputDisplay'
 export type { ContentOpsInputDisplayFallback } from './inputDisplay'
+
+export {
+  FAQ_DEFLECTION_REPORT_OUTPUT,
+  FAQ_RESOLUTION_EVIDENCE_STATUS,
+  faqDeflectionReportAnswerSteps,
+  faqDeflectionReportView,
+  isProvenFAQDeflectionReportItem,
+} from './faqDeflectionReport'
+export type {
+  FAQDeflectionReportAnswerTone,
+  FAQDeflectionReportItemView,
+  FAQDeflectionReportSummaryView,
+  FAQDeflectionReportView,
+  FAQTermMappingView,
+} from './faqDeflectionReport'

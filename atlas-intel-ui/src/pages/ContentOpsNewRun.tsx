@@ -25,6 +25,7 @@ import {
   contentOpsIngestionFilePreflightError,
   contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
+  faqDeflectionReportAnswerSteps,
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
@@ -33,10 +34,13 @@ import {
   fromWirePreview,
   fromWireRequest,
   fromWireUsageSummary,
+  faqDeflectionReportView,
   inputContractDisplay,
   toWireIngestionInspectRequest,
   toWireIngestionImportRequest,
   toWireRequest,
+  FAQ_DEFLECTION_REPORT_OUTPUT,
+  FAQ_RESOLUTION_EVIDENCE_STATUS,
   type ContentOpsCatalog,
   type ContentOpsCachePolicy,
   type ContentOpsIngestionDiagnostics,
@@ -50,6 +54,9 @@ import {
   type CampaignReasoningContextView,
   type ContentOpsStepReasoningAudit,
   type ControlSurfacePreview,
+  type FAQDeflectionReportAnswerTone,
+  type FAQDeflectionReportItemView,
+  type FAQDeflectionReportView,
   type GenerationPlan,
   type GenerationPlanStep,
   type ContentOpsUsageBudgetEvaluation,
@@ -3037,7 +3044,285 @@ function ExecutionStepSummary({
   if (output === 'faq_markdown') {
     return <FAQMarkdownExecutionSummary result={result} />
   }
+  if (output === FAQ_DEFLECTION_REPORT_OUTPUT) {
+    return <FAQDeflectionReportExecutionSummary result={result} />
+  }
   return null
+}
+
+function FAQDeflectionReportExecutionSummary({
+  result,
+}: {
+  result: Record<string, unknown>
+}) {
+  const report = faqDeflectionReportView(result)
+  if (!report) return null
+
+  return (
+    <div className="mb-3 space-y-3 rounded-md border border-slate-800 bg-slate-900/70 p-3 text-xs text-slate-300">
+      <div className="flex flex-wrap items-center gap-3">
+        <DeflectionReportMetric
+          label="FAQ opportunities"
+          value={report.summary.generated}
+        />
+        <DeflectionReportMetric
+          label="Source rows"
+          value={report.summary.sourceCount}
+        />
+        <DeflectionReportMetric
+          label="Ticket sources"
+          value={report.summary.ticketSourceCount}
+        />
+        <DeflectionReportMetric
+          label="Proven answers"
+          value={report.summary.draftedAnswerCount ?? report.provenItems.length}
+        />
+        <DeflectionReportMetric
+          label="No proven answer"
+          value={report.summary.noProvenAnswerCount ?? report.noProvenItems.length}
+        />
+      </div>
+
+      <DeflectionOutputChecks checks={report.outputChecks} />
+      <DeflectionRankedOpportunities report={report} />
+      <DeflectionReportAnswerSection
+        title="Drafted Answers (proven solutions)"
+        tone="proven"
+        items={report.provenItems}
+      />
+      <DeflectionReportAnswerSection
+        title="No Proven Answer Yet"
+        tone="unproven"
+        items={report.noProvenItems}
+      />
+      <DeflectionVocabularyGaps report={report} />
+      <details className="text-xs text-slate-400">
+        <summary className="cursor-pointer text-slate-500 hover:text-slate-300">
+          Report Markdown
+        </summary>
+        <pre className="mt-2 max-h-96 overflow-auto rounded bg-slate-950/80 p-3 whitespace-pre-wrap font-mono text-[11px] text-slate-300">
+          {report.markdown}
+        </pre>
+      </details>
+    </div>
+  )
+}
+
+function DeflectionReportMetric({
+  label,
+  value,
+}: {
+  label: string
+  value: number | null
+}) {
+  return (
+    <span>
+      {label}: <span className="font-medium text-slate-100">{value ?? '--'}</span>
+    </span>
+  )
+}
+
+function DeflectionOutputChecks({
+  checks,
+}: {
+  checks: Record<string, boolean>
+}) {
+  const entries = Object.entries(checks)
+  if (entries.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([name, passed]) => (
+        <span
+          key={name}
+          className={clsx(
+            'rounded border px-2 py-0.5 text-[11px]',
+            passed
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+              : 'border-amber-500/40 bg-amber-500/10 text-amber-100',
+          )}
+        >
+          {name.replaceAll('_', ' ')}: {passed ? 'pass' : 'check'}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function DeflectionRankedOpportunities({
+  report,
+}: {
+  report: FAQDeflectionReportView
+}) {
+  if (report.items.length === 0) return null
+  return (
+    <Section label="Ranked opportunities">
+      <div className="grid gap-2">
+        {report.items.map((item, index) => (
+          <div
+            key={`${item.question}-${index}`}
+            className="rounded border border-slate-800 bg-slate-950/50 px-3 py-2"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-slate-100">
+                  {index + 1}. {item.question}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                  {item.topic && <span>{item.topic}</span>}
+                  {item.ticketCount !== null && (
+                    <span>{formatCount(item.ticketCount)} tickets</span>
+                  )}
+                  {item.opportunityScore !== null && (
+                    <span>score {item.opportunityScore}</span>
+                  )}
+                </div>
+              </div>
+              <DeflectionStatusBadge item={item} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+function DeflectionReportAnswerSection({
+  title,
+  tone,
+  items,
+}: {
+  title: string
+  tone: FAQDeflectionReportAnswerTone
+  items: FAQDeflectionReportItemView[]
+}) {
+  return (
+    <Section label={title}>
+      {items.length === 0 ? (
+        <div className="rounded border border-slate-800 bg-slate-950/50 px-3 py-2 text-slate-500">
+          {tone === 'proven'
+            ? 'No proven drafted answers returned in this run.'
+            : 'No unproven FAQ gaps returned in this run.'}
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {items.map((item, index) => (
+            <div
+              key={`${tone}-${item.question}-${index}`}
+              className={clsx(
+                'rounded border px-3 py-2',
+                tone === 'proven'
+                  ? 'border-emerald-500/30 bg-emerald-500/10'
+                  : 'border-amber-500/40 bg-amber-500/10',
+              )}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-medium text-slate-100">
+                  {item.question}
+                </div>
+                <DeflectionStatusBadge item={item} />
+              </div>
+              {item.summary && (
+                <p className="mt-1 text-xs text-slate-300">{item.summary}</p>
+              )}
+              {tone === 'proven' ? (
+                <DeflectionStepList
+                  steps={faqDeflectionReportAnswerSteps(item, tone)}
+                />
+              ) : (
+                <p className="mt-2 text-xs text-amber-100">
+                  No verified support resolution was present in the uploaded data.
+                  Add an approved answer before publishing this FAQ.
+                </p>
+              )}
+              <DeflectionSourceIds ids={item.sourceIds} />
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function DeflectionStatusBadge({
+  item,
+}: {
+  item: FAQDeflectionReportItemView
+}) {
+  const proven = item.answerEvidenceStatus === FAQ_RESOLUTION_EVIDENCE_STATUS
+  return (
+    <span
+      className={clsx(
+        'shrink-0 rounded px-2 py-0.5 text-[10px] uppercase tracking-wide',
+        proven
+          ? 'bg-emerald-500/20 text-emerald-200'
+          : 'bg-amber-500/20 text-amber-100',
+      )}
+    >
+      {proven ? 'proven solution' : 'no proven answer'}
+    </span>
+  )
+}
+
+function DeflectionStepList({ steps }: { steps: string[] }) {
+  if (steps.length === 0) return null
+  return (
+    <ol className="mt-2 ml-4 list-decimal space-y-1 text-xs text-slate-200">
+      {steps.map((step, index) => (
+        <li key={`${step}-${index}`}>{step}</li>
+      ))}
+    </ol>
+  )
+}
+
+function DeflectionSourceIds({ ids }: { ids: string[] }) {
+  if (ids.length === 0) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {ids.slice(0, 6).map((id) => (
+        <span
+          key={id}
+          className="max-w-full break-all rounded bg-slate-950/60 px-1.5 py-0.5 font-mono text-[11px] text-slate-200"
+        >
+          {id}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function DeflectionVocabularyGaps({
+  report,
+}: {
+  report: FAQDeflectionReportView
+}) {
+  const mappings = report.items.flatMap((item) => item.termMappings).slice(0, 5)
+  if (mappings.length === 0) return null
+  return (
+    <Section label="Vocabulary gaps">
+      <div className="grid gap-1.5">
+        {mappings.map((mapping, index) => (
+          <div
+            key={`${mapping.customerTerm}-${mapping.documentationTerm}-${index}`}
+            className="rounded border border-slate-800 bg-slate-950/50 px-2 py-1"
+          >
+            <span className="font-medium text-slate-100">
+              {mapping.customerTerm || 'Customer term'}
+            </span>
+            {' -> '}
+            <span className="text-cyan-200">
+              {mapping.documentationTerm || 'Documentation term'}
+            </span>
+            {mapping.sourceIdCount !== null && (
+              <span className="ml-2 text-slate-500">
+                {mapping.sourceIdCount} source
+                {mapping.sourceIdCount === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
 }
 
 function FAQMarkdownExecutionSummary({ result }: { result: Record<string, unknown> }) {
