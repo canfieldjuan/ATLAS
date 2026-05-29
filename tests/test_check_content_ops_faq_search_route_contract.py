@@ -15,6 +15,13 @@ _SCRIPT_PATH = (
     / "scripts"
     / "check_content_ops_faq_search_route_contract.py"
 )
+_HANDOFF_DOC_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "docs"
+    / "extraction"
+    / "validation"
+    / "content_ops_faq_search_route_contract_handoff.md"
+)
 _SPEC = importlib.util.spec_from_file_location(
     "check_content_ops_faq_search_route_contract",
     _SCRIPT_PATH,
@@ -202,6 +209,35 @@ def test_build_detail_url_allows_template_override():
     )
 
     assert url == "https://atlas.example.com/api/v2/faqs/id%20with%20space/full"
+
+
+def test_contract_handoff_doc_matches_checker_fields_and_semantics():
+    text = _HANDOFF_DOC_PATH.read_text(encoding="utf-8")
+
+    assert '{"query": "<query>", "results": [], "count": 0}' in text
+    assert "No-match is not an error." in text
+    assert "not a percentage" in text
+    assert "not the FAQ opportunity score" in text
+    assert "count is the number of returned rows" in text
+
+    for field in ("faq_id", *list(_MODULE.RESULT_FIELDS)):
+        assert f"`{field}`" in text
+    for field in _MODULE.DETAIL_FIELDS:
+        assert f"`{field}`" in text
+    for field in (
+        *_MODULE.DETAIL_ITEM_STRING_FIELDS,
+        *_MODULE.DETAIL_ITEM_INT_FIELDS,
+        *_MODULE.DETAIL_ITEM_STRING_LIST_FIELDS,
+        *_MODULE.DETAIL_ITEM_COUNT_MAP_FIELDS,
+        "term_mappings",
+    ):
+        assert f"`{field}`" in text
+    for field in (
+        *_MODULE.DETAIL_TERM_MAPPING_STRING_FIELDS,
+        *_MODULE.DETAIL_TERM_MAPPING_INT_FIELDS,
+        "failure_risk_signals",
+    ):
+        assert f"`{field}`" in text
 
 
 def test_validate_envelope_rejects_bool_count():
