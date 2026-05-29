@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import cast
 
 import pytest
 
@@ -17,6 +18,10 @@ from extracted_content_pipeline.api.generated_assets import (
 )
 import extracted_content_pipeline.api.generated_assets as asset_api
 from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+from extracted_content_pipeline.faq_macro_writeback import (
+    MacroPublishResult,
+    MacroPublishStatus,
+)
 
 
 BATCH_REPORT_ID_1 = "11111111-1111-1111-1111-111111111111"
@@ -183,6 +188,26 @@ class _Skills:
     def get_prompt(self, name):
         self.calls.append(name)
         return self.prompt
+
+
+class _MacroProvider:
+    def __init__(self, *, status: str = "published", error: str = "") -> None:
+        self.status = status
+        self.error = error
+        self.calls: list[dict[str, object]] = []
+
+    async def publish(self, macros, *, scope: TenantScope):
+        captured = tuple(macros)
+        self.calls.append({"macros": captured, "scope": scope})
+        return tuple(
+            MacroPublishResult(
+                macro=macro,
+                status=cast(MacroPublishStatus, self.status),
+                external_id=f"external-{index}" if not self.error else "",
+                error=self.error,
+            )
+            for index, macro in enumerate(captured, start=1)
+        )
 
 
 def _report_row():
@@ -403,12 +428,31 @@ def _ticket_faq_row():
     }
 
 
+def _publishable_ticket_faq_row():
+    row = _ticket_faq_row()
+    row.update({
+        "id": "11111111-1111-1111-1111-111111111111",
+        "status": "approved",
+        "items": [{
+            "faq_item_id": "faq-item-1",
+            "topic": "billing",
+            "question": "Why was I charged twice?",
+            "resolution_text": "Open Billing and compare settled charges.",
+            "answer_evidence_status": "resolution_evidence",
+            "source_ids": ["ticket-1"],
+        }],
+        "metadata": {"corpus_id": "corpus-1"},
+    })
+    return row
+
+
 def _client(
     pool,
     *,
     scope=None,
     llm=None,
     skills=None,
+    macro_provider=None,
     config: GeneratedAssetApiConfig | None = None,
     dependencies=None,
 ) -> TestClient:
@@ -426,12 +470,18 @@ def _client(
     async def skills_provider():
         return skills
 
+    async def macro_publish_provider():
+        return macro_provider
+
     app.include_router(
         create_generated_asset_router(
             pool_provider=pool_provider,
             scope_provider=scope_provider if scope is not None else None,
             llm_provider=llm_provider if llm is not None else None,
             skills_provider=skills_provider if skills is not None else None,
+            macro_publish_provider=(
+                macro_publish_provider if macro_provider is not None else None
+            ),
             config=config,
             dependencies=dependencies,
         )
@@ -1409,6 +1459,101 @@ def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() ->
         "support_account",
         "approved",
     )
+
+
+def test_generated_asset_router_publishes_ticket_faq_macros() -> None:
+    pool = _Pool(rows=[_publishable_ticket_faq_row()])
+    provider = _MacroProvider()
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1", "user_id": "user_1"},
+        macro_provider=provider,
+    ).post(
+        "/content-assets/faq_markdown/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macros"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "acct_1"
+    assert body["asset"] == "faq_markdown"
+    assert body["ok"] is True
+    assert body["publishable_count"] == 1
+    assert body["draft_status_updated"] is True
+    assert provider.calls[0]["scope"] == TenantScope(
+        account_id="acct_1",
+        user_id="user_1",
+    )
+    macro = provider.calls[0]["macros"][0]
+    assert macro.title == "Why was I charged twice?"
+    assert macro.body == "Open Billing and compare settled charges."
+    get_query, get_args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in get_query
+    assert get_args == ("11111111-1111-1111-1111-111111111111", "acct_1")
+    update_query, update_args = pool.fetch_calls[1]
+    assert "UPDATE ticket_faq_markdown" in update_query
+    assert update_args == ("11111111-1111-1111-1111-111111111111", "published", "acct_1")
+
+
+def test_generated_asset_router_publish_macros_requires_provider() -> None:
+    pool = _Pool(rows=[_publishable_ticket_faq_row()])
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/faq_markdown/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macros"
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "FAQ macro publish provider unavailable"
+
+
+def test_generated_asset_router_publish_macros_is_faq_only() -> None:
+    pool = _Pool()
+    provider = _MacroProvider()
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+        macro_provider=provider,
+    ).post(
+        "/content-assets/report/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macros"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "only faq_markdown drafts can publish macros"
+    assert provider.calls == []
+    assert pool.fetch_calls == []
+
+
+def test_generated_asset_router_publish_macros_surfaces_pending_reconcile() -> None:
+    pool = _Pool(rows=[_publishable_ticket_faq_row()])
+    provider = _MacroProvider(
+        status="failed",
+        error="zendesk_macro_mapping_pending_reconcile",
+    )
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+        macro_provider=provider,
+    ).post(
+        "/content-assets/faq_markdown/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macros"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["failed_count"] == 1
+    assert body["pending_reconcile_count"] == 1
+    assert body["draft_status_updated"] is False
+    assert body["results"][0]["error"] == "zendesk_macro_mapping_pending_reconcile"
+    assert len(pool.fetch_calls) == 1
 
 
 def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:
