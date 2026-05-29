@@ -38,9 +38,11 @@ Slice phase: Production hardening
 
 The new table stores one active Zendesk credential row per SaaS account. API
 tokens are encrypted via `atlas_brain.auth.encryption.encrypt_secret`, reusing
-the existing BYOK KEK rotation model. The table stores display-safe fields
-(`email`, `subdomain`, `base_url`, token prefix) plus `encrypted_api_token` and
-`encryption_kid`; active rows are soft-revoked with `revoked_at`.
+the existing BYOK KEK rotation model through lazy wrapper functions so the
+module remains importable in lean extracted CI. The table stores display-safe
+fields (`email`, `subdomain`, `base_url`, token prefix) plus
+`encrypted_api_token` and `encryption_kid`; active rows are soft-revoked with
+`revoked_at`.
 
 `lookup_zendesk_credentials(...)` filters by account id and active rows only,
 decrypts the API token with `decrypt_secret`, and returns
@@ -79,6 +81,7 @@ Parked hardening: none
 
 - python -m pytest tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py -q — 14 passed.
 - python -m py_compile atlas_brain/_content_ops_zendesk_credentials.py atlas_brain/_content_ops_macro_writeback.py tests/test_content_ops_zendesk_credentials.py tests/test_atlas_content_ops_macro_writeback.py — passed.
+- python - <<'PY' ... import atlas_brain._content_ops_zendesk_credentials with cryptography blocked ... PY — passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py — passed.
 - bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-faq-macro-writeback-tenant-credentials.md — passed.
 
@@ -88,9 +91,9 @@ Parked hardening: none
 |---|---:|
 | Plan | ~95 |
 | Migration | ~34 |
-| Service / wiring / CI | ~284 |
+| Service / wiring / CI | ~300 |
 | Tests | ~280 |
-| Total | ~695 |
+| Total | ~714 |
 
 This is over the 400 LOC soft cap because credential storage must ship with the
 encryption boundary, scoped lookup, provider wiring, and tests together. A

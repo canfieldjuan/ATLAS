@@ -12,9 +12,6 @@ from extracted_content_pipeline.faq_macro_writeback_zendesk import (
     ZendeskMacroCredentials,
 )
 
-from .auth.encryption import decrypt_secret, encrypt_secret
-
-
 logger = logging.getLogger("atlas.content_ops_zendesk_credentials")
 
 TOKEN_PREFIX_LEN = 8
@@ -205,6 +202,22 @@ def _validated_credentials(
     if not credentials.is_complete():
         raise ValueError("Complete Zendesk email, API token, and endpoint are required")
     return credentials
+
+
+def encrypt_secret(raw: str) -> tuple[bytes, str]:
+    """Encrypt a secret through the host crypto boundary."""
+
+    from .auth.encryption import encrypt_secret as _encrypt_secret
+
+    return _encrypt_secret(raw)
+
+
+def decrypt_secret(ciphertext: bytes, kid: str) -> str | None:
+    """Decrypt a secret through the host crypto boundary."""
+
+    from .auth.encryption import decrypt_secret as _decrypt_secret
+
+    return _decrypt_secret(ciphertext, kid)
 
 
 def _display_record(row) -> ContentOpsZendeskCredentialRecord:
