@@ -165,6 +165,11 @@ OUTPUT_REASONING_POLICIES: Mapping[str, OutputReasoningPolicy] = MappingProxyTyp
         default_preset="none",
         supported_presets=("none",),
     ),
+    "faq_deflection_report": OutputReasoningPolicy(
+        output="faq_deflection_report",
+        default_preset="none",
+        supported_presets=("none",),
+    ),
     "email_campaign": OutputReasoningPolicy(
         output="email_campaign",
         default_preset="single_pass",

@@ -392,7 +392,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "max_text_chars": config.max_text_chars,
             },
         )
-    if output == "faq_markdown":
+    if output in {"faq_markdown", "faq_deflection_report"}:
         config = _faq_markdown_config_for_request(request)
         step_config: dict[str, Any] = {
             "title": config.title,
@@ -413,9 +413,18 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             step_config["vocabulary_gap_rules"] = [
                 list(rule) for rule in config.vocabulary_gap_rules
             ]
+        if output == "faq_deflection_report":
+            step_config["report_title"] = (
+                _text_input(request.inputs, "deflection_report_title")
+                or "Support Ticket Deflection Report"
+            )
         return GenerationPlanStep(
             output=output,
-            runner="TicketFAQMarkdownService.generate",
+            runner=(
+                "FAQDeflectionReportService.generate"
+                if output == "faq_deflection_report"
+                else "TicketFAQMarkdownService.generate"
+            ),
             status="runnable",
             config=step_config,
         )

@@ -207,6 +207,17 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         reasoning_requirement="absent",
         default_parse_retry_attempts=0,
     ),
+    "faq_deflection_report": OutputDefinition(
+        id="faq_deflection_report",
+        label="FAQ Deflection Report",
+        description="Customer-facing deflection report from support-ticket evidence.",
+        implemented=True,
+        estimated_unit_cost_usd=0.0,
+        required_inputs=("source_material",),
+        default_max_items=20,
+        reasoning_requirement="absent",
+        default_parse_retry_attempts=0,
+    ),
 })
 
 

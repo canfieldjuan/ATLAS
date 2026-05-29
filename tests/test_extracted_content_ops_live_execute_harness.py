@@ -23,6 +23,7 @@ from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
 )
@@ -584,6 +585,66 @@ async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
         item["term_mappings"][0]["documentation_term"]
         == "Single sign-on setup"
     )
+
+
+async def test_live_execute_route_returns_faq_deflection_report_artifact() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_deflection_report"],
+        "limit": 3,
+        "require_quality_gates": False,
+        "inputs": {
+            "deflection_report_title": "Hosted FAQ Deflection Report",
+            "faq_title": "Hosted FAQ Source",
+            "source_material": {
+                "support_tickets": [
+                    {
+                        "ticket_id": "ticket-export-1",
+                        "source_type": "support_ticket",
+                        "subject": "Export report",
+                        "message": "How do I export attribution reports?",
+                        "pain_category": "exports",
+                        "resolution_text": (
+                            "Open Analytics, choose Attribution, then select "
+                            "Download report."
+                        ),
+                    },
+                    {
+                        "ticket_id": "ticket-billing-1",
+                        "source_type": "support_ticket",
+                        "subject": "Renewal invoice",
+                        "message": "How do I confirm my renewal invoice before payment?",
+                        "pain_category": "billing",
+                    },
+                ]
+            },
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["report_title"] == (
+        "Hosted FAQ Deflection Report"
+    )
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["status"] == "completed"
+    assert step["result"]["summary"]["source_count"] == 2
+    assert step["result"]["summary"]["drafted_answer_count"] == 1
+    assert step["result"]["summary"]["no_proven_answer_count"] == 1
+    assert step["result"]["markdown"].startswith("# Hosted FAQ Deflection Report")
+    assert "## Ranked Question Opportunities" in step["result"]["markdown"]
+    assert "## No Proven Answer Yet" in step["result"]["markdown"]
+    assert step["result"]["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
 
 
 async def test_live_execute_route_handles_bulk_faq_source_material() -> None:
