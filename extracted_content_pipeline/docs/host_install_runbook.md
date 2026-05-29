@@ -302,6 +302,26 @@ Repeat `--rule-file` to combine files. Explicit `--intent-rule` and
 use the same CLI delimiter guardrails: intent topics cannot contain `=` or `,`,
 and keywords or vocabulary aliases cannot contain `,`.
 
+To build the customer-facing deflection report artifact for review or delivery,
+run the report CLI with the same support-ticket rows and rule-file contract:
+
+```bash
+python scripts/build_content_ops_deflection_report.py \
+  extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv \
+  --source-format csv \
+  --documentation-term "Single sign-on setup" \
+  --rule-file extracted_content_pipeline/examples/faq_custom_rules.json \
+  --require-output-checks \
+  --result-output deflection-report-result.json \
+  --summary-output deflection-report-summary.json \
+  --output deflection-report.md
+```
+
+`deflection-report.md` is the customer-facing report. The result JSON records
+the resolved intent/vocabulary rules, output checks, and compact item proof
+metadata. If `--require-output-checks` fails, the result JSON is still written
+and the Markdown/summary artifacts are withheld.
+
 When `ticket_faq_markdown` migrations are installed, prove the persisted review
 loop with the FAQ lifecycle smoke:
 
