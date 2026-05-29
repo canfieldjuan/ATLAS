@@ -28,6 +28,7 @@ from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
 )
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
+from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 from extracted_quality_gate.types import QualityPolicy
 from tests.content_ops_live_execute_harness import (
     MemoryDraftRepository,
@@ -41,6 +42,8 @@ pytestmark = pytest.mark.skipif(
     api_module.APIRouter is None,
     reason="fastapi is not installed in this test environment",
 )
+
+FAQ_DRAFT_ID = "11111111-1111-4111-8111-111111111111"
 
 
 def _route(router, path: str, method: str):
@@ -115,6 +118,52 @@ class _RecordingBlueprintRepository:
             "filters": dict(filters or {}),
         })
         return self.rows[:limit]
+
+
+class _SelectedFAQRepository:
+    def __init__(self, pool: dict[str, Any]) -> None:
+        self.pool = pool
+
+    async def get_draft(
+        self,
+        faq_id: str,
+        *,
+        scope: TenantScope,
+    ) -> TicketFAQDraft | None:
+        self.pool["calls"].append((faq_id, scope.account_id))
+        return self.pool["drafts"].get(faq_id)
+
+
+def _saved_faq_draft() -> TicketFAQDraft:
+    return TicketFAQDraft(
+        id=FAQ_DRAFT_ID,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Saved FAQ report",
+        markdown="# Saved FAQ report",
+        items=(
+            {
+                "topic": "billing confusion",
+                "question": "Why was I charged twice?",
+                "summary": "Customers ask why duplicate-looking invoices appear.",
+                "steps": (
+                    "Open Billing, choose invoice history, and compare pending charges.",
+                    "Contact support with the invoice ID if both charges settled.",
+                ),
+                "answer_evidence_status": "resolution_evidence",
+                "source_ids": ("ticket-billing-1", "ticket-billing-2"),
+            },
+        ),
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={
+            "uses_user_vocabulary": True,
+            "condensed": True,
+            "has_action_items": True,
+        },
+        metadata={"source_period": "Uploaded support tickets"},
+        status="draft",
+    )
 
 
 def _real_service_response_for_metadata(
@@ -461,6 +510,116 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
     assert "support_ticket_provider" in user_prompt
     assert "included_ticket_row_count" in user_prompt
     assert "Generate one blog post" in user_prompt
+
+
+async def test_selected_faq_id_feeds_real_landing_and_blog_generation() -> None:
+    blueprints = _RecordingBlueprintRepository([{
+        "id": "bp-selected-faq",
+        "slug": "selected-faq-report",
+        "topic": "Saved FAQ questions customers keep asking",
+        "topic_type": "content_ops_support_ticket_faq",
+    }])
+    llm = _RecordingContentLLM()
+    landing_pages = MemoryDraftRepository("landing")
+    blog_posts = MemoryDraftRepository("blog")
+    scope = TenantScope(
+        account_id="acct-selected-faq-real",
+        user_id="user-selected-faq-real",
+    )
+    pool = {
+        "drafts": {FAQ_DRAFT_ID: _saved_faq_draft()},
+        "calls": [],
+    }
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            landing_page=LandingPageGenerationService(
+                landing_pages=landing_pages,
+                llm=llm,
+                skills=MemorySkillStore(),
+            ),
+            blog_post=BlogPostGenerationService(
+                blueprints=blueprints,
+                blog_posts=blog_posts,
+                llm=llm,
+                skills=MemorySkillStore(),
+            ),
+        ),
+        scope_provider=lambda: scope,
+        input_provider=build_content_ops_input_provider(
+            pool_provider=lambda: pool,
+            faq_repository_factory=_SelectedFAQRepository,
+        ),
+    )
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "outputs": ["landing_page", "blog_post"],
+        "limit": 1,
+        "require_quality_gates": False,
+        "inputs": {"source_faq_ids": [FAQ_DRAFT_ID]},
+    })
+
+    assert pool["calls"] == [(FAQ_DRAFT_ID, "acct-selected-faq-real")]
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["provider"] == "atlas_support_ticket_request"
+    assert payload["input_provider"]["metadata"]["source_row_count"] == 1
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 1
+    assert payload["input_provider"]["warnings"] == []
+    assert [step["output"] for step in payload["steps"]] == [
+        "landing_page",
+        "blog_post",
+    ]
+    assert [step["status"] for step in payload["steps"]] == [
+        "completed",
+        "completed",
+    ]
+
+    assert len(landing_pages.saved) == 1
+    landing_scope, landing_draft = landing_pages.saved[0]
+    assert landing_scope == scope
+    assert landing_draft.campaign_name == "FAQ Report"
+    assert landing_draft.reference_ids == ("ticket-acme-1", "ticket-northstar-1")
+
+    assert blueprints.calls == [{
+        "scope": scope,
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "filters": {"topic_type": "content_ops_support_ticket_faq"},
+    }]
+    assert len(blog_posts.saved) == 1
+    blog_scope, blog_draft = blog_posts.saved[0]
+    assert blog_scope == scope
+    assert blog_draft.data_context["source"] == "support_ticket_provider"
+    assert blog_draft.data_context["included_ticket_row_count"] == 1
+    assert blog_draft.data_context["faq_questions"] == ["Why was I charged twice?"]
+    assert blog_draft.data_context["support_ticket_resolution_evidence_present"] is True
+    assert blog_draft.data_context["support_ticket_resolution_evidence_count"] == 1
+
+    expected_resolution = (
+        "Open Billing, choose invoice history, and compare pending charges. "
+        "Contact support with the invoice ID if both charges settled."
+    )
+    assert blog_draft.data_context["support_ticket_resolution_examples"] == [{
+        "source_id": FAQ_DRAFT_ID,
+        "source_title": "Why was I charged twice?",
+        "text": expected_resolution,
+    }]
+
+    assert len(llm.calls) == 2
+    landing_call, blog_call = llm.calls
+    landing_system_prompt, landing_user_prompt = _message_texts(landing_call)
+    assert landing_call["metadata"]["asset_type"] == "landing_page"
+    assert "Why was I charged twice?" in landing_system_prompt
+    assert expected_resolution in landing_system_prompt
+    assert "Generate one landing page" in landing_user_prompt
+
+    blog_system_prompt, blog_user_prompt = _message_texts(blog_call)
+    assert blog_call["metadata"]["asset_type"] == "blog_post"
+    assert "Saved FAQ questions customers keep asking" not in blog_system_prompt
+    assert "Why was I charged twice?" in blog_user_prompt
+    assert "support_ticket_resolution_evidence_present" in blog_user_prompt
+    assert "Generate one blog post" in blog_user_prompt
 
 
 async def test_support_ticket_provider_triggers_blog_generated_content_gate() -> None:
