@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from .campaign_ports import TenantScope
 from .faq_macro_writeback import MacroWritebackMapping
+from .faq_macro_writeback_publish import FAQMacroPublishSummary
 from .storage._jsonb_helpers import decode_jsonb_field, json_dump_jsonb, row_to_dict
 
 
@@ -164,6 +165,50 @@ class PostgresFAQMacroWritebackMappingRepository:
         return tuple(_row_to_mapping(row_to_dict(row)) for row in rows)
 
 
+@dataclass(frozen=True)
+class PostgresFAQMacroPublishAttemptRepository:
+    """Async Postgres adapter for append-only FAQ macro publish attempts."""
+
+    pool: Any
+
+    async def record_attempt(
+        self,
+        summary: FAQMacroPublishSummary,
+        *,
+        scope: TenantScope,
+    ) -> None:
+        await self.pool.execute(
+            """
+            INSERT INTO ticket_faq_macro_publish_attempts (
+                account_id, faq_draft_id, draft_status, ok,
+                publishable_count, skipped_count, published_count,
+                updated_count, failed_count, pending_reconcile_count,
+                draft_status_updated, skipped, results
+            )
+            VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7,
+                $8, $9, $10,
+                $11, $12::jsonb, $13::jsonb
+            )
+            """,
+            scope.account_id or "",
+            _clean(summary.faq_id),
+            _clean(summary.draft_status),
+            bool(summary.ok),
+            int(summary.publishable_count),
+            int(summary.skipped_count),
+            int(summary.published_count),
+            int(summary.updated_count),
+            int(summary.failed_count),
+            int(summary.pending_reconcile_count),
+            bool(summary.draft_status_updated),
+            json_dump_jsonb([dict(item) for item in summary.skipped]),
+            json_dump_jsonb([dict(item) for item in summary.results]),
+        )
+
+
 __all__ = [
+    "PostgresFAQMacroPublishAttemptRepository",
     "PostgresFAQMacroWritebackMappingRepository",
 ]

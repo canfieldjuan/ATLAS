@@ -1494,6 +1494,24 @@ def test_generated_asset_router_publishes_ticket_faq_macros() -> None:
     update_query, update_args = pool.fetch_calls[1]
     assert "UPDATE ticket_faq_markdown" in update_query
     assert update_args == ("11111111-1111-1111-1111-111111111111", "published", "acct_1")
+    attempt_query, attempt_args = next(
+        call for call in pool.execute_calls
+        if "ticket_faq_macro_publish_attempts" in call[0]
+    )
+    assert "INSERT INTO ticket_faq_macro_publish_attempts" in attempt_query
+    assert attempt_args[:11] == (
+        "acct_1",
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        True,
+        1,
+        0,
+        1,
+        0,
+        0,
+        0,
+        True,
+    )
 
 
 def test_generated_asset_router_publish_macros_requires_provider() -> None:
@@ -1554,6 +1572,24 @@ def test_generated_asset_router_publish_macros_surfaces_pending_reconcile() -> N
     assert body["draft_status_updated"] is False
     assert body["results"][0]["error"] == "zendesk_macro_mapping_pending_reconcile"
     assert len(pool.fetch_calls) == 1
+    attempt_query, attempt_args = next(
+        call for call in pool.execute_calls
+        if "ticket_faq_macro_publish_attempts" in call[0]
+    )
+    assert "INSERT INTO ticket_faq_macro_publish_attempts" in attempt_query
+    assert attempt_args[:11] == (
+        "acct_1",
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        False,
+        1,
+        0,
+        0,
+        0,
+        1,
+        1,
+        False,
+    )
 
 
 def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:

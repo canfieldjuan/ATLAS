@@ -39,6 +39,7 @@ from ..landing_page_postgres import (
 )
 from ..landing_page_ports import LandingPageDraft, LandingPageSection
 from ..faq_macro_writeback import MacroPublishProvider
+from ..faq_macro_writeback_postgres import PostgresFAQMacroPublishAttemptRepository
 from ..faq_macro_writeback_publish import FAQMacroWritebackPublishService
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
@@ -397,6 +398,7 @@ def create_generated_asset_router(
         summary = await FAQMacroWritebackPublishService(
             faq_repository=PostgresTicketFAQRepository(pool),
             provider=provider,
+            attempt_repository=PostgresFAQMacroPublishAttemptRepository(pool),
         ).publish_faq_draft(faq_id, scope=tenant)
         if not summary.found:
             raise HTTPException(status_code=404, detail="FAQ draft not found")

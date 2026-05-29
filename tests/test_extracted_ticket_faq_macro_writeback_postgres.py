@@ -8,7 +8,11 @@ import pytest
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.faq_macro_writeback import MacroWritebackMapping
 from extracted_content_pipeline.faq_macro_writeback_postgres import (
+    PostgresFAQMacroPublishAttemptRepository,
     PostgresFAQMacroWritebackMappingRepository,
+)
+from extracted_content_pipeline.faq_macro_writeback_publish import (
+    FAQMacroPublishSummary,
 )
 
 
@@ -26,6 +30,13 @@ PENDING_MIGRATION = (
     / "migrations"
     / "329_ticket_faq_macro_writebacks_pending.sql"
 )
+ATTEMPT_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "extracted_content_pipeline"
+    / "storage"
+    / "migrations"
+    / "330_ticket_faq_macro_publish_attempts.sql"
+)
 
 
 class _Pool:
@@ -34,6 +45,7 @@ class _Pool:
         self.fetchrow_rows: list[dict] = []
         self.fetch_calls: list[dict] = []
         self.fetchrow_calls: list[dict] = []
+        self.execute_calls: list[tuple[str, tuple[object, ...]]] = []
 
     async def fetch(self, query, *args):
         self.fetch_calls.append({"query": query, "args": args})
@@ -42,6 +54,10 @@ class _Pool:
     async def fetchrow(self, query, *args):
         self.fetchrow_calls.append({"query": query, "args": args})
         return self.fetchrow_rows.pop(0)
+
+    async def execute(self, query, *args):
+        self.execute_calls.append((str(query), args))
+        return "INSERT 0 1"
 
 
 def _row(**overrides) -> dict:
@@ -81,6 +97,19 @@ def test_ticket_faq_macro_writeback_pending_migration_prevents_retry_duplicates(
     assert "chk_ticket_faq_macro_writebacks_external_id_when_published" in sql
     assert "DROP CONSTRAINT IF EXISTS ticket_faq_macro_writebacks_account_id_platform_external_id_key" in sql
     assert "WHERE btrim(external_id) <> ''" in sql
+
+
+def test_ticket_faq_macro_publish_attempts_migration_adds_append_only_history() -> None:
+    sql = ATTEMPT_MIGRATION.read_text()
+
+    assert "CREATE TABLE IF NOT EXISTS ticket_faq_macro_publish_attempts" in sql
+    assert (
+        "faq_draft_id UUID NOT NULL REFERENCES ticket_faq_markdown(id) "
+        "ON DELETE CASCADE"
+    ) in sql
+    assert "skipped JSONB NOT NULL DEFAULT '[]'::jsonb" in sql
+    assert "results JSONB NOT NULL DEFAULT '[]'::jsonb" in sql
+    assert "idx_ticket_faq_macro_publish_attempts_faq" in sql
 
 
 @pytest.mark.asyncio
@@ -260,3 +289,48 @@ async def test_upsert_mapping_keeps_account_scope_outside_client_payload() -> No
 
     assert pool.fetchrow_calls[0]["args"][0] == "acct-tenant-a"
     assert "account_id" not in pool.fetchrow_calls[0]["args"][-1]
+
+
+@pytest.mark.asyncio
+async def test_record_publish_attempt_persists_summary_with_tenant_scope() -> None:
+    pool = _Pool()
+    repo = PostgresFAQMacroPublishAttemptRepository(pool)
+    summary = FAQMacroPublishSummary(
+        faq_id="11111111-1111-1111-1111-111111111111",
+        found=True,
+        draft_status="approved",
+        publishable_count=1,
+        skipped_count=0,
+        published_count=0,
+        updated_count=1,
+        failed_count=0,
+        pending_reconcile_count=0,
+        draft_status_updated=True,
+        skipped=(),
+        results=({
+            "status": "updated",
+            "external_id": "macro-123",
+            "error": "",
+        },),
+    )
+
+    await repo.record_attempt(summary, scope=TenantScope(account_id="acct-1"))
+
+    query, args = pool.execute_calls[0]
+    assert "INSERT INTO ticket_faq_macro_publish_attempts" in query
+    assert "account_id, faq_draft_id, draft_status, ok" in query
+    assert args == (
+        "acct-1",
+        "11111111-1111-1111-1111-111111111111",
+        "approved",
+        True,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        True,
+        "[]",
+        '[{"status":"updated","external_id":"macro-123","error":""}]',
+    )

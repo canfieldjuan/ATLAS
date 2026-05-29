@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
-from typing import Sequence
+from typing import Protocol, Sequence
 
 from .campaign_ports import JsonDict, TenantScope
 from .faq_macro_writeback import (
@@ -56,12 +56,25 @@ class FAQMacroPublishSummary:
         return data
 
 
+class FAQMacroPublishAttemptRepository(Protocol):
+    """Persistence port for append-only FAQ macro publish attempt history."""
+
+    async def record_attempt(
+        self,
+        summary: FAQMacroPublishSummary,
+        *,
+        scope: TenantScope,
+    ) -> None:
+        """Persist one publish attempt summary for a tenant."""
+
+
 @dataclass(frozen=True)
 class FAQMacroWritebackPublishService:
     """Product-level trigger for approved FAQ macro writeback."""
 
     faq_repository: TicketFAQRepository
     provider: MacroPublishProvider
+    attempt_repository: FAQMacroPublishAttemptRepository | None = None
     published_status: str = PUBLISHED_FAQ_STATUS
 
     async def publish_faq_draft(
@@ -80,13 +93,15 @@ class FAQMacroWritebackPublishService:
 
         preview = build_macro_writeback_preview([draft])
         if not preview.macros:
-            return _summary(
+            summary = _summary(
                 faq_id=cleaned_id,
                 found=True,
                 draft_status=_clean(draft.status),
                 preview=preview,
                 results=(),
             )
+            await self._record_attempt(summary, scope=scope)
+            return summary
 
         results = tuple(await self.provider.publish(preview.macros, scope=scope))
         summary = _summary(
@@ -102,8 +117,19 @@ class FAQMacroWritebackPublishService:
                 self.published_status,
                 scope=scope,
             )
-            return replace(summary, draft_status_updated=status_updated)
+            summary = replace(summary, draft_status_updated=status_updated)
+        await self._record_attempt(summary, scope=scope)
         return summary
+
+    async def _record_attempt(
+        self,
+        summary: FAQMacroPublishSummary,
+        *,
+        scope: TenantScope,
+    ) -> None:
+        if self.attempt_repository is None or not summary.found:
+            return
+        await self.attempt_repository.record_attempt(summary, scope=scope)
 
 
 def _summary(
@@ -157,6 +183,7 @@ def _clean(value: object) -> str:
 
 
 __all__ = [
+    "FAQMacroPublishAttemptRepository",
     "FAQMacroPublishSummary",
     "FAQMacroWritebackPublishService",
     "PUBLISHED_FAQ_STATUS",
