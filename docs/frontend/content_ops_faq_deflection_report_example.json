@@ -1,0 +1,157 @@
+{
+  "faq_result": {
+    "generated": 2,
+    "items": [
+      {
+        "action_items": [
+          "Use the uploaded resolution evidence: Open Analytics, choose Attribution, then click Download report",
+          "Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.",
+          "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+        ],
+        "answer": "Customers mention: \"How do I export attribution reports?\" Evidence comes from 2 ticket source(s).",
+        "answer_evidence_status": "resolution_evidence",
+        "displayed_evidence_count": 1,
+        "evidence_count": 1,
+        "evidence_quotes": [
+          "`ticket-export-1` - Export attribution: \"How do I export attribution reports?\""
+        ],
+        "failure_risk_score": 0,
+        "failure_risk_signals": [],
+        "frequency": 2,
+        "opportunity_score": 2,
+        "question": "How do I export attribution reports?",
+        "question_source": "customer_wording",
+        "resolution_source_count": 2,
+        "source_ids": [
+          "ticket-export-1",
+          "ticket-export-2"
+        ],
+        "source_labels": [
+          "`ticket-export-1` - Export attribution"
+        ],
+        "source_type_counts": {
+          "support_ticket": 2
+        },
+        "steps": [
+          "Use the uploaded resolution evidence: Open Analytics, choose Attribution, then click Download report",
+          "Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.",
+          "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+        ],
+        "summary": "Customers are asking about reporting friction across 2 ticket sources. The clearest customer wording is \"How do I export attribution reports?\", so this FAQ should answer that request directly and tell users exactly what to try next.",
+        "term_mappings": [
+          {
+            "customer_term": "export",
+            "documentation_term": "Download report",
+            "failure_risk_score": 0,
+            "failure_risk_signals": [],
+            "first_source_id": "ticket-export-1",
+            "opportunity_score": 2,
+            "source_id_count": 2,
+            "suggestion": "Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text.",
+            "zero_result_source_count": 0
+          },
+          {
+            "customer_term": "report download",
+            "documentation_term": "Download report",
+            "failure_risk_score": 0,
+            "failure_risk_signals": [],
+            "first_source_id": "ticket-export-1",
+            "opportunity_score": 2,
+            "source_id_count": 2,
+            "suggestion": "Add \"report download\" as alternate phrasing for \"Download report\" in FAQ headings and answer text.",
+            "zero_result_source_count": 0
+          }
+        ],
+        "ticket_count": 2,
+        "topic": "reporting friction",
+        "weighted_frequency": 2,
+        "weighted_source_volume_by_type": {
+          "support_ticket": 2
+        },
+        "when_to_contact_support": "Contact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions."
+      },
+      {
+        "action_items": [
+          "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
+          "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
+          "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+        ],
+        "answer": "Customers mention: \"Can I turn on SSO for all users?\" Evidence comes from 2 ticket source(s).",
+        "answer_evidence_status": "draft_needs_review",
+        "displayed_evidence_count": 1,
+        "evidence_count": 1,
+        "evidence_quotes": [
+          "`ticket-sso-2` - Team login: \"Can I turn on SSO for all users?\""
+        ],
+        "failure_risk_score": 0,
+        "failure_risk_signals": [],
+        "frequency": 2,
+        "opportunity_score": 2,
+        "question": "Can I turn on SSO for all users?",
+        "question_source": "customer_wording",
+        "resolution_source_count": 0,
+        "source_ids": [
+          "ticket-sso-2",
+          "ticket-sso-1"
+        ],
+        "source_labels": [
+          "`ticket-sso-2` - Team login"
+        ],
+        "source_type_counts": {
+          "support_ticket": 2
+        },
+        "steps": [
+          "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
+          "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
+          "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+        ],
+        "summary": "Customers are asking about other support issues across 2 ticket sources. The clearest customer wording is \"Can I turn on SSO for all users?\", so this FAQ should answer that request directly and tell users exactly what to try next.",
+        "term_mappings": [
+          {
+            "customer_term": "SSO",
+            "documentation_term": "Single sign-on setup",
+            "failure_risk_score": 0,
+            "failure_risk_signals": [],
+            "first_source_id": "ticket-sso-2",
+            "opportunity_score": 2,
+            "source_id_count": 2,
+            "suggestion": "Add \"SSO\" as alternate phrasing for \"Single sign-on setup\" in FAQ headings and answer text.",
+            "zero_result_source_count": 0
+          }
+        ],
+        "ticket_count": 2,
+        "topic": "other support issues",
+        "weighted_frequency": 2,
+        "weighted_source_volume_by_type": {
+          "support_ticket": 2
+        },
+        "when_to_contact_support": "Contact support at https://example.com/support if you cannot access the account, the field is locked, or the confirmation message never arrives."
+      }
+    ],
+    "markdown": "# Support Ticket FAQ Source\n\n_Source rows analyzed: 4. Ticket sources used: 4._\n\n## 1. How do I export attribution reports?\n\nCustomers are asking about reporting friction across 2 ticket sources. The clearest customer wording is \"How do I export attribution reports?\", so this FAQ should answer that request directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"export\"; documentation says \"Download report\". Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); mapping score 2.)\n- Customers say \"report download\"; documentation says \"Download report\". Add \"report download\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); mapping score 2.)\n\n**What to do next:**\n\n1. Use the uploaded resolution evidence: Open Analytics, choose Attribution, then click Download report\n2. Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.\n\n**Sources:**\n\n- `ticket-export-1` - Export attribution: \"How do I export attribution reports?\"\n\n## 2. Can I turn on SSO for all users?\n\nCustomers are asking about other support issues across 2 ticket sources. The clearest customer wording is \"Can I turn on SSO for all users?\", so this FAQ should answer that request directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"SSO\"; documentation says \"Single sign-on setup\". Add \"SSO\" as alternate phrasing for \"Single sign-on setup\" in FAQ headings and answer text. (Seen in 2 source(s); mapping score 2.)\n\n**What to do next:**\n\n1. Review the cited ticket evidence and confirm the policy-approved answer before publishing.\n2. Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if you cannot access the account, the field is locked, or the confirmation message never arrives.\n\n**Sources:**\n\n- `ticket-sso-2` - Team login: \"Can I turn on SSO for all users?\"\n",
+    "output_checks": {
+      "condensed": true,
+      "has_action_items": true,
+      "uses_user_vocabulary": true
+    },
+    "saved_ids": [],
+    "source_count": 4,
+    "ticket_source_count": 4,
+    "warnings": []
+  },
+  "markdown": "# Support Ticket Deflection Report\n\n## Executive Summary\n\nThis report analyzed 4 source rows and produced 2 ranked FAQ opportunities from the supplied support data.\n\n- Drafted answers with proven solutions: 1\n- No proven answer yet: 1\n- Ticket sources represented: 4\n\n## Ranked Question Opportunities\n\n| Rank | Customer question | Frequency | Opportunity | Answer status | Source IDs |\n|---:|---|---:|---:|---|---|\n| 1 | How do I export attribution reports? | 2 | 2 | drafted from resolution evidence | ticket-export-1, ticket-export-2 |\n| 2 | Can I turn on SSO for all users? | 2 | 2 | no proven answer yet | ticket-sso-2, ticket-sso-1 |\n\n## Drafted Answers With Proven Solutions\n\n### 1. How do I export attribution reports?\n\nUploaded resolution evidence supports this draft answer.\n\n**Draft answer steps:**\n\n1. Use the uploaded resolution evidence: Open Analytics, choose Attribution, then click Download report\n2. Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**Sources:** ticket-export-1, ticket-export-2\n\n## No Proven Answer Yet\n\n### 1. Can I turn on SSO for all users?\n\nCustomers repeatedly asked this question, but the uploaded data did not include verified resolution evidence for a publishable answer.\n\nNo verified support resolution was present in the uploaded data. Support should add the approved answer before this FAQ is published.\n\n**Sources:** ticket-sso-2, ticket-sso-1\n\n## Vocabulary Gaps\n\n| Customer wording | Documentation term | Suggested update | Source count |\n|---|---|---|---:|\n| export | Download report | Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. | 2 |\n| report download | Download report | Add \"report download\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. | 2 |\n| SSO | Single sign-on setup | Add \"SSO\" as alternate phrasing for \"Single sign-on setup\" in FAQ headings and answer text. | 2 |\n\n## Evidence Appendix\n\n### 1. How do I export attribution reports?\n\n- `ticket-export-1` - Export attribution: \"How do I export attribution reports?\"\n\n### 2. Can I turn on SSO for all users?\n\n- `ticket-sso-2` - Team login: \"Can I turn on SSO for all users?\"\n",
+  "summary": {
+    "drafted_answer_count": 1,
+    "generated": 2,
+    "no_proven_answer_count": 1,
+    "output_checks": {
+      "condensed": true,
+      "has_action_items": true,
+      "uses_user_vocabulary": true
+    },
+    "source_count": 4,
+    "ticket_source_count": 4,
+    "top_opportunity_score": 2,
+    "top_question": "How do I export attribution reports?"
+  }
+}
