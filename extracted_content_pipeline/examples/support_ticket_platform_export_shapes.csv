@@ -1,0 +1,4 @@
+Id,Ticket ID,Conversation ID,Subject,Ticket Subject,Conversation title,Description,Message,Latest message,Conversation body,Created at,Created time,Conversation created at,Requester email,Contact email address,User email,Pain Category
+zd-100,,,How do I reset MFA?,,,I cannot get the login code on my new phone.,,,,2026-05-01T09:00:00Z,,,maya@example.test,,,login access
+,fd-200,,,Where do I export my invoice?,,,Where do I export my invoice before month-end?,Agent reply: use the billing export menu.,,,2026-05-02 10:15:00,,,ops@example.test,,billing export
+,,ic-300,,,"Cancellation before renewal",,,,"Can I cancel my account before it renews?",,,2026-05-03,,,founder@example.test,cancellation

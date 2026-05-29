@@ -10,6 +10,7 @@ _SCRIPT_PATH = (
     / "scripts"
     / "smoke_content_ops_support_ticket_package.py"
 )
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "smoke_content_ops_support_ticket_package",
     _SCRIPT_PATH,
@@ -150,6 +151,40 @@ def test_support_ticket_package_smoke_reports_resolution_evidence(
             "text": "Open Reports, choose Export, then select CSV.",
         }
     ]
+
+
+def test_support_ticket_package_smoke_accepts_platform_export_fixture() -> None:
+    fixture = (
+        _REPO_ROOT
+        / "extracted_content_pipeline"
+        / "examples"
+        / "support_ticket_platform_export_shapes.csv"
+    )
+
+    summary = build_support_ticket_package_smoke_summary(
+        fixture,
+        require_included_rows=True,
+    )
+
+    assert summary["source_row_count"] == 3
+    assert summary["included_ticket_row_count"] == 3
+    assert summary["skipped_ticket_row_count"] == 0
+    assert summary["source_period"] == "Last 90 days of support tickets"
+    assert summary["has_dated_window"] is True
+    assert summary["faq_questions"] == [
+        "How do I reset MFA?",
+        "Where do I export my invoice?",
+        "Can I cancel my account before it renews?",
+    ]
+    assert summary["customer_wording_examples"][1] == {
+        "source_id": "fd-200",
+        "source_title": "Where do I export my invoice?",
+        "pain_category": "billing export",
+        "text": (
+            "Where do I export my invoice? "
+            "Where do I export my invoice before month-end?"
+        ),
+    }
 
 
 def test_support_ticket_package_smoke_reports_measured_outcome_evidence(
