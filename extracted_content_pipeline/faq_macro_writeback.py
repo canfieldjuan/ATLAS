@@ -68,6 +68,21 @@ class MacroPublishResult:
 
 
 @dataclass(frozen=True)
+class MacroWritebackMapping:
+    """Tenant-scoped mapping from one FAQ item to one external macro."""
+
+    platform: str
+    faq_draft_id: str
+    faq_item_id: str
+    external_id: str
+    external_url: str = ""
+    metadata: JsonDict = field(default_factory=dict)
+
+    def as_dict(self) -> JsonDict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class MacroWritebackPreview:
     """Dry-run preview of macros that would be written back."""
 
@@ -99,6 +114,28 @@ class MacroPublishProvider(Protocol):
         scope: TenantScope,
     ) -> Sequence[MacroPublishResult]:
         """Publish or preview support macros for one tenant scope."""
+
+
+class MacroWritebackMappingRepository(Protocol):
+    """Persistence port for macro writeback idempotency mappings."""
+
+    async def get_mapping(
+        self,
+        *,
+        platform: str,
+        faq_draft_id: str,
+        faq_item_id: str,
+        scope: TenantScope,
+    ) -> MacroWritebackMapping | None:
+        """Return the existing external macro mapping for one FAQ item."""
+
+    async def upsert_mapping(
+        self,
+        mapping: MacroWritebackMapping,
+        *,
+        scope: TenantScope,
+    ) -> MacroWritebackMapping:
+        """Create or update the external macro mapping for one FAQ item."""
 
 
 class DryRunMacroPublishProvider:
@@ -223,6 +260,8 @@ __all__ = [
     "MacroPublishResult",
     "MacroPublishStatus",
     "MacroSkipReason",
+    "MacroWritebackMapping",
+    "MacroWritebackMappingRepository",
     "MacroWritebackPreview",
     "MacroWritebackSkippedItem",
     "SupportMacroDraft",
