@@ -114,6 +114,17 @@ _MEASURED_OUTCOME_KEYS = (
     "impact_metric",
     "result_metric",
 )
+_PASSTHROUGH_KEYS = (
+    "faq_draft_id",
+    "faq_rank",
+    "faq_question",
+    "faq_topic",
+    "faq_summary",
+    "faq_steps",
+    "faq_customer_language",
+    "faq_source_ticket_ids",
+    "faq_answer_evidence_status",
+)
 _DATE_KEYS = (
     "created_at",
     "created_time",
@@ -314,6 +325,10 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
     if measured_outcome:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
+    for key in _PASSTHROUGH_KEYS:
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            normalized[key] = value
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
