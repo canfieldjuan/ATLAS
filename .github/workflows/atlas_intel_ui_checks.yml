@@ -11,6 +11,7 @@ on:
       - "atlas-intel-ui/public/**"
       - "atlas-intel-ui/scripts/**"
       - "atlas-intel-ui/src/**"
+      - "docs/frontend/**"
   push:
     branches:
       - main
@@ -23,6 +24,7 @@ on:
       - "atlas-intel-ui/public/**"
       - "atlas-intel-ui/scripts/**"
       - "atlas-intel-ui/src/**"
+      - "docs/frontend/**"
 
 jobs:
   atlas-intel-ui-checks:
@@ -49,6 +51,9 @@ jobs:
 
       - name: Test landing-page prerender verifier
         run: npm run test:landing-page-prerender
+
+      - name: Test Content Ops deflection report UI
+        run: npm run test:content-ops-deflection-report-ui
 
       - name: Build
         run: npm run build
