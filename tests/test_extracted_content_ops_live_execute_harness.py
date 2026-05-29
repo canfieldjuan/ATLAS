@@ -24,6 +24,9 @@ from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
+)
 from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
@@ -748,12 +751,14 @@ async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
 
 
 async def test_live_execute_route_returns_faq_deflection_report_artifact() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(),
         execution_services_provider=lambda: ContentOpsExecutionServices(
             faq_deflection_report=FAQDeflectionReportService(),
         ),
         scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+        deflection_report_store_provider=lambda: store,
     )
 
     route = _route(router, "/content-ops/execute", "POST")
@@ -798,22 +803,47 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
     step = payload["steps"][0]
     assert step["output"] == "faq_deflection_report"
     assert step["status"] == "completed"
-    assert step["result"]["summary"]["source_count"] == 2
-    assert step["result"]["summary"]["drafted_answer_count"] == 1
-    assert step["result"]["summary"]["no_proven_answer_count"] == 1
-    assert step["result"]["markdown"].startswith("# Hosted FAQ Deflection Report")
-    assert "## Ranked Question Opportunities" in step["result"]["markdown"]
-    assert "## No Proven Answer Yet" in step["result"]["markdown"]
-    assert step["result"]["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
+    assert step["result"]["snapshot"]["summary"]["generated"] == 2
+    assert step["result"]["snapshot"]["summary"]["drafted_answer_count"] == 1
+    assert step["result"]["snapshot"]["summary"]["no_proven_answer_count"] == 1
+    assert step["result"]["full_report"]["status"] == "locked"
+    assert "markdown" not in step["result"]
+    assert "faq_result" not in step["result"]
+    assert "Open Analytics" not in json.dumps(step["result"], sort_keys=True)
+
+    request_id = payload["request_id"]
+    artifact_route = _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/artifact",
+        "GET",
+    )
+    paid_route = _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/paid",
+        "POST",
+    )
+    with pytest.raises(api_module.HTTPException) as exc:
+        await artifact_route.endpoint(request_id=request_id)
+    assert exc.value.status_code == 403
+    await paid_route.endpoint(
+        payload=api_module.DeflectionReportPaidModel(),
+        request_id=request_id,
+    )
+    artifact = await artifact_route.endpoint(request_id=request_id)
+    assert artifact["summary"]["source_count"] == 2
+    assert artifact["markdown"].startswith("# Hosted FAQ Deflection Report")
+    assert artifact["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
 
 
 async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(),
         execution_services_provider=lambda: ContentOpsExecutionServices(
             faq_deflection_report=FAQDeflectionReportService(),
         ),
         scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+        deflection_report_store_provider=lambda: store,
     )
     export_tickets = [
         {
@@ -860,19 +890,34 @@ async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
     assert step["status"] == "completed"
 
     result = step["result"]
-    assert result["summary"]["source_count"] == 1000
-    assert result["summary"]["ticket_source_count"] == 1000
-    assert result["summary"]["drafted_answer_count"] >= 1
-    assert result["summary"]["no_proven_answer_count"] >= 1
-    assert "## Drafted Answers With Proven Solutions" in result["markdown"]
-    assert "## No Proven Answer Yet" in result["markdown"]
-    assert "ticket-export-bulk-0" in result["markdown"]
+    assert result["snapshot"]["summary"]["generated"] >= 2
+    assert result["snapshot"]["summary"]["drafted_answer_count"] >= 1
+    assert result["snapshot"]["summary"]["no_proven_answer_count"] >= 1
+    assert result["full_report"]["status"] == "locked"
+    assert "ticket-export-bulk-0" not in json.dumps(result, sort_keys=True)
 
-    faq_result = result["faq_result"]
+    await _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/paid",
+        "POST",
+    ).endpoint(
+        payload=api_module.DeflectionReportPaidModel(),
+        request_id=payload["request_id"],
+    )
+    artifact = await _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/artifact",
+        "GET",
+    ).endpoint(request_id=payload["request_id"])
+    assert artifact["summary"]["source_count"] == 1000
+    assert artifact["summary"]["ticket_source_count"] == 1000
+    assert "ticket-export-bulk-0" in artifact["markdown"]
+
+    faq_result = artifact["faq_result"]
     assert faq_result["source_count"] == 1000
     assert faq_result["ticket_source_count"] == 1000
     assert all(faq_result["output_checks"].values())
-    assert len(faq_result["items"]) == result["summary"]["generated"]
+    assert len(faq_result["items"]) == artifact["summary"]["generated"]
     assert any(
         item["answer_evidence_status"] == "resolution_evidence"
         for item in faq_result["items"]
@@ -904,12 +949,14 @@ async def test_live_execute_route_handles_concurrent_faq_deflection_reports() ->
             return await self._inner.generate(**kwargs)
 
     service = _BarrierFAQDeflectionReportService(expected=4)
+    store = InMemoryDeflectionReportArtifactStore()
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(execute_max_concurrency=4),
         execution_services_provider=lambda: ContentOpsExecutionServices(
             faq_deflection_report=service,
         ),
         scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+        deflection_report_store_provider=lambda: store,
     )
     route = _route(router, "/content-ops/execute", "POST")
 
@@ -962,15 +1009,33 @@ async def test_live_execute_route_handles_concurrent_faq_deflection_reports() ->
         assert step["status"] == "completed"
 
         result = step["result"]
-        assert result["summary"]["source_count"] == 250
-        assert result["summary"]["ticket_source_count"] == 250
-        assert result["summary"]["drafted_answer_count"] >= 1
-        assert result["summary"]["no_proven_answer_count"] >= 1
-        assert "## Drafted Answers With Proven Solutions" in result["markdown"]
-        assert "## No Proven Answer Yet" in result["markdown"]
-        assert f"ticket-export-concurrent-{case_index}-0" in result["markdown"]
+        assert result["snapshot"]["summary"]["generated"] >= 2
+        assert result["snapshot"]["summary"]["drafted_answer_count"] >= 1
+        assert result["snapshot"]["summary"]["no_proven_answer_count"] >= 1
+        assert result["full_report"]["status"] == "locked"
+        assert (
+            f"ticket-export-concurrent-{case_index}-0"
+            not in json.dumps(result, sort_keys=True)
+        )
 
-        faq_result = result["faq_result"]
+        await _route(
+            router,
+            "/content-ops/deflection-reports/{request_id}/paid",
+            "POST",
+        ).endpoint(
+            payload=api_module.DeflectionReportPaidModel(),
+            request_id=payload["request_id"],
+        )
+        artifact = await _route(
+            router,
+            "/content-ops/deflection-reports/{request_id}/artifact",
+            "GET",
+        ).endpoint(request_id=payload["request_id"])
+        assert artifact["summary"]["source_count"] == 250
+        assert artifact["summary"]["ticket_source_count"] == 250
+        assert f"ticket-export-concurrent-{case_index}-0" in artifact["markdown"]
+
+        faq_result = artifact["faq_result"]
         assert faq_result["source_count"] == 250
         assert faq_result["ticket_source_count"] == 250
         assert all(faq_result["output_checks"].values())

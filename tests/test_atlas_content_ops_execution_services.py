@@ -14,7 +14,9 @@ the host has wired. Currently:
 - `blog_post` (E4): same shape as landing_page (no
   IntelligenceRepository); plugs the `PostgresBlogBlueprintRepository`
   (PR #458) + `PostgresBlogPostRepository`.
-- `faq_markdown`: always wired (stateless).
+- `faq_markdown`: wired by default, but host callers can hide it from
+  customer-executable output lists while keeping it as the internal
+  deflection-report source.
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
   `faq_markdown`).
 
@@ -24,7 +26,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (17 tests):
+Test inventory (18 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -54,6 +56,8 @@ Test inventory (17 tests):
 17. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
+18. The hosted paywall mode can hide `faq_markdown` while
+    retaining a runnable `faq_deflection_report`.
 """
 
 from __future__ import annotations
@@ -236,6 +240,48 @@ async def test_faq_deflection_report_runs_through_host_bundle() -> None:
     assert step["result"]["summary"]["generated"] == 1
     assert step["result"]["markdown"].startswith("# Acme Deflection Report")
     assert "## Ranked Question Opportunities" in step["result"]["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None:
+    pool = _FAQPoolStub()
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+        expose_faq_markdown_output=False,
+    )
+
+    assert services.faq_markdown is None
+    assert services.faq_deflection_report is not None
+    assert services.configured_outputs() == (
+        "signal_extraction",
+        "faq_deflection_report",
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_deflection_report"],
+            "inputs": {
+                "deflection_report_title": "Hidden FAQ Source Report",
+                "source_material": [{
+                    "ticket_id": "ticket-1",
+                    "source_type": "ticket",
+                    "message": "How do I fix failed exports?",
+                    "pain_category": "exports",
+                }],
+            },
+        },
+        services=services,
+    )
+
+    assert result["status"] == "completed", result
+    step = result["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["status"] == "completed"
+    assert step["result"]["summary"]["generated"] == 1
+    assert step["result"]["markdown"].startswith("# Hidden FAQ Source Report")
 
 
 def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:

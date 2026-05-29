@@ -15,7 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 try:
-    from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+    from fastapi import APIRouter, Body, File, Form, HTTPException, Path as PathParam, Query, UploadFile
     from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
@@ -47,6 +47,7 @@ from ..content_ops_input_provider import (
     merge_content_ops_input_package,
 )
 from ..content_ops_cache_policy import normalize_content_ops_cache_policy
+from ..deflection_report_access import DeflectionReportArtifactStore
 from ..control_surfaces import (
     OUTPUT_CATALOG,
     PRESETS,
@@ -58,6 +59,10 @@ from ..control_surfaces import (
     resolve_outputs,
 )
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
+from ..faq_deflection_report import (
+    DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
+    build_deflection_snapshot,
+)
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
 from ..ingestion_diagnostics import inspect_ingestion_file, inspect_ingestion_rows
 from ..landing_page_repair_contract import (
@@ -94,6 +99,10 @@ ReasoningStatusProvider = Callable[
 ]
 LLMProvider = Callable[[], Any | Awaitable[Any]]
 PoolProvider = Callable[[], Any | Awaitable[Any]]
+DeflectionReportStoreProvider = Callable[
+    [],
+    DeflectionReportArtifactStore | Awaitable[DeflectionReportArtifactStore],
+]
 ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
 CachePolicyDefaultProvider = Callable[
     [TenantScope],
@@ -310,6 +319,7 @@ class ContentOpsControlSurfaceApiConfig:
     ingestion_opportunity_table: str = "campaign_opportunities"
     execute_max_concurrency: int = 8
     faq_execute_max_source_material_rows: int = _MAX_INGESTION_ROWS
+    deflection_snapshot_top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N
     ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
@@ -357,6 +367,8 @@ class ContentOpsControlSurfaceApiConfig:
                 "faq_execute_max_source_material_rows cannot exceed "
                 f"{_MAX_INGESTION_ROWS}"
             )
+        if self.deflection_snapshot_top_n <= 0:
+            raise ValueError("deflection_snapshot_top_n must be positive")
         if self.ingestion_import_max_concurrency <= 0:
             raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
@@ -551,10 +563,18 @@ if BaseModel is not None:
         replace_existing: bool = False
         dry_run: bool = False
 
+    class DeflectionReportPaidModel(BaseModel):
+        """Authenticated paid-release marker for a generated report."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        payment_reference: str | None = Field(default=None, max_length=200)
+
 else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsRequestModel = Any
     ContentOpsIngestionInspectModel = Any
     ContentOpsIngestionImportModel = Any
+    DeflectionReportPaidModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -566,9 +586,11 @@ def create_content_ops_control_surface_router(
     reasoning_status_provider: ReasoningStatusProvider | None = None,
     llm_provider: LLMProvider | None = None,
     input_provider: InputProvider | None = None,
+    deflection_report_store_provider: DeflectionReportStoreProvider | None = None,
     opportunity_import_pool_provider: PoolProvider | None = None,
     usage_pool_provider: PoolProvider | None = None,
     usage_dependencies: Sequence[Any] | None = None,
+    deflection_report_paid_dependencies: Sequence[Any] | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     cache_policy_default_provider: CachePolicyDefaultProvider | None = None,
     dependencies: Sequence[Any] | None = None,
@@ -655,6 +677,55 @@ def create_content_ops_control_surface_router(
             run_id=run_id,
             request_id=request_id,
         )
+
+    @router.get("/deflection-reports/{request_id}/snapshot")
+    async def deflection_report_snapshot(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        snapshot = await store.get_snapshot(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        return snapshot
+
+    @router.get("/deflection-reports/{request_id}/artifact")
+    async def deflection_report_artifact(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        record = await store.get_artifact_record(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        if not record.paid:
+            raise HTTPException(status_code=403, detail="Deflection report is locked.")
+        return dict(record.artifact or {})
+
+    @router.post(
+        "/deflection-reports/{request_id}/paid",
+        dependencies=list(deflection_report_paid_dependencies or ()),
+    )
+    async def mark_deflection_report_paid(
+        payload: DeflectionReportPaidModel = Body(...),
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        marked = await store.mark_paid(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+            payment_reference=_clean(getattr(payload, "payment_reference", None)),
+        )
+        if not marked:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        return {"request_id": request_id, "paid": True}
 
     @router.post("/preview")
     async def preview_generation(
@@ -945,6 +1016,13 @@ def create_content_ops_control_surface_router(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             result = _sanitize_execution_result(result)
+            result = await _gate_deflection_report_artifacts(
+                result,
+                store_provider=deflection_report_store_provider,
+                scope=scope,
+                request_id=request_id,
+                top_n=resolved_config.deflection_snapshot_top_n,
+            )
             result = _with_input_provider_diagnostics(result, payload_mapping)
             result["request_id"] = request_id
             usage_summary = await _execute_usage_summary(
@@ -1611,6 +1689,33 @@ async def _resolve_usage_pool(pool_provider: PoolProvider | None) -> Any:
     return pool
 
 
+async def _resolve_deflection_report_store(
+    provider: DeflectionReportStoreProvider | None,
+) -> DeflectionReportArtifactStore:
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops deflection report store is not configured.",
+        )
+    try:
+        store = await _resolve_provider(provider)
+    except Exception as exc:
+        logger.warning(
+            "Content Ops deflection report store provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops deflection report store is unavailable.",
+        ) from exc
+    if store is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops deflection report store is unavailable.",
+        )
+    return store
+
+
 async def _execute_usage_summary(
     *,
     usage_pool_provider: PoolProvider | None,
@@ -1637,6 +1742,74 @@ async def _execute_usage_summary(
             extra={"request_id": request_id},
         )
         return None
+
+
+async def _gate_deflection_report_artifacts(
+    result: Mapping[str, Any],
+    *,
+    store_provider: DeflectionReportStoreProvider | None,
+    scope: TenantScope | None,
+    request_id: str,
+    top_n: int,
+) -> dict[str, Any]:
+    gated = dict(result)
+    steps = list(gated.get("steps", ()) or ())
+    if not any(_is_completed_deflection_report_step(step) for step in steps):
+        return gated
+    store = await _resolve_deflection_report_store(store_provider)
+    account_id = _required_scope_account_id(scope)
+    gated_steps: list[dict[str, Any]] = []
+    for step in steps:
+        step_dict = dict(step)
+        if not _is_completed_deflection_report_step(step_dict):
+            gated_steps.append(step_dict)
+            continue
+        artifact = step_dict.get("result")
+        if not isinstance(artifact, Mapping):
+            raise HTTPException(
+                status_code=502,
+                detail="Deflection report artifact is malformed.",
+            )
+        try:
+            snapshot = build_deflection_snapshot(artifact, top_n=top_n).as_dict()
+            await store.save_report(
+                account_id=account_id,
+                request_id=request_id,
+                snapshot=snapshot,
+                artifact=dict(artifact),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.warning(
+                "Content Ops deflection report artifact storage failed",
+                exc_info=True,
+                extra={"request_id": request_id},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Content Ops deflection report store is unavailable.",
+            ) from exc
+        step_dict["result"] = {
+            "request_id": request_id,
+            "snapshot": snapshot,
+            "full_report": {
+                "status": "locked",
+                "reason": "payment_required",
+            },
+        }
+        gated_steps.append(step_dict)
+    gated["steps"] = gated_steps
+    return gated
+
+
+def _is_completed_deflection_report_step(step: Any) -> bool:
+    if not isinstance(step, Mapping):
+        return False
+    return (
+        step.get("output") == "faq_deflection_report"
+        and step.get("status") == "completed"
+    )
 
 
 async def _evaluate_account_usage_budget(
