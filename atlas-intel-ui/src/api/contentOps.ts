@@ -19,6 +19,7 @@
  *   GET  /content-assets/{asset}/drafts/export
  *   PATCH /content-assets/landing_page/drafts/{id}
  *   POST /content-assets/landing_page/drafts/{id}/repair
+ *   POST /content-assets/faq_markdown/drafts/{id}/publish-macros
  *   POST /content-assets/{asset}/drafts/review
  *   POST /content-assets/{asset}/drafts/review-batch
  *
@@ -560,6 +561,37 @@ export interface GeneratedLandingPageDraftUpdate {
   reference_ids?: string[]
 }
 
+export interface GeneratedAssetMacroPublishSkippedItem {
+  question?: string
+  reason?: string
+  [key: string]: unknown
+}
+
+export interface GeneratedAssetMacroPublishResult {
+  status?: string
+  external_id?: string | null
+  error?: string | null
+  [key: string]: unknown
+}
+
+export interface GeneratedAssetMacroPublishSummary {
+  account_id?: string | null
+  asset: GeneratedAssetType
+  faq_id: string
+  found: boolean
+  ok: boolean
+  draft_status: string
+  publishable_count: number
+  skipped_count: number
+  published_count: number
+  updated_count: number
+  failed_count: number
+  pending_reconcile_count: number
+  draft_status_updated: boolean
+  skipped: GeneratedAssetMacroPublishSkippedItem[]
+  results: GeneratedAssetMacroPublishResult[]
+}
+
 // ---------------------------------------------------------------------------
 // Internal fetch plumbing
 // ---------------------------------------------------------------------------
@@ -915,6 +947,17 @@ export function repairGeneratedLandingPageDraft(
     }
     return rawJson<GeneratedAssetDraft>(res)
   })
+}
+
+/** POST /content-assets/faq_markdown/drafts/{id}/publish-macros -- publish approved FAQ macros. */
+export function publishGeneratedFaqMacros(
+  id: string,
+): Promise<GeneratedAssetMacroPublishSummary> {
+  return postAssetJson<GeneratedAssetMacroPublishSummary>(
+    'faq_markdown',
+    `/drafts/${encodeURIComponent(id)}/publish-macros`,
+    {},
+  )
 }
 
 async function repairErrorMessage(res: Response): Promise<string> {

@@ -20,6 +20,7 @@ import {
   Pencil,
   RefreshCw,
   Save,
+  UploadCloud,
   Wrench,
   X,
   XCircle,
@@ -28,12 +29,14 @@ import { clsx } from 'clsx'
 import {
   exportGeneratedAssetDraftsCsv,
   fetchGeneratedAssetDrafts,
+  publishGeneratedFaqMacros,
   repairGeneratedLandingPageDraft,
   reviewGeneratedAssetDraft,
   reviewGeneratedAssetDrafts,
   updateGeneratedLandingPageDraft,
   type GeneratedAssetDraft,
   type GeneratedLandingPageDraftUpdate,
+  type GeneratedAssetMacroPublishSummary,
   type GeneratedAssetListResponse,
   type GeneratedAssetType,
 } from '../api/contentOps'
@@ -121,6 +124,11 @@ type LandingPageEditState = {
   sections: LandingPageSectionEdit[]
 }
 
+type MacroPublishOutcome =
+  | { kind: 'idle' }
+  | { kind: 'success'; draftId: string; summary: GeneratedAssetMacroPublishSummary }
+  | { kind: 'error'; draftId: string; message: string }
+
 const ASSETS: Array<{
   id: GeneratedAssetType
   label: string
@@ -173,6 +181,8 @@ export default function ContentOpsAssetsReview() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [exporting, setExporting] = useState(false)
   const [detailRow, setDetailRow] = useState<GeneratedAssetDraft | null>(null)
+  const [macroPublishOutcome, setMacroPublishOutcome] =
+    useState<MacroPublishOutcome>({ kind: 'idle' })
 
   const params = useMemo(
     () => ({
@@ -304,6 +314,27 @@ export default function ContentOpsAssetsReview() {
       const message = err instanceof Error ? err.message : String(err)
       setActionError(message)
       throw err
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handlePublishFaqMacros = async (row: GeneratedAssetDraft) => {
+    const id = assetId(row)
+    if (!id) return
+    setBusyId(id)
+    setActionError(null)
+    setMacroPublishOutcome({ kind: 'idle' })
+    try {
+      const summary = await publishGeneratedFaqMacros(id)
+      setMacroPublishOutcome({ kind: 'success', draftId: id, summary })
+      await load(true)
+    } catch (err) {
+      setMacroPublishOutcome({
+        kind: 'error',
+        draftId: id,
+        message: err instanceof Error ? err.message : String(err),
+      })
     } finally {
       setBusyId(null)
     }
@@ -473,6 +504,7 @@ export default function ContentOpsAssetsReview() {
             {actionError}
           </div>
         )}
+        <MacroPublishResultBanner outcome={macroPublishOutcome} />
         {error && data && (
           <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
             Refresh failed: {error.message}
@@ -500,6 +532,7 @@ export default function ContentOpsAssetsReview() {
                   selected={selectedIds.has(assetId(row))}
                   onToggle={toggleRow}
                   onReview={handleReview}
+                  onPublishFaqMacros={handlePublishFaqMacros}
                   onOpenDetails={setDetailRow}
                 />
               ))}
@@ -529,6 +562,7 @@ function AssetRow({
   selected,
   onToggle,
   onReview,
+  onPublishFaqMacros,
   onOpenDetails,
 }: {
   row: GeneratedAssetDraft
@@ -537,6 +571,7 @@ function AssetRow({
   selected: boolean
   onToggle: (id: string) => void
   onReview: (row: GeneratedAssetDraft, status: 'approved' | 'rejected') => void
+  onPublishFaqMacros: (row: GeneratedAssetDraft) => void
   onOpenDetails: (row: GeneratedAssetDraft) => void
 }) {
   const id = assetId(row)
@@ -548,6 +583,7 @@ function AssetRow({
   const facts = assetFacts(row, asset)
   const repairHistory = assetRepairHistory(row)
   const repairSummary = repairHistorySummary(repairHistory)
+  const canPublishFaqMacros = asset === 'faq_markdown' && canReview && status === 'approved'
 
   return (
     <article className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
@@ -669,10 +705,93 @@ function AssetRow({
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
             Reject
           </button>
+          {asset === 'faq_markdown' && (
+            <button
+              type="button"
+              onClick={() => onPublishFaqMacros(row)}
+              disabled={!canPublishFaqMacros || busy}
+              title={
+                canPublishFaqMacros
+                  ? 'Publish approved FAQ macros'
+                  : 'Approve this FAQ draft before publishing macros'
+              }
+              className="inline-flex items-center gap-2 rounded-md border border-cyan-500/40 px-3 py-2 text-sm text-cyan-200 hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UploadCloud className="h-4 w-4" />
+              )}
+              Publish macros
+            </button>
+          )}
         </div>
       </div>
     </article>
   )
+}
+
+function MacroPublishResultBanner({ outcome }: { outcome: MacroPublishOutcome }) {
+  if (outcome.kind === 'idle') return null
+  if (outcome.kind === 'error') {
+    return (
+      <div className="mt-4 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        Macro publish failed for {outcome.draftId}: {outcome.message}
+      </div>
+    )
+  }
+
+  const { summary } = outcome
+  const hasPending = summary.pending_reconcile_count > 0
+  const hasFailures = summary.failed_count > 0
+  const hasSkipped = summary.skipped_count > 0
+  const tone = summary.ok
+    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100'
+    : hasPending || hasSkipped
+      ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+      : 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+  const title = summary.ok
+    ? 'FAQ macros published.'
+    : hasPending
+      ? 'FAQ macro publish needs reconciliation.'
+      : hasFailures
+        ? 'FAQ macro publish has failures.'
+        : 'FAQ macro publish needs review.'
+  const counts = macroPublishCountLabels(summary)
+
+  return (
+    <div className={clsx('mt-4 rounded-md border px-3 py-2 text-sm', tone)}>
+      <div className="font-medium">{title}</div>
+      <div className="mt-1 text-xs opacity-90">
+        Draft {outcome.draftId}
+        {summary.draft_status_updated ? ' moved to published.' : ' kept its current review status.'}
+      </div>
+      {counts.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          {counts.map((count) => (
+            <span
+              key={count}
+              className="rounded border border-current/20 bg-slate-950/30 px-2 py-0.5"
+            >
+              {count}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function macroPublishCountLabels(summary: GeneratedAssetMacroPublishSummary): string[] {
+  return [
+    { count: summary.published_count, label: 'published' },
+    { count: summary.updated_count, label: 'updated' },
+    { count: summary.skipped_count, label: 'skipped' },
+    { count: summary.failed_count, label: 'failed' },
+    { count: summary.pending_reconcile_count, label: 'pending reconcile' },
+  ]
+    .filter(({ count }) => count > 0)
+    .map(({ count, label }) => `${count} ${label}`)
 }
 
 function AssetDetailDrawer({

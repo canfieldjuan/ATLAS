@@ -15,6 +15,7 @@
     "test:content-ops-usage-budget-ui": "node --test scripts/content-ops-usage-budget-ui.test.mjs",
     "test:content-ops-usage-summary": "node --test scripts/content-ops-usage-summary.test.mjs",
     "test:content-ops-zendesk-credentials": "node --test scripts/content-ops-zendesk-credentials-ui.test.mjs",
+    "test:content-ops-faq-macro-publish": "node --test scripts/content-ops-faq-macro-publish-ui.test.mjs",
     "test:content-ops-faq-source-selection": "node --test scripts/content-ops-faq-source-selection.test.mjs",
     "test:content-ops-deflection-report-ui": "node --test scripts/content-ops-deflection-report-ui.test.mjs",
     "test:content-ops-faq-configuration-inputs": "node --test scripts/content-ops-faq-configuration-inputs.test.mjs",
