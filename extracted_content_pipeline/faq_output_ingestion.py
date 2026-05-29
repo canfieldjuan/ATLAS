@@ -8,6 +8,7 @@ from typing import Any
 
 
 FAQ_OUTPUT_SOURCE_TYPE = "faq_output"
+_RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
 
 _FAQ_OUTPUT_MARKER_KEYS = (
     "generated",
@@ -85,6 +86,7 @@ def faq_item_to_source_row(
     steps = _text_values(item.get("steps") or item.get("action_items"))
     evidence_quotes = _text_values(item.get("evidence_quotes"))
     source_ids = _text_values(item.get("source_ids"))
+    answer_evidence_status = _clean_text(item.get("answer_evidence_status"))
     title = question or topic or f"FAQ item {rank}"
     source_id = _source_id(
         item,
@@ -107,9 +109,8 @@ def faq_item_to_source_row(
         "faq_customer_language": _customer_language(question, evidence_quotes),
         "faq_draft_id": saved_id,
         "faq_source_ticket_ids": source_ids,
-        "faq_answer_evidence_status": _clean_text(
-            item.get("answer_evidence_status")
-        ),
+        "faq_answer_evidence_status": answer_evidence_status,
+        "resolution_text": _resolution_text(answer_evidence_status, steps),
         "question_source": _clean_text(item.get("question_source")),
         "pain_points": [topic] if topic else [],
     }
@@ -187,6 +188,12 @@ def _customer_language(question: str, evidence_quotes: Sequence[str]) -> list[st
         if text and text not in out:
             out.append(text)
     return out
+
+
+def _resolution_text(answer_evidence_status: str, steps: Sequence[str]) -> str:
+    if answer_evidence_status != _RESOLUTION_EVIDENCE_STATUS:
+        return ""
+    return " ".join(steps)
 
 
 def _first_text(row: Mapping[str, Any], keys: Sequence[str]) -> str:
