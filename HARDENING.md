@@ -30,17 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-28
-
-### Atlas startup migration check warns on missing b2b_campaigns.updated_at
-- File/location: `atlas_brain/storage/migrations/309_campaign_sequences_unique_active_recipient.sql`, Atlas startup migration check.
-- Description: Local API startup logged `column "updated_at" of relation "b2b_campaigns" does not exist` while checking pending host migrations.
-- Why it matters: The FAQ route still starts and passes, but startup migration noise can hide real route-readiness issues and suggests local/host B2B campaign schema drift.
-- Effort: M
-- Category: correctness
-- Owner/session: content-ops/faq-search
-- Found during: PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof
-
 > **Atlas blog / deep-dive content pipeline** (`content-ops/blog-*` ownership
 > lanes): parked items live in [`ATLAS-HARDENING.md`](./ATLAS-HARDENING.md),
 > kept separate to avoid append-collisions with the concurrent
