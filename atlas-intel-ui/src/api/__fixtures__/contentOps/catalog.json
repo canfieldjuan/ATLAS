@@ -323,6 +323,14 @@
       "asset": "faq_markdown",
       "group": "vocabulary_gap"
     },
+    "faq_intent_rules": {
+      "key": "faq_intent_rules",
+      "label": "Intent rules",
+      "type": "string_list",
+      "placeholder": "data freshness=warehouse sync,connector lag\naccess setup=invite link,new user",
+      "asset": "faq_markdown",
+      "group": "intent_mapping"
+    },
     "faq_vocabulary_gap_rules": {
       "key": "faq_vocabulary_gap_rules",
       "label": "Vocabulary-gap rules",

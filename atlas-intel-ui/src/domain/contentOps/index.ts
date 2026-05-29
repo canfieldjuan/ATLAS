@@ -75,6 +75,8 @@ export {
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_MARKDOWN_OUTPUT,
   faqConfigurationInputsSelected,
+  faqIntentRulesDraftValue,
+  faqIntentRulesFromDraft,
 } from './faqConfigurationInputs'
 
 export {
