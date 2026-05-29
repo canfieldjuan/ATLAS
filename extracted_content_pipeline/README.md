@@ -166,6 +166,18 @@ python scripts/build_extracted_campaign_opportunities_from_sources.py \
   --output support_ticket_bundle_opportunities.json
 ```
 
+Before spending DB or LLM time on a help desk export, run the support-ticket
+package smoke. The platform-shaped fixture uses common Zendesk-, Freshdesk-, and
+Intercom-style headers and proves the CSV loader can still find ticket ids,
+subjects, customer wording, dates, contact emails, and intent labels:
+
+```bash
+python scripts/smoke_content_ops_support_ticket_package.py \
+  extracted_content_pipeline/examples/support_ticket_platform_export_shapes.csv \
+  --require-included-rows \
+  --pretty
+```
+
 To produce a quick grounded FAQ artifact from those same support-ticket rows,
 write Markdown directly:
 

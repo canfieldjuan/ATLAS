@@ -56,7 +56,11 @@ source of truth for what remains.
   for common CSV/export variants such as `Ticket ID`, `Ticket Number`,
   `Account Name`, `Organization Name`, `Requester Email`, `Issue Description`,
   `Pain Category`, and `Open Ended Response`; source-type precedence is
-  explicit and provider-style field lookups are cached per row.
+  explicit and provider-style field lookups are cached per row. The package
+  smoke also covers
+  `examples/support_ticket_platform_export_shapes.csv`, a synthetic
+  Zendesk-/Freshdesk-/Intercom-shaped fixture for checking common help desk
+  exports before DB or LLM execution.
 - `signal_extraction` exposes source-row normalization as a runnable AI Content
   Ops output. It converts inline source material into normalized opportunities
   without LLM, database, or Atlas dependencies.
