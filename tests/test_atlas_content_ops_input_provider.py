@@ -209,6 +209,76 @@ def test_atlas_content_ops_input_provider_expands_support_ticket_source_material
     assert preview.can_run is True
 
 
+def test_atlas_content_ops_input_provider_expands_selected_faq_output() -> None:
+    provider = build_content_ops_input_provider()
+
+    package = provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_material": {
+                    "id": "faq-draft-42",
+                    "title": "Saved FAQ report",
+                    "markdown": "# Saved FAQ report",
+                    "ticket_source_count": 3,
+                    "output_checks": {"has_action_items": True},
+                    "items": [
+                        {
+                            "topic": "billing confusion",
+                            "question": "Why was I charged twice?",
+                            "summary": (
+                                "Customers ask why duplicate-looking invoices "
+                                "appear."
+                            ),
+                            "steps": [
+                                "Check whether the second charge is pending.",
+                                "Confirm the invoice workspace.",
+                            ],
+                            "answer_evidence_status": "resolution_evidence",
+                            "source_ids": ["ticket-1", "ticket-2"],
+                        },
+                        {
+                            "topic": "export setup",
+                            "question": "How do I export the report?",
+                            "summary": "Customers ask where report exports live.",
+                            "steps": [
+                                "Draft answer - support team should add the "
+                                "verified resolution."
+                            ],
+                            "answer_evidence_status": "draft_needs_review",
+                            "source_ids": ["ticket-3"],
+                        },
+                    ],
+                }
+            }
+        },
+    )
+    payload = merge_content_ops_input_package({"inputs": {}}, package)
+    request = request_from_mapping(payload)
+    preview = preview_control_surface(request)
+
+    assert package.provider == "atlas_support_ticket_request"
+    assert request.outputs == ("faq_markdown", "landing_page", "blog_post")
+    assert request.inputs["source_material"][0]["source_type"] == "faq_output"
+    assert request.inputs["source_material"][0]["source_id"] == "faq-draft-42:item-1"
+    assert request.inputs["source_material"][0]["faq_draft_id"] == "faq-draft-42"
+    assert request.inputs["source_material"][0]["resolution_text"] == (
+        "Check whether the second charge is pending. Confirm the invoice workspace."
+    )
+    assert "resolution_text" not in request.inputs["source_material"][1]
+    assert request.inputs["support_ticket_resolution_evidence_present"] is True
+    assert request.inputs["support_ticket_resolution_evidence_count"] == 1
+    assert request.inputs["support_ticket_resolution_examples"][0] == {
+        "source_id": "faq-draft-42:item-1",
+        "source_title": "Why was I charged twice?",
+        "text": (
+            "Check whether the second charge is pending. Confirm the invoice "
+            "workspace."
+        ),
+    }
+    assert preview.can_run is True
+
+
 def test_atlas_content_ops_input_provider_expands_subject_body_ticket_rows() -> None:
     provider = build_content_ops_input_provider()
 

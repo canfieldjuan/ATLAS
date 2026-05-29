@@ -10,6 +10,10 @@ from extracted_content_pipeline.content_ops_input_provider import (
     ContentOpsInputPackage,
     RequestPayload,
 )
+from extracted_content_pipeline.faq_output_ingestion import (
+    FAQ_OUTPUT_SOURCE_TYPE,
+    is_faq_output_bundle,
+)
 from extracted_content_pipeline.support_ticket_input_provider import (
     SupportTicketInputProvider,
 )
@@ -112,7 +116,11 @@ def _is_empty_source_material(value: Any) -> bool:
 
 def _is_support_ticket_material(value: Any) -> bool:
     if isinstance(value, Mapping):
-        return _is_support_ticket_bundle(value) or _is_support_ticket_row(value)
+        return (
+            is_faq_output_bundle(value)
+            or _is_support_ticket_bundle(value)
+            or _is_support_ticket_row(value)
+        )
     if isinstance(value, (list, tuple)):
         return any(_is_support_ticket_material(item) for item in value)
     return False
@@ -137,6 +145,11 @@ def _is_support_ticket_bundle(value: Mapping[str, Any]) -> bool:
 def _is_support_ticket_row(value: Mapping[str, Any]) -> bool:
     keys = {_key(item) for item in value}
     source_type = _key(value.get("source_type") or value.get("type"))
+    if source_type == FAQ_OUTPUT_SOURCE_TYPE:
+        return _has_any_text(value, _SOURCE_TITLE_KEYS) or _has_any_text(
+            value,
+            _SOURCE_TEXT_KEYS,
+        )
     if source_type and source_type not in _SUPPORT_TICKET_SOURCE_TYPES:
         return False
     has_title = _has_any_text(value, _SOURCE_TITLE_KEYS)

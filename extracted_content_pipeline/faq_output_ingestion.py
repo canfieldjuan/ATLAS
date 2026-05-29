@@ -17,6 +17,7 @@ _FAQ_OUTPUT_MARKER_KEYS = (
     "ticket_source_count",
     "saved_ids",
 )
+_FAQ_OUTPUT_DRAFT_ID_KEYS = ("faq_id", "faq_draft_id", "draft_id", "id")
 _FAQ_ITEM_ID_KEYS = (
     "faq_id",
     "faq_draft_id",
@@ -47,6 +48,9 @@ def faq_output_to_source_rows(faq_output: Mapping[str, Any]) -> list[dict[str, A
 
     items = tuple(faq_output.get("items") or ())
     saved_ids = _text_values(faq_output.get("saved_ids"))
+    if not saved_ids:
+        draft_id = _first_text(faq_output, _FAQ_OUTPUT_DRAFT_ID_KEYS)
+        saved_ids = [draft_id] if draft_id else []
     report_saved_id = saved_ids[0] if len(saved_ids) == 1 else ""
     rows: list[dict[str, Any]] = []
     for index, item in enumerate(items, start=1):
