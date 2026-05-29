@@ -75,6 +75,7 @@ def create_content_ops_zendesk_credentials_router(
         body: UpsertZendeskCredentialRequest,
         user: AuthUser = Depends(auth_dependency),
     ) -> ZendeskCredentialView:
+        _require_credential_admin(user)
         pool = await _resolve_ready_pool(pool_provider)
         account_id = _account_uuid(user)
         try:
@@ -103,6 +104,7 @@ def create_content_ops_zendesk_credentials_router(
         credential_id: str,
         user: AuthUser = Depends(auth_dependency),
     ) -> None:
+        _require_credential_admin(user)
         pool = await _resolve_ready_pool(pool_provider)
         account_id = _account_uuid(user)
         try:
@@ -135,6 +137,13 @@ def _account_uuid(user: AuthUser) -> _uuid.UUID:
         return _uuid.UUID(str(user.account_id))
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Invalid tenant scope")
+
+
+def _require_credential_admin(user: AuthUser) -> None:
+    role = str(getattr(user, "role", "") or "").strip().lower()
+    if bool(getattr(user, "is_admin", False)) or role in {"owner", "admin"}:
+        return
+    raise HTTPException(status_code=403, detail="Admin access required")
 
 
 def _record_to_view(record: ContentOpsZendeskCredentialRecord) -> ZendeskCredentialView:

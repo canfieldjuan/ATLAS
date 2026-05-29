@@ -48,13 +48,13 @@ class _Pool:
     is_initialized = True
 
 
-def _user(account_id: uuid.UUID = ACCOUNT_ID) -> AuthUser:
+def _user(account_id: uuid.UUID = ACCOUNT_ID, *, role: str = "owner") -> AuthUser:
     return AuthUser(
         user_id="33333333-3333-3333-3333-333333333333",
         account_id=str(account_id),
         plan="b2b_growth",
         plan_status="active",
-        role="owner",
+        role=role,
         product="b2b_challenger",
     )
 
@@ -169,6 +169,28 @@ def test_add_zendesk_credential_maps_validation_error(
     assert "Complete Zendesk" in response.json()["detail"]
 
 
+def test_add_zendesk_credential_requires_admin_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def upsert(pool, **kwargs):
+        raise AssertionError("member should not be able to write credentials")
+
+    monkeypatch.setattr(api, "upsert_zendesk_credentials", upsert)
+    client = _client(user=_user(role="member"))
+
+    response = client.post(
+        "/content-ops/zendesk-credentials",
+        json={
+            "email": "agent@example.com",
+            "api_token": "secret-token",
+            "subdomain": "acme",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
+
+
 def test_revoke_zendesk_credential_is_account_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -185,6 +207,21 @@ def test_revoke_zendesk_credential_is_account_scoped(
 
     assert response.status_code == 204
     assert calls == [{"account_id": ACCOUNT_ID, "credential_id": CREDENTIAL_ID}]
+
+
+def test_revoke_zendesk_credential_requires_admin_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def revoke(pool, *, account_id, credential_id):
+        raise AssertionError("member should not be able to revoke credentials")
+
+    monkeypatch.setattr(api, "revoke_zendesk_credentials", revoke)
+    client = _client(user=_user(role="member"))
+
+    response = client.delete(f"/content-ops/zendesk-credentials/{CREDENTIAL_ID}")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access required"
 
 
 def test_revoke_zendesk_credential_returns_404_for_invalid_or_missing_id(
