@@ -11,6 +11,7 @@ import {
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
+  fetchGeneratedAssetDrafts,
   fetchContentOpsControlSurfaces,
   fetchContentOpsTenantUsageSummary,
   importContentOpsIngestion,
@@ -53,6 +54,7 @@ import {
   type GenerationPlanStep,
   type ContentOpsUsageBudgetEvaluation,
 } from '../domain/contentOps'
+import type { GeneratedAssetDraft } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
 
@@ -110,7 +112,9 @@ const LANDING_PAGE_QUALITY_REPAIR_INPUT =
   'landing_page_quality_repair_attempts'
 const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
+const BLOG_POST_OUTPUT = 'blog_post'
 const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
+const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
 const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
 const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
 const FAQ_DOCUMENTATION_TERMS_DISPLAY_FALLBACK = {
@@ -159,6 +163,16 @@ export default function ContentOpsNewRun() {
     error: usageError,
   } = useApiData(
     () => fetchContentOpsTenantUsageSummary({ days: 7 }),
+    [],
+  )
+  const {
+    data: faqDrafts,
+    loading: faqDraftsLoading,
+    error: faqDraftsError,
+    refresh: refreshFaqDrafts,
+    refreshing: faqDraftsRefreshing,
+  } = useApiData(
+    () => fetchGeneratedAssetDrafts('faq_markdown', { status: 'draft', limit: 10 }),
     [],
   )
 
@@ -237,6 +251,9 @@ export default function ContentOpsNewRun() {
     ? reasoningStatusHint(catalog.reasoning)
     : ''
   const landingPageOutputSelected = request.outputs.includes('landing_page')
+  const blogPostOutputSelected = request.outputs.includes(BLOG_POST_OUTPUT)
+  const faqSourceSelectionVisible =
+    landingPageOutputSelected || blogPostOutputSelected
   const faqMarkdownOutputSelected = request.outputs.includes(FAQ_MARKDOWN_OUTPUT)
   const faqDocumentationTermsContract = faqMarkdownOutputSelected
     ? catalog.inputContracts[FAQ_DOCUMENTATION_TERMS_INPUT]
@@ -275,6 +292,8 @@ export default function ContentOpsNewRun() {
     : []
   const landingPageInputsDisabled = !parsedInputsForControls.ok
   const faqInputsDisabled = !parsedInputsForControls.ok
+  const selectedFaqSourceIds = sourceFaqIdsDraftValue(parsedInputsForControls)
+  const faqSourceSelectionDisabled = !parsedInputsForControls.ok
   const landingPageRepairAttemptDisabled =
     !parsedInputsForControls.ok || !landingPageRepairAttemptContract
 
@@ -332,6 +351,16 @@ export default function ContentOpsNewRun() {
 
   const handleFaqVocabularyRulesChange = (value: string) => {
     const updated = updateFaqVocabularyRulesInputJson(inputsJson, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleFaqSourceSelectionChange = (draftId: string, checked: boolean) => {
+    const nextIds = checked
+      ? [...selectedFaqSourceIds, draftId]
+      : selectedFaqSourceIds.filter((id) => id !== draftId)
+    const updated = updateSourceFaqIdsInputJson(inputsJson, nextIds)
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -994,6 +1023,18 @@ export default function ContentOpsNewRun() {
               )}
             </div>
           )}
+          {faqSourceSelectionVisible && (
+            <FaqSourceSelector
+              drafts={faqDrafts?.rows ?? []}
+              selectedIds={selectedFaqSourceIds}
+              loading={faqDraftsLoading}
+              refreshing={faqDraftsRefreshing}
+              error={faqDraftsError}
+              disabled={faqSourceSelectionDisabled}
+              onRefresh={refreshFaqDrafts}
+              onToggle={handleFaqSourceSelectionChange}
+            />
+          )}
           {landingPageOutputSelected && (
             <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
               <label className="block text-sm">
@@ -1575,6 +1616,149 @@ function UsageSummaryCard({
         </>
       )}
     </section>
+  )
+}
+
+function FaqSourceSelector({
+  drafts,
+  selectedIds,
+  loading,
+  refreshing,
+  error,
+  disabled,
+  onRefresh,
+  onToggle,
+}: {
+  drafts: GeneratedAssetDraft[]
+  selectedIds: string[]
+  loading: boolean
+  refreshing: boolean
+  error: Error | null
+  disabled: boolean
+  onRefresh: () => void
+  onToggle: (draftId: string, checked: boolean) => void
+}) {
+  const missingSelectedIds = missingSelectedFaqSourceIds(drafts, selectedIds)
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-slate-200">
+            Saved FAQ report sources
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Selected reports write to <span className="font-mono">{SOURCE_FAQ_IDS_INPUT}</span>.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || refreshing}
+          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {!disabled && selectedIds.length > 0 && (
+        <div className="mb-3 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+          {selectedIds.length} saved FAQ report{selectedIds.length === 1 ? '' : 's'} selected.
+        </div>
+      )}
+
+      {disabled && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Fix inputs JSON before selecting saved FAQ reports.
+        </div>
+      )}
+
+      {!disabled && loading && (
+        <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading saved FAQ reports...
+        </div>
+      )}
+
+      {!disabled && error && !loading && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Saved FAQ reports unavailable: {error.message}
+        </div>
+      )}
+
+      {!disabled && !loading && missingSelectedIds.length > 0 && (
+        <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {missingSelectedIds.map((id) => (
+            <label
+              key={id}
+              className="flex cursor-pointer items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 transition hover:border-amber-400/70"
+            >
+              <input
+                type="checkbox"
+                checked
+                onChange={(event) => onToggle(id, event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-amber-500"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-amber-100">
+                  Selected FAQ report not in recent list
+                </span>
+                <span className="mt-0.5 block break-all font-mono text-xs text-amber-200/80">
+                  {id}
+                </span>
+                <span className="mt-1 block text-xs text-amber-100/75">
+                  Still included in <span className="font-mono">{SOURCE_FAQ_IDS_INPUT}</span>.
+                  Uncheck to remove.
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {!disabled && !loading && !error && drafts.length === 0 && missingSelectedIds.length === 0 && (
+        <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
+          No draft FAQ reports found yet.
+        </div>
+      )}
+
+      {!disabled && !loading && !error && drafts.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {drafts.map((draft) => {
+            const id = generatedAssetId(draft)
+            if (!id) return null
+            const checked = selectedIds.includes(id)
+            return (
+              <label
+                key={id}
+                className={clsx(
+                  'flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition',
+                  checked
+                    ? 'border-cyan-500 bg-cyan-500/10'
+                    : 'border-slate-800 bg-slate-950/50 hover:border-slate-600',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => onToggle(id, event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-200">
+                    {faqDraftTitle(draft)}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-slate-500">
+                    {faqDraftSubtitle(draft)}
+                  </span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -2215,6 +2399,29 @@ function updateFaqVocabularyRulesInputJson(
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
 }
 
+function sourceFaqIdsDraftValue(parsed: ParsedInputsJsonObject): string[] {
+  if (!parsed.ok) return []
+  return stringArrayValue(parsed.value[SOURCE_FAQ_IDS_INPUT])
+}
+
+function updateSourceFaqIdsInputJson(
+  current: string,
+  draftIds: string[],
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const values = uniqueNonBlankStrings(draftIds)
+  if (values.length === 0) {
+    delete next[SOURCE_FAQ_IDS_INPUT]
+  } else {
+    next[SOURCE_FAQ_IDS_INPUT] = values
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
 function vocabularyRulesFromDraft(value: string): string[][] {
   const rules: string[][] = []
   for (const line of value.split(/\r?\n/)) {
@@ -2236,11 +2443,22 @@ function stringListDraftValue(value: unknown): string {
   return scalarDraftValue(value)
 }
 
+function stringArrayValue(value: unknown): string[] {
+  if (Array.isArray(value)) return uniqueNonBlankStrings(value)
+  if (typeof value === 'string') return uniqueNonBlankStrings([value])
+  return []
+}
+
 function stringListFromDraft(value: string): string[] {
+  return uniqueNonBlankStrings(value.split(/[\n,]+/))
+}
+
+function uniqueNonBlankStrings(values: unknown[]): string[] {
   const seen = new Set<string>()
   const items: string[] = []
-  for (const item of value.split(/[\n,]+/)) {
-    const trimmed = item.trim()
+  for (const item of values) {
+    if (typeof item === 'undefined' || item === null) continue
+    const trimmed = String(item).trim()
     if (trimmed === '' || seen.has(trimmed)) continue
     seen.add(trimmed)
     items.push(trimmed)
@@ -2252,6 +2470,45 @@ function scalarDraftValue(value: unknown): string {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return JSON.stringify(value, null, 2)
+}
+
+function generatedAssetId(row: GeneratedAssetDraft): string {
+  return typeof row.id === 'string' ? row.id.trim() : ''
+}
+
+function missingSelectedFaqSourceIds(
+  drafts: GeneratedAssetDraft[],
+  selectedIds: string[],
+): string[] {
+  const visibleIds = new Set<string>()
+  for (const draft of drafts) {
+    const id = generatedAssetId(draft)
+    if (id) visibleIds.add(id)
+  }
+  return selectedIds.filter((id) => !visibleIds.has(id))
+}
+
+function faqDraftTitle(row: GeneratedAssetDraft): string {
+  const title = typeof row.title === 'string' ? row.title.trim() : ''
+  if (title) return title
+  const id = generatedAssetId(row)
+  return id ? `FAQ report ${id.slice(0, 8)}` : 'FAQ report'
+}
+
+function faqDraftSubtitle(row: GeneratedAssetDraft): string {
+  const facts: string[] = []
+  if (typeof row.status === 'string' && row.status.trim()) {
+    facts.push(row.status.trim())
+  }
+  if (typeof row.ticket_source_count === 'number') {
+    facts.push(`${formatCount(row.ticket_source_count)} tickets`)
+  } else if (typeof row.source_count === 'number') {
+    facts.push(`${formatCount(row.source_count)} sources`)
+  }
+  if (typeof row.target_mode === 'string' && row.target_mode.trim()) {
+    facts.push(row.target_mode.trim())
+  }
+  return facts.join(' · ') || generatedAssetId(row)
 }
 
 function landingPageRepairAttemptSelectValue(

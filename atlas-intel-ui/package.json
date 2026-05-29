@@ -14,6 +14,7 @@
     "test:content-ops-cache-policy-ui": "node --test scripts/content-ops-cache-policy-ui.test.mjs",
     "test:content-ops-usage-budget-ui": "node --test scripts/content-ops-usage-budget-ui.test.mjs",
     "test:content-ops-usage-summary": "node --test scripts/content-ops-usage-summary.test.mjs",
+    "test:content-ops-faq-source-selection": "node --test scripts/content-ops-faq-source-selection.test.mjs",
     "test:landing-page-prerender": "node --test scripts/verify-landing-page-geo-prerender.test.mjs",
     "test:sitemap-bridge": "node --test scripts/landing-page-sitemap-bridge.test.mjs",
     "verify:blog-geo": "node scripts/verify-blog-geo-prerender.mjs",
