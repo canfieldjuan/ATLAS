@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
+    build_deflection_snapshot,
     build_deflection_report_artifact,
+)
+from extracted_content_pipeline.deflection_report_access import (
+    PostgresDeflectionReportArtifactStore,
 )
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownResult
 
@@ -123,6 +127,169 @@ def test_deflection_report_does_not_put_review_needed_steps_in_drafted_section()
     assert "No FAQ gap in this run included uploaded resolution evidence." in drafted_section
     assert "Review the cited ticket evidence" not in drafted_section
     assert "Can I update permissions?" in markdown.split("## No Proven Answer Yet", 1)[1]
+
+
+def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "question_source": "customer_wording",
+                "weighted_frequency": 8,
+                "answer": "Customers mention export trouble.",
+                "steps": ["Open Analytics and download the report."],
+                "evidence_quotes": ("ticket-export-1 said export failed",),
+                "source_ids": ("ticket-export-1",),
+                "answer_evidence_status": "resolution_evidence",
+            },
+            {
+                "question": "Can I enable SSO?",
+                "question_source": "customer_wording",
+                "weighted_frequency": 6,
+                "steps": ["Review before publishing."],
+                "evidence_quotes": ("ticket-sso-1 asked about SSO",),
+                "source_ids": ("ticket-sso-1",),
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    )
+    artifact = build_deflection_report_artifact(result)
+
+    snapshot = build_deflection_snapshot(artifact, top_n=1).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot == {
+        "summary": {
+            "generated": 2,
+            "drafted_answer_count": 1,
+            "no_proven_answer_count": 1,
+        },
+        "top_questions": [
+            {
+                "rank": 1,
+                "question": "How do I export attribution reports?",
+                "weighted_frequency": 8,
+                "customer_wording": "How do I export attribution reports?",
+            }
+        ],
+    }
+    assert "Open Analytics" not in encoded
+    assert "ticket-export-1" not in encoded
+    assert "evidence" not in encoded
+
+
+def test_deflection_snapshot_rejects_non_positive_top_n() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=0,
+        ticket_source_count=0,
+        output_checks={},
+        items=(),
+    )
+
+    with pytest.raises(ValueError, match="top_n must be positive"):
+        build_deflection_snapshot(build_deflection_report_artifact(result), top_n=0)
+
+
+@pytest.mark.asyncio
+async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.rows: dict[tuple[str, str], dict[str, object]] = {}
+
+        async def execute(self, query: str, *args: object) -> str:
+            if "INSERT INTO content_ops_deflection_reports" in query:
+                account_id, request_id, snapshot, artifact = args
+                key = (str(account_id), str(request_id))
+                existing = self.rows.get(key, {})
+                self.rows[key] = {
+                    "account_id": account_id,
+                    "request_id": request_id,
+                    "snapshot": snapshot,
+                    "artifact": artifact,
+                    "paid": bool(existing.get("paid")),
+                    "payment_reference": existing.get("payment_reference"),
+                }
+                return "INSERT 0 1"
+            if "UPDATE content_ops_deflection_reports" in query:
+                account_id, request_id, payment_reference = args
+                key = (str(account_id), str(request_id))
+                if key not in self.rows:
+                    return "UPDATE 0"
+                self.rows[key]["paid"] = True
+                self.rows[key]["payment_reference"] = payment_reference
+                return "UPDATE 1"
+            raise AssertionError(query)
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
+            account_id, request_id = args
+            row = self.rows.get((str(account_id), str(request_id)))
+            if row is None:
+                return None
+            if "SELECT snapshot" in query:
+                return {"snapshot": row["snapshot"]}
+            return dict(row)
+
+    store = PostgresDeflectionReportArtifactStore(pool=_Pool())
+    snapshot = {
+        "summary": {
+            "generated": 1,
+            "drafted_answer_count": 1,
+            "no_proven_answer_count": 0,
+        },
+        "top_questions": [
+            {
+                "rank": 1,
+                "question": "How do I export reports?",
+                "weighted_frequency": 3,
+                "customer_wording": "How do I export reports?",
+            }
+        ],
+    }
+    artifact = {
+        "markdown": "# Full report\n\nOpen Analytics.",
+        "summary": {"generated": 1},
+        "faq_result": {"items": [{"source_ids": ["ticket-1"]}]},
+    }
+
+    await store.save_report(
+        account_id="acct-1",
+        request_id="request-1",
+        snapshot=snapshot,
+        artifact=artifact,
+    )
+
+    assert await store.get_snapshot(
+        account_id="acct-1",
+        request_id="request-1",
+    ) == snapshot
+    locked = await store.get_artifact_record(
+        account_id="acct-1",
+        request_id="request-1",
+    )
+    assert locked is not None
+    assert locked.paid is False
+    assert locked.artifact == artifact
+    assert await store.mark_paid(
+        account_id="acct-1",
+        request_id="request-1",
+        payment_reference="checkout-session:test",
+    ) is True
+    unlocked = await store.get_artifact_record(
+        account_id="acct-1",
+        request_id="request-1",
+    )
+    assert unlocked is not None
+    assert unlocked.paid is True
+    assert unlocked.payment_reference == "checkout-session:test"
+    assert await store.mark_paid(
+        account_id="acct-1",
+        request_id="missing",
+    ) is False
 
 
 def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None:

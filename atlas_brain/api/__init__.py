@@ -167,6 +167,9 @@ try:
     from extracted_content_pipeline.api.faq_search import (
         create_faq_deflection_search_router,
     )
+    from extracted_content_pipeline.deflection_report_access import (
+        PostgresDeflectionReportArtifactStore,
+    )
     from .._content_ops_input_provider import build_content_ops_input_provider
     from .._content_ops_infrastructure import (
         build_content_ops_llm_client,
@@ -231,16 +234,25 @@ try:
         config=content_ops_config,
         dependencies=[Depends(_capture_content_ops_auth_user)],
         execution_services_provider=lambda: (
-            build_content_ops_execution_services(enable_db_services=True)
+            build_content_ops_execution_services(
+                enable_db_services=True,
+                expose_faq_markdown_output=False,
+            )
         ),
         scope_provider=build_content_ops_scope,
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
         input_provider=build_content_ops_input_provider(pool_provider=get_db_pool),
+        deflection_report_store_provider=lambda: (
+            PostgresDeflectionReportArtifactStore(pool=get_db_pool())
+        ),
         cache_policy_default_provider=_content_ops_cache_policy_default,
         opportunity_import_pool_provider=get_db_pool,
         usage_pool_provider=get_db_pool,
         usage_dependencies=[Depends(_require_content_ops_usage_operator)],
+        deflection_report_paid_dependencies=[
+            Depends(_require_content_ops_usage_operator)
+        ],
         ingestion_import_admission_provider=lambda: (
             build_content_ops_import_admission_gate(
                 max_concurrency=content_ops_config.ingestion_import_max_concurrency

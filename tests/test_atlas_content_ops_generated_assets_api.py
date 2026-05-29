@@ -144,6 +144,18 @@ def test_content_ops_usage_summary_route_uses_shared_auth_and_pool() -> None:
     assert "_require_content_ops_usage_operator" in dependency_names
 
 
+def test_content_ops_deflection_paid_route_uses_operator_gate() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/deflection-reports/{request_id}/paid")
+    dependency_names = [
+        getattr(dependency.call, "__name__", "")
+        for dependency in route.dependant.dependencies
+    ]
+
+    assert "_capture_content_ops_auth_user" in dependency_names
+    assert "_require_content_ops_usage_operator" in dependency_names
+
+
 def test_content_ops_preview_route_uses_host_cache_policy_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

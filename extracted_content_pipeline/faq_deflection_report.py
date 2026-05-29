@@ -12,6 +12,21 @@ from .ticket_faq_markdown import TicketFAQMarkdownResult, TicketFAQMarkdownServi
 
 _RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
 _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
+DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
+
+
+@dataclass(frozen=True)
+class DeflectionSnapshot:
+    """Free preview projection that excludes paid answer/evidence fields."""
+
+    summary: dict[str, int]
+    top_questions: tuple[dict[str, Any], ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "summary": dict(self.summary),
+            "top_questions": [dict(question) for question in self.top_questions],
+        }
 
 
 @dataclass(frozen=True)
@@ -28,6 +43,9 @@ class DeflectionReportArtifact:
             "summary": dict(self.summary),
             "faq_result": self.faq_result.as_dict(),
         }
+
+    def snapshot(self, *, top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N) -> DeflectionSnapshot:
+        return build_deflection_snapshot(self, top_n=top_n)
 
 
 class FAQDeflectionReportService:
@@ -98,6 +116,43 @@ def build_deflection_report_artifact(
         markdown=markdown,
         summary=summary,
         faq_result=faq_result,
+    )
+
+
+def build_deflection_snapshot(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+    *,
+    top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
+) -> DeflectionSnapshot:
+    """Project a report into the free snapshot shape.
+
+    The snapshot intentionally omits Markdown, answers, steps, evidence,
+    source IDs, term mappings, and nested FAQ item payloads.
+    """
+
+    if top_n <= 0:
+        raise ValueError("top_n must be positive")
+    summary = _artifact_summary(artifact)
+    items = _artifact_items(artifact)
+    snapshot_summary = {
+        "generated": _int(summary.get("generated")),
+        "drafted_answer_count": _int(summary.get("drafted_answer_count")),
+        "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
+    }
+    top_questions: list[dict[str, Any]] = []
+    for rank, item in enumerate(items[:top_n], start=1):
+        question = _text(item.get("question"))
+        top_questions.append({
+            "rank": rank,
+            "question": question,
+            "weighted_frequency": _int(
+                item.get("weighted_frequency") or item.get("frequency")
+            ),
+            "customer_wording": _snapshot_customer_wording(item, question),
+        })
+    return DeflectionSnapshot(
+        summary=snapshot_summary,
+        top_questions=tuple(top_questions),
     )
 
 
@@ -305,6 +360,38 @@ def _item(value: Mapping[str, Any]) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _artifact_summary(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if isinstance(artifact, DeflectionReportArtifact):
+        return artifact.summary
+    value = artifact.get("summary")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _artifact_items(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(artifact, DeflectionReportArtifact):
+        return tuple(_item(item) for item in artifact.faq_result.items)
+    faq_result = artifact.get("faq_result")
+    if not isinstance(faq_result, Mapping):
+        return ()
+    items = faq_result.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
+        return ()
+    return tuple(_item(item) for item in items if isinstance(item, Mapping))
+
+
+def _snapshot_customer_wording(item: Mapping[str, Any], question: str) -> str:
+    explicit = _text(item.get("customer_wording"))
+    if explicit:
+        return explicit
+    if _text(item.get("question_source")) == "customer_wording":
+        return question
+    return ""
+
+
 def _texts(value: Any) -> list[str]:
     if value in (None, "", [], {}):
         return []
@@ -343,8 +430,11 @@ def _md(value: Any) -> str:
 
 
 __all__ = [
+    "DEFAULT_DEFLECTION_SNAPSHOT_TOP_N",
+    "DeflectionSnapshot",
     "DeflectionReportArtifact",
     "FAQDeflectionReportService",
+    "build_deflection_snapshot",
     "build_deflection_report_artifact",
     "deflection_report_summary",
     "render_deflection_report",

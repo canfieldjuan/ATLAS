@@ -18,12 +18,17 @@ from extracted_content_pipeline.campaign_llm_client import (
 from extracted_content_pipeline.campaign_ports import CampaignReasoningContext
 from extracted_content_pipeline.content_ops_input_provider import ContentOpsInputPackage
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
+from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
+)
+from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 
 
 pytestmark = pytest.mark.skipif(
     api_module.APIRouter is None,
     reason="fastapi is not installed in this test environment",
 )
+Depends = pytest.importorskip("fastapi").Depends
 
 _DEFAULT_EXECUTION_LIMITS = {
     "max_concurrency": 8,
@@ -38,6 +43,13 @@ def _route(router, path: str, method: str):
         if getattr(route, "path", None) == path and method.upper() in getattr(route, "methods", set()):
             return route
     raise AssertionError(f"route not found: {method} {path}")
+
+
+def _dependency_names(route) -> list[str]:
+    return [
+        getattr(dependency.call, "__name__", "")
+        for dependency in route.dependant.dependencies
+    ]
 
 
 class _UploadFile:
@@ -2406,6 +2418,192 @@ async def test_execute_generation_route_rejects_invalid_faq_vocabulary_rules_as_
     assert (
         exc.value.detail
         == "faq_vocabulary_gap_rules entries must include at least two terms"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_returns_snapshot_for_unpaid_deflection_report():
+    store = InMemoryDeflectionReportArtifactStore()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+        deflection_report_store_provider=lambda: store,
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 3,
+            "require_quality_gates": False,
+            "inputs": {
+                "deflection_report_title": "Paid Gate Report",
+                "faq_title": "Paid Gate FAQ",
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-export-1",
+                        "source_type": "support_ticket",
+                        "subject": "Export report",
+                        "message": "How do I export attribution reports?",
+                        "pain_category": "exports",
+                        "resolution_text": "Open Analytics and download the report.",
+                    },
+                    {
+                        "ticket_id": "ticket-sso-1",
+                        "source_type": "support_ticket",
+                        "subject": "SSO setup",
+                        "message": "Can I enable SSO for my workspace?",
+                        "pain_category": "authentication",
+                    },
+                ],
+            },
+        }
+    )
+
+    assert payload["status"] == "completed"
+    request_id = payload["request_id"]
+    result = payload["steps"][0]["result"]
+    encoded = json.dumps(result, sort_keys=True)
+    assert result["request_id"] == request_id
+    assert result["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
+    assert result["snapshot"]["summary"]["generated"] == 2
+    assert result["snapshot"]["summary"]["drafted_answer_count"] == 1
+    assert result["snapshot"]["summary"]["no_proven_answer_count"] == 1
+    assert result["snapshot"]["top_questions"][0]["rank"] == 1
+    assert "markdown" not in result
+    assert "faq_result" not in result
+    assert "Open Analytics" not in encoded
+    assert "ticket-export-1" not in encoded
+
+    snapshot_route = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
+    assert await snapshot_route.endpoint(request_id=request_id) == result["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_deflection_report_artifact_route_is_locked_until_marked_paid():
+    store = InMemoryDeflectionReportArtifactStore()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+        deflection_report_store_provider=lambda: store,
+    )
+
+    execute_route = _route(router, "/ops/execute", "POST")
+    payload = await execute_route.endpoint(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 2,
+            "require_quality_gates": False,
+            "inputs": {
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-export-1",
+                        "source_type": "support_ticket",
+                        "subject": "Export report",
+                        "message": "How do I export attribution reports?",
+                        "pain_category": "exports",
+                        "resolution_text": "Open Analytics and download the report.",
+                    }
+                ],
+            },
+        }
+    )
+    request_id = payload["request_id"]
+    artifact_route = _route(router, "/ops/deflection-reports/{request_id}/artifact", "GET")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await artifact_route.endpoint(request_id=request_id)
+    assert exc.value.status_code == 403
+
+    paid_route = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
+    paid_payload = api_module.DeflectionReportPaidModel(
+        payment_reference="checkout-session:test"
+    )
+    assert await paid_route.endpoint(
+        payload=paid_payload,
+        request_id=request_id,
+    ) == {"request_id": request_id, "paid": True}
+
+    artifact = await artifact_route.endpoint(request_id=request_id)
+    assert artifact["markdown"].startswith("# Support Ticket Deflection Report")
+    assert "Open Analytics and download the report" in artifact["markdown"]
+    assert tuple(artifact["faq_result"]["items"][0]["source_ids"]) == (
+        "ticket-export-1",
+    )
+
+
+def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
+    async def _tenant_user() -> None:
+        return None
+
+    async def _trusted_paid_release() -> None:
+        return None
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        dependencies=[Depends(_tenant_user)],
+        deflection_report_paid_dependencies=[Depends(_trusted_paid_release)],
+    )
+
+    paid_route = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
+    artifact_route = _route(
+        router,
+        "/ops/deflection-reports/{request_id}/artifact",
+        "GET",
+    )
+    snapshot_route = _route(
+        router,
+        "/ops/deflection-reports/{request_id}/snapshot",
+        "GET",
+    )
+
+    assert "_tenant_user" in _dependency_names(paid_route)
+    assert "_trusted_paid_release" in _dependency_names(paid_route)
+    assert "_trusted_paid_release" not in _dependency_names(artifact_route)
+    assert "_trusted_paid_release" not in _dependency_names(snapshot_route)
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_fails_closed_without_deflection_report_store():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_deflection_report"],
+                "require_quality_gates": False,
+                "inputs": {
+                    "source_material": [
+                        {
+                            "ticket_id": "ticket-export-1",
+                            "source_type": "support_ticket",
+                            "message": "How do I export attribution reports?",
+                            "resolution_text": "Open Analytics.",
+                        }
+                    ],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == (
+        "Content Ops deflection report store is not configured."
     )
 
 

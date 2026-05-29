@@ -229,6 +229,7 @@ def build_content_ops_execution_services(
     skills_factory: Callable[[], SkillStore] | None = None,
     pool_factory: Callable[[], Any] | None = None,
     enable_db_services: bool = False,
+    expose_faq_markdown_output: bool = True,
 ) -> ContentOpsExecutionServices:
     """Return the host's Content Ops execution-services bundle.
 
@@ -279,7 +280,8 @@ def build_content_ops_execution_services(
     report = None
     sales_brief = None
     blog_post = None
-    faq_markdown = _FAQ_MARKDOWN_SERVICE
+    faq_markdown_service = _FAQ_MARKDOWN_SERVICE
+    faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
     faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
     if enable_db_services:
         llm = llm_factory()
@@ -319,8 +321,11 @@ def build_content_ops_execution_services(
             skills=skills,
             pool=pool,
         )
-        faq_markdown = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
-        faq_deflection_report = FAQDeflectionReportService(faq_markdown=faq_markdown)
+        faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
+        faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
+        faq_deflection_report = FAQDeflectionReportService(
+            faq_markdown=faq_markdown_service
+        )
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
