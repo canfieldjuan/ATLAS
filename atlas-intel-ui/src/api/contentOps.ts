@@ -5,6 +5,9 @@
  * `/content-ops/*` and `/content-assets/*` routes the backend exposes:
  *
  *   GET  /content-ops/control-surfaces
+ *   GET  /content-ops/zendesk-credentials
+ *   POST /content-ops/zendesk-credentials
+ *   DELETE /content-ops/zendesk-credentials/{credential_id}
  *   POST /content-ops/preview
  *   POST /content-ops/plan
  *   POST /content-ops/ingestion/files/inspect
@@ -174,6 +177,29 @@ export interface ContentOpsUsageSummaryResponse {
   by_model: ContentOpsUsageSummaryBreakdownResponse[]
   by_asset_type: ContentOpsUsageSummaryBreakdownResponse[]
   by_cache_status?: ContentOpsUsageSummaryBreakdownResponse[]
+}
+
+// GET/POST/DELETE /content-ops/zendesk-credentials
+
+export interface ContentOpsZendeskCredential {
+  id: string
+  account_id: string
+  email: string
+  api_token_prefix: string
+  subdomain: string
+  base_url: string
+  label: string
+  added_at: string
+  last_used_at?: string | null
+  revoked_at?: string | null
+}
+
+export interface UpsertContentOpsZendeskCredentialRequest {
+  email: string
+  api_token: string
+  subdomain?: string
+  base_url?: string
+  label?: string
 }
 
 // POST /content-ops/preview, /plan, /execute share this body shape.
@@ -613,6 +639,20 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return rawJson<T>(res)
 }
 
+async function deleteJson(path: string): Promise<void> {
+  const url = `${BASE}${path}`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const text = await rawText(res)
+    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+  }
+}
+
 async function postMultipart<T>(path: string, body: FormData): Promise<T> {
   const url = `${BASE}${path}`
   const doFetch = () =>
@@ -784,6 +824,25 @@ export function fetchContentOpsTenantUsageSummary(
     '/usage/summary/tenant',
     params,
   )
+}
+
+/** GET /content-ops/zendesk-credentials -- display-safe tenant credential list. */
+export function fetchContentOpsZendeskCredentials(): Promise<
+  ContentOpsZendeskCredential[]
+> {
+  return getJson<ContentOpsZendeskCredential[]>('/zendesk-credentials')
+}
+
+/** POST /content-ops/zendesk-credentials -- add or rotate tenant Zendesk credential. */
+export function saveContentOpsZendeskCredential(
+  body: UpsertContentOpsZendeskCredentialRequest,
+): Promise<ContentOpsZendeskCredential> {
+  return postJson<ContentOpsZendeskCredential>('/zendesk-credentials', body)
+}
+
+/** DELETE /content-ops/zendesk-credentials/{id} -- revoke tenant Zendesk credential. */
+export function revokeContentOpsZendeskCredential(id: string): Promise<void> {
+  return deleteJson(`/zendesk-credentials/${encodeURIComponent(id)}`)
 }
 
 /** GET /content-assets/{asset}/drafts -- persisted generated assets. */

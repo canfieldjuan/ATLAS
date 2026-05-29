@@ -2,15 +2,18 @@ import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import {
   ChevronRight,
   FileUp,
+  KeyRound,
   Loader2,
   Play,
   RefreshCw,
   Search,
+  Trash2,
   Upload,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
+  fetchContentOpsZendeskCredentials,
   fetchGeneratedAssetDrafts,
   fetchContentOpsControlSurfaces,
   fetchContentOpsTenantUsageSummary,
@@ -20,6 +23,8 @@ import {
   inspectContentOpsIngestionFile,
   planContentOpsRun,
   previewContentOpsRun,
+  revokeContentOpsZendeskCredential,
+  saveContentOpsZendeskCredential,
 } from '../api/contentOps'
 import {
   contentOpsIngestionFilePreflightError,
@@ -64,7 +69,10 @@ import {
   type GenerationPlanStep,
   type ContentOpsUsageBudgetEvaluation,
 } from '../domain/contentOps'
-import type { GeneratedAssetDraft } from '../api/contentOps'
+import type {
+  ContentOpsZendeskCredential,
+  GeneratedAssetDraft,
+} from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
 
@@ -112,6 +120,13 @@ type IngestionFileLoadState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
   | { kind: 'success'; filename: string; size: number }
+
+type ZendeskCredentialMutationState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'revoking'; id: string }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string }
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
 const DEFAULT_INGESTION_ROWS_JSON = '[\n  \n]'
@@ -180,6 +195,13 @@ export default function ContentOpsNewRun() {
     () => fetchContentOpsTenantUsageSummary({ days: 7 }),
     [],
   )
+  const {
+    data: zendeskCredentials,
+    loading: zendeskCredentialsLoading,
+    error: zendeskCredentialsError,
+    refresh: refreshZendeskCredentials,
+    refreshing: zendeskCredentialsRefreshing,
+  } = useApiData(() => fetchContentOpsZendeskCredentials(), [])
   const {
     data: faqDrafts,
     loading: faqDraftsLoading,
@@ -874,6 +896,13 @@ export default function ContentOpsNewRun() {
         loading={usageLoading}
         error={usageError}
         summary={usageSummary}
+      />
+      <ZendeskCredentialCard
+        credentials={zendeskCredentials ?? []}
+        loading={zendeskCredentialsLoading}
+        refreshing={zendeskCredentialsRefreshing}
+        error={zendeskCredentialsError}
+        onRefresh={refreshZendeskCredentials}
       />
 
       <form onSubmit={handleSubmit} className="space-y-8">
@@ -1669,6 +1698,234 @@ function UsageSummaryCard({
   )
 }
 
+function ZendeskCredentialCard({
+  credentials,
+  loading,
+  refreshing,
+  error,
+  onRefresh,
+}: {
+  credentials: ContentOpsZendeskCredential[]
+  loading: boolean
+  refreshing: boolean
+  error: Error | null
+  onRefresh: () => void
+}) {
+  const [email, setEmail] = useState('')
+  const [apiToken, setApiToken] = useState('')
+  const [subdomain, setSubdomain] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [label, setLabel] = useState('')
+  const [mutationState, setMutationState] =
+    useState<ZendeskCredentialMutationState>({ kind: 'idle' })
+  const canSave = canSaveZendeskCredential(email, apiToken, subdomain, baseUrl)
+  const mutating =
+    mutationState.kind === 'saving' || mutationState.kind === 'revoking'
+
+  const handleSave = async () => {
+    if (!canSave || mutationState.kind === 'saving') return
+    setMutationState({ kind: 'saving' })
+    try {
+      await saveContentOpsZendeskCredential({
+        email: email.trim(),
+        api_token: apiToken,
+        subdomain: subdomain.trim(),
+        base_url: baseUrl.trim(),
+        label: label.trim(),
+      })
+      setApiToken('')
+      setMutationState({ kind: 'success', message: 'Zendesk credential saved.' })
+      onRefresh()
+    } catch (err) {
+      setMutationState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handleRevoke = async (credential: ContentOpsZendeskCredential) => {
+    if (mutationState.kind === 'revoking') return
+    setMutationState({ kind: 'revoking', id: credential.id })
+    try {
+      await revokeContentOpsZendeskCredential(credential.id)
+      setMutationState({
+        kind: 'success',
+        message: 'Zendesk credential revoked.',
+      })
+      onRefresh()
+    } catch (err) {
+      setMutationState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return (
+    <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-slate-100">
+            <KeyRound className="h-4 w-4 text-cyan-300" />
+            Zendesk macro connection
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Add or rotate the tenant Zendesk API token used when FAQ entries are
+            published as macros.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || refreshing || mutating}
+          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && !loading && (
+        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Zendesk credentials unavailable: {error.message}
+        </div>
+      )}
+      {mutationState.kind === 'error' && (
+        <div className="mb-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+          {mutationState.message}
+        </div>
+      )}
+      {mutationState.kind === 'success' && (
+        <div className="mb-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+          {mutationState.message}
+        </div>
+      )}
+
+      <div className="mb-4 grid grid-cols-1 gap-2 lg:grid-cols-2">
+        {loading ? (
+          <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading Zendesk credentials...
+          </div>
+        ) : credentials.length === 0 ? (
+          <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
+            No Zendesk credential saved for this tenant yet.
+          </div>
+        ) : (
+          credentials.map((credential) => (
+            <div
+              key={credential.id}
+              className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-slate-200">
+                    {credential.label || credential.email}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {credential.email} - {formatZendeskCredentialEndpoint(credential)}
+                  </div>
+                  <div className="mt-1 text-[11px] text-slate-600">
+                    Token prefix {credential.api_token_prefix || 'n/a'} - Added{' '}
+                    {formatCredentialDate(credential.added_at)}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRevoke(credential)}
+                  disabled={mutating}
+                  className="flex items-center gap-1 rounded-md border border-rose-500/30 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+                >
+                  {mutationState.kind === 'revoking' &&
+                  mutationState.id === credential.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  Revoke
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+        <label className="block text-sm lg:col-span-2">
+          <span className="text-slate-300">Zendesk email</span>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            placeholder="agent@example.com"
+          />
+        </label>
+        <label className="block text-sm lg:col-span-2">
+          <span className="text-slate-300">API token</span>
+          <input
+            type="password"
+            value={apiToken}
+            onChange={(e) => setApiToken(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            placeholder="Paste token to add or rotate"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-slate-300">Label</span>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            placeholder="Primary"
+          />
+        </label>
+        <label className="block text-sm lg:col-span-2">
+          <span className="text-slate-300">Subdomain</span>
+          <input
+            type="text"
+            value={subdomain}
+            onChange={(e) => setSubdomain(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            placeholder="acme"
+          />
+        </label>
+        <label className="block text-sm lg:col-span-2">
+          <span className="text-slate-300">Base URL</span>
+          <input
+            type="url"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none"
+            placeholder="https://acme.zendesk.com"
+          />
+        </label>
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!canSave || mutating}
+            className="flex w-full items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-sm font-medium text-cyan-100 hover:bg-cyan-500/20 disabled:opacity-50"
+          >
+            {mutationState.kind === 'saving' ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <KeyRound className="h-4 w-4" />
+            )}
+            Save connection
+          </button>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Use either a Zendesk subdomain or full base URL. The token is write-only
+        and is not shown after save.
+      </p>
+    </section>
+  )
+}
+
 function FaqSourceSelector({
   drafts,
   selectedIds,
@@ -2184,6 +2441,35 @@ function formatUsageDate(value: string | null): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString()
+}
+
+function formatCredentialDate(value: string | null | undefined): string {
+  if (!value) return 'unknown'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString()
+}
+
+function formatZendeskCredentialEndpoint(
+  credential: ContentOpsZendeskCredential,
+): string {
+  const baseUrl = credential.base_url.trim()
+  if (baseUrl) return baseUrl
+  const subdomain = credential.subdomain.trim()
+  return subdomain ? `${subdomain}.zendesk.com` : 'endpoint not set'
+}
+
+function canSaveZendeskCredential(
+  email: string,
+  apiToken: string,
+  subdomain: string,
+  baseUrl: string,
+): boolean {
+  return Boolean(
+    email.trim() &&
+      apiToken.trim() &&
+      (subdomain.trim() || baseUrl.trim()),
+  )
 }
 
 function formatDuration(value: number): string {
