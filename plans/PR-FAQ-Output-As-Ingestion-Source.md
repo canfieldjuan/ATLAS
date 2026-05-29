@@ -79,7 +79,8 @@ directly without knowing about FAQ internals.
 Ran locally:
 
 - Command: python -m pytest tests/test_extracted_ticket_faq_output_ingestion.py tests/test_extracted_campaign_source_adapters.py -q
-  - 72 passed
+  - 72 passed; rerun after addressing the saved FAQ draft traceability review
+    comment
 - Command: python -m py_compile extracted_content_pipeline/faq_output_ingestion.py extracted_content_pipeline/campaign_source_adapters.py tests/test_extracted_ticket_faq_output_ingestion.py
   - passed
 - Command: python scripts/audit_extracted_pipeline_ci_enrollment.py
@@ -98,13 +99,16 @@ Ran locally:
   - passed; 2648 passed, 9 skipped
 - Command: bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-faq-output-as-ingestion-source.md
   - passed
+- Review update: addressed the bot P2 by preserving a report-level
+  `saved_ids[0]` value as `faq_draft_id` on every generated item row and using
+  an item suffix for unique `source_id` values in multi-item reports.
 
 ## Estimated diff size
 
 | Area | Estimated LOC |
 |---|---:|
-| FAQ output adapter | ~220 |
+| FAQ output adapter | ~230 |
 | Source adapter wiring | ~10 |
 | Focused tests + runner enrollment | ~135 |
-| Plan doc | ~105 |
-| **Total** | **~470** |
+| Plan doc | ~110 |
+| **Total** | **~485** |

@@ -44,13 +44,23 @@ def faq_output_to_source_rows(faq_output: Mapping[str, Any]) -> list[dict[str, A
     if not is_faq_output_bundle(faq_output):
         return []
 
+    items = tuple(faq_output.get("items") or ())
     saved_ids = _text_values(faq_output.get("saved_ids"))
+    report_saved_id = saved_ids[0] if len(saved_ids) == 1 else ""
     rows: list[dict[str, Any]] = []
-    for index, item in enumerate(faq_output.get("items") or (), start=1):
+    for index, item in enumerate(items, start=1):
         if not isinstance(item, Mapping):
             continue
-        saved_id = saved_ids[index - 1] if index <= len(saved_ids) else ""
-        row = faq_item_to_source_row(item, rank=index, saved_id=saved_id)
+        saved_id = (
+            report_saved_id
+            or (saved_ids[index - 1] if index <= len(saved_ids) else "")
+        )
+        row = faq_item_to_source_row(
+            item,
+            rank=index,
+            saved_id=saved_id,
+            saved_id_is_report_level=bool(report_saved_id and len(items) > 1),
+        )
         if row:
             rows.append(row)
     return rows
@@ -61,6 +71,7 @@ def faq_item_to_source_row(
     *,
     rank: int,
     saved_id: str = "",
+    saved_id_is_report_level: bool = False,
 ) -> dict[str, Any]:
     """Convert one generated FAQ item into one source-material row."""
 
@@ -75,7 +86,13 @@ def faq_item_to_source_row(
     evidence_quotes = _text_values(item.get("evidence_quotes"))
     source_ids = _text_values(item.get("source_ids"))
     title = question or topic or f"FAQ item {rank}"
-    source_id = _source_id(item, rank=rank, saved_id=saved_id, title=title)
+    source_id = _source_id(
+        item,
+        rank=rank,
+        saved_id=saved_id,
+        saved_id_is_report_level=saved_id_is_report_level,
+        title=title,
+    )
 
     row: dict[str, Any] = {
         "source_type": FAQ_OUTPUT_SOURCE_TYPE,
@@ -88,6 +105,7 @@ def faq_item_to_source_row(
         "faq_summary": summary,
         "faq_steps": steps,
         "faq_customer_language": _customer_language(question, evidence_quotes),
+        "faq_draft_id": saved_id,
         "faq_source_ticket_ids": source_ids,
         "faq_answer_evidence_status": _clean_text(
             item.get("answer_evidence_status")
@@ -148,9 +166,13 @@ def _source_id(
     *,
     rank: int,
     saved_id: str,
+    saved_id_is_report_level: bool,
     title: str,
 ) -> str:
-    candidate = _clean_text(saved_id) or _first_text(item, _FAQ_ITEM_ID_KEYS)
+    cleaned_saved_id = _clean_text(saved_id)
+    if cleaned_saved_id and saved_id_is_report_level:
+        return f"{cleaned_saved_id}:item-{rank}"
+    candidate = cleaned_saved_id or _first_text(item, _FAQ_ITEM_ID_KEYS)
     if candidate:
         return candidate
     slug = _SLUG_SEPARATOR_RE.sub("-", title.lower()).strip("-")

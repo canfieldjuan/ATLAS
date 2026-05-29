@@ -62,8 +62,10 @@ def test_faq_output_rows_normalize_into_campaign_opportunities() -> None:
         FAQ_OUTPUT_SOURCE_TYPE,
         FAQ_OUTPUT_SOURCE_TYPE,
     ]
-    assert rows[0]["source_id"] == "faq-draft-1"
-    assert rows[1]["source_id"].startswith("faq-output-2-how-do-i-export")
+    assert rows[0]["source_id"] == "faq-draft-1:item-1"
+    assert rows[1]["source_id"] == "faq-draft-1:item-2"
+    assert rows[0]["faq_draft_id"] == "faq-draft-1"
+    assert rows[1]["faq_draft_id"] == "faq-draft-1"
     assert rows[0]["source_title"] == "Why was I charged twice?"
     assert rows[0]["faq_source_ticket_ids"] == ["ticket-1", "ticket-2"]
     assert rows[0]["faq_customer_language"] == [
@@ -84,7 +86,7 @@ def test_faq_output_rows_normalize_into_campaign_opportunities() -> None:
     assert first["opportunity_score"] == 4
     assert first["evidence"] == [{
         "text": rows[0]["text"],
-        "source_id": "faq-draft-1",
+        "source_id": "faq-draft-1:item-1",
         "source_type": FAQ_OUTPUT_SOURCE_TYPE,
         "source_title": "Why was I charged twice?",
     }]
