@@ -88,6 +88,7 @@ pytest \
   tests/test_atlas_content_ops_input_provider.py \
   tests/test_atlas_content_ops_macro_writeback.py \
   tests/test_content_ops_zendesk_credentials.py \
+  tests/test_content_ops_zendesk_credentials_api.py \
   tests/test_atlas_content_ops_reasoning.py \
   tests/test_atlas_content_ops_scope.py \
   tests/test_support_ticket_provider_landing_blog_execute.py \

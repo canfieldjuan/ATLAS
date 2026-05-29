@@ -184,6 +184,9 @@ try:
         describe_content_ops_reasoning_context_provider,
         select_content_ops_reasoning_context_provider,
     )
+    from .content_ops_zendesk_credentials import (
+        create_content_ops_zendesk_credentials_router,
+    )
     from ..auth.dependencies import AuthUser
     from ..config import settings
     from ..storage.database import get_db_pool
@@ -262,6 +265,11 @@ try:
         dependencies=[Depends(_capture_content_ops_auth_user)],
     )
     router.include_router(faq_search_router)
+    zendesk_credentials_router = create_content_ops_zendesk_credentials_router(
+        pool_provider=get_db_pool,
+        auth_dependency=_capture_content_ops_auth_user,
+    )
+    router.include_router(zendesk_credentials_router)
     public_landing_page_router = create_public_landing_page_router(
         pool_provider=get_db_pool,
     )
