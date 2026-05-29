@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import ts from 'typescript'
+
+async function loadTsModule(path) {
+  const source = readFileSync(new URL(path, import.meta.url), 'utf8')
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+      verbatimModuleSyntax: true,
+    },
+  }).outputText
+
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
+  return import(moduleUrl)
+}
+
+const {
+  FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
+  FAQ_MARKDOWN_OUTPUT,
+  faqConfigurationInputsSelected,
+} = await loadTsModule('../src/domain/contentOps/faqConfigurationInputs.ts')
+const { FAQ_DEFLECTION_REPORT_OUTPUT } = await loadTsModule(
+  '../src/domain/contentOps/faqDeflectionReport.ts',
+)
+
+const newRunSource = readFileSync(
+  new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
+  'utf8',
+)
+
+test('FAQ configuration controls apply to FAQ markdown and deflection report outputs', () => {
+  assert.equal(FAQ_MARKDOWN_OUTPUT, 'faq_markdown')
+  assert.equal(
+    FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
+    FAQ_DEFLECTION_REPORT_OUTPUT,
+  )
+  assert.equal(faqConfigurationInputsSelected([FAQ_MARKDOWN_OUTPUT]), true)
+  assert.equal(
+    faqConfigurationInputsSelected([FAQ_DEFLECTION_REPORT_OUTPUT]),
+    true,
+  )
+  assert.equal(faqConfigurationInputsSelected(['landing_page']), false)
+  assert.equal(faqConfigurationInputsSelected([]), false)
+})
+
+test('new run page uses the shared FAQ configuration output predicate', () => {
+  assert.ok(
+    newRunSource.includes(
+      'const faqConfigurationOutputSelected = faqConfigurationInputsSelected(',
+    ),
+  )
+  assert.ok(newRunSource.includes('{faqConfigurationOutputSelected && ('))
+  assert.ok(!newRunSource.includes('faqMarkdownOutputSelected'))
+  assert.ok(newRunSource.includes('FAQ vocabulary-gap inputs'))
+})
