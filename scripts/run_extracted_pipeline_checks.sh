@@ -29,6 +29,7 @@ pytest \
   tests/test_content_ops_faq_saas_demo_corpus.py \
   tests/test_content_ops_faq_report_contract_docs.py \
   tests/test_extracted_ticket_faq_markdown.py \
+  tests/test_extracted_ticket_faq_output_ingestion.py \
   tests/test_smoke_content_ops_faq_output_proof.py \
   tests/test_smoke_content_ops_faq_search_concurrency.py \
   tests/test_smoke_content_ops_faq_search_route_concurrency.py \

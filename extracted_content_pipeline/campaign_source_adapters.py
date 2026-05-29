@@ -15,6 +15,10 @@ from .campaign_customer_data import (
     normalize_campaign_opportunity_rows,
 )
 from .campaign_opportunities import normalize_campaign_opportunity
+from .faq_output_ingestion import (
+    faq_output_to_source_rows,
+    is_faq_output_bundle,
+)
 
 
 SourceDataFormat = Literal["auto", "json", "jsonl", "csv"]
@@ -425,6 +429,8 @@ def source_material_to_source_rows(source_material: Any) -> list[Any]:
     """Expand a source-material object, bundle, or row list into source rows."""
 
     if isinstance(source_material, Mapping):
+        if is_faq_output_bundle(source_material):
+            return faq_output_to_source_rows(source_material)
         return _source_rows_from_bundle(source_material)
     if isinstance(source_material, Sequence) and not isinstance(
         source_material,
