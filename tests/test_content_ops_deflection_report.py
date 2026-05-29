@@ -277,3 +277,97 @@ def test_deflection_report_cli_fails_required_output_checks_for_weak_rows(
     assert result["diagnostics"]["item_count"] == 2
     assert result["diagnostics"]["items"][0]["source_id_count"] == 1
     assert "markdown" not in result
+
+
+def test_deflection_report_cli_applies_custom_intent_rules(tmp_path: Path) -> None:
+    source = tmp_path / "intent-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    result_output = tmp_path / "deflection-report-result.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-access-1",
+                "source_type": "support_ticket",
+                "subject": "Invite links",
+                "message": "The invite link expired before a contractor could join.",
+            },
+            {
+                "ticket_id": "ticket-access-2",
+                "source_type": "support_ticket",
+                "subject": "Login email",
+                "message": "How do I change the login email for a new teammate?",
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    exit_code = MODULE.main([
+        str(source),
+        "--source-format",
+        "json",
+        "--intent-rule",
+        "Account access=invite link,login email,LOGIN EMAIL",
+        "--require-output-checks",
+        "--output",
+        str(output),
+        "--result-output",
+        str(result_output),
+    ])
+
+    assert exit_code == 0
+    markdown = output.read_text(encoding="utf-8")
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["generated"] == 1
+    assert result["output_checks"]["condensed"] is True
+    assert result["failed_output_checks"] == []
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "Account access", "keywords": ["invite link", "login email"]}
+    ]
+    assert result["diagnostics"]["items"][0]["topic"] == "account access"
+    assert result["diagnostics"]["items"][0]["source_id_count"] == 2
+    assert "| 1 |" in markdown
+    assert "ticket-access-1, ticket-access-2" in markdown
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "Account access",
+        "=invite link",
+        "Account access=",
+        "Account access=,",
+    ],
+)
+def test_deflection_report_cli_rejects_malformed_intent_rule(
+    rule: str,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "intent-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-access-1",
+                "source_type": "support_ticket",
+                "subject": "Invite links",
+                "message": "The invite link expired before a contractor could join.",
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        MODULE.main([
+            str(source),
+            "--source-format",
+            "json",
+            "--intent-rule",
+            rule,
+            "--output",
+            str(output),
+        ])
+
+    assert str(exc_info.value) == (
+        "--intent-rule must use topic=keyword,keyword with at least one keyword"
+    )
+    assert not output.exists()
