@@ -329,6 +329,124 @@ def test_deflection_report_cli_applies_custom_intent_rules(tmp_path: Path) -> No
     assert "ticket-access-1, ticket-access-2" in markdown
 
 
+def test_deflection_report_cli_accepts_json_rule_file(tmp_path: Path) -> None:
+    source = tmp_path / "rule-file-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    result_output = tmp_path / "deflection-report-result.json"
+    rule_file = tmp_path / "faq-rules.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-rule-1",
+                "source_type": "support_ticket",
+                "subject": "SSO sync",
+                "message": "How do I enable SSO after warehouse sync?",
+            },
+            {
+                "ticket_id": "ticket-rule-2",
+                "source_type": "support_ticket",
+                "subject": "Connector lag",
+                "message": "Can connector lag delay SSO provisioning?",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    rule_file.write_text(
+        json.dumps({
+            "intent_rules": [
+                {"topic": "file topic", "keywords": ["warehouse sync", "connector lag"]}
+            ],
+            "vocabulary_gap_rules": [["SSO", "single sign-on"]],
+        }),
+        encoding="utf-8",
+    )
+
+    exit_code = MODULE.main([
+        str(source),
+        "--source-format",
+        "json",
+        "--documentation-term",
+        "Single sign-on setup",
+        "--rule-file",
+        str(rule_file),
+        "--intent-rule",
+        "cli topic=warehouse sync,connector lag",
+        "--require-output-checks",
+        "--output",
+        str(output),
+        "--result-output",
+        str(result_output),
+    ])
+
+    assert exit_code == 0
+    markdown = output.read_text(encoding="utf-8")
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["rule_files"] == [str(rule_file)]
+    assert result["config"]["custom_intent_rules"] == [
+        {"topic": "cli topic", "keywords": ["warehouse sync", "connector lag"]},
+        {"topic": "file topic", "keywords": ["warehouse sync", "connector lag"]},
+    ]
+    assert result["config"]["vocabulary_gap_rules"] == [["SSO", "single sign-on"]]
+    assert result["generated"] == 1
+    assert result["diagnostics"]["items"][0]["topic"] == "cli topic"
+    assert result["diagnostics"]["items"][0]["source_id_count"] == 2
+    assert result["diagnostics"]["items"][0]["term_mapping_count"] >= 1
+    assert "SSO" in markdown
+    assert "Single sign-on setup" in markdown
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ([], "--rule-file must contain a JSON object"),
+        ({"unknown": []}, "--rule-file contains unsupported key(s): unknown"),
+        ({"intent_rules": "bad"}, "--rule-file intent_rules must be an array"),
+        (
+            {"intent_rules": [{"topic": "data freshness", "keywords": []}]},
+            "--rule-file intent_rules[1] is invalid",
+        ),
+        (
+            {"vocabulary_gap_rules": [["SSO"]]},
+            "--rule-file vocabulary_gap_rules[1] is invalid",
+        ),
+    ],
+)
+def test_deflection_report_cli_rejects_invalid_rule_file(
+    tmp_path: Path,
+    payload: object,
+    message: str,
+) -> None:
+    source = tmp_path / "bad-rule-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    rule_file = tmp_path / "faq-rules.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-rule-1",
+                "source_type": "support_ticket",
+                "subject": "Sync lag",
+                "message": "The warehouse sync is delayed.",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    rule_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        MODULE.main([
+            str(source),
+            "--source-format",
+            "json",
+            "--rule-file",
+            str(rule_file),
+            "--output",
+            str(output),
+        ])
+
+    assert message in str(exc_info.value)
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     "rule",
     [

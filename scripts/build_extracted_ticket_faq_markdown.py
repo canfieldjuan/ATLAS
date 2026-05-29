@@ -16,6 +16,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 _DOCUMENTATION_TERM_ROW_KEYS = (
     "documentation_term",
@@ -51,6 +54,11 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     is_zero_result_search_row,
     source_row_weight,
     weighted_source_volume_by_group,
+)
+from content_ops_faq_cli_rules import (  # noqa: E402
+    load_rule_files,
+    parse_intent_rules,
+    parse_vocabulary_gap_rules,
 )
 
 _SOURCE_CHANNELS = {
@@ -215,14 +223,14 @@ def main(argv: list[str] | None = None) -> int:
         args.documentation_term_format,
     )
     args.documentation_terms = documentation_terms
-    file_rules = _load_rule_files(args.rule_file)
+    file_rules = load_rule_files(args.rule_file)
     vocabulary_gap_rules = (
-        *_parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
+        *parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
         *file_rules["vocabulary_gap_rules"],
     )
     args.vocabulary_gap_rules = vocabulary_gap_rules
     custom_intent_rules = (
-        *_parse_intent_rules(args.intent_rule),
+        *parse_intent_rules(args.intent_rule),
         *file_rules["intent_rules"],
     )
     args.custom_intent_rules = custom_intent_rules
@@ -545,58 +553,6 @@ def _clean_diagnostic_text(value: Any) -> str:
     return " ".join(str(value or "").split())
 
 
-def _parse_vocabulary_gap_rules(values: list[str]) -> tuple[tuple[str, ...], ...]:
-    rules: list[tuple[str, ...]] = []
-    for value in values:
-        terms = _parse_vocabulary_gap_rule_terms(value)
-        if len(terms) < 2:
-            raise SystemExit(
-                "--vocabulary-gap-rule must include at least two comma-separated terms"
-            )
-        rules.append(terms)
-    return tuple(rules)
-
-
-def _parse_vocabulary_gap_rule_terms(value: str) -> tuple[str, ...]:
-    terms: list[str] = []
-    seen: set[str] = set()
-    for part in value.split(","):
-        term = part.strip()
-        key = term.lower()
-        if not term or key in seen:
-            continue
-        seen.add(key)
-        terms.append(term)
-    return tuple(terms)
-
-
-def _parse_intent_rules(values: list[str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    rules: list[tuple[str, tuple[str, ...]]] = []
-    for value in values:
-        topic, separator, raw_keywords = value.partition("=")
-        topic = topic.strip()
-        keywords = _parse_intent_rule_keywords(raw_keywords)
-        if not separator or not topic or not keywords:
-            raise SystemExit(
-                "--intent-rule must use topic=keyword,keyword with at least one keyword"
-            )
-        rules.append((topic, keywords))
-    return tuple(rules)
-
-
-def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
-    keywords: list[str] = []
-    seen: set[str] = set()
-    for part in value.split(","):
-        keyword = part.strip()
-        key = keyword.lower()
-        if not keyword or key in seen:
-            continue
-        seen.add(key)
-        keywords.append(keyword)
-    return tuple(keywords)
-
-
 def _cli_documentation_terms(
     inline_terms: list[str],
     files: list[Path],
@@ -787,133 +743,6 @@ def _clean_cli_documentation_terms(terms: list[str]) -> tuple[str, ...]:
         if text:
             out.setdefault(text.lower(), text)
     return tuple(out.values())
-
-
-def _load_rule_files(paths: list[Path]) -> dict[str, tuple[Any, ...]]:
-    intent_rules: list[tuple[str, tuple[str, ...]]] = []
-    vocabulary_gap_rules: list[tuple[str, ...]] = []
-    for path in paths:
-        payload = _load_rule_file(path)
-        intent_rules.extend(_parse_intent_rule_payloads(payload.get("intent_rules", []), path))
-        vocabulary_gap_rules.extend(
-            _parse_vocabulary_gap_rule_payloads(
-                payload.get("vocabulary_gap_rules", []),
-                path,
-            )
-        )
-    return {
-        "intent_rules": tuple(intent_rules),
-        "vocabulary_gap_rules": tuple(vocabulary_gap_rules),
-    }
-
-
-def _load_rule_file(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise SystemExit(f"--rule-file not found: {path}") from None
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"--rule-file must be valid JSON: {path}: {exc.msg}") from None
-    if not isinstance(payload, dict):
-        raise SystemExit(f"--rule-file must contain a JSON object: {path}")
-    allowed = {"intent_rules", "vocabulary_gap_rules"}
-    unknown = sorted(str(key) for key in payload if key not in allowed)
-    if unknown:
-        raise SystemExit(
-            f"--rule-file contains unsupported key(s): {', '.join(unknown)}"
-        )
-    return payload
-
-
-def _parse_intent_rule_payloads(
-    values: Any,
-    path: Path,
-) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    if not isinstance(values, list):
-        raise SystemExit(f"--rule-file intent_rules must be an array: {path}")
-    rules: list[tuple[str, tuple[str, ...]]] = []
-    for index, value in enumerate(values, start=1):
-        if not isinstance(value, dict):
-            raise SystemExit(
-                f"--rule-file intent_rules[{index}] must be an object: {path}"
-            )
-        topic = _rule_file_text(
-            value.get("topic"),
-            path=path,
-            label=f"intent_rules[{index}].topic",
-            forbidden=("=", ","),
-        )
-        keywords = value.get("keywords")
-        if not isinstance(keywords, list):
-            raise SystemExit(
-                f"--rule-file intent_rules[{index}].keywords must be an array: {path}"
-            )
-        parsed_keywords = [
-            _rule_file_text(
-                keyword,
-                path=path,
-                label=f"intent_rules[{index}].keywords",
-                forbidden=(",",),
-            )
-            for keyword in keywords
-        ]
-        rule_text = f"{topic}={','.join(parsed_keywords)}"
-        try:
-            rules.extend(_parse_intent_rules([rule_text]))
-        except SystemExit as exc:
-            raise SystemExit(
-                f"--rule-file intent_rules[{index}] is invalid: {path}: {exc}"
-            ) from None
-    return tuple(rules)
-
-
-def _parse_vocabulary_gap_rule_payloads(
-    values: Any,
-    path: Path,
-) -> tuple[tuple[str, ...], ...]:
-    if not isinstance(values, list):
-        raise SystemExit(f"--rule-file vocabulary_gap_rules must be an array: {path}")
-    rules: list[tuple[str, ...]] = []
-    for index, value in enumerate(values, start=1):
-        if not isinstance(value, list):
-            raise SystemExit(
-                f"--rule-file vocabulary_gap_rules[{index}] must be an array: {path}"
-            )
-        aliases = [
-            _rule_file_text(
-                alias,
-                path=path,
-                label=f"vocabulary_gap_rules[{index}]",
-                forbidden=(",",),
-            )
-            for alias in value
-        ]
-        rule_text = ",".join(aliases)
-        try:
-            rules.extend(_parse_vocabulary_gap_rules([rule_text]))
-        except SystemExit as exc:
-            raise SystemExit(
-                f"--rule-file vocabulary_gap_rules[{index}] is invalid: {path}: {exc}"
-            ) from None
-    return tuple(rules)
-
-
-def _rule_file_text(
-    value: Any,
-    *,
-    path: Path,
-    label: str,
-    forbidden: tuple[str, ...],
-) -> str:
-    if not isinstance(value, str):
-        raise SystemExit(f"--rule-file {label} must contain string values: {path}")
-    text = value.strip()
-    for delimiter in forbidden:
-        if delimiter in text:
-            raise SystemExit(
-                f"--rule-file {label} cannot contain delimiter {delimiter!r}: {path}"
-            )
-    return text
 
 
 def _output_check_details(

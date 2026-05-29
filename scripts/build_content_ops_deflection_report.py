@@ -15,6 +15,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
@@ -27,6 +30,11 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     DEFAULT_INTENT_RULES,
     DEFAULT_TITLE,
     build_ticket_faq_markdown,
+)
+from content_ops_faq_cli_rules import (  # noqa: E402
+    load_rule_files,
+    parse_intent_rules,
+    parse_vocabulary_gap_rules,
 )
 
 
@@ -114,6 +122,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comma-separated customer/documentation aliases. Repeat for multiple rules.",
     )
     parser.add_argument(
+        "--rule-file",
+        action="append",
+        default=[],
+        type=Path,
+        help="JSON file with intent_rules and/or vocabulary_gap_rules. Repeat for multiple files.",
+    )
+    parser.add_argument(
         "--intent-rule",
         action="append",
         default=[],
@@ -132,7 +147,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def build_report(args: argparse.Namespace):
-    custom_intent_rules = _parse_intent_rules(args.intent_rule)
+    file_rules = load_rule_files(args.rule_file)
+    vocabulary_gap_rules = (
+        *parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
+        *file_rules["vocabulary_gap_rules"],
+    )
+    args.vocabulary_gap_rules = vocabulary_gap_rules
+    custom_intent_rules = (
+        *parse_intent_rules(args.intent_rule),
+        *file_rules["intent_rules"],
+    )
     args.custom_intent_rules = custom_intent_rules
     intent_rules = (*custom_intent_rules, *DEFAULT_INTENT_RULES)
     loaded = load_source_campaign_opportunities_from_file(
@@ -151,50 +175,13 @@ def build_report(args: argparse.Namespace):
         support_contact=args.support_contact,
         intent_rules=intent_rules,
         documentation_terms=tuple(args.documentation_term or ()),
-        vocabulary_gap_rules=_parse_vocabulary_gap_rules(args.vocabulary_gap_rule),
+        vocabulary_gap_rules=vocabulary_gap_rules,
     )
     return build_deflection_report_artifact(
         faq_result,
         title=args.title,
         source_label=str(args.path),
     )
-
-
-def _parse_vocabulary_gap_rules(values: list[str]) -> tuple[tuple[str, ...], ...]:
-    rules: list[tuple[str, ...]] = []
-    for raw in values or ():
-        parts = tuple(part.strip() for part in str(raw).split(",") if part.strip())
-        if len(parts) < 2:
-            raise SystemExit("--vocabulary-gap-rule must contain at least two comma-separated terms")
-        rules.append(parts)
-    return tuple(rules)
-
-
-def _parse_intent_rules(values: list[str]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    rules: list[tuple[str, tuple[str, ...]]] = []
-    for value in values or ():
-        topic, separator, raw_keywords = str(value).partition("=")
-        topic = topic.strip()
-        keywords = _parse_intent_rule_keywords(raw_keywords)
-        if not separator or not topic or not keywords:
-            raise SystemExit(
-                "--intent-rule must use topic=keyword,keyword with at least one keyword"
-            )
-        rules.append((topic, keywords))
-    return tuple(rules)
-
-
-def _parse_intent_rule_keywords(value: str) -> tuple[str, ...]:
-    keywords: list[str] = []
-    seen: set[str] = set()
-    for part in value.split(","):
-        keyword = part.strip()
-        key = keyword.lower()
-        if not keyword or key in seen:
-            continue
-        seen.add(key)
-        keywords.append(keyword)
-    return tuple(keywords)
 
 
 def _failed_output_checks(output_checks: Mapping[str, Any]) -> list[str]:
@@ -229,9 +216,10 @@ def _result_payload(
             "as_of_date": args.as_of_date,
             "require_output_checks": bool(args.require_output_checks),
             "support_contact": args.support_contact,
+            "rule_files": [str(path) for path in args.rule_file],
             "documentation_terms": list(args.documentation_term or ()),
             "vocabulary_gap_rules": [
-                list(rule) for rule in _parse_vocabulary_gap_rules(args.vocabulary_gap_rule)
+                list(rule) for rule in getattr(args, "vocabulary_gap_rules", ())
             ],
             "custom_intent_rules": [
                 {"topic": topic, "keywords": list(keywords)}
