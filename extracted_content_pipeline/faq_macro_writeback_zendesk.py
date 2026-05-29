@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, Sequence
+from urllib.parse import urlencode
 
 import httpx
 
@@ -169,11 +170,18 @@ class ZendeskMacroPublishProvider:
             )
             payload = _zendesk_macro_payload(macro)
             if existing is not None and not existing.external_id:
-                return MacroPublishResult(
-                    macro=macro,
-                    status="failed",
-                    error="zendesk_macro_mapping_pending_reconcile",
+                existing = await self._reconcile_pending_mapping(
+                    existing,
+                    macro,
+                    credentials=credentials,
+                    scope=scope,
                 )
+                if existing is None:
+                    return MacroPublishResult(
+                        macro=macro,
+                        status="failed",
+                        error="zendesk_macro_mapping_pending_reconcile",
+                    )
             if existing is None:
                 reservation = await self.mapping_repository.reserve_mapping(
                     MacroWritebackMapping(
@@ -221,7 +229,10 @@ class ZendeskMacroPublishProvider:
                         faq_draft_id=macro.faq_draft_id,
                         faq_item_id=macro.faq_item_id,
                         external_id=external_id,
-                        external_url=_external_url(data),
+                        external_url=_external_url(
+                            data,
+                            fallback=existing.external_url if existing else "",
+                        ),
                         publish_status="published",
                         metadata={
                             "title": macro.title,
@@ -248,6 +259,43 @@ class ZendeskMacroPublishProvider:
                 status="failed",
                 error=_safe_error(exc),
             )
+
+    async def _reconcile_pending_mapping(
+        self,
+        existing: MacroWritebackMapping,
+        macro: SupportMacroDraft,
+        *,
+        credentials: ZendeskMacroCredentials,
+        scope: TenantScope,
+    ) -> MacroWritebackMapping | None:
+        title = _pending_mapping_title(existing, macro)
+        if not title:
+            return None
+        data = await self.transport.request(
+            "GET",
+            _zendesk_macro_search_url(credentials, title),
+            headers=_headers(credentials),
+            json={},
+        )
+        match = _exact_title_macro(data, title=title)
+        external_id = _clean(match.get("id")) if match is not None else ""
+        if not external_id:
+            return None
+        return await self.mapping_repository.upsert_mapping(
+            MacroWritebackMapping(
+                platform=ZENDESK_PLATFORM,
+                faq_draft_id=macro.faq_draft_id,
+                faq_item_id=macro.faq_item_id,
+                external_id=external_id,
+                external_url=_clean(match.get("url")),
+                publish_status="published",
+                metadata={
+                    "title": macro.title,
+                    "category": macro.category,
+                },
+            ),
+            scope=scope,
+        )
 
 
 def _zendesk_macro_payload(macro: SupportMacroDraft) -> JsonDict:
@@ -284,11 +332,48 @@ def _external_id(data: Mapping[str, Any], *, fallback: str = "") -> str:
     return _clean(fallback)
 
 
-def _external_url(data: Mapping[str, Any]) -> str:
+def _external_url(data: Mapping[str, Any], *, fallback: str = "") -> str:
     macro = data.get("macro")
     if isinstance(macro, Mapping):
-        return _clean(macro.get("url"))
-    return ""
+        return _clean(macro.get("url")) or _clean(fallback)
+    return _clean(fallback)
+
+
+def _pending_mapping_title(
+    existing: MacroWritebackMapping,
+    macro: SupportMacroDraft,
+) -> str:
+    return _clean(existing.metadata.get("title")) or _clean(macro.title)
+
+
+def _zendesk_macro_search_url(
+    credentials: ZendeskMacroCredentials,
+    title: str,
+) -> str:
+    query = urlencode({"query": title})
+    return f"{credentials.normalized_base_url()}/api/v2/macros/search?{query}"
+
+
+def _exact_title_macro(
+    data: Mapping[str, Any],
+    *,
+    title: str,
+) -> Mapping[str, Any] | None:
+    macros = data.get("macros")
+    if not isinstance(macros, Sequence) or isinstance(macros, (str, bytes)):
+        return None
+    normalized_title = _normalized_title(title)
+    for macro in macros:
+        if (
+            isinstance(macro, Mapping)
+            and _normalized_title(macro.get("title")) == normalized_title
+        ):
+            return macro
+    return None
+
+
+def _normalized_title(value: Any) -> str:
+    return _clean(value).casefold()
 
 
 def _safe_error(exc: Exception) -> str:
