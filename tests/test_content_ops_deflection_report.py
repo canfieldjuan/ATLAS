@@ -4,6 +4,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_report_artifact,
 )
@@ -126,23 +128,33 @@ def test_deflection_report_does_not_put_review_needed_steps_in_drafted_section()
 def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None:
     output = tmp_path / "deflection-report.md"
     summary_output = tmp_path / "deflection-report-summary.json"
+    result_output = tmp_path / "deflection-report-result.json"
 
     exit_code = MODULE.main([
         str(SAAS_DEMO),
         "--source-format",
         "csv",
+        "--require-output-checks",
         "--output",
         str(output),
         "--summary-output",
         str(summary_output),
+        "--result-output",
+        str(result_output),
     ])
 
     assert exit_code == 0
     markdown = output.read_text()
     summary = json.loads(summary_output.read_text())
+    result = json.loads(result_output.read_text())
     assert summary["generated"] >= 7
     assert summary["source_count"] == 36
     assert summary["no_proven_answer_count"] >= 1
+    assert result["status"] == "ok"
+    assert result["failed_output_checks"] == []
+    assert result["summary"] == summary
+    assert result["config"]["require_output_checks"] is True
+    assert result["diagnostics"]["item_count"] == result["generated"]
     assert "## Ranked Question Opportunities" in markdown
     assert "## No Proven Answer Yet" in markdown
     assert "support_ticket_saas_demo_sources.csv" in markdown
@@ -208,3 +220,60 @@ def test_deflection_report_cli_splits_backed_and_unproven_answers(tmp_path: Path
     assert "How do I enable SSO for my team?" in no_proven
     assert "Open Analytics then Attribution then click Download report" not in no_proven
     assert "tell users exactly what to try next" not in drafted
+
+
+def test_deflection_report_cli_fails_required_output_checks_for_weak_rows(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "weak-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    summary_output = tmp_path / "deflection-report-summary.json"
+    result_output = tmp_path / "deflection-report-result.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-1",
+                "source_type": "support_ticket",
+                "subject": "Unique export issue",
+                "message": "The export button moved.",
+                "pain_category": "exports",
+            },
+            {
+                "ticket_id": "ticket-2",
+                "source_type": "support_ticket",
+                "subject": "Unique billing issue",
+                "message": "Billing receipt is missing.",
+                "pain_category": "billing",
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        MODULE.main([
+            str(source),
+            "--source-format",
+            "json",
+            "--require-output-checks",
+            "--output",
+            str(output),
+            "--summary-output",
+            str(summary_output),
+            "--result-output",
+            str(result_output),
+        ])
+
+    assert str(exc_info.value) == "Deflection report output checks failed: condensed"
+    assert not output.exists()
+    assert not summary_output.exists()
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["status"] == "failed_output_checks"
+    assert result["failed_output_checks"] == ["condensed"]
+    assert result["summary"]["source_count"] == 2
+    assert result["summary"]["ticket_source_count"] == 2
+    assert result["output"]["markdown_path"] == str(output)
+    assert result["output"]["summary_path"] == str(summary_output)
+    assert result["output"]["result_path"] == str(result_output)
+    assert result["diagnostics"]["item_count"] == 2
+    assert result["diagnostics"]["items"][0]["source_id_count"] == 1
+    assert "markdown" not in result
