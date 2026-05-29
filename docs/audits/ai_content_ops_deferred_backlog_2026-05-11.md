@@ -67,6 +67,11 @@ The following items appear in older plan docs but are no longer active backlog:
 - Landing-page SEO/AEO/GEO input contract, prompt consumption, save-time
   readiness, review UI, draft edit/repair, public rendering,
   sitemap/prerender, publish verification, and generation smoke coverage.
+- FAQ output as ingestion source for blog/landing generation, including
+  grounded resolution-evidence bridging, selected saved FAQ draft IDs, the New
+  Run saved-FAQ selector, execute-route context proof, Postgres tenant
+  isolation, and live execute-harness coverage with the real landing/blog
+  generation services.
 
 ## Active Backlog
 
@@ -250,6 +255,18 @@ needed financial complaint action policy before SaaS-style reporting/account
 rules. Those source-level fixes landed in the FAQ complaint/source-policy
 chain. Future FAQ/source work should be driven by a real customer help desk
 export, hosted UI need, or another real dataset exposing a generic policy gap.
+
+**FAQ output-as-ingestion closeout:** PRs #1109, #1113, #1114, #1116, #1118,
+#1121, #1123, and #1125 closed the current saved-FAQ reuse path. Generated FAQ
+output now adapts into canonical `faq_output` source rows, resolution-backed FAQ
+steps bridge into the existing support-ticket `resolution_text` contract, the
+host input provider can load selected saved FAQ drafts by `inputs.source_faq_ids`,
+the New Run UI can send those IDs, the execute route proves selected IDs reach
+landing/blog context, the SQL-backed `get_draft` lookup is tenant-scoped, and
+the live execute harness proves the real landing-page and blog-post generation
+services consume selected FAQ IDs. This does not create a new active
+implementation backlog. A hosted/live execute runbook artifact or richer
+saved-FAQ picker should be added only if operators need those surfaces.
 
 **Real CFPB output-quality update:** A follow-up run against three 150-row
 samples from the same local CFPB export (`Debt collection`, `Credit reporting,
