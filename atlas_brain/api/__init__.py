@@ -230,7 +230,7 @@ try:
         scope_provider=build_content_ops_scope,
         reasoning_context_provider=select_content_ops_reasoning_context_provider,
         reasoning_status_provider=describe_content_ops_reasoning_context_provider,
-        input_provider=build_content_ops_input_provider(),
+        input_provider=build_content_ops_input_provider(pool_provider=get_db_pool),
         cache_policy_default_provider=_content_ops_cache_policy_default,
         opportunity_import_pool_provider=get_db_pool,
         usage_pool_provider=get_db_pool,

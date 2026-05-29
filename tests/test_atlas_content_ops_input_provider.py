@@ -27,9 +27,12 @@ from extracted_content_pipeline.support_ticket_input_provider import (
     SupportTicketInputProvider,
 )
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
+from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FAQ_DRAFT_ID = "11111111-1111-4111-8111-111111111111"
+MISSING_FAQ_DRAFT_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def _fresh_api_package():
@@ -75,6 +78,38 @@ def _support_ticket_csv_rows() -> list[dict[str, str]]:
     path = ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
+
+
+def _saved_faq_draft(faq_id: str = FAQ_DRAFT_ID) -> TicketFAQDraft:
+    return TicketFAQDraft(
+        id=faq_id,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Saved FAQ report",
+        markdown="# Saved FAQ report",
+        items=(
+            {
+                "topic": "billing confusion",
+                "question": "Why was I charged twice?",
+                "summary": "Customers ask why duplicate-looking invoices appear.",
+                "steps": ("Check invoice history.",),
+                "answer_evidence_status": "resolution_evidence",
+            },
+        ),
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"has_action_items": True},
+        status="draft",
+    )
+
+
+class _FAQRepo:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def get_draft(self, faq_id: str, *, scope: TenantScope):
+        self.pool["calls"].append((faq_id, scope.account_id))
+        return self.pool["drafts"].get(faq_id)
 
 
 def test_atlas_content_ops_input_provider_noops_without_source_material() -> None:
@@ -323,6 +358,88 @@ def test_atlas_content_ops_input_provider_expands_faq_output_inside_source_lists
     assert package.inputs["support_ticket_resolution_evidence_count"] == 1
 
 
+@pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_fetches_selected_faq_ids_by_scope() -> None:
+    pool = {
+        "drafts": {FAQ_DRAFT_ID: _saved_faq_draft()},
+        "calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        faq_repository_factory=_FAQRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={"inputs": {"source_faq_ids": [FAQ_DRAFT_ID]}},
+    )
+
+    assert pool["calls"] == [(FAQ_DRAFT_ID, "acct-1")]
+    assert package.provider == "atlas_support_ticket_request"
+    assert package.metadata["selected_faq_id_count"] == 1
+    assert package.metadata["selected_faq_loaded_count"] == 1
+    assert package.metadata["selected_faq_missing_id_count"] == 0
+    assert package.warnings == ()
+    assert package.inputs["source_material"][0]["source_type"] == "faq_output"
+    assert package.inputs["source_material"][0]["source_id"] == FAQ_DRAFT_ID
+    assert package.inputs["source_material"][0]["faq_draft_id"] == FAQ_DRAFT_ID
+    assert package.inputs["support_ticket_resolution_evidence_present"] is True
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_warns_for_missing_selected_faq_ids() -> None:
+    pool = {"drafts": {}, "calls": []}
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        faq_repository_factory=_FAQRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={"inputs": {"source_faq_ids": [MISSING_FAQ_DRAFT_ID]}},
+    )
+
+    assert pool["calls"] == [(MISSING_FAQ_DRAFT_ID, "acct-1")]
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["selected_faq_id_count"] == 1
+    assert package.metadata["selected_faq_loaded_count"] == 0
+    assert package.metadata["selected_faq_missing_id_count"] == 1
+    assert package.warnings == ({
+        "code": "source_faq_drafts_not_found",
+        "message": "One or more selected FAQ reports were not found for this account.",
+        "missing_count": 1,
+    },)
+
+
+@pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_warns_for_invalid_selected_faq_ids() -> None:
+    pool = {"drafts": {FAQ_DRAFT_ID: _saved_faq_draft()}, "calls": []}
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        faq_repository_factory=_FAQRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={"inputs": {"source_faq_ids": ["not-a-uuid"]}},
+    )
+
+    assert pool["calls"] == []
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["selected_faq_id_count"] == 1
+    assert package.metadata["selected_faq_loaded_count"] == 0
+    assert package.metadata["selected_faq_missing_id_count"] == 0
+    assert package.metadata["selected_faq_invalid_id_count"] == 1
+    assert package.warnings == ({
+        "code": "source_faq_ids_invalid",
+        "message": "One or more selected FAQ report IDs are invalid.",
+        "invalid_count": 1,
+    },)
+
+
 def test_atlas_content_ops_input_provider_expands_subject_body_ticket_rows() -> None:
     provider = build_content_ops_input_provider()
 
@@ -481,6 +598,35 @@ async def test_api_preview_route_applies_support_ticket_input_provider() -> None
     assert payload["can_run"] is True
     assert payload["outputs"] == ["faq_markdown", "landing_page", "blog_post"]
     assert payload["missing_inputs"] == []
+
+
+@pytest.mark.asyncio
+async def test_api_preview_route_fetches_selected_faq_ids() -> None:
+    pool = {
+        "drafts": {FAQ_DRAFT_ID: _saved_faq_draft()},
+        "calls": [],
+    }
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(
+            pool_provider=lambda: pool,
+            faq_repository_factory=_FAQRepo,
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-preview"),
+    )
+
+    route = _router_route(router, "/content-ops/preview", "POST")
+    payload = await route.endpoint({
+        "outputs": ["landing_page"],
+        "inputs": {"source_faq_ids": [FAQ_DRAFT_ID]},
+    })
+
+    assert pool["calls"] == [(FAQ_DRAFT_ID, "acct-preview")]
+    assert payload["can_run"] is True
+    assert payload["outputs"] == ["landing_page"]
+    assert payload["input_provider"]["provider"] == "atlas_support_ticket_request"
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 1
+    assert payload["input_provider"]["warnings"] == []
 
 
 @pytest.mark.asyncio
