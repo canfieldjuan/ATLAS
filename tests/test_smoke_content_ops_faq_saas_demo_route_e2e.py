@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -36,6 +38,18 @@ def _base_args(tmp_path: Path) -> list[str]:
         "--output-result",
         str(tmp_path / "result.json"),
     ]
+
+
+def _clear_atlas_db_env(monkeypatch) -> None:
+    for name in (
+        "ATLAS_DB_HOST",
+        "ATLAS_DB_PORT",
+        "ATLAS_DB_DATABASE",
+        "ATLAS_DB_USER",
+        "ATLAS_DB_PASSWORD",
+        "ATLAS_DB_SOCKET_PATH",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _fake_runner(
@@ -155,6 +169,81 @@ def test_validate_args_fails_closed_for_missing_host_inputs() -> None:
         "--route-requests must be positive",
         "--max-detail-ms must be positive",
     ]
+
+
+def test_default_database_url_prefers_url_env(monkeypatch) -> None:
+    monkeypatch.setenv("EXTRACTED_DATABASE_URL", "postgresql://env/atlas")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://database-url/atlas")
+
+    assert smoke._default_database_url() == "postgresql://env/atlas"
+
+
+def test_default_database_url_falls_back_to_atlas_db_settings(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ATLAS_DB_HOST", "settings-host")
+    monkeypatch.setenv("ATLAS_DB_PORT", "6543")
+    monkeypatch.setenv("ATLAS_DB_DATABASE", "atlas_settings")
+    monkeypatch.setenv("ATLAS_DB_USER", "atlas_user")
+    monkeypatch.setenv("ATLAS_DB_PASSWORD", "atlas_pass")
+    monkeypatch.delenv("ATLAS_DB_SOCKET_PATH", raising=False)
+
+    assert (
+        smoke._default_database_url()
+        == "postgresql://atlas_user:atlas_pass@settings-host:6543/atlas_settings"
+    )
+
+
+def test_default_database_url_ignores_implicit_atlas_db_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
+
+    assert smoke._default_database_url() == ""
+
+
+def test_script_preflight_uses_atlas_db_settings_fallback(tmp_path) -> None:
+    result_path = tmp_path / "preflight.json"
+    env = os.environ.copy()
+    env.pop("EXTRACTED_DATABASE_URL", None)
+    env.pop("DATABASE_URL", None)
+    env.pop("ATLAS_API_BASE_URL", None)
+    env.pop("ATLAS_B2B_JWT", None)
+    env.pop("ATLAS_TOKEN", None)
+    env.pop("ATLAS_FAQ_SEARCH_ACCOUNT_ID", None)
+    env.pop("ATLAS_ACCOUNT_ID", None)
+    env.update(
+        {
+            "ATLAS_DB_HOST": "db-settings-host",
+            "ATLAS_DB_PORT": "5432",
+            "ATLAS_DB_DATABASE": "atlas_settings",
+            "ATLAS_DB_USER": "atlas_settings_user",
+            "ATLAS_DB_PASSWORD": "atlas_settings_password",
+        }
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight-only",
+            "--json",
+            "--output-result",
+            str(result_path),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert completed.returncode == 2
+    assert payload["required_inputs"]["database_url"] == {"present": True}
+    assert "Missing --database-url, EXTRACTED_DATABASE_URL, or DATABASE_URL" not in (
+        payload["preflight_errors"]
+    )
 
 
 @pytest.mark.parametrize(

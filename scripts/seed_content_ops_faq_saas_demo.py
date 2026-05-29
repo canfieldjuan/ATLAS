@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import csv
 from dataclasses import replace
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,7 @@ DEFAULT_TARGET_MODE = "support_account"
 DEFAULT_STATUS = "approved"
 DEFAULT_SUPPORT_CONTACT = "https://example.com/support"
 DEFAULT_QUERY = "export attribution reports"
+ATLAS_DB_TARGET_ENV = ("ATLAS_DB_HOST", "ATLAS_DB_SOCKET_PATH")
 
 
 def _load_dotenv_files() -> None:
@@ -65,6 +67,31 @@ def _env(*names: str) -> str:
     return ""
 
 
+def _default_database_url() -> str:
+    raw = _env("EXTRACTED_DATABASE_URL", "DATABASE_URL")
+    if raw:
+        return raw
+    if not _env(*ATLAS_DB_TARGET_ENV):
+        return ""
+    return _atlas_db_settings_dsn()
+
+
+def _atlas_db_settings_dsn() -> str:
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_atlas_storage_config_for_saas_demo_seed",
+            ROOT / "atlas_brain/storage/config.py",
+        )
+        if spec is None or spec.loader is None:
+            return ""
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:
+        return ""
+    db_settings = getattr(module, "db_settings", None)
+    return str(getattr(db_settings, "dsn", "") or "").strip()
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _load_dotenv_files()
     parser = argparse.ArgumentParser(
@@ -72,7 +99,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--database-url",
-        default=_env("EXTRACTED_DATABASE_URL", "DATABASE_URL"),
+        default=_default_database_url(),
     )
     parser.add_argument(
         "--account-id",
