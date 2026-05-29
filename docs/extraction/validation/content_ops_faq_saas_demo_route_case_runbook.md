@@ -36,7 +36,6 @@ missing hosted inputs or ready for the DB write plus hosted route measurement:
 
 ```bash
 python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --base-url "$ATLAS_API_BASE_URL" \
   --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
@@ -56,7 +55,6 @@ one-command smoke below.
 
 ```bash
 python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --base-url "$ATLAS_API_BASE_URL" \
   --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
@@ -87,7 +85,6 @@ file between seed and route validation.
 
 ```bash
 python scripts/seed_content_ops_faq_saas_demo.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
   --route-case-file-output /tmp/faq-saas-demo-route-cases.json \
   --output-result /tmp/faq-saas-demo-seed-result.json
@@ -180,7 +177,6 @@ database, delete it with the FAQ id from the seed result:
 
 ```bash
 python scripts/seed_content_ops_faq_saas_demo.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
   --cleanup-faq-id "<faq_id_from_seed_result>" \
   --output-result /tmp/faq-saas-demo-cleanup-result.json

@@ -119,7 +119,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-case-file-output", type=Path)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    return _normalize_args(parser.parse_args(argv))
+
+
+def _normalize_args(args: argparse.Namespace) -> argparse.Namespace:
+    if not str(args.database_url or "").strip():
+        args.database_url = _default_database_url()
+    return args
 
 
 def _validate_args(args: argparse.Namespace) -> list[str]:

@@ -202,6 +202,33 @@ def test_default_database_url_ignores_implicit_atlas_db_defaults(monkeypatch) ->
     assert smoke._default_database_url() == ""
 
 
+def test_blank_database_url_uses_guarded_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ATLAS_DB_HOST", "settings-host")
+    monkeypatch.setenv("ATLAS_DB_PORT", "6543")
+    monkeypatch.setenv("ATLAS_DB_DATABASE", "atlas_settings")
+    monkeypatch.setenv("ATLAS_DB_USER", "atlas_user")
+    monkeypatch.setenv("ATLAS_DB_PASSWORD", "atlas_pass")
+    monkeypatch.delenv("ATLAS_DB_SOCKET_PATH", raising=False)
+    args = smoke._build_parser().parse_args(["--database-url", ""])
+
+    smoke._normalize_args(args)
+
+    assert args.database_url == "postgresql://atlas_user:atlas_pass@settings-host:6543/atlas_settings"
+
+
+def test_blank_database_url_stays_missing_without_target(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
+    args = smoke._build_parser().parse_args(["--database-url", ""])
+
+    smoke._normalize_args(args)
+
+    assert args.database_url == ""
+
+
 def test_script_preflight_uses_atlas_db_settings_fallback(tmp_path) -> None:
     result_path = tmp_path / "preflight.json"
     env = os.environ.copy()
@@ -368,8 +395,11 @@ def test_main_malformed_base_url_writes_preflight_result_before_exit(
     assert calls == []
 
 
-def test_main_writes_preflight_result_before_exit(tmp_path, capsys) -> None:
+def test_main_writes_preflight_result_before_exit(tmp_path, capsys, monkeypatch) -> None:
     result_path = tmp_path / "preflight.json"
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
 
     code = smoke.main([
         "--database-url",

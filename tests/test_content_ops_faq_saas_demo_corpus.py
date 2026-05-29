@@ -236,7 +236,7 @@ def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
 
     parsed = e2e_smoke._build_parser().parse_args(args)
 
-    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert "--database-url" not in args
     assert parsed.base_url == "$ATLAS_API_BASE_URL"
     assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
     assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
@@ -247,6 +247,7 @@ def test_saas_demo_route_case_runbook_e2e_command_matches_parser() -> None:
     assert parsed.max_detail_ms == 2500
     assert parsed.artifact_dir == Path("/tmp/faq-saas-demo-route-e2e-artifacts")
     assert parsed.output_result == Path("/tmp/faq-saas-demo-route-e2e-result.json")
+    parsed.database_url = "postgresql://example/atlas"
     parsed.base_url = "https://atlas.example.com"
     assert e2e_smoke._validate_args(parsed) == []
 
@@ -259,7 +260,7 @@ def test_saas_demo_route_case_runbook_preflight_command_matches_parser() -> None
 
     parsed = e2e_smoke._build_parser().parse_args(args)
 
-    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert "--database-url" not in args
     assert parsed.base_url == "$ATLAS_API_BASE_URL"
     assert parsed.token == "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}"
     assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
@@ -267,6 +268,7 @@ def test_saas_demo_route_case_runbook_preflight_command_matches_parser() -> None
     assert parsed.json is True
     assert parsed.artifact_dir is None
     assert parsed.output_result == Path("/tmp/faq-saas-demo-route-e2e-preflight.json")
+    parsed.database_url = "postgresql://example/atlas"
     parsed.base_url = "https://atlas.example.com"
     assert e2e_smoke._validate_args(parsed) == []
 
@@ -276,11 +278,12 @@ def test_saas_demo_route_case_runbook_seed_command_matches_parser() -> None:
 
     parsed = seeder._parse_args(args)
 
-    assert parsed.database_url == "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}"
+    assert "--database-url" not in args
     assert parsed.account_id == "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}"
     assert parsed.route_case_file_output == Path("/tmp/faq-saas-demo-route-cases.json")
     assert parsed.output_result == Path("/tmp/faq-saas-demo-seed-result.json")
     assert parsed.cleanup_faq_id is None
+    parsed.database_url = "postgresql://example/atlas"
     assert seeder._validate_args(parsed) == []
 
 
@@ -372,6 +375,31 @@ def test_saas_demo_seed_default_database_url_ignores_implicit_atlas_db_defaults(
     assert seeder._default_database_url() == ""
 
 
+def test_saas_demo_seed_blank_database_url_uses_guarded_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ATLAS_DB_HOST", "settings-host")
+    monkeypatch.setenv("ATLAS_DB_PORT", "6543")
+    monkeypatch.setenv("ATLAS_DB_DATABASE", "atlas_settings")
+    monkeypatch.setenv("ATLAS_DB_USER", "atlas_user")
+    monkeypatch.setenv("ATLAS_DB_PASSWORD", "atlas_pass")
+    monkeypatch.delenv("ATLAS_DB_SOCKET_PATH", raising=False)
+
+    args = seeder._parse_args(["--database-url", "", "--account-id", "acct-demo"])
+
+    assert args.database_url == "postgresql://atlas_user:atlas_pass@settings-host:6543/atlas_settings"
+
+
+def test_saas_demo_seed_blank_database_url_stays_missing_without_target(monkeypatch) -> None:
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
+
+    args = seeder._parse_args(["--database-url", "", "--account-id", "acct-demo"])
+
+    assert args.database_url == ""
+
+
 def test_saas_demo_cleanup_args_skip_seed_only_required_values() -> None:
     errors = seeder._validate_args(
         SimpleNamespace(
@@ -407,8 +435,11 @@ def test_saas_demo_route_case_output_is_seed_only() -> None:
     assert errors == ["--route-case-file-output is only available in seed mode"]
 
 
-def test_saas_demo_seed_preflight_writes_result_before_exit(tmp_path) -> None:
+def test_saas_demo_seed_preflight_writes_result_before_exit(tmp_path, monkeypatch) -> None:
     result_path = tmp_path / "seed-preflight.json"
+    monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    _clear_atlas_db_env(monkeypatch)
 
     with pytest.raises(SystemExit) as exc:
         seeder.main([

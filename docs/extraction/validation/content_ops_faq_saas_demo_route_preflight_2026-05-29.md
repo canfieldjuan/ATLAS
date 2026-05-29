@@ -18,7 +18,6 @@ route traffic, so this slice ran the existing preflight-only mode first.
 ```bash
 mkdir -p tmp/faq_saas_demo_route_preflight_20260529
 python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --base-url "$ATLAS_API_BASE_URL" \
   --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
@@ -81,7 +80,6 @@ Atlas' localhost defaults from satisfying hosted proof preflight by themselves.
 ```bash
 python scripts/run_extracted_content_pipeline_migrations.py
 python scripts/smoke_content_ops_faq_saas_demo_route_e2e.py \
-  --database-url "${EXTRACTED_DATABASE_URL:-$DATABASE_URL}" \
   --base-url "$ATLAS_API_BASE_URL" \
   --token "${ATLAS_B2B_JWT:-$ATLAS_TOKEN}" \
   --account-id "${ATLAS_FAQ_SEARCH_ACCOUNT_ID:-$ATLAS_ACCOUNT_ID}" \
