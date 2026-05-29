@@ -27,11 +27,13 @@ def test_faq_output_proof_writes_artifacts_and_passes(tmp_path: Path) -> None:
     assert exit_code == 0
     summary = json.loads((artifact_dir / "proof_summary.json").read_text())
     result = json.loads((artifact_dir / "faq_result.json").read_text())
+    full_result = json.loads((artifact_dir / "faq_full_result.json").read_text())
     markdown = (artifact_dir / "faq_output.md").read_text()
     assert summary["ok"] is True
     assert summary["failures"] == []
     assert summary["proof"]["status"] == "ok"
     assert summary["proof"]["generated"] >= 3
+    assert len(full_result["items"]) == summary["proof"]["generated"]
     assert summary["proof"]["support_contact_present"] is True
     assert summary["proof"]["source_ids_present"] is True
     assert set(summary["proof"]["topics"]) >= {
@@ -41,6 +43,25 @@ def test_faq_output_proof_writes_artifacts_and_passes(tmp_path: Path) -> None:
     }
     assert summary["proof"]["min_source_id_count"] >= 1
     assert summary["proof"]["min_step_count"] >= 3
+    assert summary["proof"]["ingestion_bridge"]["adapted_source_row_count"] >= (
+        summary["proof"]["generated"]
+    )
+    assert summary["proof"]["ingestion_bridge"]["adapted_source_types"] == [
+        "faq_output"
+    ]
+    assert summary["proof"]["ingestion_bridge"]["resolution_text_row_count"] >= 1
+    assert (
+        summary["proof"]["ingestion_bridge"][
+            "support_ticket_resolution_evidence_present"
+        ]
+        is True
+    )
+    assert (
+        summary["proof"]["ingestion_bridge"][
+            "support_ticket_resolution_evidence_count"
+        ]
+        >= 1
+    )
     assert summary["proof"]["vocabulary_gaps"]["term_mapping_count"] >= 2
     assert {"export", "SSO"} <= set(
         summary["proof"]["vocabulary_gaps"]["top_customer_terms"]
@@ -100,6 +121,13 @@ def test_faq_output_proof_reports_failed_predicates() -> None:
             "topics": ["reporting friction"],
             "min_source_id_count": 0,
             "min_step_count": 1,
+            "ingestion_bridge": {
+                "adapted_source_row_count": 0,
+                "adapted_source_types": [],
+                "resolution_text_row_count": 0,
+                "support_ticket_resolution_evidence_present": False,
+                "support_ticket_resolution_evidence_count": 0,
+            },
             "support_contact_present": False,
             "source_ids_present": False,
             "vocabulary_gaps": {
@@ -122,6 +150,11 @@ def test_faq_output_proof_reports_failed_predicates() -> None:
         "generated_items",
         "source_id_coverage",
         "action_step_coverage",
+        "faq_output_adapter_row_coverage",
+        "faq_output_adapter_source_type",
+        "faq_output_resolution_text_bridge",
+        "support_ticket_resolution_evidence_present",
+        "support_ticket_resolution_evidence_count",
         "support_contact_present",
         "source_ids_rendered",
         "vocabulary_gap_mappings",

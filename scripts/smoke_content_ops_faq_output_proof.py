@@ -13,8 +13,23 @@ import sys
 import time
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from extracted_content_pipeline.faq_output_ingestion import (
+    FAQ_OUTPUT_SOURCE_TYPE,
+    faq_output_to_source_rows,
+)
+from extracted_content_pipeline.campaign_source_adapters import (
+    load_source_campaign_opportunities_from_file,
+)
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
+from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
+
+
 FAQ_CLI = ROOT / "scripts" / "build_extracted_ticket_faq_markdown.py"
 DEFAULT_SUPPORT_CONTACT = "support@example.com"
 DEFAULT_DOCUMENTATION_TERMS = (
@@ -32,6 +47,7 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "source_id": "ticket-export-1",
         "source_title": "Export attribution report",
         "text": "How do I export the attribution dashboard before renewal?",
+        "resolution_text": "Open Analytics, choose Attribution, then select Download report.",
         "pain_category": "reporting friction",
     },
     {
@@ -39,6 +55,7 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "source_id": "ticket-export-2",
         "source_title": "Reporting dashboard missing export",
         "text": "The reporting dashboard export is missing for my analyst role.",
+        "resolution_text": "Enable Report Downloads for the analyst role before exporting.",
         "pain_category": "reporting friction",
     },
     {
@@ -94,6 +111,7 @@ def run_output_proof(args: argparse.Namespace) -> dict[str, Any]:
 
     markdown_path = artifact_dir / "faq_output.md"
     result_path = artifact_dir / "faq_result.json"
+    full_result_path = artifact_dir / "faq_full_result.json"
     stdout_path = artifact_dir / "stdout.txt"
     stderr_path = artifact_dir / "stderr.txt"
     summary_path = artifact_dir / "proof_summary.json"
@@ -110,9 +128,18 @@ def run_output_proof(args: argparse.Namespace) -> dict[str, Any]:
     stderr_path.write_text(completed.stderr, encoding="utf-8")
 
     result_payload = _read_json(result_path)
+    full_result_payload = _full_faq_result_payload(
+        source_path=source_path,
+        support_contact=args.support_contact,
+    )
+    full_result_path.write_text(
+        json.dumps(full_result_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     markdown = markdown_path.read_text(encoding="utf-8") if markdown_path.exists() else ""
     proof = _proof_payload(
         result_payload=result_payload,
+        full_result_payload=full_result_payload,
         markdown=markdown,
         support_contact=args.support_contact,
     )
@@ -133,6 +160,7 @@ def run_output_proof(args: argparse.Namespace) -> dict[str, Any]:
             "source": str(source_path),
             "markdown": str(markdown_path) if markdown_path.exists() else None,
             "result": str(result_path) if result_path.exists() else None,
+            "full_result": str(full_result_path),
             "stdout": str(stdout_path),
             "stderr": str(stderr_path),
             "summary": str(summary_path),
@@ -179,9 +207,29 @@ def _faq_command(
     return command
 
 
+def _full_faq_result_payload(*, source_path: Path, support_contact: str) -> dict[str, Any]:
+    loaded = load_source_campaign_opportunities_from_file(
+        source_path,
+        file_format="csv",
+    )
+    result = build_ticket_faq_markdown(
+        loaded.opportunities,
+        title="Support Ticket FAQ Output Proof",
+        max_items=6,
+        support_contact=support_contact,
+        documentation_terms=DEFAULT_DOCUMENTATION_TERMS,
+        vocabulary_gap_rules=tuple(
+            tuple(part.strip() for part in rule.split(",") if part.strip())
+            for rule in DEFAULT_VOCABULARY_RULES
+        ),
+    )
+    return result.as_dict()
+
+
 def _proof_payload(
     *,
     result_payload: Mapping[str, Any] | None,
+    full_result_payload: Mapping[str, Any] | None,
     markdown: str,
     support_contact: str,
 ) -> dict[str, Any]:
@@ -199,6 +247,7 @@ def _proof_payload(
     ]
     step_counts = [_integer(item.get("step_count")) for item in items]
     output_checks = _mapping(result_payload.get("output_checks")) if result_payload else {}
+    bridge = _ingestion_bridge_proof(full_result_payload)
     return {
         "status": str(result_payload.get("status") or "") if result_payload else "",
         "generated": _integer(result_payload.get("generated")) if result_payload else 0,
@@ -222,7 +271,46 @@ def _proof_payload(
             for source_id in ("ticket-export-1", "search-export-1", "ticket-sso-1")
         ),
         "vocabulary_gaps": dict(vocabulary_gaps),
+        "ingestion_bridge": bridge,
         "markdown_bytes": len(markdown.encode("utf-8")),
+    }
+
+
+def _ingestion_bridge_proof(result_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result_payload, Mapping):
+        return {
+            "adapted_source_row_count": 0,
+            "resolution_text_row_count": 0,
+            "support_ticket_resolution_evidence_present": False,
+            "support_ticket_resolution_evidence_count": 0,
+            "support_ticket_resolution_example_count": 0,
+        }
+    source_rows = faq_output_to_source_rows(result_payload)
+    resolution_text_rows = [
+        row for row in source_rows
+        if isinstance(row, Mapping) and row.get("resolution_text")
+    ]
+    package = build_support_ticket_input_package(
+        result_payload,
+        outputs=("blog_post",),
+    )
+    return {
+        "adapted_source_row_count": len(source_rows),
+        "adapted_source_types": sorted({
+            str(row.get("source_type") or "")
+            for row in source_rows
+            if isinstance(row, Mapping) and row.get("source_type")
+        }),
+        "resolution_text_row_count": len(resolution_text_rows),
+        "support_ticket_resolution_evidence_present": (
+            package.inputs.get("support_ticket_resolution_evidence_present") is True
+        ),
+        "support_ticket_resolution_evidence_count": _integer(
+            package.inputs.get("support_ticket_resolution_evidence_count")
+        ),
+        "support_ticket_resolution_example_count": len(_sequence(
+            package.inputs.get("support_ticket_resolution_examples")
+        )),
     }
 
 
@@ -262,6 +350,32 @@ def _proof_failures(
         failures.append({"check": "source_id_coverage", "detail": proof.get("min_source_id_count")})
     if _integer(proof.get("min_step_count")) < 3:
         failures.append({"check": "action_step_coverage", "detail": proof.get("min_step_count")})
+    bridge = _mapping(proof.get("ingestion_bridge"))
+    if _integer(bridge.get("adapted_source_row_count")) < _integer(proof.get("generated")):
+        failures.append({
+            "check": "faq_output_adapter_row_coverage",
+            "detail": bridge.get("adapted_source_row_count"),
+        })
+    if FAQ_OUTPUT_SOURCE_TYPE not in set(_sequence(bridge.get("adapted_source_types"))):
+        failures.append({
+            "check": "faq_output_adapter_source_type",
+            "detail": bridge.get("adapted_source_types"),
+        })
+    if _integer(bridge.get("resolution_text_row_count")) < 1:
+        failures.append({
+            "check": "faq_output_resolution_text_bridge",
+            "detail": bridge.get("resolution_text_row_count"),
+        })
+    if bridge.get("support_ticket_resolution_evidence_present") is not True:
+        failures.append({
+            "check": "support_ticket_resolution_evidence_present",
+            "detail": bridge.get("support_ticket_resolution_evidence_present"),
+        })
+    if _integer(bridge.get("support_ticket_resolution_evidence_count")) < 1:
+        failures.append({
+            "check": "support_ticket_resolution_evidence_count",
+            "detail": bridge.get("support_ticket_resolution_evidence_count"),
+        })
     if proof.get("support_contact_present") is not True:
         failures.append({"check": "support_contact_present", "detail": support_contact})
     if proof.get("source_ids_present") is not True:
