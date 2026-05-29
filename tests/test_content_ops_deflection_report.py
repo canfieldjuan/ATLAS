@@ -395,6 +395,107 @@ def test_deflection_report_cli_accepts_json_rule_file(tmp_path: Path) -> None:
     assert "Single sign-on setup" in markdown
 
 
+def test_deflection_report_cli_accepts_documentation_term_file(tmp_path: Path) -> None:
+    source = tmp_path / "term-file-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    result_output = tmp_path / "deflection-report-result.json"
+    term_file = tmp_path / "documentation-terms.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "subject": "Export attribution report",
+                "message": "How do I export attribution reports?",
+                "pain_category": "exports",
+            },
+            {
+                "ticket_id": "ticket-export-2",
+                "source_type": "support_ticket",
+                "subject": "Export report",
+                "message": "Can I export the attribution report?",
+                "pain_category": "exports",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    term_file.write_text(
+        json.dumps({
+            "documentation_terms": ["Single sign-on setup"],
+            "documents": [{"title": "Download report"}],
+        }),
+        encoding="utf-8",
+    )
+
+    exit_code = MODULE.main([
+        str(source),
+        "--source-format",
+        "json",
+        "--documentation-term",
+        "Billing center",
+        "--documentation-term-file",
+        str(term_file),
+        "--require-output-checks",
+        "--output",
+        str(output),
+        "--result-output",
+        str(result_output),
+    ])
+
+    assert exit_code == 0
+    markdown = output.read_text(encoding="utf-8")
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["config"]["documentation_term_files"] == [str(term_file)]
+    assert result["config"]["documentation_term_format"] == "auto"
+    assert result["config"]["documentation_terms"] == [
+        "Billing center",
+        "Single sign-on setup",
+        "Download report",
+    ]
+    assert result["diagnostics"]["items"][0]["term_mapping_count"] >= 1
+    assert "Download report" in markdown
+    assert "export" in markdown
+
+
+def test_deflection_report_cli_rejects_bad_documentation_term_file(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "bad-term-file-support-tickets.json"
+    output = tmp_path / "deflection-report.md"
+    term_file = tmp_path / "documentation-terms.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "subject": "Export attribution report",
+                "message": "How do I export attribution reports?",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    term_file.write_text(
+        json.dumps({"documents": [{"url": "https://help.example/export"}]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        MODULE.main([
+            str(source),
+            "--source-format",
+            "json",
+            "--documentation-term-file",
+            str(term_file),
+            "--output",
+            str(output),
+        ])
+
+    assert "--documentation-term-file has no recognized term fields:" in str(
+        exc_info.value
+    )
+    assert not output.exists()
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

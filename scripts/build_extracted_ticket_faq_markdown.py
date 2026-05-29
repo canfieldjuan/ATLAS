@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from datetime import date
-import io
 import json
 from pathlib import Path
 import sys
@@ -19,29 +17,6 @@ if str(ROOT) not in sys.path:
 SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
-
-_DOCUMENTATION_TERM_ROW_KEYS = (
-    "documentation_term",
-    "documentation_terms",
-    "term",
-    "heading",
-    "title",
-    "page_title",
-    "name",
-    "label",
-)
-_DOCUMENTATION_TERM_LIST_KEYS = (
-    "terms",
-    "headings",
-    "documents",
-    "pages",
-    "articles",
-    "rows",
-    "data",
-)
-_DOCUMENTATION_TERM_KEY_HINT = ", ".join(_DOCUMENTATION_TERM_ROW_KEYS)
-_DOCUMENTATION_TERM_FORMATS = ("auto", "text", "json", "jsonl", "csv")
-_EMPTY_JSONL_LINE = object()
 
 from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     load_source_campaign_opportunities_from_file,
@@ -56,7 +31,9 @@ from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
     weighted_source_volume_by_group,
 )
 from content_ops_faq_cli_rules import (  # noqa: E402
+    DOCUMENTATION_TERM_FORMATS,
     load_rule_files,
+    parse_documentation_terms,
     parse_intent_rules,
     parse_vocabulary_gap_rules,
 )
@@ -157,7 +134,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--documentation-term-format",
-        choices=_DOCUMENTATION_TERM_FORMATS,
+        choices=DOCUMENTATION_TERM_FORMATS,
         default="auto",
         help=(
             "Format for documentation-term files. Defaults to suffix-based "
@@ -217,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
             date.fromisoformat(args.as_of_date)
         except ValueError:
             raise SystemExit("--as-of-date must use YYYY-MM-DD format") from None
-    documentation_terms = _cli_documentation_terms(
+    documentation_terms = parse_documentation_terms(
         args.documentation_term,
         args.documentation_term_file,
         args.documentation_term_format,
@@ -551,198 +528,6 @@ def _is_zero_result_search_source(
 
 def _clean_diagnostic_text(value: Any) -> str:
     return " ".join(str(value or "").split())
-
-
-def _cli_documentation_terms(
-    inline_terms: list[str],
-    files: list[Path],
-    file_format: str = "auto",
-) -> tuple[str, ...]:
-    terms: list[str] = []
-    terms.extend(inline_terms)
-    for path in files:
-        terms.extend(_load_cli_documentation_term_file(path, file_format=file_format))
-    return _clean_cli_documentation_terms(terms)
-
-
-def _load_cli_documentation_term_file(
-    path: Path,
-    *,
-    file_format: str = "auto",
-) -> tuple[str, ...]:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        raise SystemExit(f"--documentation-term-file not found: {path}") from None
-    suffix = path.suffix.lower()
-    resolved_format = file_format
-    if resolved_format == "auto":
-        if suffix == ".json":
-            resolved_format = "json"
-        elif suffix == ".jsonl":
-            resolved_format = "jsonl"
-        elif suffix == ".csv":
-            resolved_format = "csv"
-        else:
-            resolved_format = "text"
-    if resolved_format == "json":
-        terms = _load_cli_documentation_term_json(text, path)
-    elif resolved_format == "jsonl":
-        terms = _load_cli_documentation_term_jsonl(text, path)
-    elif resolved_format == "csv":
-        terms = _load_cli_documentation_term_csv(text, path)
-    else:
-        terms = _load_cli_documentation_term_text(text)
-    if not terms:
-        raise SystemExit(f"--documentation-term-file contains no terms: {path}")
-    return tuple(terms)
-
-
-def _load_cli_documentation_term_text(text: str) -> tuple[str, ...]:
-    return tuple(
-        line.strip()
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    )
-
-
-def _load_cli_documentation_term_json(text: str, path: Path) -> tuple[str, ...]:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            f"--documentation-term-file must be valid JSON: {path}: {exc.msg}"
-        ) from None
-    terms = tuple(_documentation_terms_from_payload(payload))
-    if not terms and _payload_has_unrecognized_term_fields(payload):
-        _raise_unrecognized_documentation_term_fields(path)
-    return terms
-
-
-def _load_cli_documentation_term_jsonl(text: str, path: Path) -> tuple[str, ...]:
-    saw_unrecognized_fields = False
-    terms: list[str] = []
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        payload = _parse_documentation_term_jsonl_payload(line, path, line_no)
-        if payload is _EMPTY_JSONL_LINE:
-            continue
-        line_terms = tuple(_documentation_terms_from_payload(payload))
-        if not line_terms and _payload_has_unrecognized_term_fields(payload):
-            saw_unrecognized_fields = True
-        terms.extend(line_terms)
-    if not terms and saw_unrecognized_fields:
-        _raise_unrecognized_documentation_term_fields(path)
-    return tuple(terms)
-
-
-def _parse_documentation_term_jsonl_payload(
-    line: str,
-    path: Path,
-    line_no: int,
-) -> Any:
-    text = line.strip()
-    if not text:
-        return _EMPTY_JSONL_LINE
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(
-            "--documentation-term-file must be valid JSONL: "
-            f"{path}: line {line_no}: {exc.msg}"
-        ) from None
-
-
-def _load_cli_documentation_term_csv(text: str, path: Path) -> tuple[str, ...]:
-    rows = list(csv.DictReader(io.StringIO(text, newline="")))
-    if not rows:
-        return ()
-    terms = tuple(
-        term
-        for row in rows
-        for term in _documentation_terms_from_mapping(row)
-    )
-    if not terms:
-        _raise_unrecognized_documentation_term_fields(path)
-    return terms
-
-
-def _documentation_terms_from_payload(payload: Any) -> tuple[str, ...]:
-    if isinstance(payload, str):
-        return (payload,)
-    if isinstance(payload, dict):
-        terms = list(_documentation_terms_from_mapping(payload))
-        for key in _DOCUMENTATION_TERM_LIST_KEYS:
-            value = _case_insensitive_get(payload, key)
-            if value is not None:
-                terms.extend(_documentation_terms_from_payload(value))
-        return tuple(terms)
-    if isinstance(payload, list):
-        return tuple(
-            term
-            for item in payload
-            for term in _documentation_terms_from_payload(item)
-        )
-    return ()
-
-
-def _payload_has_unrecognized_term_fields(payload: Any) -> bool:
-    if isinstance(payload, dict):
-        has_row_key = any(
-            _case_insensitive_has_key(payload, key)
-            for key in _DOCUMENTATION_TERM_ROW_KEYS
-        )
-        list_values = [
-            value
-            for key in _DOCUMENTATION_TERM_LIST_KEYS
-            if (value := _case_insensitive_get(payload, key)) is not None
-        ]
-        if not has_row_key and not list_values:
-            return bool(payload)
-        return any(_payload_has_unrecognized_term_fields(value) for value in list_values)
-    if isinstance(payload, list):
-        return any(_payload_has_unrecognized_term_fields(item) for item in payload)
-    return False
-
-
-def _documentation_terms_from_mapping(
-    row: dict[str, Any],
-) -> tuple[str, ...]:
-    for key in _DOCUMENTATION_TERM_ROW_KEYS:
-        value = _case_insensitive_get(row, key)
-        if value not in (None, ""):
-            if isinstance(value, (dict, list)):
-                return _documentation_terms_from_payload(value)
-            return (str(value),)
-    return ()
-
-
-def _case_insensitive_get(row: dict[str, Any], key: str) -> Any:
-    target = key.lower()
-    for raw_key, value in row.items():
-        if str(raw_key).lstrip("\ufeff").lower() == target:
-            return value
-    return None
-
-
-def _case_insensitive_has_key(row: dict[str, Any], key: str) -> bool:
-    target = key.lower()
-    return any(str(raw_key).lstrip("\ufeff").lower() == target for raw_key in row)
-
-
-def _raise_unrecognized_documentation_term_fields(path: Path) -> None:
-    raise SystemExit(
-        "--documentation-term-file has no recognized term fields: "
-        f"{path}; expected one of: {_DOCUMENTATION_TERM_KEY_HINT}"
-    )
-
-
-def _clean_cli_documentation_terms(terms: list[str]) -> tuple[str, ...]:
-    out: dict[str, str] = {}
-    for term in terms:
-        text = " ".join(str(term).split())
-        if text:
-            out.setdefault(text.lower(), text)
-    return tuple(out.values())
 
 
 def _output_check_details(
