@@ -73,6 +73,7 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
     assert summary["has_window_filter"] is False
     assert summary["faq_question_count"] == 2
     assert summary["question_like_ticket_count"] == 2
+    assert summary["contact_email_count"] == 0
     assert summary["top_ticket_clusters"] == [
         {"label": "profile updates", "count": 1},
         {"label": "Export dashboard", "count": 1},
@@ -171,6 +172,7 @@ def test_support_ticket_package_smoke_accepts_platform_export_fixture() -> None:
     assert summary["skipped_ticket_row_count"] == 0
     assert summary["source_period"] == "Last 90 days of support tickets"
     assert summary["has_dated_window"] is True
+    assert summary["contact_email_count"] == 3
     assert summary["faq_questions"] == [
         "How do I reset MFA?",
         "Where do I export my invoice?",
