@@ -49,6 +49,12 @@ def build_support_ticket_package_smoke_summary(
     resolution_examples = list(inputs.get("support_ticket_resolution_examples") or [])
     measured_outcome_examples = list(inputs.get("measured_outcome_examples") or [])
     faq_questions = list(inputs.get("faq_questions") or [])
+    source_rows = list(inputs.get("source_material") or [])
+    contact_email_count = sum(
+        1
+        for row in source_rows
+        if isinstance(row, dict) and str(row.get("contact_email") or "").strip()
+    )
     return {
         "path": str(Path(path)),
         "provider": package.provider,
@@ -65,6 +71,7 @@ def build_support_ticket_package_smoke_summary(
         "faq_questions": faq_questions,
         "question_like_ticket_count": int(inputs.get("question_like_ticket_count") or 0),
         "top_ticket_clusters": list(inputs.get("top_ticket_clusters") or []),
+        "contact_email_count": contact_email_count,
         "customer_wording_example_count": len(customer_wording_examples),
         "customer_wording_examples": customer_wording_examples,
         "support_ticket_resolution_evidence_present": bool(
