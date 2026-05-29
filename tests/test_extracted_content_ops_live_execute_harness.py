@@ -647,6 +647,82 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
     assert step["result"]["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
 
 
+async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+    )
+    export_tickets = [
+        {
+            "ticket_id": f"ticket-export-bulk-{index}",
+            "source_type": "support_ticket",
+            "subject": "Export attribution report",
+            "message": "How do I export attribution reports?",
+            "pain_category": "exports",
+            "resolution_text": (
+                "Open Analytics, choose Attribution, then select Download report."
+            ),
+        }
+        for index in range(700)
+    ]
+    sso_tickets = [
+        {
+            "ticket_id": f"ticket-sso-bulk-{index}",
+            "source_type": "support_ticket",
+            "subject": "SSO setup",
+            "message": "How do I enable SSO for my team?",
+            "pain_category": "authentication",
+        }
+        for index in range(300)
+    ]
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_deflection_report"],
+        "limit": 5,
+        "require_quality_gates": False,
+        "inputs": {
+            "deflection_report_title": "Hosted FAQ Deflection Bulk Smoke",
+            "faq_title": "Hosted FAQ Deflection Bulk Source",
+            "source_material": {"support_tickets": export_tickets + sso_tickets},
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["max_items"] == 5
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["status"] == "completed"
+
+    result = step["result"]
+    assert result["summary"]["source_count"] == 1000
+    assert result["summary"]["ticket_source_count"] == 1000
+    assert result["summary"]["drafted_answer_count"] >= 1
+    assert result["summary"]["no_proven_answer_count"] >= 1
+    assert "## Drafted Answers With Proven Solutions" in result["markdown"]
+    assert "## No Proven Answer Yet" in result["markdown"]
+    assert "ticket-export-bulk-0" in result["markdown"]
+
+    faq_result = result["faq_result"]
+    assert faq_result["source_count"] == 1000
+    assert faq_result["ticket_source_count"] == 1000
+    assert all(faq_result["output_checks"].values())
+    assert len(faq_result["items"]) == result["summary"]["generated"]
+    assert any(
+        item["answer_evidence_status"] == "resolution_evidence"
+        for item in faq_result["items"]
+    )
+    assert any(
+        item["answer_evidence_status"] == "draft_needs_review"
+        for item in faq_result["items"]
+    )
+
+
 async def test_live_execute_route_handles_bulk_faq_source_material() -> None:
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(),
