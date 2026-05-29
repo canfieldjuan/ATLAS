@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -220,6 +223,51 @@ async def test_get_draft_returns_none_on_miss() -> None:
     )
 
     assert draft is None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_get_draft_is_tenant_scoped_against_postgres() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = os.getenv("EXTRACTED_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not database_url:
+        pytest.skip("EXTRACTED_DATABASE_URL or DATABASE_URL is required")
+
+    root = Path(__file__).resolve().parents[1]
+    run_id = uuid4().hex
+    account_a = f"acct-faq-get-a-{run_id}"
+    account_b = f"acct-faq-get-b-{run_id}"
+    pool = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    repo = PostgresTicketFAQRepository(pool)
+
+    try:
+        await pool.execute(
+            (root / "atlas_brain/storage/migrations/325_ticket_faq_markdown.sql").read_text()
+        )
+        saved_ids = await repo.save_drafts([
+            _draft(),
+        ], scope=TenantScope(account_id=account_a))
+        saved_id = saved_ids[0]
+
+        account_a_draft = await repo.get_draft(
+            saved_id,
+            scope=TenantScope(account_id=account_a),
+        )
+        account_b_draft = await repo.get_draft(
+            saved_id,
+            scope=TenantScope(account_id=account_b),
+        )
+
+        assert account_a_draft is not None
+        assert account_a_draft.id == saved_id
+        assert account_a_draft.title == "Support FAQ"
+        assert account_b_draft is None
+    finally:
+        await pool.execute(
+            "DELETE FROM ticket_faq_markdown WHERE account_id = ANY($1::text[])",
+            [account_a, account_b],
+        )
+        await pool.close()
 
 
 @pytest.mark.asyncio
