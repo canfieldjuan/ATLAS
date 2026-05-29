@@ -20,9 +20,16 @@ from extracted_content_pipeline.faq_macro_writeback_zendesk import (
 
 
 class _MappingRepo:
-    def __init__(self, existing: MacroWritebackMapping | None = None) -> None:
+    def __init__(
+        self,
+        existing: MacroWritebackMapping | None = None,
+        *,
+        upsert_error: Exception | None = None,
+    ) -> None:
         self.existing = existing
+        self.upsert_error = upsert_error
         self.get_calls: list[dict[str, Any]] = []
+        self.reserve_calls: list[dict[str, Any]] = []
         self.upsert_calls: list[dict[str, Any]] = []
 
     async def get_mapping(
@@ -48,6 +55,17 @@ class _MappingRepo:
         scope: TenantScope,
     ) -> MacroWritebackMapping:
         self.upsert_calls.append({"mapping": mapping, "scope": scope})
+        if self.upsert_error is not None:
+            raise self.upsert_error
+        return mapping
+
+    async def reserve_mapping(
+        self,
+        mapping: MacroWritebackMapping,
+        *,
+        scope: TenantScope,
+    ) -> MacroWritebackMapping:
+        self.reserve_calls.append({"mapping": mapping, "scope": scope})
         return mapping
 
 
@@ -137,11 +155,15 @@ async def test_zendesk_provider_creates_macro_and_persists_mapping() -> None:
     assert saved.platform == ZENDESK_PLATFORM
     assert saved.external_id == "123"
     assert saved.external_url == "https://example.zendesk.com/api/v2/macros/123"
+    assert saved.publish_status == "published"
     assert saved.metadata == {
         "title": "Why was I charged twice?",
         "category": "billing",
     }
     assert "secret-token" not in saved.as_dict()["metadata"].values()
+    reserved = repo.reserve_calls[0]["mapping"]
+    assert reserved.publish_status == "pending"
+    assert reserved.external_id == ""
 
 
 @pytest.mark.asyncio
@@ -166,6 +188,7 @@ async def test_zendesk_provider_updates_existing_macro_from_mapping() -> None:
     assert transport.calls[0]["method"] == "PUT"
     assert transport.calls[0]["url"] == "https://example.zendesk.com/api/v2/macros/123"
     assert repo.get_calls[0]["platform"] == ZENDESK_PLATFORM
+    assert repo.reserve_calls == []
 
 
 @pytest.mark.asyncio
@@ -184,6 +207,53 @@ async def test_zendesk_provider_fails_without_credentials_without_network_call()
     assert results[0].error == "zendesk_credentials_missing"
     assert transport.calls == []
     assert repo.get_calls == []
+
+
+@pytest.mark.asyncio
+async def test_zendesk_provider_refuses_to_repost_when_mapping_is_pending() -> None:
+    repo = _MappingRepo(existing=MacroWritebackMapping(
+        platform=ZENDESK_PLATFORM,
+        faq_draft_id="11111111-1111-1111-1111-111111111111",
+        faq_item_id="faq-draft-1:item-1",
+        external_id="",
+        publish_status="pending",
+    ))
+    transport = _Transport({"macro": {"id": 123}})
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=StaticZendeskMacroCredentialsProvider(_credentials()),
+        mapping_repository=repo,
+        transport=transport,
+    )
+
+    results = await provider.publish([_macro()], scope=TenantScope(account_id="acct-1"))
+
+    assert results[0].status == "failed"
+    assert results[0].error == "zendesk_macro_mapping_pending_reconcile"
+    assert transport.calls == []
+    assert repo.reserve_calls == []
+    assert repo.upsert_calls == []
+
+
+@pytest.mark.asyncio
+async def test_zendesk_provider_marks_create_then_mapping_failure_without_reposting() -> None:
+    repo = _MappingRepo(upsert_error=RuntimeError("database down"))
+    transport = _Transport({"macro": {"id": 123}})
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=StaticZendeskMacroCredentialsProvider(_credentials()),
+        mapping_repository=repo,
+        transport=transport,
+    )
+
+    first = await provider.publish([_macro()], scope=TenantScope(account_id="acct-1"))
+    repo.existing = repo.reserve_calls[0]["mapping"]
+    second = await provider.publish([_macro()], scope=TenantScope(account_id="acct-1"))
+
+    assert first[0].status == "failed"
+    assert first[0].external_id == "123"
+    assert first[0].error == "zendesk_mapping_persist_failed"
+    assert second[0].status == "failed"
+    assert second[0].error == "zendesk_macro_mapping_pending_reconcile"
+    assert [call["method"] for call in transport.calls] == ["POST"]
 
 
 @pytest.mark.asyncio
@@ -212,6 +282,7 @@ async def test_zendesk_provider_isolates_per_item_transport_failures() -> None:
     assert results[1].external_id == "456"
     assert len(transport.calls) == 2
     assert len(repo.upsert_calls) == 1
+    assert len(repo.reserve_calls) == 2
 
 
 def test_zendesk_credentials_repr_redacts_api_token_and_builds_base_url() -> None:

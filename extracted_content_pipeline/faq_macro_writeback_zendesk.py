@@ -168,15 +168,38 @@ class ZendeskMacroPublishProvider:
                 scope=scope,
             )
             payload = _zendesk_macro_payload(macro)
-            if existing is None:
-                data = await self.transport.request(
-                    "POST",
-                    f"{credentials.normalized_base_url()}/api/v2/macros",
-                    headers=_headers(credentials),
-                    json=payload,
+            if existing is not None and not existing.external_id:
+                return MacroPublishResult(
+                    macro=macro,
+                    status="failed",
+                    error="zendesk_macro_mapping_pending_reconcile",
                 )
-                status = "published"
-            else:
+            if existing is None:
+                reservation = await self.mapping_repository.reserve_mapping(
+                    MacroWritebackMapping(
+                        platform=ZENDESK_PLATFORM,
+                        faq_draft_id=macro.faq_draft_id,
+                        faq_item_id=macro.faq_item_id,
+                        external_id="",
+                        publish_status="pending",
+                        metadata={
+                            "title": macro.title,
+                            "category": macro.category,
+                        },
+                    ),
+                    scope=scope,
+                )
+                if reservation.external_id:
+                    existing = reservation
+                else:
+                    data = await self.transport.request(
+                        "POST",
+                        f"{credentials.normalized_base_url()}/api/v2/macros",
+                        headers=_headers(credentials),
+                        json=payload,
+                    )
+                    status = "published"
+            if existing is not None:
                 data = await self.transport.request(
                     "PUT",
                     f"{credentials.normalized_base_url()}/api/v2/macros/{existing.external_id}",
@@ -189,22 +212,31 @@ class ZendeskMacroPublishProvider:
                 return MacroPublishResult(
                     macro=macro,
                     status="failed",
-                    error="zendesk_macro_id_missing",
+                    error="zendesk_macro_id_missing_after_create",
                 )
-            mapping = await self.mapping_repository.upsert_mapping(
-                MacroWritebackMapping(
-                    platform=ZENDESK_PLATFORM,
-                    faq_draft_id=macro.faq_draft_id,
-                    faq_item_id=macro.faq_item_id,
+            try:
+                mapping = await self.mapping_repository.upsert_mapping(
+                    MacroWritebackMapping(
+                        platform=ZENDESK_PLATFORM,
+                        faq_draft_id=macro.faq_draft_id,
+                        faq_item_id=macro.faq_item_id,
+                        external_id=external_id,
+                        external_url=_external_url(data),
+                        publish_status="published",
+                        metadata={
+                            "title": macro.title,
+                            "category": macro.category,
+                        },
+                    ),
+                    scope=scope,
+                )
+            except Exception:
+                return MacroPublishResult(
+                    macro=macro,
+                    status="failed",
                     external_id=external_id,
-                    external_url=_external_url(data),
-                    metadata={
-                        "title": macro.title,
-                        "category": macro.category,
-                    },
-                ),
-                scope=scope,
-            )
+                    error="zendesk_mapping_persist_failed",
+                )
             return MacroPublishResult(
                 macro=macro,
                 status=status,
