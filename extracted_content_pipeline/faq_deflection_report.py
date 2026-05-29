@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .ticket_faq_markdown import TicketFAQMarkdownResult
+from .campaign_ports import TenantScope
+from .ticket_faq_markdown import TicketFAQMarkdownResult, TicketFAQMarkdownService
 
 
 _RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
@@ -27,6 +28,55 @@ class DeflectionReportArtifact:
             "summary": dict(self.summary),
             "faq_result": self.faq_result.as_dict(),
         }
+
+
+class FAQDeflectionReportService:
+    """Service-shaped generator for customer-facing FAQ deflection reports."""
+
+    def __init__(self, faq_markdown: TicketFAQMarkdownService | None = None) -> None:
+        self._faq_markdown = faq_markdown or TicketFAQMarkdownService()
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        source_material: Any,
+        report_title: str | None = None,
+        faq_title: str | None = None,
+        max_items: int | None = None,
+        max_evidence_per_item: int | None = None,
+        source_types: Sequence[str] | None = None,
+        max_text_chars: int | None = None,
+        window_days: int | None = None,
+        as_of_date: Any = None,
+        support_contact: str | None = None,
+        intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
+        documentation_terms: Sequence[str] | None = None,
+        vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
+        **kwargs: Any,
+    ) -> DeflectionReportArtifact:
+        del kwargs
+        faq_result = await self._faq_markdown.generate(
+            scope=scope,
+            target_mode=target_mode,
+            source_material=source_material,
+            title=faq_title,
+            max_items=max_items,
+            max_evidence_per_item=max_evidence_per_item,
+            source_types=source_types,
+            max_text_chars=max_text_chars,
+            window_days=window_days,
+            as_of_date=as_of_date,
+            support_contact=support_contact,
+            intent_rules=intent_rules,
+            documentation_terms=documentation_terms,
+            vocabulary_gap_rules=vocabulary_gap_rules,
+        )
+        return build_deflection_report_artifact(
+            faq_result,
+            title=report_title or "Support Ticket Deflection Report",
+        )
 
 
 def build_deflection_report_artifact(
@@ -294,6 +344,7 @@ def _md(value: Any) -> str:
 
 __all__ = [
     "DeflectionReportArtifact",
+    "FAQDeflectionReportService",
     "build_deflection_report_artifact",
     "deflection_report_summary",
     "render_deflection_report",

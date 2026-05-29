@@ -18,6 +18,7 @@ from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
@@ -628,6 +629,61 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
         == "Single sign-on setup"
     )
     assert "Billing export is confusing." not in step["result"]["markdown"]
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_faq_deflection_report_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 3,
+            "inputs": {
+                "deflection_report_title": "Acme Support Deflection Report",
+                "faq_title": "Acme Support FAQ",
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "support_ticket",
+                        "subject": "Export attribution",
+                        "message": "How do I export attribution reports?",
+                        "pain_category": "exports",
+                        "resolution_text": (
+                            "Open Analytics, choose Attribution, then select "
+                            "Download report."
+                        ),
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "support_ticket",
+                        "subject": "Renewal invoice",
+                        "message": "How do I confirm my renewal invoice before payment?",
+                        "pain_category": "billing",
+                    },
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["runner"] == "FAQDeflectionReportService.generate"
+    assert step["status"] == "completed"
+    assert step["result"]["markdown"].startswith("# Acme Support Deflection Report")
+    assert "## Ranked Question Opportunities" in step["result"]["markdown"]
+    assert "## Drafted Answers With Proven Solutions" in step["result"]["markdown"]
+    assert "Open Analytics, choose Attribution" in step["result"]["markdown"]
+    assert "## No Proven Answer Yet" in step["result"]["markdown"]
+    assert step["result"]["summary"]["source_count"] == 2
+    assert step["result"]["summary"]["drafted_answer_count"] == 1
+    assert step["result"]["summary"]["no_proven_answer_count"] == 1
+    assert step["result"]["faq_result"]["markdown"].startswith("# Acme Support FAQ")
+    assert result["plan"]["steps"][0]["config"]["report_title"] == (
+        "Acme Support Deflection Report"
+    )
 
 
 @pytest.mark.asyncio

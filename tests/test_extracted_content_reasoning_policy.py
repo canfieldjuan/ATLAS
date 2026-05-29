@@ -50,6 +50,7 @@ def test_output_policy_defaults_match_audit_recommendations() -> None:
     assert defaults == {
         "signal_extraction": "none",
         "faq_markdown": "none",
+        "faq_deflection_report": "none",
         "email_campaign": "single_pass",
         "landing_page": "single_pass",
         "blog_post": "multi_pass_structured",
@@ -102,6 +103,12 @@ def test_faq_markdown_only_supports_no_reasoning() -> None:
     assert supported_reasoning_presets("faq_markdown") == ("none",)
     with pytest.raises(ValueError, match="not supported"):
         resolve_reasoning_policy("faq_markdown", "single_pass")
+
+
+def test_faq_deflection_report_only_supports_no_reasoning() -> None:
+    assert supported_reasoning_presets("faq_deflection_report") == ("none",)
+    with pytest.raises(ValueError, match="not supported"):
+        resolve_reasoning_policy("faq_deflection_report", "single_pass")
 
 
 def test_email_campaign_supports_structured_but_not_strict_preset() -> None:

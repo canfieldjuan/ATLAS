@@ -25,6 +25,9 @@ Currently wired:
   stays `None` when LLM or pool is absent.
 - `faq_markdown`: deterministic ticket FAQ builder. It runs without
   DB, and persists drafts when DB services are enabled.
+- `faq_deflection_report`: deterministic customer-facing report wrapper over
+  the FAQ builder. It runs without DB, and reuses the FAQ persistence path when
+  DB services are enabled.
 
 See `plans/PR-Content-Ops-Execution-Services-Wire-4.md`.
 """
@@ -56,6 +59,9 @@ from extracted_content_pipeline.campaign_postgres import (
 )
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
+)
+from extracted_content_pipeline.faq_deflection_report import (
+    FAQDeflectionReportService,
 )
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
@@ -90,6 +96,9 @@ from extracted_content_pipeline.ticket_faq_postgres import (
 # re-creating it per request would just churn allocations.
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
 _FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
+_FAQ_DEFLECTION_REPORT_SERVICE: FAQDeflectionReportService = FAQDeflectionReportService(
+    faq_markdown=_FAQ_MARKDOWN_SERVICE
+)
 
 
 def _build_landing_page_service(
@@ -271,6 +280,7 @@ def build_content_ops_execution_services(
     sales_brief = None
     blog_post = None
     faq_markdown = _FAQ_MARKDOWN_SERVICE
+    faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
     if enable_db_services:
         llm = llm_factory()
         skills = skills_factory()
@@ -310,6 +320,7 @@ def build_content_ops_execution_services(
             pool=pool,
         )
         faq_markdown = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
+        faq_deflection_report = FAQDeflectionReportService(faq_markdown=faq_markdown)
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
@@ -319,6 +330,7 @@ def build_content_ops_execution_services(
         sales_brief=sales_brief,
         blog_post=blog_post,
         faq_markdown=faq_markdown,
+        faq_deflection_report=faq_deflection_report,
     )
 
 

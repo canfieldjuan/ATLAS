@@ -505,6 +505,53 @@ def test_plan_maps_faq_markdown_to_ticket_faq_service():
     }
 
 
+def test_plan_maps_faq_deflection_report_to_report_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 4,
+            "inputs": {
+                "source_material": [
+                    {"source_type": "ticket", "text": "How do I export a report?"}
+                ],
+                "deflection_report_title": "Customer FAQ Deflection Report",
+                "faq_title": "Source FAQ",
+                "faq_documentation_terms": ["Download report"],
+                "faq_vocabulary_gap_rules": [["export", "download"]],
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "FAQDeflectionReportService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "title": "Source FAQ",
+        "max_items": 4,
+        "max_evidence_per_item": 3,
+        "source_types": [
+            "ticket",
+            "support_ticket",
+            "case",
+            "chat",
+            "chat_transcript",
+            "conversation",
+            "transcript",
+            "sales_call",
+            "meeting",
+            "sales_objection",
+            "objection",
+            "complaint",
+            "search_log",
+            "search_query",
+        ],
+        "max_text_chars": 1200,
+        "documentation_terms": ["Download report"],
+        "vocabulary_gap_rules": [["export", "download"]],
+        "report_title": "Customer FAQ Deflection Report",
+    }
+
+
 def test_plan_rejects_faq_as_of_date_without_window_days():
     with pytest.raises(ValueError, match="faq_as_of_date requires faq_window_days"):
         build_generation_plan_from_mapping(
