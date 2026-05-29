@@ -139,6 +139,30 @@ class PostgresFAQMacroWritebackMappingRepository:
         )
         return _row_to_mapping(row_to_dict(row))
 
+    async def list_pending_mappings(
+        self,
+        *,
+        platform: str,
+        scope: TenantScope,
+        limit: int,
+    ) -> tuple[MacroWritebackMapping, ...]:
+        rows = await self.pool.fetch(
+            f"""
+            SELECT {_MAPPING_COLUMNS}
+              FROM ticket_faq_macro_writebacks
+             WHERE account_id = $1
+               AND platform = $2
+               AND publish_status = 'pending'
+               AND btrim(external_id) = ''
+             ORDER BY updated_at ASC, faq_draft_id ASC, faq_item_id ASC
+             LIMIT $3
+            """,
+            scope.account_id or "",
+            _clean(platform),
+            max(1, int(limit)),
+        )
+        return tuple(_row_to_mapping(row_to_dict(row)) for row in rows)
+
 
 __all__ = [
     "PostgresFAQMacroWritebackMappingRepository",

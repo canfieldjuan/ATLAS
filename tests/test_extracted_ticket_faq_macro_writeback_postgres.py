@@ -205,6 +205,44 @@ async def test_reserve_mapping_inserts_pending_row_without_external_id() -> None
 
 
 @pytest.mark.asyncio
+async def test_list_pending_mappings_filters_pending_without_external_id() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [
+        _row(
+            external_id="",
+            external_url="",
+            publish_status="pending",
+            metadata={"title": "Question"},
+        )
+    ]
+    repo = PostgresFAQMacroWritebackMappingRepository(pool)
+
+    mappings = await repo.list_pending_mappings(
+        platform=" zendesk ",
+        scope=TenantScope(account_id="acct-1"),
+        limit=25,
+    )
+
+    call = pool.fetch_calls[0]
+    assert "publish_status = 'pending'" in call["query"]
+    assert "btrim(external_id) = ''" in call["query"]
+    assert "ORDER BY updated_at ASC, faq_draft_id ASC, faq_item_id ASC" in call["query"]
+    assert "LIMIT $3" in call["query"]
+    assert call["args"] == ("acct-1", "zendesk", 25)
+    assert mappings == (
+        MacroWritebackMapping(
+            platform="zendesk",
+            faq_draft_id="11111111-1111-1111-1111-111111111111",
+            faq_item_id="faq-draft-1:item-1",
+            external_id="",
+            external_url="",
+            publish_status="pending",
+            metadata={"title": "Question"},
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_upsert_mapping_keeps_account_scope_outside_client_payload() -> None:
     pool = _Pool()
     pool.fetchrow_rows = [_row()]

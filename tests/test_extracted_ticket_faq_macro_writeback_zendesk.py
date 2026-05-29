@@ -261,6 +261,80 @@ async def test_zendesk_provider_reconciles_pending_mapping_before_update() -> No
 
 
 @pytest.mark.asyncio
+async def test_zendesk_provider_public_reconcile_backfills_unique_pending_mapping() -> None:
+    repo = _MappingRepo()
+    mapping = MacroWritebackMapping(
+        platform=ZENDESK_PLATFORM,
+        faq_draft_id="11111111-1111-1111-1111-111111111111",
+        faq_item_id="faq-draft-1:item-1",
+        external_id="",
+        publish_status="pending",
+        metadata={"title": "Why was I charged twice?", "category": "billing"},
+    )
+    transport = _Transport({
+        "macros": [
+            {
+                "id": 123,
+                "url": "https://example.zendesk.com/api/v2/macros/123",
+                "title": "Why was I charged twice?",
+            }
+        ]
+    })
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=StaticZendeskMacroCredentialsProvider(_credentials()),
+        mapping_repository=repo,
+        transport=transport,
+    )
+
+    result = await provider.reconcile_pending_mapping(
+        mapping,
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert result.status == "reconciled"
+    assert result.external_id == "123"
+    assert [call["method"] for call in transport.calls] == ["GET"]
+    saved = repo.upsert_calls[0]["mapping"]
+    assert saved.external_id == "123"
+    assert saved.external_url == "https://example.zendesk.com/api/v2/macros/123"
+    assert saved.publish_status == "published"
+    assert saved.metadata == {"title": "Why was I charged twice?", "category": "billing"}
+
+
+@pytest.mark.asyncio
+async def test_zendesk_provider_public_reconcile_reports_ambiguous_title() -> None:
+    repo = _MappingRepo()
+    mapping = MacroWritebackMapping(
+        platform=ZENDESK_PLATFORM,
+        faq_draft_id="11111111-1111-1111-1111-111111111111",
+        faq_item_id="faq-draft-1:item-1",
+        external_id="",
+        publish_status="pending",
+        metadata={"title": "Why was I charged twice?"},
+    )
+    transport = _Transport({
+        "macros": [
+            {"id": 123, "title": "Why was I charged twice?"},
+            {"id": 456, "title": " why  was I charged twice? "},
+        ]
+    })
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=StaticZendeskMacroCredentialsProvider(_credentials()),
+        mapping_repository=repo,
+        transport=transport,
+    )
+
+    result = await provider.reconcile_pending_mapping(
+        mapping,
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert result.status == "pending"
+    assert result.error == "zendesk_macro_mapping_ambiguous_reconcile"
+    assert repo.upsert_calls == []
+
+
+@pytest.mark.asyncio
 async def test_zendesk_provider_refuses_to_repost_when_pending_mapping_has_no_match() -> None:
     repo = _MappingRepo(existing=MacroWritebackMapping(
         platform=ZENDESK_PLATFORM,

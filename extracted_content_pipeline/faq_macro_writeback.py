@@ -146,6 +146,15 @@ class MacroWritebackMappingRepository(Protocol):
     ) -> MacroWritebackMapping:
         """Reserve one FAQ item before creating an external macro."""
 
+    async def list_pending_mappings(
+        self,
+        *,
+        platform: str,
+        scope: TenantScope,
+        limit: int,
+    ) -> Sequence[MacroWritebackMapping]:
+        """Return pending external macro mappings for one tenant and platform."""
+
 
 class DryRunMacroPublishProvider:
     async def publish(
