@@ -91,6 +91,15 @@ class SaaSAuthConfig(BaseSettings):
     stripe_b2b_pro_price_id: str = Field(default="", description="Stripe Price ID for B2B Pro plan")
     stripe_vendor_standard_price_id: str = Field(default="", description="Stripe Price ID for Vendor Standard ($499/mo)")
     stripe_vendor_pro_price_id: str = Field(default="", description="Stripe Price ID for Vendor Pro ($1,499/mo)")
+    stripe_content_ops_deflection_report_amount_cents: int = Field(
+        default=150000,
+        ge=0,
+        description="Minimum Stripe Checkout amount for the one-time Content Ops FAQ deflection report",
+    )
+    stripe_content_ops_deflection_report_currency: str = Field(
+        default="usd",
+        description="Stripe Checkout currency for the one-time Content Ops FAQ deflection report",
+    )
 
     # LLM Gateway plan tiers (PR-D2). Stripe products are created
     # operationally; the price IDs land here when ready, _init_price_map()

@@ -2,6 +2,8 @@
 
 import logging
 import uuid as _uuid
+from collections.abc import Mapping
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -9,6 +11,9 @@ from pydantic import BaseModel
 from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..storage.database import get_db_pool
+from extracted_content_pipeline.deflection_report_access import (
+    PostgresDeflectionReportArtifactStore,
+)
 
 logger = logging.getLogger("atlas.api.billing")
 
@@ -306,6 +311,12 @@ async def stripe_webhook(request: Request):
         meta = obj.metadata or {}
         if meta.get("source") == "vendor_briefing_report":
             await _handle_vendor_checkout_completed(pool, obj, meta)
+        elif meta.get("source") == "content_ops_deflection_report":
+            await _handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                obj,
+                meta,
+            )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
 
@@ -477,6 +488,108 @@ async def _handle_vendor_checkout_completed(pool, session, meta: dict) -> None:
         )
     except Exception:
         logger.exception("Failed to send vendor checkout confirmation email")
+
+
+async def _handle_content_ops_deflection_report_checkout_completed(
+    pool: Any,
+    session: Any,
+    meta: Mapping[str, Any],
+) -> None:
+    """Handle one-time deflection report checkout completion."""
+
+    session_id = _stripe_text(session, "id")
+    account_id_text = _clean_metadata(meta.get("account_id"))
+    request_id = _clean_metadata(meta.get("request_id"))
+    if _stripe_text(session, "mode") != "payment":
+        logger.warning(
+            "Deflection report checkout ignored: non-payment mode session=%s",
+            session_id,
+        )
+        return
+    if _stripe_text(session, "payment_status") != "paid":
+        logger.warning(
+            "Deflection report checkout ignored: unpaid session=%s",
+            session_id,
+        )
+        return
+    if not account_id_text or not request_id:
+        logger.warning(
+            "Deflection report checkout ignored: missing account_id/request_id session=%s",
+            session_id,
+        )
+        return
+    try:
+        _uuid.UUID(account_id_text)
+    except ValueError:
+        logger.warning(
+            "Deflection report checkout ignored: invalid account_id session=%s",
+            session_id,
+        )
+        return
+    if not _deflection_checkout_amount_is_valid(session):
+        logger.warning(
+            "Deflection report checkout ignored: amount/currency mismatch session=%s",
+            session_id,
+        )
+        return
+
+    marked = await PostgresDeflectionReportArtifactStore(pool=pool).mark_paid(
+        account_id=account_id_text,
+        request_id=request_id,
+        payment_reference=session_id or None,
+    )
+    if not marked:
+        logger.error(
+            "Deflection report checkout completed but report was not found: account=%s request=%s session=%s",
+            account_id_text,
+            request_id,
+            session_id,
+        )
+        raise HTTPException(status_code=409, detail="Deflection report not found")
+    return
+
+
+def _deflection_checkout_amount_is_valid(session: Any) -> bool:
+    cfg = settings.saas_auth
+    expected_cents = int(
+        getattr(cfg, "stripe_content_ops_deflection_report_amount_cents", 150000)
+        or 0
+    )
+    expected_currency = str(
+        getattr(cfg, "stripe_content_ops_deflection_report_currency", "usd") or ""
+    ).strip().lower()
+    amount_total = _stripe_object_value(session, "amount_total")
+    currency = _stripe_text(session, "currency").lower()
+    if expected_cents <= 0:
+        logger.error(
+            "Deflection report checkout price gate misconfigured: expected_cents=%s",
+            expected_cents,
+        )
+        return False
+    if not expected_currency:
+        logger.error("Deflection report checkout currency gate is misconfigured")
+        return False
+    if currency != expected_currency:
+        return False
+    try:
+        actual_cents = int(amount_total)
+    except (TypeError, ValueError):
+        return False
+    return actual_cents >= expected_cents
+
+
+def _stripe_text(obj: Any, key: str) -> str:
+    return str(_stripe_object_value(obj, key) or "").strip()
+
+
+def _stripe_object_value(obj: Any, key: str) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _clean_metadata(value: Any) -> str:
+    return str(value or "").strip()
 
 
 async def _handle_invoice_paid(pool, invoice) -> _uuid.UUID | None:
