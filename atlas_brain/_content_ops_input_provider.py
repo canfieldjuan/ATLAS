@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_input_provider import (
@@ -113,14 +114,20 @@ class _AtlasSupportTicketInputProvider:
         scope: TenantScope,
         request: RequestPayload | None,
     ) -> ContentOpsInputPackage:
-        loaded, missing = await self._load_selected_faq_drafts(source_faq_ids, scope=scope)
+        valid_faq_ids, invalid_faq_ids = _partition_source_faq_ids(source_faq_ids)
+        loaded, missing = await self._load_selected_faq_drafts(
+            valid_faq_ids,
+            scope=scope,
+        )
         combined_source_material = _combine_source_material(source_material, loaded)
         metadata = {
             "selected_faq_id_count": len(source_faq_ids),
             "selected_faq_loaded_count": len(loaded),
             "selected_faq_missing_id_count": len(missing),
+            "selected_faq_invalid_id_count": len(invalid_faq_ids),
         }
         warnings = _selected_faq_warnings(
+            invalid=invalid_faq_ids,
             missing=missing,
             repository_configured=self.pool_provider is not None,
         )
@@ -229,6 +236,19 @@ def _string_values(value: Any) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _partition_source_faq_ids(values: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    valid: list[str] = []
+    invalid: list[str] = []
+    for value in values:
+        try:
+            UUID(value)
+        except ValueError:
+            invalid.append(value)
+        else:
+            valid.append(value)
+    return tuple(valid), tuple(invalid)
+
+
 def _combine_source_material(source_material: Any, selected_faq_outputs: Sequence[Any]) -> Any:
     if not selected_faq_outputs:
         return source_material
@@ -315,21 +335,29 @@ def _clean(value: Any) -> str:
 
 def _selected_faq_warnings(
     *,
+    invalid: Sequence[str],
     missing: Sequence[str],
     repository_configured: bool,
 ) -> tuple[dict[str, Any], ...]:
+    warnings: list[dict[str, Any]] = []
+    if invalid:
+        warnings.append({
+            "code": "source_faq_ids_invalid",
+            "message": "One or more selected FAQ report IDs are invalid.",
+            "invalid_count": len(invalid),
+        })
     if not repository_configured:
-        return ({
+        warnings.append({
             "code": "source_faq_repository_unconfigured",
             "message": "Saved FAQ source selection is not configured for this route.",
-        },)
-    if not missing:
-        return ()
-    return ({
-        "code": "source_faq_drafts_not_found",
-        "message": "One or more selected FAQ reports were not found for this account.",
-        "missing_count": len(missing),
-    },)
+        })
+    elif missing:
+        warnings.append({
+            "code": "source_faq_drafts_not_found",
+            "message": "One or more selected FAQ reports were not found for this account.",
+            "missing_count": len(missing),
+        })
+    return tuple(warnings)
 
 
 def _noop_package(

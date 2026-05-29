@@ -13,6 +13,10 @@ same FAQ-output source adapter. This keeps the database and authorization
 concern at the host boundary instead of teaching blog or landing generators how
 to read FAQ storage.
 
+This is slightly over the 400-LOC soft cap after the review fix because
+repository wiring, UUID validation, warning behavior, and the biting provider
+tests need to ship together for the by-ID path to be safe.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/faq-output-ingestion
@@ -21,11 +25,13 @@ Slice phase: Vertical slice
 1. Add `inputs.source_faq_ids` support to the Atlas Content Ops input provider.
 2. Fetch selected FAQ drafts through `PostgresTicketFAQRepository.get_draft(...)`
    using the existing tenant `TenantScope`.
-3. Route loaded draft payloads through the existing support-ticket/FAQ-output
+3. Validate selected FAQ IDs before repository lookup so malformed IDs produce
+   provider warnings instead of Postgres UUID errors.
+4. Route loaded draft payloads through the existing support-ticket/FAQ-output
    package path.
-4. Wire the hosted API mount with the existing DB pool provider.
-5. Add focused tests for tenant-scoped repository lookup, missing IDs, and the
-   API preview route.
+5. Wire the hosted API mount with the existing DB pool provider.
+6. Add focused tests for tenant-scoped repository lookup, missing IDs, invalid
+   IDs, and the API preview route.
 
 ### Files touched
 
@@ -42,16 +48,18 @@ The host input provider gains optional repository wiring:
 build_content_ops_input_provider(pool_provider=get_db_pool)
 ```
 
-When `inputs.source_faq_ids` contains one or more IDs, the provider resolves the
-pool, builds a `PostgresTicketFAQRepository`, and calls `get_draft(faq_id,
-scope=scope)` for each ID. Drafts found under that tenant are converted with
-`TicketFAQDraft.as_dict()` and passed as source material to the existing
-`SupportTicketInputProvider`.
+When `inputs.source_faq_ids` contains one or more IDs, the provider partitions
+valid UUIDs from malformed values before touching the repository. Valid IDs
+resolve the pool, build a `PostgresTicketFAQRepository`, and call
+`get_draft(faq_id, scope=scope)` for each ID. Drafts found under that tenant are
+converted with `TicketFAQDraft.as_dict()` and passed as source material to the
+existing `SupportTicketInputProvider`.
 
-Missing IDs are reported as provider warnings and do not leak cross-tenant
-detail. If no selected draft is found and no other support-ticket material is
-present, the provider returns a warning-bearing noop package so preview/plan can
-surface the selection problem without silently running on unrelated inputs.
+Malformed or missing IDs are reported as provider warnings and do not leak
+cross-tenant detail. If no selected draft is found and no other support-ticket
+material is present, the provider returns a warning-bearing noop package so
+preview/plan can surface the selection problem without silently running on
+unrelated inputs.
 
 ## Intentional
 
@@ -78,7 +86,7 @@ surface the selection problem without silently running on unrelated inputs.
 Ran locally:
 
 - Command: python -m pytest tests/test_atlas_content_ops_input_provider.py -q
-  - 18 passed, 1 warning
+  - 19 passed, 1 warning
 - Command: python -m py_compile atlas_brain/_content_ops_input_provider.py tests/test_atlas_content_ops_input_provider.py
   - passed
 - Command: git diff --check
@@ -90,8 +98,8 @@ Ran locally:
 
 | Area | Estimated LOC |
 |---|---:|
-| Host provider by-ID loader | ~120 |
+| Host provider by-ID loader | ~205 |
 | Hosted API wiring | ~5 |
-| Focused tests | ~120 |
-| Plan doc | ~90 |
-| **Total** | **~335** |
+| Focused tests | ~150 |
+| Plan doc | ~105 |
+| **Total** | **~465** |
