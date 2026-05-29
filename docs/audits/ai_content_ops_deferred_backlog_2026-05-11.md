@@ -219,6 +219,14 @@ ingestion friction. PR #630 added optional live-provider mode to the CFPB
 support-ticket-like Postgres smoke, matching the review-source path. Further
 source breadth should still wait for a real host export fixture.
 
+**Support-ticket platform export closeout:** PRs #1101, #1102, #1103, and #1105
+closed the synthetic support-ticket export chain: common Zendesk/Freshdesk/
+Intercom-style aliases, a platform-shaped CSV fixture, operator docs for the
+pre-LLM package smoke, and count-only `contact_email_count` diagnostics. That
+is enough synthetic coverage for now. The next support-ticket source breadth
+slice should be a real anonymized customer export smoke, or no slice at all
+until samples exist.
+
 **FAQ output-contract update:** PR #666 proved the persisted support-ticket FAQ
 lifecycle: source rows -> generated Markdown draft -> export -> review/status
 update -> reviewed export. PR #667 tightened the packaged support-ticket FAQ

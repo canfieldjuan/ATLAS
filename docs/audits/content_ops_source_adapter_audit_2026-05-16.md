@@ -14,6 +14,11 @@ PR #550 made source-type precedence explicit in code/tests, and PR #551 added
 the per-row field lookup cache for provider-style aliases. Further source work
 should now require a real host export or field-loss risk.
 
+2026-05-29 update: support-ticket export coverage now has the synthetic platform
+path closed through PRs #1101, #1102, #1103, and #1105. Do not add more
+plausible help desk export shapes without an anonymized customer export or a
+specific field-loss bug.
+
 ## Current Surface
 
 The source adapter converts host source rows into the existing campaign
@@ -122,7 +127,9 @@ Do not add a new source family when:
 1. If a real host export is available, add only the minimal alias/source keys
    needed to load that file and include a fixture shaped like the export.
 2. If no export is available, do not add more source breadth. The current
-   consolidation items are complete; move to reasoning-policy depth instead.
+   consolidation items and synthetic support-ticket platform smoke are complete;
+   move to reasoning-policy depth or another concrete product runtime gap
+   instead.
 
 ## Performance Improvements
 
