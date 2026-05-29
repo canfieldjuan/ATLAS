@@ -1,6 +1,7 @@
 import importlib.util
 from io import BytesIO
 import json
+import re
 import sys
 import urllib.error
 from pathlib import Path
@@ -137,6 +138,20 @@ def _expected_checker_term_mapping_keys():
     )
 
 
+def _documented_search_card_fields(text: str) -> set[str]:
+    marker = "When matches exist, `results[0]` is the lean card/list shape:"
+    section = text.split(marker, maxsplit=1)[1].split(
+        "`count is the number of returned rows`",
+        maxsplit=1,
+    )[0]
+    fields: set[str] = set()
+    for line in section.splitlines():
+        match = re.match(r"^\| `([^`]+)` \|", line)
+        if match:
+            fields.add(match.group(1))
+    return fields
+
+
 def _producer_detail_item():
     result = build_ticket_faq_markdown(
         [
@@ -220,6 +235,10 @@ def test_contract_handoff_doc_matches_checker_fields_and_semantics():
     assert "not the FAQ opportunity score" in text
     assert "count is the number of returned rows" in text
 
+    assert _documented_search_card_fields(text) == {
+        "faq_id",
+        *list(_MODULE.RESULT_FIELDS),
+    }
     for field in ("faq_id", *list(_MODULE.RESULT_FIELDS)):
         assert f"`{field}`" in text
     for field in _MODULE.DETAIL_FIELDS:
