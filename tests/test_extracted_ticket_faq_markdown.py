@@ -1187,6 +1187,18 @@ def test_normalize_intent_rules_accepts_line_and_object_shapes() -> None:
     )
 
 
+def test_normalize_intent_rules_is_idempotent() -> None:
+    rules = normalize_intent_rules(
+        [
+            "data freshness=warehouse sync,connector lag",
+            {"topic": "access setup", "keywords": ["invite link", "new user"]},
+        ],
+        label="faq_intent_rules",
+    )
+
+    assert normalize_intent_rules(rules, label="intent_rules") == rules
+
+
 @pytest.mark.parametrize(
     ("rules", "message"),
     [

@@ -671,6 +671,58 @@ async def test_execute_applies_hosted_faq_intent_rules() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_applies_hosted_faq_intent_rules_to_deflection_report_without_inventing_answers() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_deflection_report"],
+            "limit": 2,
+            "inputs": {
+                "faq_intent_rules": [
+                    "data freshness=warehouse sync,connector lag"
+                ],
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "support_ticket",
+                        "subject": "Warehouse sync lag",
+                        "message": "The warehouse sync is delayed again.",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "support_ticket",
+                        "subject": "Connector lag",
+                        "message": "CRM connector lag repeats every morning.",
+                    },
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    assert result["plan"]["steps"][0]["config"]["intent_rules"][0] == {
+        "topic": "data freshness",
+        "keywords": ["warehouse sync", "connector lag"],
+    }
+
+    step = result["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["status"] == "completed"
+    assert step["result"]["summary"]["drafted_answer_count"] == 0
+    assert step["result"]["summary"]["no_proven_answer_count"] == 1
+
+    item = step["result"]["faq_result"]["items"][0]
+    assert item["topic"] == "data freshness"
+    assert item["ticket_count"] == 2
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert "## Drafted Answers With Proven Solutions" in step["result"]["markdown"]
+    assert "## No Proven Answer Yet" in step["result"]["markdown"]
+    assert "No verified support resolution was present" in step["result"]["markdown"]
+
+
+@pytest.mark.asyncio
 async def test_execute_runs_faq_deflection_report_from_source_material() -> None:
     result = await execute_content_ops_from_mapping(
         {
