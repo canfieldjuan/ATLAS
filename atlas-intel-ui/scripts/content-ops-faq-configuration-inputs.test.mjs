@@ -20,6 +20,7 @@ async function loadTsModule(path) {
 const {
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_MARKDOWN_OUTPUT,
+  faqConfigurationControlsVisible,
   faqConfigurationInputsSelected,
   faqIntentRulesDraftValue,
   faqIntentRulesFromDraft,
@@ -54,11 +55,40 @@ test('new run page uses the shared FAQ configuration output predicate', () => {
       'const faqConfigurationOutputSelected = faqConfigurationInputsSelected(',
     ),
   )
-  assert.ok(newRunSource.includes('{faqConfigurationOutputSelected && ('))
+  assert.ok(
+    newRunSource.includes(
+      'const faqConfigurationControlsVisibleForCatalog =',
+    ),
+  )
+  assert.ok(newRunSource.includes('{faqConfigurationControlsVisibleForCatalog && ('))
+  assert.ok(newRunSource.includes('{faqIntentRulesContract && ('))
+  assert.ok(newRunSource.includes('{faqDocumentationTermsContract && ('))
+  assert.ok(newRunSource.includes('{faqVocabularyGapRulesContract && ('))
   assert.ok(!newRunSource.includes('faqMarkdownOutputSelected'))
   assert.ok(newRunSource.includes('FAQ vocabulary-gap inputs'))
   assert.ok(newRunSource.includes('FAQ_INTENT_RULES_INPUT'))
   assert.ok(newRunSource.includes('handleFaqIntentRulesChange'))
+})
+
+test('FAQ configuration controls require selected output and advertised catalog contract', () => {
+  assert.equal(
+    faqConfigurationControlsVisible([FAQ_DEFLECTION_REPORT_OUTPUT], {
+      intentRules: { key: 'faq_intent_rules' },
+    }),
+    true,
+  )
+  assert.equal(
+    faqConfigurationControlsVisible([FAQ_DEFLECTION_REPORT_OUTPUT], {}),
+    false,
+  )
+  assert.equal(
+    faqConfigurationControlsVisible(['landing_page'], {
+      intentRules: { key: 'faq_intent_rules' },
+      documentationTerms: { key: 'faq_documentation_terms' },
+      vocabularyGapRules: { key: 'faq_vocabulary_gap_rules' },
+    }),
+    false,
+  )
 })
 
 test('FAQ intent-rule draft helpers preserve line-based rules', () => {

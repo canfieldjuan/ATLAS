@@ -1,5 +1,8 @@
 export const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
 export const FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT = 'faq_deflection_report'
+export const FAQ_INTENT_RULES_INPUT = 'faq_intent_rules'
+export const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
+export const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
 
 export const FAQ_CONFIGURATION_OUTPUTS = [
   FAQ_MARKDOWN_OUTPUT,
@@ -13,6 +16,26 @@ export function faqConfigurationInputsSelected(
     FAQ_CONFIGURATION_OUTPUTS.includes(
       output as (typeof FAQ_CONFIGURATION_OUTPUTS)[number],
     ),
+  )
+}
+
+export interface FAQConfigurationInputContracts {
+  intentRules?: unknown
+  documentationTerms?: unknown
+  vocabularyGapRules?: unknown
+}
+
+export function faqConfigurationControlsVisible(
+  outputs: readonly string[],
+  contracts: FAQConfigurationInputContracts,
+): boolean {
+  return (
+    faqConfigurationInputsSelected(outputs) &&
+    Boolean(
+      contracts.intentRules ||
+        contracts.documentationTerms ||
+        contracts.vocabularyGapRules,
+    )
   )
 }
 

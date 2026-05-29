@@ -73,11 +73,16 @@ export type { ContentOpsInputDisplayFallback } from './inputDisplay'
 export {
   FAQ_CONFIGURATION_OUTPUTS,
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
+  FAQ_DOCUMENTATION_TERMS_INPUT,
+  FAQ_INTENT_RULES_INPUT,
   FAQ_MARKDOWN_OUTPUT,
+  FAQ_VOCABULARY_GAP_RULES_INPUT,
+  faqConfigurationControlsVisible,
   faqConfigurationInputsSelected,
   faqIntentRulesDraftValue,
   faqIntentRulesFromDraft,
 } from './faqConfigurationInputs'
+export type { FAQConfigurationInputContracts } from './faqConfigurationInputs'
 
 export {
   FAQ_DEFLECTION_REPORT_OUTPUT,
