@@ -1,11 +1,14 @@
 # Content Ops FAQ Report Contract
 
 This is the frontend/demo handoff for generated support-ticket FAQ reports.
-The canonical producer is
+The canonical FAQ producer is
 `extracted_content_pipeline.ticket_faq_markdown.TicketFAQMarkdownResult.as_dict()`.
+The canonical customer-facing deflection report producer is
+`extracted_content_pipeline.faq_deflection_report.DeflectionReportArtifact.as_dict()`.
 
 Use this contract for Content Ops `faq_markdown` execute results, persisted FAQ
-detail hydration, and landing-page demos that render the full generated FAQ
+detail hydration, Content Ops `faq_deflection_report` execute results, and
+landing-page demos that render the full generated FAQ or deflection report
 artifact.
 
 Do not use the compact search result row as the full report. Search returns a
@@ -29,6 +32,44 @@ type TicketFAQMarkdownResult = {
   saved_ids: string[];
 };
 ```
+
+## Deflection Report Artifact
+
+`faq_deflection_report` execute steps return this shape in
+`ContentOpsStepExecution.result`. The nested `faq_result` is the same generated
+FAQ artifact described above; `markdown` is the customer-facing $1,500 report.
+
+```ts
+type FAQDeflectionReportArtifact = {
+  markdown: string;
+  summary: FAQDeflectionReportSummary;
+  faq_result: TicketFAQMarkdownResult;
+};
+
+type FAQDeflectionReportSummary = {
+  generated: number;
+  source_count: number;
+  ticket_source_count: number;
+  drafted_answer_count: number;
+  no_proven_answer_count: number;
+  output_checks: {
+    uses_user_vocabulary: boolean;
+    condensed: boolean;
+    has_action_items: boolean;
+  };
+  top_question: string;
+  top_opportunity_score: number;
+};
+```
+
+The report Markdown always contains these customer-facing sections:
+
+- `Executive Summary`
+- `Ranked Question Opportunities`
+- `Drafted Answers With Proven Solutions`
+- `No Proven Answer Yet`
+- `Vocabulary Gaps`
+- `Evidence Appendix`
 
 ## FAQ Item
 
@@ -131,14 +172,22 @@ type TicketFAQSearchResponse = {
 ## Rendering Guidance
 
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
+- For `faq_deflection_report`, render top-level `markdown` as the deliverable.
+  Use `summary` for proof badges and `faq_result` for drill-down cards.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
   system found repeated customer wording but no uploaded resolution evidence, so
   the generated steps are review placeholders.
+- In deflection reports, `drafted_answer_count` counts only FAQ opportunities
+  backed by uploaded resolution evidence. `no_proven_answer_count` is not a
+  failure; it is the list of repeated questions where support has not supplied a
+  verified answer yet.
 - Show `term_mappings` as vocabulary-gap suggestions. These are grounded in the
   supplied documentation terms/rules and customer wording.
 - Treat `source_ids` and `evidence_quotes` as proof links/footnotes, not primary
   marketing copy.
 
 See [`content_ops_faq_report_example.json`](./content_ops_faq_report_example.json)
-for a current compact example.
+for a current compact FAQ example and
+[`content_ops_faq_deflection_report_example.json`](./content_ops_faq_deflection_report_example.json)
+for a current compact deflection report example.
