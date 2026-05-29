@@ -363,13 +363,16 @@ def _exact_title_macro(
     if not isinstance(macros, Sequence) or isinstance(macros, (str, bytes)):
         return None
     normalized_title = _normalized_title(title)
+    matches: list[Mapping[str, Any]] = []
     for macro in macros:
         if (
             isinstance(macro, Mapping)
             and _normalized_title(macro.get("title")) == normalized_title
         ):
-            return macro
-    return None
+            matches.append(macro)
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def _normalized_title(value: Any) -> str:

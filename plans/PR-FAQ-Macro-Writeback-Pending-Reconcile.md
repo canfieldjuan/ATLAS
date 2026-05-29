@@ -18,11 +18,12 @@ Slice phase: Production hardening
 1. Add pending mapping reconciliation inside `ZendeskMacroPublishProvider`.
 2. Search Zendesk macros by the reserved title stored in pending mapping
    metadata, falling back to the current macro title.
-3. Require an exact normalized title match before accepting a search result.
+3. Require exactly one exact normalized title match before accepting a search
+   result.
 4. Backfill the mapping with the reconciled external macro id and continue the
    existing PUT update path.
-5. Add focused tests for successful reconciliation, no-match behavior, and safe
-   exact-match rejection.
+5. Add focused tests for successful reconciliation, no-match behavior, safe
+   exact-match rejection, and duplicate exact-title rejection.
 
 ### Files touched
 
@@ -40,20 +41,21 @@ The helper:
    `macro.title`.
 2. Calls Zendesk's official macro search endpoint:
    `/api/v2/macros/search?query=<title>`.
-3. Accepts only a result whose normalized `title` exactly matches the requested
-   title.
+3. Accepts only when exactly one result's normalized `title` matches the
+   requested title.
 4. Upserts the mapping with the found `external_id`, `external_url`, and the
    reserved metadata.
 5. Returns the reconciled mapping so the existing PUT path updates the macro
    body and returns `updated`.
 
-No match still returns the existing pending-reconcile failure, so retries remain
-duplicate-safe.
+No match or multiple exact-title matches still returns the existing
+pending-reconcile failure, so retries remain duplicate-safe and ambiguous
+results stay operator-visible.
 
 ## Intentional
 
-- Reconcile is title-exact, not fuzzy. A fuzzy match could attach one FAQ item
-  to the wrong Zendesk macro.
+- Reconcile is title-exact and uniqueness-gated, not fuzzy. Fuzzy or ambiguous
+  matching could attach one FAQ item to the wrong Zendesk macro.
 - Reconcile does not POST when a pending mapping exists. The pending row is the
   idempotency guard; reposting would reintroduce the duplicate-macro bug.
 - Category is retained in metadata but not required for matching, because the
@@ -73,7 +75,7 @@ Parked hardening: none
 
 ## Verification
 
-- python -m pytest tests/test_extracted_ticket_faq_macro_writeback_zendesk.py -q — 9 passed.
+- python -m pytest tests/test_extracted_ticket_faq_macro_writeback_zendesk.py -q — 10 passed.
 - python -m py_compile extracted_content_pipeline/faq_macro_writeback_zendesk.py tests/test_extracted_ticket_faq_macro_writeback_zendesk.py — passed.
 - bash scripts/validate_extracted_content_pipeline.sh — passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline — passed.
@@ -90,6 +92,6 @@ Parked hardening: none
 | Area | Estimated LOC |
 |---|---:|
 | Plan | ~95 |
-| Adapter | ~101 |
-| Tests | ~95 |
-| Total | ~291 |
+| Adapter | ~106 |
+| Tests | ~134 |
+| Total | ~335 |

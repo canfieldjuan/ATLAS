@@ -320,6 +320,45 @@ async def test_zendesk_provider_rejects_pending_mapping_title_near_miss() -> Non
 
 
 @pytest.mark.asyncio
+async def test_zendesk_provider_rejects_ambiguous_pending_mapping_title_matches() -> None:
+    repo = _MappingRepo(existing=MacroWritebackMapping(
+        platform=ZENDESK_PLATFORM,
+        faq_draft_id="11111111-1111-1111-1111-111111111111",
+        faq_item_id="faq-draft-1:item-1",
+        external_id="",
+        publish_status="pending",
+        metadata={"title": "Why was I charged twice?"},
+    ))
+    transport = _Transport({
+        "macros": [
+            {
+                "id": 123,
+                "url": "https://example.zendesk.com/api/v2/macros/123",
+                "title": "Why was I charged twice?",
+            },
+            {
+                "id": 456,
+                "url": "https://example.zendesk.com/api/v2/macros/456",
+                "title": " why  was I charged twice? ",
+            },
+        ]
+    })
+    provider = ZendeskMacroPublishProvider(
+        credentials_provider=StaticZendeskMacroCredentialsProvider(_credentials()),
+        mapping_repository=repo,
+        transport=transport,
+    )
+
+    results = await provider.publish([_macro()], scope=TenantScope(account_id="acct-1"))
+
+    assert results[0].status == "failed"
+    assert results[0].error == "zendesk_macro_mapping_pending_reconcile"
+    assert [call["method"] for call in transport.calls] == ["GET"]
+    assert repo.reserve_calls == []
+    assert repo.upsert_calls == []
+
+
+@pytest.mark.asyncio
 async def test_zendesk_provider_marks_create_then_mapping_failure_without_reposting() -> None:
     repo = _MappingRepo(upsert_error=RuntimeError("database down"))
     transport = _Transport({"macro": {"id": 123}}, {"macros": []})
