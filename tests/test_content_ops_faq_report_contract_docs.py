@@ -1,12 +1,18 @@
 import json
 from pathlib import Path
 
+from extracted_content_pipeline.faq_deflection_report import (
+    build_deflection_report_artifact,
+)
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_PATH = ROOT / "docs/frontend/content_ops_faq_report_contract.md"
 EXAMPLE_PATH = ROOT / "docs/frontend/content_ops_faq_report_example.json"
+DEFLECTION_EXAMPLE_PATH = (
+    ROOT / "docs/frontend/content_ops_faq_deflection_report_example.json"
+)
 
 
 def _producer_report_shape() -> tuple[set[str], set[str]]:
@@ -40,6 +46,55 @@ def _producer_report_shape() -> tuple[set[str], set[str]]:
 
     assert result.items
     return set(result.as_dict()), set(result.items[0])
+
+
+def _producer_deflection_report_payload() -> dict[str, object]:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "source_title": "Export attribution",
+                "text": "How do I export attribution reports?",
+                "resolution_text": (
+                    "Open Analytics, choose Attribution, then click Download report"
+                ),
+            },
+            {
+                "source_id": "ticket-export-2",
+                "source_type": "support_ticket",
+                "source_title": "Report download",
+                "text": "Where is the report download for attribution exports?",
+                "resolution_text": (
+                    "Open Analytics, choose Attribution, then click Download report"
+                ),
+            },
+            {
+                "source_id": "ticket-sso-1",
+                "source_type": "support_ticket",
+                "source_title": "SSO setup",
+                "text": "How do I enable SSO for my team?",
+            },
+            {
+                "source_id": "ticket-sso-2",
+                "source_type": "support_ticket",
+                "source_title": "Team login",
+                "text": "Can I turn on SSO for all users?",
+            },
+        ],
+        title="Support Ticket FAQ Source",
+        max_items=2,
+        max_evidence_per_item=1,
+        support_contact="https://example.com/support",
+        documentation_terms=("Download report", "Single sign-on setup"),
+        vocabulary_gap_rules=(
+            ("export", "Download report"),
+            ("SSO", "Single sign-on setup"),
+            ("report download", "Download report"),
+        ),
+    )
+
+    return build_deflection_report_artifact(result).as_dict()
 
 
 def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
@@ -82,9 +137,31 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
         assert item["source_ids"]
 
 
+def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
+    payload = json.loads(DEFLECTION_EXAMPLE_PATH.read_text(encoding="utf-8"))
+    producer_payload = _producer_deflection_report_payload()
+
+    assert set(payload) == set(producer_payload)
+    assert set(payload["summary"]) == set(producer_payload["summary"])
+    assert set(payload["faq_result"]) == set(producer_payload["faq_result"])
+    assert payload["summary"]["drafted_answer_count"] == 1
+    assert payload["summary"]["no_proven_answer_count"] == 1
+    assert payload["summary"]["generated"] == len(payload["faq_result"]["items"])
+    assert payload["summary"]["output_checks"] == {
+        "condensed": True,
+        "has_action_items": True,
+        "uses_user_vocabulary": True,
+    }
+    assert all(payload["faq_result"]["output_checks"].values())
+    assert "## Drafted Answers With Proven Solutions" in payload["markdown"]
+    assert "## No Proven Answer Yet" in payload["markdown"]
+
+
 def test_content_ops_faq_report_contract_links_example() -> None:
     doc = DOC_PATH.read_text(encoding="utf-8")
 
     assert "content_ops_faq_report_example.json" in doc
+    assert "content_ops_faq_deflection_report_example.json" in doc
     assert "account_id: string;" in doc
     assert EXAMPLE_PATH.exists()
+    assert DEFLECTION_EXAMPLE_PATH.exists()
