@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Literal, Mapping, Protocol, Sequence
 from urllib.parse import urlencode
 
 import httpx
@@ -19,6 +19,7 @@ from .faq_macro_writeback import (
 
 
 ZENDESK_PLATFORM = "zendesk"
+MacroMappingReconcileStatus = Literal["reconciled", "pending", "skipped", "failed"]
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,24 @@ class ZendeskMacroTransport(Protocol):
         json: Mapping[str, Any],
     ) -> Mapping[str, Any]:
         """Send one Zendesk macro request and return a JSON object."""
+
+
+@dataclass(frozen=True)
+class MacroMappingReconcileResult:
+    """Result for reconciling one pending external macro mapping."""
+
+    mapping: MacroWritebackMapping
+    status: MacroMappingReconcileStatus
+    external_id: str = ""
+    error: str = ""
+
+    def as_dict(self) -> JsonDict:
+        return {
+            "mapping": self.mapping.as_dict(),
+            "status": self.status,
+            "external_id": self.external_id,
+            "error": self.error,
+        }
 
 
 class ZendeskHTTPMacroTransport:
@@ -260,6 +279,91 @@ class ZendeskMacroPublishProvider:
                 error=_safe_error(exc),
             )
 
+    async def reconcile_pending_mapping(
+        self,
+        mapping: MacroWritebackMapping,
+        *,
+        scope: TenantScope,
+    ) -> MacroMappingReconcileResult:
+        """Backfill one pending mapping when Zendesk has a unique title match."""
+
+        if _clean(mapping.platform) != ZENDESK_PLATFORM:
+            return MacroMappingReconcileResult(
+                mapping=mapping,
+                status="skipped",
+                error="zendesk_macro_unsupported_platform",
+            )
+        if _clean(mapping.external_id):
+            return MacroMappingReconcileResult(
+                mapping=mapping,
+                status="skipped",
+                external_id=_clean(mapping.external_id),
+                error="zendesk_macro_mapping_already_has_external_id",
+            )
+        title = _pending_mapping_title(mapping, None)
+        if not title:
+            return MacroMappingReconcileResult(
+                mapping=mapping,
+                status="failed",
+                error="zendesk_macro_pending_title_missing",
+            )
+        credentials = await self.credentials_provider.credentials_for_scope(scope)
+        if credentials is None or not credentials.is_complete():
+            return MacroMappingReconcileResult(
+                mapping=mapping,
+                status="failed",
+                error="zendesk_credentials_missing",
+            )
+        try:
+            data = await self.transport.request(
+                "GET",
+                _zendesk_macro_search_url(credentials, title),
+                headers=_headers(credentials),
+                json={},
+            )
+            matches = _exact_title_macros(data, title=title)
+            if len(matches) != 1:
+                return MacroMappingReconcileResult(
+                    mapping=mapping,
+                    status="pending",
+                    error=(
+                        "zendesk_macro_mapping_ambiguous_reconcile"
+                        if matches
+                        else "zendesk_macro_mapping_pending_reconcile"
+                    ),
+                )
+            match = matches[0]
+            external_id = _clean(match.get("id"))
+            if not external_id:
+                return MacroMappingReconcileResult(
+                    mapping=mapping,
+                    status="failed",
+                    error="zendesk_macro_id_missing_after_reconcile",
+                )
+            reconciled = await self.mapping_repository.upsert_mapping(
+                MacroWritebackMapping(
+                    platform=ZENDESK_PLATFORM,
+                    faq_draft_id=mapping.faq_draft_id,
+                    faq_item_id=mapping.faq_item_id,
+                    external_id=external_id,
+                    external_url=_clean(match.get("url")),
+                    publish_status="published",
+                    metadata=dict(mapping.metadata or {}),
+                ),
+                scope=scope,
+            )
+            return MacroMappingReconcileResult(
+                mapping=reconciled,
+                status="reconciled",
+                external_id=reconciled.external_id,
+            )
+        except Exception as exc:
+            return MacroMappingReconcileResult(
+                mapping=mapping,
+                status="failed",
+                error=_safe_error(exc),
+            )
+
     async def _reconcile_pending_mapping(
         self,
         existing: MacroWritebackMapping,
@@ -277,7 +381,8 @@ class ZendeskMacroPublishProvider:
             headers=_headers(credentials),
             json={},
         )
-        match = _exact_title_macro(data, title=title)
+        matches = _exact_title_macros(data, title=title)
+        match = matches[0] if len(matches) == 1 else None
         external_id = _clean(match.get("id")) if match is not None else ""
         if not external_id:
             return None
@@ -341,9 +446,9 @@ def _external_url(data: Mapping[str, Any], *, fallback: str = "") -> str:
 
 def _pending_mapping_title(
     existing: MacroWritebackMapping,
-    macro: SupportMacroDraft,
+    macro: SupportMacroDraft | None,
 ) -> str:
-    return _clean(existing.metadata.get("title")) or _clean(macro.title)
+    return _clean(existing.metadata.get("title")) or _clean(macro.title if macro else "")
 
 
 def _zendesk_macro_search_url(
@@ -354,14 +459,14 @@ def _zendesk_macro_search_url(
     return f"{credentials.normalized_base_url()}/api/v2/macros/search?{query}"
 
 
-def _exact_title_macro(
+def _exact_title_macros(
     data: Mapping[str, Any],
     *,
     title: str,
-) -> Mapping[str, Any] | None:
+) -> tuple[Mapping[str, Any], ...]:
     macros = data.get("macros")
     if not isinstance(macros, Sequence) or isinstance(macros, (str, bytes)):
-        return None
+        return ()
     normalized_title = _normalized_title(title)
     matches: list[Mapping[str, Any]] = []
     for macro in macros:
@@ -370,9 +475,7 @@ def _exact_title_macro(
             and _normalized_title(macro.get("title")) == normalized_title
         ):
             matches.append(macro)
-    if len(matches) != 1:
-        return None
-    return matches[0]
+    return tuple(matches)
 
 
 def _normalized_title(value: Any) -> str:
@@ -390,6 +493,8 @@ def _clean(value: Any) -> str:
 
 
 __all__ = [
+    "MacroMappingReconcileResult",
+    "MacroMappingReconcileStatus",
     "StaticZendeskMacroCredentialsProvider",
     "ZENDESK_PLATFORM",
     "ZendeskHTTPMacroTransport",
