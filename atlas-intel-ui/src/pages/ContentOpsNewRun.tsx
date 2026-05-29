@@ -27,6 +27,8 @@ import {
   formatContentOpsBytes,
   faqDeflectionReportAnswerSteps,
   faqConfigurationInputsSelected,
+  faqIntentRulesDraftValue,
+  faqIntentRulesFromDraft,
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
@@ -122,8 +124,14 @@ const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
+const FAQ_INTENT_RULES_INPUT = 'faq_intent_rules'
 const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
 const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
+const FAQ_INTENT_RULES_DISPLAY_FALLBACK = {
+  label: 'Intent rules',
+  placeholder:
+    'data freshness=warehouse sync,connector lag\naccess setup=invite link,new user',
+}
 const FAQ_DOCUMENTATION_TERMS_DISPLAY_FALLBACK = {
   label: 'Documentation terms',
   placeholder: 'Single sign-on setup\nData export guide',
@@ -264,6 +272,9 @@ export default function ContentOpsNewRun() {
   const faqConfigurationOutputSelected = faqConfigurationInputsSelected(
     request.outputs,
   )
+  const faqIntentRulesContract = faqConfigurationOutputSelected
+    ? catalog.inputContracts[FAQ_INTENT_RULES_INPUT]
+    : undefined
   const faqDocumentationTermsContract = faqConfigurationOutputSelected
     ? catalog.inputContracts[FAQ_DOCUMENTATION_TERMS_INPUT]
     : undefined
@@ -277,6 +288,10 @@ export default function ContentOpsNewRun() {
   const faqVocabularyGapRulesDisplay = inputContractDisplay(
     faqVocabularyGapRulesContract,
     FAQ_VOCABULARY_GAP_RULES_DISPLAY_FALLBACK,
+  )
+  const faqIntentRulesDisplay = inputContractDisplay(
+    faqIntentRulesContract,
+    FAQ_INTENT_RULES_DISPLAY_FALLBACK,
   )
   const landingPageRepairAttemptContract = landingPageOutputSelected
     ? integerInputContract(catalog, LANDING_PAGE_QUALITY_REPAIR_INPUT)
@@ -353,6 +368,13 @@ export default function ContentOpsNewRun() {
 
   const handleFaqDocumentationTermsChange = (value: string) => {
     const updated = updateFaqDocumentationTermsInputJson(inputsJson, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleFaqIntentRulesChange = (value: string) => {
+    const updated = updateFaqIntentRulesInputJson(inputsJson, value)
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -1100,6 +1122,25 @@ export default function ContentOpsNewRun() {
                 </h3>
               </div>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <label className="block text-sm lg:col-span-2">
+                  <span className="text-slate-300">
+                    {faqIntentRulesDisplay.label}
+                  </span>
+                  <textarea
+                    value={faqIntentRulesDraftValue(
+                      parsedInputsForControls.ok
+                        ? parsedInputsForControls.value[FAQ_INTENT_RULES_INPUT]
+                        : undefined,
+                    )}
+                    onChange={(e) =>
+                      handleFaqIntentRulesChange(e.target.value)
+                    }
+                    rows={3}
+                    disabled={faqInputsDisabled}
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder={faqIntentRulesDisplay.placeholder}
+                  />
+                </label>
                 <label className="block text-sm">
                   <span className="text-slate-300">
                     {faqDocumentationTermsDisplay.label}
@@ -2367,6 +2408,24 @@ function updateFaqDocumentationTermsInputJson(
     delete next[FAQ_DOCUMENTATION_TERMS_INPUT]
   } else {
     next[FAQ_DOCUMENTATION_TERMS_INPUT] = values
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function updateFaqIntentRulesInputJson(
+  current: string,
+  draftValue: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const rules = faqIntentRulesFromDraft(draftValue)
+  if (rules.length === 0) {
+    delete next[FAQ_INTENT_RULES_INPUT]
+  } else {
+    next[FAQ_INTENT_RULES_INPUT] = rules
   }
 
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }

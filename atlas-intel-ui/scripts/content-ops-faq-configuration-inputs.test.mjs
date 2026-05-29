@@ -21,6 +21,8 @@ const {
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_MARKDOWN_OUTPUT,
   faqConfigurationInputsSelected,
+  faqIntentRulesDraftValue,
+  faqIntentRulesFromDraft,
 } = await loadTsModule('../src/domain/contentOps/faqConfigurationInputs.ts')
 const { FAQ_DEFLECTION_REPORT_OUTPUT } = await loadTsModule(
   '../src/domain/contentOps/faqDeflectionReport.ts',
@@ -55,4 +57,28 @@ test('new run page uses the shared FAQ configuration output predicate', () => {
   assert.ok(newRunSource.includes('{faqConfigurationOutputSelected && ('))
   assert.ok(!newRunSource.includes('faqMarkdownOutputSelected'))
   assert.ok(newRunSource.includes('FAQ vocabulary-gap inputs'))
+  assert.ok(newRunSource.includes('FAQ_INTENT_RULES_INPUT'))
+  assert.ok(newRunSource.includes('handleFaqIntentRulesChange'))
+})
+
+test('FAQ intent-rule draft helpers preserve line-based rules', () => {
+  assert.deepEqual(
+    faqIntentRulesFromDraft(
+      'data freshness=warehouse sync,connector lag\n\nDATA FRESHNESS=warehouse sync,connector lag\naccess setup=invite link',
+    ),
+    [
+      'data freshness=warehouse sync,connector lag',
+      'access setup=invite link',
+    ],
+  )
+  assert.equal(
+    faqIntentRulesDraftValue([
+      {
+        topic: 'data freshness',
+        keywords: ['warehouse sync', 'connector lag'],
+      },
+      'access setup=invite link',
+    ]),
+    'data freshness=warehouse sync,connector lag\naccess setup=invite link',
+  )
 })

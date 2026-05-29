@@ -632,6 +632,45 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_applies_hosted_faq_intent_rules() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "limit": 2,
+            "inputs": {
+                "faq_intent_rules": [
+                    {"topic": "data freshness", "keywords": ["warehouse sync"]}
+                ],
+                "source_material": [
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "subject": "Warehouse sync lag",
+                        "message": "The warehouse sync is delayed again.",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "subject": "Warehouse sync stale",
+                        "message": "Warehouse sync data is stale this morning.",
+                    },
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(faq_markdown=TicketFAQMarkdownService()),
+    )
+
+    assert result["status"] == "completed"
+    assert result["plan"]["steps"][0]["config"]["intent_rules"][0] == {
+        "topic": "data freshness",
+        "keywords": ["warehouse sync"],
+    }
+    item = result["steps"][0]["result"]["items"][0]
+    assert item["topic"] == "data freshness"
+    assert item["ticket_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_execute_runs_faq_deflection_report_from_source_material() -> None:
     result = await execute_content_ops_from_mapping(
         {

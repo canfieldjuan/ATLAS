@@ -6,10 +6,24 @@ from typing import Any
 
 
 TICKET_FAQ_INPUT_ASSET = "faq_markdown"
+TICKET_FAQ_INTENT_MAPPING_INPUT_GROUP = "intent_mapping"
 TICKET_FAQ_VOCABULARY_GAP_INPUT_GROUP = "vocabulary_gap"
 
+FAQ_INTENT_RULES_INPUT = "faq_intent_rules"
 FAQ_DOCUMENTATION_TERMS_INPUT = "faq_documentation_terms"
 FAQ_VOCABULARY_GAP_RULES_INPUT = "faq_vocabulary_gap_rules"
+
+_TICKET_FAQ_INTENT_MAPPING_INPUT_CONTRACTS: tuple[dict[str, Any], ...] = (
+    {
+        "key": FAQ_INTENT_RULES_INPUT,
+        "label": "Intent rules",
+        "type": "string_list",
+        "placeholder": (
+            "data freshness=warehouse sync,connector lag\n"
+            "access setup=invite link,new user"
+        ),
+    },
+)
 
 _TICKET_FAQ_VOCABULARY_GAP_INPUT_CONTRACTS: tuple[dict[str, Any], ...] = (
     {
@@ -27,6 +41,22 @@ _TICKET_FAQ_VOCABULARY_GAP_INPUT_CONTRACTS: tuple[dict[str, Any], ...] = (
 )
 
 
+def ticket_faq_input_contracts() -> dict[str, dict[str, Any]]:
+    """Return wire contracts for hosted FAQ configuration inputs."""
+
+    return {
+        **{
+            item["key"]: {
+                **item,
+                "asset": TICKET_FAQ_INPUT_ASSET,
+                "group": TICKET_FAQ_INTENT_MAPPING_INPUT_GROUP,
+            }
+            for item in _TICKET_FAQ_INTENT_MAPPING_INPUT_CONTRACTS
+        },
+        **ticket_faq_vocabulary_gap_input_contracts(),
+    }
+
+
 def ticket_faq_vocabulary_gap_input_contracts() -> dict[str, dict[str, Any]]:
     """Return wire contracts for FAQ vocabulary-gap inputs."""
 
@@ -42,8 +72,11 @@ def ticket_faq_vocabulary_gap_input_contracts() -> dict[str, dict[str, Any]]:
 
 __all__ = [
     "FAQ_DOCUMENTATION_TERMS_INPUT",
+    "FAQ_INTENT_RULES_INPUT",
     "FAQ_VOCABULARY_GAP_RULES_INPUT",
     "TICKET_FAQ_INPUT_ASSET",
+    "TICKET_FAQ_INTENT_MAPPING_INPUT_GROUP",
     "TICKET_FAQ_VOCABULARY_GAP_INPUT_GROUP",
+    "ticket_faq_input_contracts",
     "ticket_faq_vocabulary_gap_input_contracts",
 ]
