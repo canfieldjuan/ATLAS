@@ -18,9 +18,11 @@ from extracted_content_pipeline.content_ops_execution import ContentOpsExecution
 from extracted_content_pipeline.support_ticket_input_provider import (
     SupportTicketInputProvider,
 )
+from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FAQ_DRAFT_ID = "11111111-1111-4111-8111-111111111111"
 
 
 class _LandingPageCaptureService:
@@ -100,6 +102,15 @@ class _BlogPostCaptureService:
         }
 
 
+class _FAQRepo:
+    def __init__(self, pool: dict[str, Any]) -> None:
+        self.pool = pool
+
+    async def get_draft(self, faq_id: str, *, scope: TenantScope) -> TicketFAQDraft | None:
+        self.pool["calls"].append((faq_id, scope.account_id))
+        return self.pool["drafts"].get(faq_id)
+
+
 def _route(router: Any, path: str, method: str) -> Any:
     for route in router.routes:
         if getattr(route, "path", None) == path and method.upper() in getattr(
@@ -115,6 +126,33 @@ def _support_ticket_csv_rows() -> list[dict[str, str]]:
     path = ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
     with path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
+
+
+def _saved_faq_draft() -> TicketFAQDraft:
+    return TicketFAQDraft(
+        id=FAQ_DRAFT_ID,
+        target_id="ticket-faq-report",
+        target_mode="support_ticket_faq",
+        title="Saved FAQ report",
+        markdown="# Saved FAQ report",
+        items=(
+            {
+                "topic": "billing confusion",
+                "question": "Why was I charged twice?",
+                "summary": "Customers ask why duplicate-looking invoices appear.",
+                "steps": (
+                    "Open Billing, choose invoice history, and compare pending charges.",
+                    "Contact support with the invoice ID if both charges settled.",
+                ),
+                "answer_evidence_status": "resolution_evidence",
+                "source_ids": ("ticket-billing-1", "ticket-billing-2"),
+            },
+        ),
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"has_action_items": True},
+        status="draft",
+    )
 
 
 def _generated_support_ticket_rows(row_count: int) -> list[dict[str, str]]:
@@ -147,6 +185,31 @@ def _execute_router(*, service: Any, output: str) -> Any:
     return create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(),
         input_provider=build_content_ops_input_provider(),
+        execution_services_provider=lambda: services,
+        scope_provider=lambda: TenantScope(
+            account_id="acct-support-ticket-content",
+            user_id="user-support-ticket-content",
+        ),
+    )
+
+
+def _selected_faq_execute_router(
+    *,
+    service: Any,
+    output: str,
+    pool: dict[str, Any],
+) -> Any:
+    services = (
+        ContentOpsExecutionServices(landing_page=service)
+        if output == "landing_page"
+        else ContentOpsExecutionServices(blog_post=service)
+    )
+    return create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(),
+        input_provider=build_content_ops_input_provider(
+            pool_provider=lambda: pool,
+            faq_repository_factory=_FAQRepo,
+        ),
         execution_services_provider=lambda: services,
         scope_provider=lambda: TenantScope(
             account_id="acct-support-ticket-content",
@@ -457,6 +520,79 @@ async def test_loader_backed_support_ticket_provider_bounds_large_execute_inputs
         assert data_context["measured_outcome_count"] == 0
         assert len(data_context["customer_wording_examples"]) <= 6
         assert len(data_context["top_ticket_clusters"]) <= 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["landing_page", "blog_post"])
+async def test_selected_faq_id_feeds_execute_context(output: str) -> None:
+    service = (
+        _LandingPageCaptureService()
+        if output == "landing_page"
+        else _BlogPostCaptureService()
+    )
+    pool = {
+        "drafts": {FAQ_DRAFT_ID: _saved_faq_draft()},
+        "calls": [],
+    }
+    router = _selected_faq_execute_router(
+        service=service,
+        output=output,
+        pool=pool,
+    )
+
+    payload = await _route(router, "/content-ops/execute", "POST").endpoint({
+        "outputs": [output],
+        "require_quality_gates": False,
+        "inputs": {"source_faq_ids": [FAQ_DRAFT_ID]},
+    })
+
+    assert pool["calls"] == [(FAQ_DRAFT_ID, "acct-support-ticket-content")]
+    assert payload["status"] == "completed"
+    assert payload["errors"] == []
+    assert payload["input_provider"]["provider"] == "atlas_support_ticket_request"
+    assert payload["input_provider"]["metadata"]["source_row_count"] == 1
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 1
+    assert payload["input_provider"]["warnings"] == []
+    assert len(service.calls) == 1
+
+    expected_resolution = (
+        "Open Billing, choose invoice history, and compare pending charges. "
+        "Contact support with the invoice ID if both charges settled."
+    )
+    if output == "landing_page":
+        context = service.calls[0]["campaign"].context
+        assert "source_material" not in context
+        assert context["faq_questions"] == ["Why was I charged twice?"]
+        assert context["customer_wording_examples"][0]["source_id"] == FAQ_DRAFT_ID
+        assert "Customers ask why duplicate-looking invoices appear." in (
+            context["customer_wording_examples"][0]["text"]
+        )
+        assert context["support_ticket_resolution_evidence_present"] is True
+        assert context["support_ticket_resolution_evidence_count"] == 1
+        assert context["support_ticket_resolution_examples"] == [
+            {
+                "source_id": FAQ_DRAFT_ID,
+                "source_title": "Why was I charged twice?",
+                "text": expected_resolution,
+            }
+        ]
+    else:
+        data_context = service.calls[0]["kwargs"]["data_context"]
+        assert "source_material" not in data_context
+        assert data_context["faq_questions"] == ["Why was I charged twice?"]
+        assert data_context["customer_wording_examples"][0]["source_id"] == FAQ_DRAFT_ID
+        assert "Customers ask why duplicate-looking invoices appear." in (
+            data_context["customer_wording_examples"][0]["text"]
+        )
+        assert data_context["support_ticket_resolution_evidence_present"] is True
+        assert data_context["support_ticket_resolution_evidence_count"] == 1
+        assert data_context["support_ticket_resolution_examples"] == [
+            {
+                "source_id": FAQ_DRAFT_ID,
+                "source_title": "Why was I charged twice?",
+                "text": expected_resolution,
+            }
+        ]
 
 
 @pytest.mark.asyncio
