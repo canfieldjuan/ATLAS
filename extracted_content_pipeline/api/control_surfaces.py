@@ -36,6 +36,7 @@ else:
 
 from ..campaign_ports import TenantScope
 from ..campaign_postgres_import import import_campaign_opportunities
+from ..campaign_source_adapters import source_material_to_source_rows
 from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -121,6 +122,10 @@ _INPUT_PROVIDER_RESPONSE_METADATA_KEYS = frozenset({
     "skipped_row_count",
     "truncated_row_count",
 })
+_FAQ_SOURCE_MATERIAL_LIMITED_OUTPUTS = frozenset({
+    "faq_markdown",
+    "faq_deflection_report",
+})
 _SOURCE_MATERIAL_ROW_LIST_KEYS = {
     "sources",
     "opportunities",
@@ -133,8 +138,8 @@ _SOURCE_MATERIAL_ROW_LIST_KEYS = {
     "conversations",
     "feedback",
     "rows",
+    "items",
 }
-
 
 def _build_static_catalog_payload() -> Mapping[str, Any]:
     # PR-Describe-Control-Surfaces-Cache: the outputs/presets metadata
@@ -1267,7 +1272,7 @@ def _enforce_faq_execute_source_material_limit(
         outputs = resolve_outputs(request)
     except ValueError:
         return
-    if "faq_markdown" not in outputs:
+    if not _FAQ_SOURCE_MATERIAL_LIMITED_OUTPUTS.intersection(outputs):
         return
     inputs = payload.get("inputs")
     if not isinstance(inputs, Mapping):
@@ -1287,16 +1292,7 @@ def _enforce_faq_execute_source_material_limit(
 
 
 def _source_material_row_count(source_material: Any) -> int:
-    if isinstance(source_material, (list, tuple)):
-        return len(source_material)
-    if not isinstance(source_material, Mapping):
-        return 0
-    total = 0
-    for key in _SOURCE_MATERIAL_ROW_LIST_KEYS:
-        rows = source_material.get(key)
-        if isinstance(rows, (list, tuple)):
-            total += len(rows)
-    return total
+    return len(source_material_to_source_rows(source_material))
 
 
 async def _structured_reasoning_contexts(

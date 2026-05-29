@@ -2478,6 +2478,86 @@ async def test_execute_generation_route_rejects_faq_source_material_over_configu
 
 
 @pytest.mark.asyncio
+async def test_execute_generation_route_rejects_faq_source_material_deflection_report_over_configured_limit():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=service
+        ),
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_deflection_report"],
+                "inputs": {
+                    "source_material": [
+                        {
+                            "source_type": "ticket",
+                            "text": f"Ticket row {index}",
+                        }
+                        for index in range(3)
+                    ],
+                },
+            }
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail["reason"] == "faq_source_material_too_large_for_sync_execute"
+    assert exc.value.detail["max_source_material_rows"] == 2
+    assert exc.value.detail["source_material_rows"] == 3
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_counts_faq_source_material_bundle_items():
+    service = _CampaignService()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            faq_execute_max_source_material_rows=2,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=service
+        ),
+    )
+    faq_output = {
+        "generated": 3,
+        "markdown": "# FAQ",
+        "output_checks": {"condensed": True},
+        "ticket_source_count": 3,
+        "items": [
+            {
+                "question": f"How do I handle FAQ item {index}?",
+                "summary": "Customer wording from the generated FAQ output.",
+                "answer_evidence_status": "draft_needs_review",
+            }
+            for index in range(3)
+        ],
+    }
+
+    route = _route(router, "/ops/execute", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(
+            {
+                "outputs": ["faq_deflection_report"],
+                "inputs": {"source_material": faq_output},
+            }
+        )
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail["source_material_rows"] == 3
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
 async def test_execute_generation_route_checks_input_provider_faq_rows_after_merge():
     service = _CampaignService()
     provider = _SyncInputProvider(
