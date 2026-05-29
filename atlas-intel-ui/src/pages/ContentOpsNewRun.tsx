@@ -26,6 +26,7 @@ import {
   contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
   faqDeflectionReportAnswerSteps,
+  faqConfigurationControlsVisible,
   faqConfigurationInputsSelected,
   faqIntentRulesDraftValue,
   faqIntentRulesFromDraft,
@@ -42,8 +43,11 @@ import {
   toWireIngestionInspectRequest,
   toWireIngestionImportRequest,
   toWireRequest,
+  FAQ_DOCUMENTATION_TERMS_INPUT,
   FAQ_DEFLECTION_REPORT_OUTPUT,
+  FAQ_INTENT_RULES_INPUT,
   FAQ_RESOLUTION_EVIDENCE_STATUS,
+  FAQ_VOCABULARY_GAP_RULES_INPUT,
   type ContentOpsCatalog,
   type ContentOpsCachePolicy,
   type ContentOpsIngestionDiagnostics,
@@ -124,9 +128,6 @@ const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
-const FAQ_INTENT_RULES_INPUT = 'faq_intent_rules'
-const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
-const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
 const FAQ_INTENT_RULES_DISPLAY_FALLBACK = {
   label: 'Intent rules',
   placeholder:
@@ -293,6 +294,12 @@ export default function ContentOpsNewRun() {
     faqIntentRulesContract,
     FAQ_INTENT_RULES_DISPLAY_FALLBACK,
   )
+  const faqConfigurationControlsVisibleForCatalog =
+    faqConfigurationControlsVisible(request.outputs, {
+      intentRules: faqIntentRulesContract,
+      documentationTerms: faqDocumentationTermsContract,
+      vocabularyGapRules: faqVocabularyGapRulesContract,
+    })
   const landingPageRepairAttemptContract = landingPageOutputSelected
     ? integerInputContract(catalog, LANDING_PAGE_QUALITY_REPAIR_INPUT)
     : null
@@ -1114,7 +1121,7 @@ export default function ContentOpsNewRun() {
               </p>
             </div>
           )}
-          {faqConfigurationOutputSelected && (
+          {faqConfigurationControlsVisibleForCatalog && (
             <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
               <div className="mb-3">
                 <h3 className="text-sm font-medium text-slate-200">
@@ -1122,55 +1129,61 @@ export default function ContentOpsNewRun() {
                 </h3>
               </div>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-                <label className="block text-sm lg:col-span-2">
-                  <span className="text-slate-300">
-                    {faqIntentRulesDisplay.label}
-                  </span>
-                  <textarea
-                    value={faqIntentRulesDraftValue(
-                      parsedInputsForControls.ok
-                        ? parsedInputsForControls.value[FAQ_INTENT_RULES_INPUT]
-                        : undefined,
-                    )}
-                    onChange={(e) =>
-                      handleFaqIntentRulesChange(e.target.value)
-                    }
-                    rows={3}
-                    disabled={faqInputsDisabled}
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={faqIntentRulesDisplay.placeholder}
-                  />
-                </label>
-                <label className="block text-sm">
-                  <span className="text-slate-300">
-                    {faqDocumentationTermsDisplay.label}
-                  </span>
-                  <textarea
-                    value={faqDocumentationTermsDraftValue(parsedInputsForControls)}
-                    onChange={(e) =>
-                      handleFaqDocumentationTermsChange(e.target.value)
-                    }
-                    rows={4}
-                    disabled={faqInputsDisabled}
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={faqDocumentationTermsDisplay.placeholder}
-                  />
-                </label>
-                <label className="block text-sm">
-                  <span className="text-slate-300">
-                    {faqVocabularyGapRulesDisplay.label}
-                  </span>
-                  <textarea
-                    value={faqVocabularyRulesDraftValue(parsedInputsForControls)}
-                    onChange={(e) =>
-                      handleFaqVocabularyRulesChange(e.target.value)
-                    }
-                    rows={4}
-                    disabled={faqInputsDisabled}
-                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    placeholder={faqVocabularyGapRulesDisplay.placeholder}
-                  />
-                </label>
+                {faqIntentRulesContract && (
+                  <label className="block text-sm lg:col-span-2">
+                    <span className="text-slate-300">
+                      {faqIntentRulesDisplay.label}
+                    </span>
+                    <textarea
+                      value={faqIntentRulesDraftValue(
+                        parsedInputsForControls.ok
+                          ? parsedInputsForControls.value[FAQ_INTENT_RULES_INPUT]
+                          : undefined,
+                      )}
+                      onChange={(e) =>
+                        handleFaqIntentRulesChange(e.target.value)
+                      }
+                      rows={3}
+                      disabled={faqInputsDisabled}
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder={faqIntentRulesDisplay.placeholder}
+                    />
+                  </label>
+                )}
+                {faqDocumentationTermsContract && (
+                  <label className="block text-sm">
+                    <span className="text-slate-300">
+                      {faqDocumentationTermsDisplay.label}
+                    </span>
+                    <textarea
+                      value={faqDocumentationTermsDraftValue(parsedInputsForControls)}
+                      onChange={(e) =>
+                        handleFaqDocumentationTermsChange(e.target.value)
+                      }
+                      rows={4}
+                      disabled={faqInputsDisabled}
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder={faqDocumentationTermsDisplay.placeholder}
+                    />
+                  </label>
+                )}
+                {faqVocabularyGapRulesContract && (
+                  <label className="block text-sm">
+                    <span className="text-slate-300">
+                      {faqVocabularyGapRulesDisplay.label}
+                    </span>
+                    <textarea
+                      value={faqVocabularyRulesDraftValue(parsedInputsForControls)}
+                      onChange={(e) =>
+                        handleFaqVocabularyRulesChange(e.target.value)
+                      }
+                      rows={4}
+                      disabled={faqInputsDisabled}
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder={faqVocabularyGapRulesDisplay.placeholder}
+                    />
+                  </label>
+                )}
               </div>
               {!parsedInputsForControls.ok && (
                 <p className="mt-2 text-xs text-amber-200">
