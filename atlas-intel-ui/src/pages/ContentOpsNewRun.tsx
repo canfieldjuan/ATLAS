@@ -26,6 +26,7 @@ import {
   contentOpsInlineRowsPreflightError,
   formatContentOpsBytes,
   faqDeflectionReportAnswerSteps,
+  faqConfigurationInputsSelected,
   fromWireCatalog,
   fromWireExecution,
   fromWireIngestionDiagnostics,
@@ -120,7 +121,6 @@ const LANDING_PAGE_QUALITY_REPAIR_INPUT =
 const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
-const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
 const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
 const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
@@ -261,11 +261,13 @@ export default function ContentOpsNewRun() {
   const blogPostOutputSelected = request.outputs.includes(BLOG_POST_OUTPUT)
   const faqSourceSelectionVisible =
     landingPageOutputSelected || blogPostOutputSelected
-  const faqMarkdownOutputSelected = request.outputs.includes(FAQ_MARKDOWN_OUTPUT)
-  const faqDocumentationTermsContract = faqMarkdownOutputSelected
+  const faqConfigurationOutputSelected = faqConfigurationInputsSelected(
+    request.outputs,
+  )
+  const faqDocumentationTermsContract = faqConfigurationOutputSelected
     ? catalog.inputContracts[FAQ_DOCUMENTATION_TERMS_INPUT]
     : undefined
-  const faqVocabularyGapRulesContract = faqMarkdownOutputSelected
+  const faqVocabularyGapRulesContract = faqConfigurationOutputSelected
     ? catalog.inputContracts[FAQ_VOCABULARY_GAP_RULES_INPUT]
     : undefined
   const faqDocumentationTermsDisplay = inputContractDisplay(
@@ -1090,7 +1092,7 @@ export default function ContentOpsNewRun() {
               </p>
             </div>
           )}
-          {faqMarkdownOutputSelected && (
+          {faqConfigurationOutputSelected && (
             <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
               <div className="mb-3">
                 <h3 className="text-sm font-medium text-slate-200">
