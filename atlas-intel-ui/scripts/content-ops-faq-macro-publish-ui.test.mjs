@@ -23,6 +23,7 @@ async function loadTsModule(path, replacements = []) {
 }
 
 const {
+  fetchGeneratedFaqMacroPublishAttempts,
   publishGeneratedFaqMacros,
 } = await loadTsModule('../src/api/contentOps.ts', [
   [
@@ -109,6 +110,49 @@ test('FAQ macro publish posts to encoded generated asset route', async () => {
   assert.deepEqual(JSON.parse(init.body), {})
 })
 
+
+test('FAQ macro publish history fetches encoded generated asset route', async () => {
+  const payload = {
+    account_id: 'account-1',
+    asset: 'faq_markdown',
+    faq_id: 'draft/id',
+    count: 1,
+    limit: 5,
+    attempts: [
+      {
+        id: 'attempt-1',
+        faq_id: 'draft/id',
+        draft_status: 'published',
+        ok: true,
+        publishable_count: 2,
+        skipped_count: 0,
+        published_count: 1,
+        updated_count: 1,
+        failed_count: 0,
+        pending_reconcile_count: 0,
+        draft_status_updated: true,
+        skipped: [],
+        results: [{ status: 'published', external_id: 'macro-1' }],
+        created_at: '2026-05-30T17:40:00Z',
+      },
+    ],
+  }
+  const calls = installFetchResponder(payload)
+
+  const result = await fetchGeneratedFaqMacroPublishAttempts('draft/id', { limit: 5 })
+
+  assert.deepEqual(result, payload)
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-assets/faq_markdown/drafts/draft%2Fid/publish-macro-attempts?limit=5`,
+  )
+  assert.equal(init.method, undefined)
+  assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
+})
+
+
 test('Generated Asset Review wires FAQ macro publish action and summary state', () => {
   assert.ok(reviewSource.includes('publishGeneratedFaqMacros'))
   assert.ok(reviewSource.includes('handlePublishFaqMacros'))
@@ -116,6 +160,9 @@ test('Generated Asset Review wires FAQ macro publish action and summary state', 
   assert.ok(reviewSource.includes("status === 'approved'"))
   assert.ok(reviewSource.includes('Publish macros'))
   assert.ok(reviewSource.includes('MacroPublishResultBanner'))
+  assert.ok(reviewSource.includes('fetchGeneratedFaqMacroPublishAttempts'))
+  assert.ok(reviewSource.includes('MacroPublishHistoryPanel'))
+  assert.ok(reviewSource.includes('Macro publish history'))
   assert.ok(reviewSource.includes('pending_reconcile_count'))
   assert.ok(reviewSource.includes('draft_status_updated'))
 })

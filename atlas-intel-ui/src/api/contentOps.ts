@@ -592,6 +592,32 @@ export interface GeneratedAssetMacroPublishSummary {
   results: GeneratedAssetMacroPublishResult[]
 }
 
+export interface GeneratedAssetMacroPublishAttempt {
+  id: string
+  faq_id: string
+  draft_status: string
+  ok: boolean
+  publishable_count: number
+  skipped_count: number
+  published_count: number
+  updated_count: number
+  failed_count: number
+  pending_reconcile_count: number
+  draft_status_updated: boolean
+  skipped: GeneratedAssetMacroPublishSkippedItem[]
+  results: GeneratedAssetMacroPublishResult[]
+  created_at: string
+}
+
+export interface GeneratedAssetMacroPublishAttemptsResponse {
+  account_id?: string | null
+  asset: GeneratedAssetType
+  faq_id: string
+  count: number
+  limit: number
+  attempts: GeneratedAssetMacroPublishAttempt[]
+}
+
 // ---------------------------------------------------------------------------
 // Internal fetch plumbing
 // ---------------------------------------------------------------------------
@@ -957,6 +983,18 @@ export function publishGeneratedFaqMacros(
     'faq_markdown',
     `/drafts/${encodeURIComponent(id)}/publish-macros`,
     {},
+  )
+}
+
+/** GET /content-assets/faq_markdown/drafts/{id}/publish-macro-attempts -- recent publish history. */
+export function fetchGeneratedFaqMacroPublishAttempts(
+  id: string,
+  params: { limit?: number } = {},
+): Promise<GeneratedAssetMacroPublishAttemptsResponse> {
+  return getAssetJson<GeneratedAssetMacroPublishAttemptsResponse>(
+    'faq_markdown',
+    `/drafts/${encodeURIComponent(id)}/publish-macro-attempts`,
+    params,
   )
 }
 
