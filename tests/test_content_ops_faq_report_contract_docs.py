@@ -217,6 +217,8 @@ def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> Non
         "request_id: string;",
         "GET /content-ops/deflection-reports/{request_id}/snapshot",
         "GET /content-ops/deflection-reports/{request_id}/artifact",
+        "csv_file: File;",
+        "do not expose raw support-ticket CSVs through a",
         "POST /content-ops/deflection-reports/{request_id}/paid",
         "amount_total >= 150000",
         'currency: "usd"',

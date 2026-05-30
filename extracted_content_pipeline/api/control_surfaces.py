@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 try:
-    from fastapi import APIRouter, Body, File, Form, HTTPException, Path as PathParam, Query, UploadFile
+    from fastapi import APIRouter, Body, File, Form, HTTPException, Path as PathParam, Query, Request, UploadFile
     from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as exc:  # pragma: no cover - exercised in dependency-light CI.
     APIRouter = None
@@ -30,6 +30,7 @@ except ImportError as exc:  # pragma: no cover - exercised in dependency-light C
     File = None
     Form = None
     Query = None
+    Request = None
     UploadFile = None
     BaseModel = None
     ConfigDict = None
@@ -127,6 +128,7 @@ _MAX_INGESTION_ROWS = 1000
 _MAX_FILE_INGESTION_ROWS = 10000
 _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 * 1024 * 1024
+_MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
 _DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS = 15
 _DEFLECTION_SUBMIT_OUTPUTS = ("faq_deflection_report",)
@@ -587,21 +589,15 @@ if BaseModel is not None:
 
         payment_reference: str | None = Field(default=None, max_length=200)
 
-    class DeflectionReportSubmitModel(BaseModel):
-        """Portfolio-owned upload handoff for a paid FAQ deflection report."""
+    class _DeflectionReportSubmitFieldsModel(BaseModel):
+        """Shared portfolio submit metadata fields."""
 
         model_config = ConfigDict(extra="forbid")
 
-        blob_url: str = Field(..., min_length=1, max_length=2048)
         support_platform: str = Field(..., min_length=1, max_length=80)
         company_name: str = Field(..., min_length=1, max_length=200)
         contact_email: str = Field(..., min_length=3, max_length=320)
         limit: int = Field(_MAX_INGESTION_ROWS, ge=1, le=_MAX_INGESTION_ROWS)
-
-        @field_validator("blob_url")
-        @classmethod
-        def _validate_blob_url(cls, value: Any) -> str:
-            return _validate_https_blob_url(value)
 
         @field_validator("support_platform")
         @classmethod
@@ -629,12 +625,28 @@ if BaseModel is not None:
                 raise ValueError("contact_email must be an email address")
             return value
 
+    class DeflectionReportSubmitModel(_DeflectionReportSubmitFieldsModel):
+        """Portfolio-owned URL handoff for a paid FAQ deflection report."""
+
+        blob_url: str = Field(..., min_length=1, max_length=2048)
+
+        @field_validator("blob_url")
+        @classmethod
+        def _validate_blob_url(cls, value: Any) -> str:
+            return _validate_https_blob_url(value)
+
+    class DeflectionReportSubmitFieldsModel(_DeflectionReportSubmitFieldsModel):
+        """Portfolio-owned multipart handoff fields for a paid FAQ deflection report."""
+
+        pass
+
 else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsRequestModel = Any
     ContentOpsIngestionInspectModel = Any
     ContentOpsIngestionImportModel = Any
     DeflectionReportPaidModel = Any
     DeflectionReportSubmitModel = Any
+    DeflectionReportSubmitFieldsModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -1104,23 +1116,22 @@ def create_content_ops_control_surface_router(
 
     @router.post("/deflection-reports/submit")
     async def submit_deflection_report(
-        payload: DeflectionReportSubmitModel = Body(...),
+        request: Request,
     ) -> dict[str, Any]:
-        data = _deflection_submit_payload_to_mapping(payload)
+        data, rows, byte_count, byte_count_key = await _load_deflection_submit_rows_from_request(
+            request,
+            max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
+        )
         max_rows = min(
             int(data.get("limit") or _MAX_INGESTION_ROWS),
             resolved_config.faq_execute_max_source_material_rows,
-        )
-        rows, byte_count = await _load_deflection_submit_blob_rows(
-            data["blob_url"],
-            max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
         )
         if not rows:
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "reason": "deflection_submit_empty_blob",
-                    "message": "Blob CSV did not contain support-ticket rows.",
+                    "reason": "deflection_submit_empty_csv",
+                    "message": "Submitted CSV did not contain support-ticket rows.",
                 },
             )
         raw_row_count = len(rows)
@@ -1166,9 +1177,103 @@ def create_content_ops_control_surface_router(
             submitted_row_count=len(submitted_rows),
             package=package.as_dict(),
             support_platform=data["support_platform"],
+            byte_count_key=byte_count_key,
         )
 
     return router
+
+
+async def _load_deflection_submit_rows_from_request(
+    request: Any,
+    *,
+    max_bytes: int,
+) -> tuple[dict[str, Any], list[Any], int, str]:
+    if isinstance(request, Mapping):
+        data = _deflection_submit_payload_to_mapping(request)
+        rows, byte_count = await _load_deflection_submit_blob_rows(
+            data["blob_url"],
+            max_bytes=max_bytes,
+        )
+        return data, rows, byte_count, "blob_bytes"
+
+    content_type = _request_content_type(request)
+    if "multipart/form-data" in content_type:
+        _reject_oversize_deflection_submit_multipart(request, max_bytes=max_bytes)
+        try:
+            form = await request.form(max_part_size=max_bytes)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Multipart deflection submit body could not be parsed.",
+            ) from exc
+        csv_file = form.get("csv_file") if hasattr(form, "get") else None
+        if csv_file is None:
+            raise HTTPException(status_code=422, detail="csv_file is required")
+        data = _deflection_submit_form_to_mapping(form)
+        rows, byte_count = await _load_deflection_submit_upload_rows(
+            csv_file,
+            max_bytes=max_bytes,
+        )
+        return data, rows, byte_count, "uploaded_bytes"
+
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="JSON deflection submit body could not be parsed.",
+        ) from exc
+    data = _deflection_submit_payload_to_mapping(payload)
+    rows, byte_count = await _load_deflection_submit_blob_rows(
+        data["blob_url"],
+        max_bytes=max_bytes,
+    )
+    return data, rows, byte_count, "blob_bytes"
+
+
+def _request_content_type(request: Any) -> str:
+    headers = getattr(request, "headers", {}) or {}
+    value = ""
+    if hasattr(headers, "get"):
+        value = headers.get("content-type") or headers.get("Content-Type") or ""
+    return str(value).lower()
+
+
+def _reject_oversize_deflection_submit_multipart(
+    request: Any,
+    *,
+    max_bytes: int,
+) -> None:
+    headers = getattr(request, "headers", {}) or {}
+    value = ""
+    if hasattr(headers, "get"):
+        value = headers.get("content-length") or headers.get("Content-Length") or ""
+    if not _clean(value):
+        return
+    try:
+        content_length = int(str(value))
+    except ValueError:
+        return
+    if content_length > max_bytes + _MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "reason": "deflection_submit_csv_too_large",
+                "max_file_bytes": max_bytes,
+            },
+        )
+
+
+def _deflection_submit_form_to_mapping(form: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "support_platform": form.get("support_platform") if hasattr(form, "get") else None,
+        "company_name": form.get("company_name") if hasattr(form, "get") else None,
+        "contact_email": form.get("contact_email") if hasattr(form, "get") else None,
+    }
+    limit = form.get("limit") if hasattr(form, "get") else None
+    if _clean(limit):
+        data["limit"] = limit
+    return _deflection_submit_fields_to_mapping(data)
 
 
 async def _inspect_uploaded_ingestion_file(
@@ -1243,6 +1348,37 @@ async def _load_deflection_submit_blob_rows(
     )
 
 
+async def _load_deflection_submit_upload_rows(
+    csv_file: Any,
+    *,
+    max_bytes: int,
+) -> tuple[list[Any], int]:
+    try:
+        data = await csv_file.read(max_bytes + 1)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded CSV could not be read.",
+        ) from exc
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "reason": "deflection_submit_csv_too_large",
+                "max_file_bytes": max_bytes,
+            },
+        )
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded CSV is empty.",
+        )
+    return _parse_deflection_submit_csv_bytes(
+        data,
+        parse_error_detail="Uploaded CSV could not be parsed.",
+    )
+
+
 def _load_deflection_submit_blob_rows_sync(
     blob_url: str,
     max_bytes: int,
@@ -1253,6 +1389,17 @@ def _load_deflection_submit_blob_rows_sync(
             status_code=400,
             detail="Blob CSV is empty.",
         )
+    return _parse_deflection_submit_csv_bytes(
+        data,
+        parse_error_detail="Blob CSV could not be parsed.",
+    )
+
+
+def _parse_deflection_submit_csv_bytes(
+    data: bytes,
+    *,
+    parse_error_detail: str,
+) -> tuple[list[Any], int]:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1267,7 +1414,7 @@ def _load_deflection_submit_blob_rows_sync(
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,
-                detail="Blob CSV could not be parsed.",
+                detail=parse_error_detail,
             ) from exc
         return rows, len(data)
     finally:
@@ -1534,6 +1681,7 @@ def _with_deflection_submit_diagnostics(
     submitted_row_count: int,
     package: Mapping[str, Any],
     support_platform: str,
+    byte_count_key: str = "blob_bytes",
 ) -> dict[str, Any]:
     out = dict(response)
     existing = out.get("input_provider")
@@ -1557,7 +1705,7 @@ def _with_deflection_submit_diagnostics(
         "submitted_row_count": submitted_row_count,
         "truncated_row_count": truncated_row_count,
         "max_source_material_rows": max_rows,
-        "blob_bytes": byte_count,
+        byte_count_key: byte_count,
         "support_platform": support_platform,
     })
     warnings = [
@@ -2691,6 +2839,15 @@ def _deflection_submit_payload_to_mapping(payload: Any) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
 
+def _deflection_submit_fields_to_mapping(payload: Any) -> dict[str, Any]:
+    if BaseModel is not None and isinstance(payload, DeflectionReportSubmitFieldsModel):
+        return payload.model_dump()
+    try:
+        return DeflectionReportSubmitFieldsModel.model_validate(payload).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
 def _validate_input_shape(
     value: Any,
     *,
@@ -2778,6 +2935,7 @@ __all__ = [
     "ContentOpsControlSurfaceApiConfig",
     "ContentOpsIngestionImportModel",
     "ContentOpsRequestModel",
+    "DeflectionReportSubmitFieldsModel",
     "DeflectionReportSubmitModel",
     "create_content_ops_control_surface_router",
 ]
