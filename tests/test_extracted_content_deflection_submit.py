@@ -5,6 +5,8 @@ import socket
 import urllib.error
 from typing import Any
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 import pytest
 
 import extracted_content_pipeline.api.control_surfaces as api_module
@@ -254,6 +256,51 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+
+
+def test_deflection_submit_fastapi_dispatch_accepts_multipart_csv_bytes() -> None:
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message,resolution_text,pain_category",
+        (
+            "ticket-export-1,Export attribution,"
+            "How do I export attribution reports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        (
+            "ticket-export-2,Report download,"
+            "Where is the report download for attribution exports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        "ticket-sso-1,SSO setup,How do I enable SSO for my team?,,auth",
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    app = FastAPI()
+    app.include_router(_router(store))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ops/deflection-reports/submit",
+            data={
+                "support_platform": "zendesk",
+                "company_name": "Acme Co.",
+                "contact_email": "lead@acme.example",
+                "limit": "2",
+            },
+            files={"csv_file": ("tickets.csv", csv_data, "text/csv")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["request_id"].startswith("content-ops-")
+    gated_result = payload["steps"][0]["result"]
+    assert gated_result["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
+    assert payload["input_provider"]["metadata"]["uploaded_bytes"] == len(csv_data)
+    assert payload["input_provider"]["metadata"]["support_platform"] == "zendesk"
+    assert "markdown" not in str(gated_result)
 
 
 @pytest.mark.asyncio
