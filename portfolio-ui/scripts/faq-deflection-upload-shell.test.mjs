@@ -18,6 +18,10 @@ import {
   MAX_BLOB_CSV_BYTES as MAX_UPLOAD_CSV_BYTES,
   uploadTokenConfig,
 } from "../api/content-ops/deflection/upload.js";
+import {
+  emitDeflectionServerEvent,
+  sanitizeDeflectionEventFields,
+} from "../api/content-ops/deflection/events.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = await readFile(resolve(root, "src/App.tsx"), "utf8");
@@ -356,49 +360,104 @@ await test("private blob cleanup preserves ATLAS failure result", async () => {
 
 await test("private blob cleanup failure does not mask submit success", async () => {
   const csv = "ticket_id,message\nticket-1,How do I export reports?";
-  const previousWarn = console.warn;
-  console.warn = () => {};
-  try {
-    const result = await submitPrivateBlob({
-      config: {
-        baseUrl: ENV.ATLAS_API_BASE_URL,
-        token: ENV.ATLAS_B2B_JWT,
-        accountId: ACCOUNT_ID,
-        timeoutMs: 1000,
+  const events = [];
+  const result = await submitPrivateBlob({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      support_platform: "zendesk",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    getBlobImpl: async () => ({
+      statusCode: 200,
+      stream: new Blob([csv], { type: "text/csv" }).stream(),
+      blob: {
+        size: Buffer.byteLength(csv),
+        contentType: "text/csv",
       },
-      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
-      payload: {
-        blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
-        support_platform: "zendesk",
-        company_name: "Acme Co.",
-        contact_email: "lead@acme.example",
-        limit: "1000",
+    }),
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ request_id: "content-ops-cleanup123" });
       },
-      getBlobImpl: async () => ({
-        statusCode: 200,
-        stream: new Blob([csv], { type: "text/csv" }).stream(),
-        blob: {
-          size: Buffer.byteLength(csv),
-          contentType: "text/csv",
-        },
-      }),
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        async text() {
-          return JSON.stringify({ request_id: "content-ops-cleanup123" });
-        },
-      }),
-      deleteBlobImpl: async () => {
-        throw new Error("delete unavailable");
-      },
-    });
+    }),
+    deleteBlobImpl: async () => {
+      throw new Error("delete unavailable");
+    },
+    eventLogger: (event, fields) => {
+      events.push({ event, fields });
+    },
+  });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.payload.request_id, "content-ops-cleanup123");
-  } finally {
-    console.warn = previousWarn;
-  }
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.request_id, "content-ops-cleanup123");
+  assert.deepEqual(events, [
+    {
+      event: "faq_deflection_private_blob_cleanup_failed",
+      fields: {
+        pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+        error: "delete_failed",
+      },
+    },
+  ]);
+});
+
+await test("private blob cleanup event logging is secondary", async () => {
+  const result = await cleanupPrivateCsvBlob({
+    pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+    token: ENV.BLOB_READ_WRITE_TOKEN,
+    deleteBlobImpl: async () => {
+      throw new Error("delete unavailable");
+    },
+    eventLogger: () => {
+      throw new Error("logger unavailable");
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, error: "private_blob_cleanup_failed" });
+});
+
+await test("deflection server events redact secret-shaped fields", () => {
+  assert.deepEqual(
+    sanitizeDeflectionEventFields({
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      token: ENV.BLOB_READ_WRITE_TOKEN,
+      Authorization: "Bearer secret",
+      contact_email: "lead@acme.example",
+      error: "x".repeat(300),
+      detail: `delete failed for https://blob.example.com/file.csv?token=${ENV.BLOB_READ_WRITE_TOKEN}`,
+      ok: false,
+      count: 3,
+    }),
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      error: "x".repeat(240),
+      detail: "[redacted]",
+      ok: false,
+      count: 3,
+    },
+  );
+
+  const emitted = emitDeflectionServerEvent(
+    "not a valid event name",
+    { token: "secret", outcome: "cleanup_failed" },
+    () => {},
+  );
+  assert.deepEqual(emitted, {
+    ok: true,
+    event: "faq_deflection_server_event",
+    fields: { outcome: "cleanup_failed" },
+  });
 });
 
 await test("private blob cleanup rejects unsafe references before deleting", async () => {

@@ -1,5 +1,6 @@
 import { atlasUrl, clean, configFromEnv } from "./atlas-report.js";
 import { resultPath } from "./checkout.js";
+import { emitDeflectionServerEvent } from "./events.js";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -245,6 +246,7 @@ async function cleanupPrivateCsvBlob({
   pathname,
   token,
   deleteBlobImpl = deletePrivateBlob,
+  eventLogger = console.warn,
 }) {
   const safePathname = validBlobPathname(pathname);
   if (!safePathname) return { ok: false, skipped: true, error: "invalid_blob_reference" };
@@ -252,9 +254,10 @@ async function cleanupPrivateCsvBlob({
     await deleteBlobImpl(safePathname, { token });
     return { ok: true };
   } catch (error) {
-    console.warn("faq_deflection_private_blob_cleanup_failed", {
-      error: clean(error?.message) || "unknown",
-    });
+    emitDeflectionServerEvent("faq_deflection_private_blob_cleanup_failed", {
+      pathname: safePathname,
+      error: "delete_failed",
+    }, eventLogger);
     return { ok: false, error: "private_blob_cleanup_failed" };
   }
 }
@@ -266,6 +269,7 @@ async function submitPrivateBlob({
   fetchImpl = fetch,
   getBlobImpl = getPrivateBlob,
   deleteBlobImpl = deletePrivateBlob,
+  eventLogger = console.warn,
 }) {
   const blob = await readPrivateCsvBlob({
     pathname: payload?.blob_pathname,
@@ -286,6 +290,7 @@ async function submitPrivateBlob({
     pathname: blob.pathname,
     token: blobToken,
     deleteBlobImpl,
+    eventLogger,
   });
   return result;
 }
