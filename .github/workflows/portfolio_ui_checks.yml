@@ -39,3 +39,6 @@ jobs:
 
       - name: Test FAQ deflection result page
         run: npm run test:deflection-result
+
+      - name: Test FAQ deflection ATLAS proxy
+        run: npm run test:deflection-atlas-proxy
