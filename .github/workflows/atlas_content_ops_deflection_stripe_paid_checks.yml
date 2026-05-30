@@ -7,6 +7,7 @@ on:
       - "atlas_brain/api/billing.py"
       - "atlas_brain/config.py"
       - "extracted_content_pipeline/deflection_report_access.py"
+      - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "atlas_brain/api/billing.py"
       - "atlas_brain/config.py"
       - "extracted_content_pipeline/deflection_report_access.py"
+      - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
 
 jobs:
@@ -38,4 +40,8 @@ jobs:
           python -m pip install pytest pytest-asyncio
 
       - name: Run Content Ops deflection Stripe paid tests
-        run: python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q
+        run: |
+          python -m pytest \
+            tests/test_atlas_billing_content_ops_deflection_stripe_paid.py \
+            tests/test_atlas_billing_content_ops_deflection_paid_flow.py \
+            -q
