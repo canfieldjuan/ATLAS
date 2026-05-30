@@ -1,0 +1,41 @@
+name: Portfolio UI Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/portfolio_ui_checks.yml"
+      - "portfolio-ui/api/**"
+      - "portfolio-ui/package.json"
+      - "portfolio-ui/package-lock.json"
+      - "portfolio-ui/scripts/**"
+      - "portfolio-ui/src/**"
+      - "portfolio-ui/vercel.json"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/portfolio_ui_checks.yml"
+      - "portfolio-ui/api/**"
+      - "portfolio-ui/package.json"
+      - "portfolio-ui/package-lock.json"
+      - "portfolio-ui/scripts/**"
+      - "portfolio-ui/src/**"
+      - "portfolio-ui/vercel.json"
+
+jobs:
+  portfolio-ui-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portfolio-ui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test FAQ deflection result page
+        run: npm run test:deflection-result

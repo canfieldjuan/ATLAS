@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:deflection-result": "node scripts/faq-deflection-result-page.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

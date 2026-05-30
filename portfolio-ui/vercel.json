@@ -3,6 +3,10 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
+    {
+      "source": "/services/faq-deflection/results/:requestId",
+      "destination": "/api/content-ops/deflection/result-page?request_id=:requestId"
+    },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
