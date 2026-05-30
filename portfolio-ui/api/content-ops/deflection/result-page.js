@@ -74,13 +74,38 @@ function renderSnapshot(report) {
         </section>`;
 }
 
+function renderPaidArtifact(report) {
+  const markdown =
+    report &&
+    report.ok &&
+    report.artifact_status === "unlocked" &&
+    report.artifact &&
+    typeof report.artifact.markdown === "string"
+      ? report.artifact.markdown.trim()
+      : "";
+
+  if (!markdown) return "";
+
+  return `<section class="paid-report" aria-labelledby="paid-report-title" data-atlas-deflection-paid-report>
+          <h2 id="paid-report-title">Full report</h2>
+          <p class="muted">Unlocked from the ATLAS paid artifact after Stripe webhook verification.</p>
+          <pre class="report-markdown">${escapeHtml(markdown)}</pre>
+        </section>`;
+}
+
 function renderResultPage({ requestId, accountId, checkoutStatus = "", report = null }) {
   const safeRequestId = escapeHtml(requestId);
   const safeAccountId = escapeHtml(accountId);
   const safeCheckoutStatus = escapeHtml(checkoutStatus);
   const resultHref = resultPath(requestId || "missing-request", accountId, "");
-  const buttonDisabled = requestId && accountId ? "" : "disabled";
   const artifactStatus = report && report.ok ? report.artifact_status : "snapshot_unavailable";
+  const isUnlocked = artifactStatus === "unlocked";
+  const buttonDisabled = requestId && accountId && !isUnlocked ? "" : "disabled";
+  const unlockHeading = isUnlocked ? "Full report unlocked" : "Unlock full report";
+  const unlockCopy = isUnlocked
+    ? "ATLAS has released the paid artifact for this request."
+    : "$1,500 one-time Stripe Checkout session.";
+  const unlockButtonLabel = isUnlocked ? "Report unlocked" : "Continue to Checkout";
   const statusBanner =
     checkoutStatus === "success"
       ? `<div class="notice success">Checkout returned successfully. ATLAS unlocks the paid report only after Stripe sends the verified webhook.</div>`
@@ -117,6 +142,8 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .questions article { border-top: 1px solid rgba(30, 41, 59, .9); padding-top: 14px; }
     .questions h3 { margin: 6px 0; font-size: 17px; }
     .rank { color: #86efac; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .paid-report { margin-top: 24px; border: 1px solid rgba(134, 239, 172, .28); border-radius: 8px; background: rgba(20, 83, 45, .16); padding: 24px; }
+    .report-markdown { margin: 18px 0 0; max-height: 720px; overflow: auto; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .55); padding: 18px; color: #e2e8f0; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
     .success { color: #bbf7d0; background: rgba(34, 197, 94, .1); border-color: rgba(34, 197, 94, .28); }
     .muted { color: rgba(226, 232, 240, .68); line-height: 1.65; }
@@ -139,10 +166,11 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
         <p class="lede">The free snapshot and paid artifact stay separated. The full report unlocks only after Stripe confirms payment and ATLAS releases the artifact from its signed webhook path.</p>
         ${statusBanner}
         ${renderSnapshot(report)}
+        ${renderPaidArtifact(report)}
       </section>
       <aside class="panel">
-        <h2>Unlock full report</h2>
-        <p class="muted">$1,500 one-time Stripe Checkout session.</p>
+        <h2>${unlockHeading}</h2>
+        <p class="muted">${unlockCopy}</p>
         <dl class="meta">
           <div><dt>Checkout metadata source</dt><dd>${CHECKOUT_SOURCE}</dd></div>
           <div><dt>request_id</dt><dd>${safeRequestId || "Missing request id"}</dd></div>
@@ -151,7 +179,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
           <div><dt>artifact_status</dt><dd>${escapeHtml(artifactStatus)}</dd></div>
           <div><dt>checkout</dt><dd>${safeCheckoutStatus || "locked"}</dd></div>
         </dl>
-        <button type="button" data-atlas-deflection-unlock ${buttonDisabled}>Continue to Checkout</button>
+        <button type="button" data-atlas-deflection-unlock ${buttonDisabled}>${unlockButtonLabel}</button>
         <p id="checkout-message" class="muted" role="status"></p>
       </aside>
     </div>
