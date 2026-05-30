@@ -15,9 +15,11 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >
 > 1. **Read first, in order:** `AGENTS.md` (the multi-session PR contract), `CLAUDE.md`, `CANONICAL.md`, `INTEGRATION_MAP.md`, `BUILD_SPEC.md`, `CONTEXT.md`. Then run `git log --oneline -20` and `gh pr list --state open` to see where things actually stand. Do not infer state from this prompt — those sources are truth.
 >
-> 2. **Your current lane:** [ONE line — e.g. "Content-Ops macro-writeback" or "deflection/Stripe monetization". If unsure, read CONTEXT.md + open PRs to find the active slice.] Stay in this lane. **Do not close, merge, or modify PRs outside your current task** — if a PR looks abandoned, ask the operator; don't close it.
+> 2. **Session ownership map:** read `SESSION_STATE.local.md` if it exists. If it does not exist, create it from `docs/SESSION_STATE_TEMPLATE.md` before any PR action. Fill in your assigned lane, current task, owned active PR (or `none`), open PRs that are explicitly **not yours**, current worktree, and last safe action. A PR that is not listed as owned in this file is not yours.
 >
-> 3. **Recurring mistakes — do NOT repeat these (each has cost a review cycle):**
+> 3. **Your current lane:** [ONE line — e.g. "Content-Ops macro-writeback" or "deflection/Stripe monetization". If unsure, read CONTEXT.md + open PRs to find the active slice.] Stay in this lane. **Do not close, merge, or modify PRs outside your current task** — if a PR looks abandoned, ask the operator; don't close it. If an open PR is in the same lane but is not marked owned in `SESSION_STATE.local.md`, treat it as someone else's PR.
+>
+> 4. **Recurring mistakes — do NOT repeat these (each has cost a review cycle):**
 >    - **Config:** every setting goes through `atlas_brain/config.py` typed `ATLAS_*` fields. **Never** read `os.environ` directly — especially for secrets.
 >    - **Test placement:** the `extracted-checks` CI suite (`run_extracted_pipeline_checks.sh`) runs with **no torch and no asyncpg**. Any test that imports `atlas_brain.services.*` or `atlas_brain.storage.database` (or anything pulling torch/asyncpg at module top) breaks *collection of the whole suite*. Host-DB/API tests go in the main suite; or import flat `_content_ops_*` modules and use lazy imports.
 >    - **Secondary writes are best-effort:** audit/history/notification writes that happen *after* a side-effectful op (publish, send, charge) must be wrapped (try/except + log) so they can't fail an already-successful operation.
@@ -27,9 +29,9 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >    - **Fixtures must match real producer output**, not hand-crafted shapes.
 >    - **The PR body's stated safety claim must be *enforced in code*, not just named.**
 >
-> 4. **Plan first** (`plans/PR-<Slice>.md`, the 7 sections, <400 LOC soft cap), open PRs ready-for-review (not draft), and run the per-package validation gauntlet before pushing (see CLAUDE.md "Per-package validation gauntlets").
+> 5. **Plan first** (`plans/PR-<Slice>.md`, the 7 sections, <400 LOC soft cap), open PRs ready-for-review (not draft), and run the per-package validation gauntlet before pushing (see CLAUDE.md "Per-package validation gauntlets").
 >
-> 5. **Context discipline (keeps the session from compacting mid-work):**
+> 6. **Context discipline (keeps the session from compacting mid-work):**
 >    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
 >    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
 >    - Keep the session short. If you've been alive across several PRs, expect to compact soon; finish the current slice, then let the operator restart you fresh with this bootstrap rather than running on.
@@ -42,9 +44,10 @@ Paste this when the session shows drift signals — a closed-unmerged PR, work i
 
 > Stop. You likely just compacted. Before any further action:
 > 1. Do **not** close, merge, or modify any PR — run `gh pr list --state open` and confirm which one is *yours* this task.
-> 2. Your current lane is **[X]**. If what you're about to do isn't in that lane, stop and ask.
-> 3. Don't start new work or re-do merged work — run `git log --oneline -15` to see what's already landed.
-> 4. Re-read your plan doc `plans/PR-<slice>.md` and `AGENTS.md`.
+> 2. Read `SESSION_STATE.local.md`. If it is missing, stale, or does not list the PR under "Owned Active PR" / "PRs This Session May Touch", stop and ask the operator.
+> 3. Your current lane is **[X]**. If what you're about to do isn't in that lane, stop and ask.
+> 4. Don't start new work or re-do merged work — run `git log --oneline -15` to see what's already landed.
+> 5. Re-read your plan doc `plans/PR-<slice>.md` and `AGENTS.md`.
 >
 > Confirm your current PR # and lane back to me before continuing.
 

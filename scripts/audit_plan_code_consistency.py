@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +78,20 @@ def _path_resolves(claim: str) -> bool:
     return False
 
 
+def _path_is_gitignored(claim: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", claim],
+            cwd=REPO_ROOT,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, ValueError):
+        return False
+    return result.returncode == 0
+
+
 def collect_def_names() -> set[str]:
     names: set[str] = set()
     for root in ("scripts", "atlas_brain"):
@@ -96,7 +111,11 @@ def collect_def_names() -> set[str]:
 
 def audit_claims(plan_text: str) -> tuple[list[str], list[str]]:
     path_claims, function_claims = parse_claims(plan_text)
-    missing_paths = sorted(claim for claim in path_claims if not _path_resolves(claim))
+    missing_paths = sorted(
+        claim
+        for claim in path_claims
+        if not _path_is_gitignored(claim) and not _path_resolves(claim)
+    )
     defs = collect_def_names() if function_claims else set()
     missing_functions = sorted(function_claims - defs)
     return missing_paths, missing_functions
