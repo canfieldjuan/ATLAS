@@ -502,6 +502,33 @@ def _validate_submit_envelope(
     return request_id, snapshot if isinstance(snapshot, Mapping) else None, diagnostics, errors
 
 
+def _stale_multipart_submit_route_errors(response: HttpJsonResponse, *, submit_mode: str) -> list[str]:
+    if submit_mode != "multipart" or response.status != 422:
+        return []
+    payload = response.payload
+    if not isinstance(payload, Mapping):
+        return []
+    detail = payload.get("detail")
+    if not isinstance(detail, Sequence) or isinstance(detail, (str, bytes, bytearray)):
+        return []
+    for item in detail:
+        if not isinstance(item, Mapping):
+            continue
+        loc = item.get("loc")
+        if (
+            item.get("type") == "model_attributes_type"
+            and isinstance(loc, Sequence)
+            and not isinstance(loc, (str, bytes, bytearray))
+            and tuple(loc) == ("body",)
+        ):
+            return [
+                "deployed submit route rejected multipart as a JSON body; "
+                "expected multipart CSV Request route, so the host is likely "
+                "serving stale route code or importing a stale extracted_content_pipeline"
+            ]
+    return []
+
+
 def _status_summary(response: HttpJsonResponse) -> dict[str, Any]:
     return {
         "status": response.status,
@@ -574,6 +601,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     request_id = ""
     submit_snapshot: Mapping[str, Any] | None = None
     diagnostics: dict[str, Any] = {}
+    submit_errors.extend(
+        _stale_multipart_submit_route_errors(submit_response, submit_mode=submit_mode)
+    )
     if submit_response.status != 200:
         submit_errors.append(f"submit status must be 200, got {submit_response.status}")
     else:

@@ -121,6 +121,26 @@ Both submit modes then verify:
 - `GET /api/v1/content-ops/deflection-reports/{request_id}/artifact` returns
   `403` before payment.
 
+### Stale Deploy Diagnostic
+
+If the multipart hosted smoke fails with:
+
+```text
+deployed submit route rejected multipart as a JSON body
+```
+
+then the host accepted auth but did not serve the current multipart submit
+contract. The exact FastAPI shape is a `422` with
+`detail[0].type == "model_attributes_type"` at `loc == ["body"]`, which is the
+old JSON-body route behavior when it receives `multipart/form-data`.
+
+Treat this as deployment/runtime drift, not bad portfolio input. Rebuild and
+redeploy ATLAS from a commit that includes the multipart
+`submit_deflection_report(request: Request)` route, the extracted package copy
+in the Docker image, and the `python-multipart` dependency. Re-run the smoke
+after deploy; do not continue to Stripe paid-unlock validation until submit
+returns a real `request_id`.
+
 ## Portfolio Result Page Smoke
 
 After the hosted submit smoke returns a `request_id`, validate the portfolio
