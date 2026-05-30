@@ -33,6 +33,11 @@ const SNAPSHOT = {
   ],
 };
 
+const PAID_ARTIFACT = {
+  markdown: '# Paid report\n\n<script>alert("xss")</script>',
+  summary: { generated: 3 },
+};
+
 async function test(name, fn) {
   try {
     await fn();
@@ -269,4 +274,40 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /artifact_status/);
   assert.match(html, /locked/);
   assert.doesNotMatch(html, /# Paid report/);
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+});
+
+await test("hosted result page renders escaped paid artifact only after unlock", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "unlocked",
+      artifact: PAID_ARTIFACT,
+    },
+  });
+  assert.match(html, /data-atlas-deflection-paid-report/);
+  assert.match(html, /# Paid report/);
+  assert.match(html, /&lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>alert\("xss"\)<\/script>/);
+  assert.match(html, /Full report unlocked/);
+  assert.match(html, /Report unlocked/);
+});
+
+await test("hosted result page with malformed unlocked artifact does not invent paid copy", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "unlocked",
+      artifact: { summary: { generated: 3 } },
+    },
+  });
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+  assert.doesNotMatch(html, /# Paid report/);
+  assert.match(html, /Full report unlocked/);
 });
