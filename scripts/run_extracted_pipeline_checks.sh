@@ -30,6 +30,7 @@ pytest \
   tests/test_content_ops_faq_report_contract_docs.py \
   tests/test_content_ops_deflection_report.py \
   tests/test_extracted_content_deflection_submit.py \
+  tests/test_prepare_content_ops_deflection_env.py \
   tests/test_smoke_content_ops_deflection_submit_handoff.py \
   tests/test_extracted_ticket_faq_markdown.py \
   tests/test_extracted_ticket_faq_macro_writeback.py \
