@@ -178,6 +178,16 @@ PR, the builder must verify all of the following:
 4. The local branch and expected head SHA match the target PR when a
    merge or force-push is about to happen.
 
+Run the local guard before PR mutation whenever the target PR metadata
+is known:
+
+```bash
+python scripts/check_session_pr_ownership.py \
+  --pr <number> \
+  --branch <headRefName> \
+  --head-sha <headRefOid>
+```
+
 If any check fails, stop and ask the operator. A PR in the same lane is
 not automatically owned. A PR that "looks abandoned" is not owned. A PR
 opened by another session is not owned unless the operator explicitly
