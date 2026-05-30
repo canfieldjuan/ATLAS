@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import socket
 import urllib.error
 from typing import Any
@@ -400,6 +401,24 @@ def test_read_bounded_https_blob_rejects_non_success_status() -> None:
     assert exc.value.status_code == 400
     assert exc.value.detail == "Blob URL could not be fetched."
     assert response.closed
+
+
+def test_read_bounded_https_blob_rejects_malformed_http_response() -> None:
+    with pytest.raises(api_module.HTTPException) as exc:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            _install_public_dns(monkeypatch)
+
+            def _open(_target: Any, *, timeout: int) -> _BlobResponse:
+                raise http.client.BadStatusLine("not-http")
+
+            monkeypatch.setattr(api_module, "_open_https_blob_request", _open)
+            api_module._read_bounded_https_blob(
+                "https://portfolio.example/blob/tickets.csv",
+                max_bytes=100,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Blob URL could not be fetched."
 
 
 def test_read_bounded_https_blob_uses_validated_ip_for_pinned_connection(

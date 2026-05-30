@@ -68,12 +68,12 @@ and rejects any 3xx status without following `Location`.
 ## Verification
 
 - python -m py_compile extracted_content_pipeline/api/control_surfaces.py tests/test_extracted_content_deflection_submit.py - passed.
-- python -m pytest tests/test_extracted_content_deflection_submit.py -q - 12 passed.
+- python -m pytest tests/test_extracted_content_deflection_submit.py -q - 13 passed.
 - python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline - passed.
 - python scripts/audit_extracted_standalone.py --fail-on-debt - passed.
 - bash scripts/check_ascii_python.sh - passed.
 - bash scripts/validate_extracted_content_pipeline.sh - passed.
-- bash scripts/run_extracted_pipeline_checks.sh - passed, 2812 passed, 10 skipped, 1 warning.
+- bash scripts/run_extracted_pipeline_checks.sh - passed, 2813 passed, 10 skipped, 1 warning.
 - bash scripts/local_pr_review.sh --current-pr-body-file /tmp/pr-faq-deflection-blob-dns-pinning.md - passed.
 
 ## Estimated diff size

@@ -1308,7 +1308,7 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
             status_code=400,
             detail="Blob URL could not be fetched.",
         ) from exc
-    except (OSError, urllib.error.URLError) as exc:
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
         raise HTTPException(
             status_code=400,
             detail="Blob URL could not be fetched.",
