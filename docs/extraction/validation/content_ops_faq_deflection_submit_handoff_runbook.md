@@ -94,6 +94,27 @@ to `/api/v1/content-ops/deflection-reports/submit`, then verifies:
 - `GET /api/v1/content-ops/deflection-reports/{request_id}/artifact` returns
   `403` before payment.
 
+## Portfolio Result Page Smoke
+
+After the hosted submit smoke returns a `request_id`, validate the portfolio
+result page using the same ATLAS auth values plus:
+
+- `ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL`: hosted portfolio result page for
+  the generated report.
+- `ATLAS_DEFLECTION_REQUEST_ID`: `request_id` returned by the submit smoke.
+
+```bash
+python scripts/smoke_content_ops_deflection_portfolio_result_page.py \
+  --output-result /tmp/faq-deflection-portfolio-result-page.json \
+  --json
+```
+
+The smoke verifies the hosted page renders the same `request_id` and
+`account_id`, exposes stable result/unlock hooks, preserves the Checkout
+metadata keys (`content_ops_deflection_report`, `request_id`, `account_id`),
+keeps the free snapshot limited to summary/top-question data, and confirms the
+artifact endpoint still returns `403` before payment.
+
 ## Interpreting Results
 
 The result artifact records HTTP statuses, the returned `request_id`, compact
