@@ -20,6 +20,33 @@ signed support-ticket CSV blob and return the gated deflection report response.
 - `ATLAS_DEFLECTION_SUPPORT_PLATFORM`: `zendesk`, `intercom`, `help_scout`, or
   `other`. Defaults to `zendesk` when omitted.
 
+## Prepare Auth Env
+
+If you have a B2B-Growth ATLAS login but do not have the JWT/account id yet,
+prepare the local `.env` without printing the token:
+
+```bash
+export ATLAS_LOGIN_PASSWORD='<password>'
+python scripts/prepare_content_ops_deflection_env.py \
+  --base-url https://<deployed-atlas-api-host> \
+  --email <b2b-growth-user-email>
+```
+
+Prefer `ATLAS_LOGIN_PASSWORD` or the interactive password prompt over
+`--password`; command-line arguments can be visible in shell history and process
+list output.
+
+The helper logs into `/api/v1/auth/login`, verifies `/api/v1/auth/me` returns a
+B2B account on `b2b_growth` or higher, then writes:
+
+```dotenv
+ATLAS_API_BASE_URL=https://...
+ATLAS_B2B_JWT=<redacted bearer token>
+ATLAS_ACCOUNT_ID=<account id from /auth/me>
+```
+
+to `.env`. Existing ATLAS keys are not replaced unless `--force` is passed.
+
 ## Preflight
 
 ```bash
