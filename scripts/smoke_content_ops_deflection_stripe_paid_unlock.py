@@ -75,6 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-path-template", default=ARTIFACT_PATH_TEMPLATE)
     parser.add_argument("--output-result", type=Path)
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--replay-webhook", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -252,6 +253,7 @@ def _result_payload(
     session_id: str = "",
     before_artifact: HttpResult | None = None,
     webhook: HttpResult | None = None,
+    replay_webhook: HttpResult | None = None,
     after_artifact: HttpResult | None = None,
     errors: Sequence[str] = (),
 ) -> dict[str, Any]:
@@ -270,6 +272,14 @@ def _result_payload(
         },
         "before_artifact": {"status": before_artifact.status if before_artifact else None},
         "webhook": {"status": webhook.status if webhook else None},
+        "replay_webhook": {
+            "status": replay_webhook.status if replay_webhook else None,
+            "payload_status": (
+                replay_webhook.payload.get("status")
+                if replay_webhook and isinstance(replay_webhook.payload, Mapping)
+                else None
+            ),
+        },
         "after_artifact": {"status": after_artifact.status if after_artifact else None},
     }
 
@@ -354,6 +364,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif not isinstance(webhook.payload, Mapping) or webhook.payload.get("status") != "ok":
         errors.append("stripe webhook response status must be ok")
 
+    replay_webhook = None
+    if not errors and args.replay_webhook:
+        replay_webhook = _json_request(
+            "POST",
+            _join_url(_clean(args.base_url), _clean(args.webhook_path)),
+            body=body,
+            stripe_signature=signature,
+            timeout=float(args.timeout),
+        )
+        if replay_webhook.status != 200:
+            errors.append(
+                f"stripe webhook replay status must be 200, got {replay_webhook.status}"
+            )
+        elif (
+            not isinstance(replay_webhook.payload, Mapping)
+            or replay_webhook.payload.get("status") != "already_processed"
+        ):
+            errors.append("stripe webhook replay status must be already_processed")
+
     after_artifact = None
     if not errors:
         after_artifact = _json_request(
@@ -374,6 +403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         session_id=session_id,
         before_artifact=before_artifact,
         webhook=webhook,
+        replay_webhook=replay_webhook,
         after_artifact=after_artifact,
         errors=errors,
     )
