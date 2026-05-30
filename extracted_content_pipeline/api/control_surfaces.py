@@ -1188,47 +1188,54 @@ async def _load_deflection_submit_rows_from_request(
     *,
     max_bytes: int,
 ) -> tuple[dict[str, Any], list[Any], int, str]:
-    if isinstance(request, Mapping):
-        data = _deflection_submit_payload_to_mapping(request)
+    if _is_deflection_submit_http_request(request):
+        content_type = _request_content_type(request)
+        if "multipart/form-data" in content_type:
+            _reject_oversize_deflection_submit_multipart(request, max_bytes=max_bytes)
+            try:
+                form = await request.form(max_part_size=max_bytes)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Multipart deflection submit body could not be parsed.",
+                ) from exc
+            csv_file = form.get("csv_file") if hasattr(form, "get") else None
+            if csv_file is None:
+                raise HTTPException(status_code=422, detail="csv_file is required")
+            data = _deflection_submit_form_to_mapping(form)
+            rows, byte_count = await _load_deflection_submit_upload_rows(
+                csv_file,
+                max_bytes=max_bytes,
+            )
+            return data, rows, byte_count, "uploaded_bytes"
+
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="JSON deflection submit body could not be parsed.",
+            ) from exc
+        data = _deflection_submit_payload_to_mapping(payload)
         rows, byte_count = await _load_deflection_submit_blob_rows(
             data["blob_url"],
             max_bytes=max_bytes,
         )
         return data, rows, byte_count, "blob_bytes"
 
-    content_type = _request_content_type(request)
-    if "multipart/form-data" in content_type:
-        _reject_oversize_deflection_submit_multipart(request, max_bytes=max_bytes)
-        try:
-            form = await request.form(max_part_size=max_bytes)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Multipart deflection submit body could not be parsed.",
-            ) from exc
-        csv_file = form.get("csv_file") if hasattr(form, "get") else None
-        if csv_file is None:
-            raise HTTPException(status_code=422, detail="csv_file is required")
-        data = _deflection_submit_form_to_mapping(form)
-        rows, byte_count = await _load_deflection_submit_upload_rows(
-            csv_file,
-            max_bytes=max_bytes,
-        )
-        return data, rows, byte_count, "uploaded_bytes"
-
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="JSON deflection submit body could not be parsed.",
-        ) from exc
-    data = _deflection_submit_payload_to_mapping(payload)
+    data = _deflection_submit_payload_to_mapping(request)
     rows, byte_count = await _load_deflection_submit_blob_rows(
         data["blob_url"],
         max_bytes=max_bytes,
     )
     return data, rows, byte_count, "blob_bytes"
+
+
+def _is_deflection_submit_http_request(value: Any) -> bool:
+    return (
+        hasattr(value, "headers")
+        and (hasattr(value, "form") or hasattr(value, "json"))
+    )
 
 
 def _request_content_type(request: Any) -> str:
