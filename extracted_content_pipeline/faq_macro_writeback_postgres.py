@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from .campaign_ports import TenantScope
 from .faq_macro_writeback import MacroWritebackMapping
-from .faq_macro_writeback_publish import FAQMacroPublishSummary
+from .faq_macro_writeback_publish import FAQMacroPublishAttempt, FAQMacroPublishSummary
 from .storage._jsonb_helpers import decode_jsonb_field, json_dump_jsonb, row_to_dict
 
 
@@ -26,6 +26,13 @@ def _metadata(value: Any) -> dict[str, Any]:
     return dict(decoded) if isinstance(decoded, Mapping) else {}
 
 
+def _json_list(value: Any) -> tuple[dict[str, Any], ...]:
+    decoded = decode_jsonb_field(value, default=[])
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(dict(item) for item in decoded if isinstance(item, Mapping))
+
+
 def _row_to_mapping(row: Mapping[str, Any]) -> MacroWritebackMapping:
     return MacroWritebackMapping(
         platform=str(row.get("platform") or ""),
@@ -35,6 +42,25 @@ def _row_to_mapping(row: Mapping[str, Any]) -> MacroWritebackMapping:
         external_url=str(row.get("external_url") or ""),
         publish_status=str(row.get("publish_status") or "published"),
         metadata=_metadata(row.get("metadata")),
+    )
+
+
+def _row_to_attempt(row: Mapping[str, Any]) -> FAQMacroPublishAttempt:
+    return FAQMacroPublishAttempt(
+        id=str(row.get("id") or ""),
+        faq_id=str(row.get("faq_draft_id") or ""),
+        draft_status=str(row.get("draft_status") or ""),
+        ok=bool(row.get("ok")),
+        publishable_count=int(row.get("publishable_count") or 0),
+        skipped_count=int(row.get("skipped_count") or 0),
+        published_count=int(row.get("published_count") or 0),
+        updated_count=int(row.get("updated_count") or 0),
+        failed_count=int(row.get("failed_count") or 0),
+        pending_reconcile_count=int(row.get("pending_reconcile_count") or 0),
+        draft_status_updated=bool(row.get("draft_status_updated")),
+        skipped=_json_list(row.get("skipped")),
+        results=_json_list(row.get("results")),
+        created_at=str(row.get("created_at") or ""),
     )
 
 
@@ -206,6 +232,32 @@ class PostgresFAQMacroPublishAttemptRepository:
             json_dump_jsonb([dict(item) for item in summary.skipped]),
             json_dump_jsonb([dict(item) for item in summary.results]),
         )
+
+    async def list_attempts(
+        self,
+        faq_id: str,
+        *,
+        scope: TenantScope,
+        limit: int,
+    ) -> tuple[FAQMacroPublishAttempt, ...]:
+        rows = await self.pool.fetch(
+            """
+            SELECT
+                id, faq_draft_id, draft_status, ok,
+                publishable_count, skipped_count, published_count,
+                updated_count, failed_count, pending_reconcile_count,
+                draft_status_updated, skipped, results, created_at
+              FROM ticket_faq_macro_publish_attempts
+             WHERE account_id = $1
+               AND faq_draft_id = $2
+             ORDER BY created_at DESC, id DESC
+             LIMIT $3
+            """,
+            scope.account_id or "",
+            _clean(faq_id),
+            max(1, int(limit)),
+        )
+        return tuple(_row_to_attempt(row_to_dict(row)) for row in rows)
 
 
 __all__ = [

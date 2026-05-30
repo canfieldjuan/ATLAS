@@ -408,6 +408,43 @@ def create_generated_asset_router(
             **summary.as_dict(),
         }
 
+    @router.get("/{asset}/drafts/{draft_id}/publish-macro-attempts")
+    async def list_faq_macro_publish_attempts(
+        asset: str,
+        draft_id: str,
+        limit: int = Query(20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        asset_name = _asset_arg(asset)
+        if asset_name != "faq_markdown":
+            raise HTTPException(
+                status_code=400,
+                detail="only faq_markdown drafts can list macro publish attempts",
+            )
+        try:
+            faq_id = str(UUID(draft_id))
+        except ValueError:
+            raise HTTPException(status_code=404, detail="FAQ draft not found") from None
+        pool = await _resolve_pool(pool_provider)
+        scope = await _resolve_scope(scope_provider)
+        tenant = _tenant_scope(scope)
+        faq_repository = PostgresTicketFAQRepository(pool)
+        draft = await faq_repository.get_draft(faq_id, scope=tenant)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="FAQ draft not found")
+        attempts = await PostgresFAQMacroPublishAttemptRepository(pool).list_attempts(
+            faq_id,
+            scope=tenant,
+            limit=limit,
+        )
+        return {
+            "account_id": tenant.account_id,
+            "asset": asset_name,
+            "faq_id": faq_id,
+            "count": len(attempts),
+            "limit": limit,
+            "attempts": [attempt.as_dict() for attempt in attempts],
+        }
+
     @router.post("/{asset}/drafts/review-batch")
     async def review_drafts_batch(
         asset: str,
