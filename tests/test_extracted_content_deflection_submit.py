@@ -341,3 +341,46 @@ def test_deflection_submit_opener_disables_redirects() -> None:
     handler = api_module._NoRedirectHandler()
 
     assert handler.redirect_request(None, None, 302, "Found", {}, "https://x") is None
+
+
+def test_read_bounded_https_blob_rejects_redirects_through_no_redirect_opener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    handlers: list[Any] = []
+    calls: list[tuple[str, int]] = []
+
+    class _RedirectingOpener:
+        def open(self, request: Any, *, timeout: int) -> Any:
+            calls.append((request.full_url, timeout))
+            raise urllib.error.HTTPError(
+                request.full_url,
+                302,
+                "Found",
+                {"Location": "http://169.254.169.254/latest/meta-data"},
+                None,
+            )
+
+    def _build_opener(*opener_handlers: Any) -> _RedirectingOpener:
+        handlers.extend(opener_handlers)
+        return _RedirectingOpener()
+
+    monkeypatch.setattr(api_module.urllib.request, "build_opener", _build_opener)
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        api_module._read_bounded_https_blob(
+            "https://portfolio.example/blob/tickets.csv",
+            max_bytes=100,
+        )
+
+    assert any(
+        handler is api_module._NoRedirectHandler
+        or isinstance(handler, api_module._NoRedirectHandler)
+        for handler in handlers
+    )
+    assert calls == [(
+        "https://portfolio.example/blob/tickets.csv",
+        api_module._DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
+    )]
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Blob URL redirects are not allowed."
