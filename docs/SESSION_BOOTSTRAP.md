@@ -1,0 +1,55 @@
+# Builder Session Bootstrap & Drift Redirect
+
+Two copy-paste prompts for the Codex builder session.
+
+- **Bootstrap** — paste into a *fresh* session to get it up to speed fast (so you can restart proactively instead of letting one session run long and compact repeatedly).
+- **Redirect** — paste into a session that has *drifted after compaction* (closing PRs, jumping lanes, redoing merged work) to course-correct.
+
+Both deliberately point at the live state docs for anything volatile and hardcode only the stable recurring-lapse checklist. Update the one-line "current lane" per use; everything else is durable.
+
+---
+
+## 1. Fresh-session bootstrap
+
+> You are the builder for the Atlas repo (`canfieldjuan/ATLAS`). Before any work:
+>
+> 1. **Read first, in order:** `AGENTS.md` (the multi-session PR contract), `CLAUDE.md`, `CANONICAL.md`, `INTEGRATION_MAP.md`, `BUILD_SPEC.md`, `CONTEXT.md`. Then run `git log --oneline -20` and `gh pr list --state open` to see where things actually stand. Do not infer state from this prompt — those sources are truth.
+>
+> 2. **Your current lane:** [ONE line — e.g. "Content-Ops macro-writeback" or "deflection/Stripe monetization". If unsure, read CONTEXT.md + open PRs to find the active slice.] Stay in this lane. **Do not close, merge, or modify PRs outside your current task** — if a PR looks abandoned, ask the operator; don't close it.
+>
+> 3. **Recurring mistakes — do NOT repeat these (each has cost a review cycle):**
+>    - **Config:** every setting goes through `atlas_brain/config.py` typed `ATLAS_*` fields. **Never** read `os.environ` directly — especially for secrets.
+>    - **Test placement:** the `extracted-checks` CI suite (`run_extracted_pipeline_checks.sh`) runs with **no torch and no asyncpg**. Any test that imports `atlas_brain.services.*` or `atlas_brain.storage.database` (or anything pulling torch/asyncpg at module top) breaks *collection of the whole suite*. Host-DB/API tests go in the main suite; or import flat `_content_ops_*` modules and use lazy imports.
+>    - **Secondary writes are best-effort:** audit/history/notification writes that happen *after* a side-effectful op (publish, send, charge) must be wrapped (try/except + log) so they can't fail an already-successful operation.
+>    - **Lookup-and-backfill fails safe on ambiguity:** match an external resource only on a *unique* result; 0 *or* >1 matches → don't guess.
+>    - **Per-tenant credentials fail closed:** an unprovisioned tenant must not silently borrow shared/global credentials.
+>    - **CI is truth:** "passed locally" ≠ green. Run the test the way CI does and check `gh pr checks` is green before claiming done.
+>    - **Fixtures must match real producer output**, not hand-crafted shapes.
+>    - **The PR body's stated safety claim must be *enforced in code*, not just named.**
+>
+> 4. **Plan first** (`plans/PR-<Slice>.md`, the 7 sections, <400 LOC soft cap), open PRs ready-for-review (not draft), and run the per-package validation gauntlet before pushing (see CLAUDE.md "Per-package validation gauntlets").
+>
+> 5. **Context discipline (keeps the session from compacting mid-work):**
+>    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
+>    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
+>    - Keep the session short. If you've been alive across several PRs, expect to compact soon; finish the current slice, then let the operator restart you fresh with this bootstrap rather than running on.
+
+---
+
+## 2. Mid-session drift redirect (post-compaction)
+
+Paste this when the session shows drift signals — a closed-unmerged PR, work in a different lane than the assigned task, or redoing already-merged work (these cluster when a compaction lands right as a PR is being opened).
+
+> Stop. You likely just compacted. Before any further action:
+> 1. Do **not** close, merge, or modify any PR — run `gh pr list --state open` and confirm which one is *yours* this task.
+> 2. Your current lane is **[X]**. If what you're about to do isn't in that lane, stop and ask.
+> 3. Don't start new work or re-do merged work — run `git log --oneline -15` to see what's already landed.
+> 4. Re-read your plan doc `plans/PR-<slice>.md` and `AGENTS.md`.
+>
+> Confirm your current PR # and lane back to me before continuing.
+
+---
+
+## Why this exists
+
+Per forensic observation (see the reviewer's session notes): the builder's regressions cluster at conversation-**compaction** boundaries, and a compaction landing close to a PR-open causes *hard* drift — closing PRs that aren't in its lane and doing out-of-scope work. Shorter sessions (restart with the bootstrap above) reduce how often it compacts; the redirect recovers a session that's already drifting. The recurring-lapse list in §1.3 is the same checklist the reviewer runs on every PR — front-loading it prevents the repeats.

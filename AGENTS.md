@@ -12,6 +12,13 @@ This file is the contract both sessions work from. The auditor
 canonical / scope checks; this file defines the **PR-shape contract**
 that lets the reviewer give the builder a clean LGTM.
 
+**New or restarted builder sessions: read `docs/SESSION_BOOTSTRAP.md`
+first.** It carries the get-up-to-speed checklist, the recurring-lapse
+list, and the context-discipline rules (stop after opening a PR; read
+narrow / run scoped tests during iteration) that keep a session from
+compacting mid-work. A session that has drifted post-compaction gets the
+redirect prompt in that file.
+
 ---
 
 ## 1. PR shape
