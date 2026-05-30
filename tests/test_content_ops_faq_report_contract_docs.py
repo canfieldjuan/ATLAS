@@ -17,6 +17,9 @@ DEFLECTION_EXAMPLE_PATH = (
 DEFLECTION_SNAPSHOT_EXAMPLE_PATH = (
     ROOT / "docs/frontend/content_ops_faq_deflection_snapshot_example.json"
 )
+DEFLECTION_CHECKOUT_CONTRACT_PATH = (
+    ROOT / "docs/frontend/content_ops_faq_deflection_checkout_contract.md"
+)
 
 
 def _producer_report_shape() -> tuple[set[str], set[str]]:
@@ -196,8 +199,30 @@ def test_content_ops_faq_report_contract_links_example() -> None:
     assert "content_ops_faq_report_example.json" in doc
     assert "content_ops_faq_deflection_report_example.json" in doc
     assert "content_ops_faq_deflection_snapshot_example.json" in doc
+    assert "content_ops_faq_deflection_checkout_contract.md" in doc
     assert "type DeflectionSnapshot" in doc
     assert "account_id: string;" in doc
     assert EXAMPLE_PATH.exists()
     assert DEFLECTION_EXAMPLE_PATH.exists()
     assert DEFLECTION_SNAPSHOT_EXAMPLE_PATH.exists()
+    assert DEFLECTION_CHECKOUT_CONTRACT_PATH.exists()
+
+
+def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> None:
+    doc = DEFLECTION_CHECKOUT_CONTRACT_PATH.read_text(encoding="utf-8")
+
+    required_terms = {
+        'source: "content_ops_deflection_report"',
+        "account_id: string;",
+        "request_id: string;",
+        "GET /content-ops/deflection-reports/{request_id}/snapshot",
+        "GET /content-ops/deflection-reports/{request_id}/artifact",
+        "POST /content-ops/deflection-reports/{request_id}/paid",
+        "amount_total >= 150000",
+        'currency: "usd"',
+        "The portfolio does not call an authed \"mark paid\" endpoint",
+        "Stripe webhook -> ATLAS verifies -> ATLAS marks paid",
+    }
+
+    for term in required_terms:
+        assert term in doc
