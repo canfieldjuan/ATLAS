@@ -37,6 +37,43 @@ type GatedDeflectionExecuteResult = {
 Render `snapshot` on the free page. Do not derive answer text, evidence, source
 IDs, or Markdown from this object.
 
+## Portfolio Blob Submit Endpoint
+
+The portfolio can hand ATLAS a support-ticket CSV blob and receive the same
+gated execute response:
+
+```http
+POST /content-ops/deflection-reports/submit
+```
+
+Request:
+
+```ts
+type DeflectionReportSubmitRequest = {
+  blob_url: string; // HTTPS Vercel Blob URL, public or signed
+  support_platform: "zendesk" | "intercom" | "help_scout" | "other";
+  company_name: string;
+  contact_email: string;
+  limit?: number; // default 1000, max 1000
+};
+```
+
+ATLAS fetches the blob server-side, parses it as CSV, normalizes rows through
+the support-ticket input package, and runs synchronous `faq_deflection_report`
+generation. A `200` response means the report row exists for the authenticated
+ATLAS account and `/snapshot` should be immediately readable.
+
+Caps and failures:
+
+- `blob_url` must be `https://`; private/signed URLs are preferred when the
+  portfolio makes them available.
+- ATLAS rejects localhost/private/link-local blob hosts after DNS resolution
+  and does not follow redirects.
+- Blob body cap: 50 MB. Larger responses return `413`.
+- Sync source-material cap: first 1,000 parsed rows, or `limit` when lower.
+- Empty CSVs or CSVs with no usable customer wording return `400`.
+- Fetch and CSV parse failures return `400`.
+
 ## Free Snapshot Endpoint
 
 ```http

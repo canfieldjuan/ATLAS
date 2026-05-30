@@ -7,6 +7,11 @@ import json
 import logging
 import math
 import tempfile
+import ipaddress
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +42,7 @@ else:
 from ..campaign_ports import TenantScope
 from ..campaign_postgres_import import import_campaign_opportunities
 from ..campaign_source_adapters import source_material_to_source_rows
+from ..campaign_source_adapters import load_source_rows_from_file
 from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -77,6 +83,7 @@ from ..reasoning_policy import (
 )
 from ..reasoning_signals import reasoning_validation_blocked_reason
 from ..ticket_faq_input_contract import ticket_faq_input_contracts
+from ..support_ticket_input_package import build_support_ticket_input_package
 
 ExecutionServicesProvider = Callable[
     [],
@@ -118,7 +125,16 @@ _MAX_INPUT_STRING_CHARS = 10000
 _MAX_INGESTION_ROWS = 1000
 _MAX_FILE_INGESTION_ROWS = 10000
 _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
+_MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 * 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
+_DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS = 15
+_DEFLECTION_SUBMIT_OUTPUTS = ("faq_deflection_report",)
+_DEFLECTION_SUBMIT_PLATFORMS = frozenset({
+    "zendesk",
+    "intercom",
+    "help_scout",
+    "other",
+})
 _UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
@@ -570,11 +586,54 @@ if BaseModel is not None:
 
         payment_reference: str | None = Field(default=None, max_length=200)
 
+    class DeflectionReportSubmitModel(BaseModel):
+        """Portfolio-owned upload handoff for a paid FAQ deflection report."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        blob_url: str = Field(..., min_length=1, max_length=2048)
+        support_platform: str = Field(..., min_length=1, max_length=80)
+        company_name: str = Field(..., min_length=1, max_length=200)
+        contact_email: str = Field(..., min_length=3, max_length=320)
+        limit: int = Field(_MAX_INGESTION_ROWS, ge=1, le=_MAX_INGESTION_ROWS)
+
+        @field_validator("blob_url")
+        @classmethod
+        def _validate_blob_url(cls, value: Any) -> str:
+            return _validate_https_blob_url(value)
+
+        @field_validator("support_platform")
+        @classmethod
+        def _validate_support_platform(cls, value: Any) -> str:
+            text = (_clean(value) or "").lower().replace("-", "_")
+            if text not in _DEFLECTION_SUBMIT_PLATFORMS:
+                raise ValueError(
+                    "support_platform must be one of: zendesk, intercom, "
+                    "help_scout, other"
+                )
+            return text
+
+        @field_validator("company_name", "contact_email")
+        @classmethod
+        def _validate_required_text(cls, value: Any) -> str:
+            text = _clean(value)
+            if not text:
+                raise ValueError("field is required")
+            return str(text)
+
+        @field_validator("contact_email")
+        @classmethod
+        def _validate_contact_email(cls, value: str) -> str:
+            if "@" not in value or value.startswith("@") or value.endswith("@"):
+                raise ValueError("contact_email must be an email address")
+            return value
+
 else:  # pragma: no cover - module import fallback when FastAPI is unavailable.
     ContentOpsRequestModel = Any
     ContentOpsIngestionInspectModel = Any
     ContentOpsIngestionImportModel = Any
     DeflectionReportPaidModel = Any
+    DeflectionReportSubmitModel = Any
 
 
 def create_content_ops_control_surface_router(
@@ -1042,6 +1101,72 @@ def create_content_ops_control_surface_router(
         finally:
             await execute_gate.release()
 
+    @router.post("/deflection-reports/submit")
+    async def submit_deflection_report(
+        payload: DeflectionReportSubmitModel = Body(...),
+    ) -> dict[str, Any]:
+        data = _deflection_submit_payload_to_mapping(payload)
+        max_rows = min(
+            int(data.get("limit") or _MAX_INGESTION_ROWS),
+            resolved_config.faq_execute_max_source_material_rows,
+        )
+        rows, byte_count = await _load_deflection_submit_blob_rows(
+            data["blob_url"],
+            max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
+        )
+        if not rows:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "deflection_submit_empty_blob",
+                    "message": "Blob CSV did not contain support-ticket rows.",
+                },
+            )
+        raw_row_count = len(rows)
+        submitted_rows = _deflection_submit_rows_with_defaults(data, rows)[:max_rows]
+        title = _deflection_submit_title(data)
+        package = build_support_ticket_input_package(
+            submitted_rows,
+            provider="portfolio_deflection_submit",
+            outputs=_DEFLECTION_SUBMIT_OUTPUTS,
+            max_rows=max_rows,
+            campaign_name=title,
+        )
+        included_row_count = int(package.metadata.get("included_row_count") or 0)
+        if included_row_count <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "deflection_submit_no_usable_rows",
+                    "message": "Blob CSV did not include usable support-ticket wording.",
+                    "source_row_count": raw_row_count,
+                    "max_source_material_rows": max_rows,
+                },
+            )
+
+        execute_inputs = dict(package.inputs)
+        execute_inputs.update({
+            "deflection_report_title": title,
+            "company_name": data["company_name"],
+            "contact_email": data["contact_email"],
+            "support_platform": data["support_platform"],
+        })
+        result = await execute_generation({
+            "outputs": list(_DEFLECTION_SUBMIT_OUTPUTS),
+            "limit": max_rows,
+            "require_quality_gates": False,
+            "inputs": execute_inputs,
+        })
+        return _with_deflection_submit_diagnostics(
+            result,
+            byte_count=byte_count,
+            max_rows=max_rows,
+            source_row_count=raw_row_count,
+            submitted_row_count=len(submitted_rows),
+            package=package.as_dict(),
+            support_platform=data["support_platform"],
+        )
+
     return router
 
 
@@ -1103,6 +1228,246 @@ async def _inspect_uploaded_ingestion_file(
                     "Content Ops temporary ingestion upload cleanup failed",
                     extra={"source": _clean(source) or _clean(getattr(file, "filename", None))},
                 )
+
+
+async def _load_deflection_submit_blob_rows(
+    blob_url: str,
+    *,
+    max_bytes: int,
+) -> tuple[list[Any], int]:
+    return await asyncio.to_thread(
+        _load_deflection_submit_blob_rows_sync,
+        blob_url,
+        max_bytes,
+    )
+
+
+def _load_deflection_submit_blob_rows_sync(
+    blob_url: str,
+    max_bytes: int,
+) -> tuple[list[Any], int]:
+    data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="Blob CSV is empty.",
+        )
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-deflection-submit-",
+            suffix=".csv",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(data)
+        try:
+            rows = load_source_rows_from_file(temp_path, file_format="csv")
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Blob CSV could not be parsed.",
+            ) from exc
+        return rows, len(data)
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Content Ops deflection submit temp cleanup failed")
+
+
+def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
+    url = _validate_https_blob_fetch_target(blob_url)
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Atlas-Content-Ops/1.0"},
+    )
+    try:
+        with _open_https_blob_request(
+            request,
+            timeout=_DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
+        ) as response:
+            data = response.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        if 300 <= int(getattr(exc, "code", 0) or 0) < 400:
+            raise HTTPException(
+                status_code=400,
+                detail="Blob URL redirects are not allowed.",
+            ) from exc
+        raise HTTPException(
+            status_code=400,
+            detail="Blob URL could not be fetched.",
+        ) from exc
+    except (OSError, urllib.error.URLError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Blob URL could not be fetched.",
+        ) from exc
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "reason": "deflection_submit_blob_too_large",
+                "max_file_bytes": max_bytes,
+            },
+        )
+    return data
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+def _open_https_blob_request(
+    request: urllib.request.Request,
+    *,
+    timeout: int,
+) -> Any:
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    return opener.open(request, timeout=timeout)
+
+
+def _validate_https_blob_url(value: Any) -> str:
+    text = _clean(value) or ""
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("blob_url must be an https URL")
+    host = parsed.hostname or ""
+    if not host or _is_blocked_blob_host(host):
+        raise ValueError("blob_url host is not allowed")
+    if parsed.username or parsed.password:
+        raise ValueError("blob_url must not include credentials")
+    return text
+
+
+def _validate_https_blob_fetch_target(value: Any) -> str:
+    url = _validate_https_blob_url(value)
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    try:
+        _validate_blob_host_resolution(host)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return url
+
+
+def _validate_blob_host_resolution(host: str) -> None:
+    # This preflight closes common hostname-to-private SSRF cases. urllib still
+    # resolves again at connect time, so a full DNS-rebinding defense would pin
+    # the validated IP at connection construction.
+    try:
+        resolved = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("blob_url host could not be resolved") from exc
+    if not resolved:
+        raise ValueError("blob_url host could not be resolved")
+    for item in resolved:
+        sockaddr = item[4]
+        if not sockaddr:
+            raise ValueError("blob_url host could not be resolved")
+        if _is_blocked_blob_host(str(sockaddr[0])):
+            raise ValueError("blob_url host is not allowed")
+
+
+def _is_blocked_blob_host(host: str) -> bool:
+    lowered = host.strip().lower().rstrip(".")
+    if lowered in {"localhost", "0.0.0.0"} or lowered.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(lowered)
+    except ValueError:
+        return False
+    return bool(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def _deflection_submit_rows_with_defaults(
+    data: Mapping[str, Any],
+    rows: Sequence[Any],
+) -> list[Any]:
+    defaults = {
+        "source_type": "support_ticket",
+        "company_name": data["company_name"],
+        "contact_email": data["contact_email"],
+        "support_platform": data["support_platform"],
+    }
+    return [
+        {**defaults, **dict(row)}
+        if isinstance(row, Mapping)
+        else row
+        for row in rows
+    ]
+
+
+def _deflection_submit_title(data: Mapping[str, Any]) -> str:
+    return f"{data['company_name']} Support Deflection Report"
+
+
+def _with_deflection_submit_diagnostics(
+    response: Mapping[str, Any],
+    *,
+    byte_count: int,
+    max_rows: int,
+    source_row_count: int,
+    submitted_row_count: int,
+    package: Mapping[str, Any],
+    support_platform: str,
+) -> dict[str, Any]:
+    out = dict(response)
+    existing = out.get("input_provider")
+    diagnostics = dict(existing) if isinstance(existing, Mapping) else {}
+    metadata = dict(diagnostics.get("metadata") or {})
+    package_metadata = package.get("metadata") if isinstance(package, Mapping) else {}
+    if isinstance(package_metadata, Mapping):
+        metadata.update({
+            key: package_metadata[key]
+            for key in (
+                "included_row_count",
+                "skipped_row_count",
+                "source_period",
+            )
+            if key in package_metadata
+        })
+    truncated_row_count = max(0, source_row_count - submitted_row_count)
+    metadata.update({
+        "source": "portfolio_deflection_submit",
+        "source_row_count": source_row_count,
+        "submitted_row_count": submitted_row_count,
+        "truncated_row_count": truncated_row_count,
+        "max_source_material_rows": max_rows,
+        "blob_bytes": byte_count,
+        "support_platform": support_platform,
+    })
+    warnings = [
+        dict(warning)
+        for warning in diagnostics.get("warnings") or ()
+        if isinstance(warning, Mapping)
+    ]
+    if truncated_row_count:
+        warnings.append({
+            "code": "deflection_submit_rows_truncated",
+            "message": (
+                f"Used first {submitted_row_count} support-ticket rows "
+                f"out of {source_row_count}."
+            ),
+            "row_count": source_row_count,
+            "max_rows": max_rows,
+            "truncated_row_count": truncated_row_count,
+        })
+    out["input_provider"] = {
+        "provider": "portfolio_deflection_submit",
+        "metadata": metadata,
+        "warnings": warnings,
+    }
+    return out
 
 
 async def _read_bounded_upload(file: UploadFile) -> bytes:
@@ -2203,6 +2568,15 @@ def _ingestion_import_payload_to_mapping(payload: Any) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
 
 
+def _deflection_submit_payload_to_mapping(payload: Any) -> dict[str, Any]:
+    if BaseModel is not None and isinstance(payload, DeflectionReportSubmitModel):
+        return payload.model_dump()
+    try:
+        return DeflectionReportSubmitModel.model_validate(payload).model_dump()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
 def _validate_input_shape(
     value: Any,
     *,
@@ -2290,5 +2664,6 @@ __all__ = [
     "ContentOpsControlSurfaceApiConfig",
     "ContentOpsIngestionImportModel",
     "ContentOpsRequestModel",
+    "DeflectionReportSubmitModel",
     "create_content_ops_control_surface_router",
 ]
