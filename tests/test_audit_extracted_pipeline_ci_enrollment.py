@@ -216,3 +216,206 @@ def test_cli_returns_nonzero_for_incomplete_enrollment(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "missing from runner" in result.stdout
+
+
+def _write_atlas_workflow(
+    root: Path,
+    *,
+    workflow_name: str = "atlas_widget_checks.yml",
+    pull_request_filters: tuple[str, ...] = ("tests/test_atlas_widget.py",),
+    push_filters: tuple[str, ...] = ("tests/test_atlas_widget.py",),
+    runner_paths: tuple[str, ...] = ("tests/test_atlas_widget.py",),
+    inline_run: bool = False,
+) -> None:
+    lines = [
+        "name: Atlas Widget Checks",
+        "",
+        "on:",
+        "  pull_request:",
+        "    paths:",
+    ]
+    lines.extend(f'      - "{path}"' for path in pull_request_filters)
+    lines.extend(["  push:", "    paths:"])
+    lines.extend(f'      - "{path}"' for path in push_filters)
+    lines.extend(
+        [
+            "",
+            "jobs:",
+            "  atlas-widget-checks:",
+            "    runs-on: ubuntu-latest",
+            "    steps:",
+        ]
+    )
+    if inline_run:
+        lines.append("      - run: python -m pytest " + " ".join(runner_paths) + " -q")
+    else:
+        lines.extend(
+            [
+                "      - name: Run atlas widget tests",
+                "        run: python -m pytest " + " ".join(runner_paths) + " -q",
+            ]
+        )
+    lines.append("")
+    (root / f".github/workflows/{workflow_name}").write_text(
+        "\n".join(lines),
+        encoding="utf-8",
+    )
+
+
+def _write_atlas_importing_test(root: Path) -> str:
+    path = "tests/test_atlas_widget.py"
+    (root / path).write_text(
+        "from atlas_brain.widgets import build_widget\n\n"
+        "def test_widget():\n"
+        "    assert build_widget\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_atlas_brain_changed_test_accepts_dedicated_workflow(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(root)
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
+def test_atlas_brain_changed_test_accepts_inline_run_step(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(root, inline_run=True)
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
+
+
+def test_atlas_brain_changed_test_requires_atlas_workflow(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.atlas_brain_test_errors == (
+        "tests/test_atlas_widget.py imports atlas_brain.* but no "
+        "atlas_*_checks.yml workflow exists",
+    )
+    assert not audit.ok
+
+
+def test_atlas_brain_changed_test_reports_missing_pr_filter(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(root, pull_request_filters=("tests/test_other.py",))
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.atlas_brain_test_errors == (
+        "tests/test_atlas_widget.py imports atlas_brain.* but is missing "
+        "dedicated atlas workflow enrollment: pull_request path filter",
+    )
+    assert not audit.ok
+
+
+def test_atlas_brain_changed_test_reports_missing_push_filter(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(root, push_filters=("tests/test_other.py",))
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.atlas_brain_test_errors == (
+        "tests/test_atlas_widget.py imports atlas_brain.* but is missing "
+        "dedicated atlas workflow enrollment: push path filter",
+    )
+    assert not audit.ok
+
+
+def test_atlas_brain_changed_test_reports_missing_pytest_runner(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(root, runner_paths=("tests/test_other.py",))
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.atlas_brain_test_errors == (
+        "tests/test_atlas_widget.py imports atlas_brain.* but is missing "
+        "dedicated atlas workflow enrollment: pytest run step",
+    )
+    assert not audit.ok
+
+
+def test_atlas_brain_changed_test_rejects_split_workflow_enrollment(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    test_path = _write_atlas_importing_test(root)
+    _write_atlas_workflow(
+        root,
+        workflow_name="atlas_widget_pr_checks.yml",
+        push_filters=("tests/test_other.py",),
+        runner_paths=("tests/test_other.py",),
+    )
+    _write_atlas_workflow(
+        root,
+        workflow_name="atlas_widget_push_checks.yml",
+        pull_request_filters=("tests/test_other.py",),
+        runner_paths=("tests/test_other.py",),
+    )
+    _write_atlas_workflow(
+        root,
+        workflow_name="atlas_widget_run_checks.yml",
+        pull_request_filters=("tests/test_other.py",),
+        push_filters=("tests/test_other.py",),
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(test_path,),
+    )
+
+    assert audit.atlas_brain_test_errors == (
+        "tests/test_atlas_widget.py imports atlas_brain.* but is missing "
+        "dedicated atlas workflow enrollment: single atlas workflow with "
+        "pull_request path filter, push path filter, and pytest run step",
+    )
+    assert not audit.ok
+
+
+def test_non_atlas_brain_changed_test_does_not_need_atlas_workflow(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    path = "tests/test_plain_widget.py"
+    (root / path).write_text("def test_plain():\n    assert True\n", encoding="utf-8")
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
+        root,
+        atlas_brain_test_paths=(path,),
+    )
+
+    assert audit.ok
+    assert audit.atlas_brain_test_errors == ()
