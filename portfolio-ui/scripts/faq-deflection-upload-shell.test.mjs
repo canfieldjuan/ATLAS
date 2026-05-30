@@ -134,6 +134,8 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-account-id-input",
     "data-atlas-deflection-submit",
     "data-atlas-deflection-upload-endpoint",
+    "data-atlas-deflection-upload-progress",
+    "data-atlas-deflection-retry",
   ]) {
     assert.match(uploadSource, new RegExp(marker));
   }
@@ -142,6 +144,12 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.doesNotMatch(blobUploadRouteSource, /^import .*@vercel\/blob\/client/m);
   assert.match(blobUploadRouteSource, /import\("@vercel\/blob\/client"\)/);
   assert.match(uploadSource, /access: "private"/);
+  assert.match(uploadSource, /onUploadProgress/);
+  assert.match(uploadSource, /boundedProgress\(event\.percentage\)/);
+  assert.match(uploadSource, /role="progressbar"/);
+  assert.match(uploadSource, /aria-valuenow=\{submit\.percentage\}/);
+  assert.match(uploadSource, /Retry upload/);
+  assert.match(uploadSource, /starts a new private upload/);
   assert.match(uploadSource, /blob_pathname: blob\.pathname/);
   assert.match(uploadSource, /private_blob_persistence/);
   assert.match(uploadSource, /value: "help_scout"/);

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Loader2,
+  RotateCcw,
   Send,
   Upload,
 } from "lucide-react";
@@ -30,7 +31,7 @@ type UploadState =
 
 type SubmitState =
   | { status: "idle" }
-  | { status: "uploading" }
+  | { status: "uploading"; percentage: number }
   | { status: "submitting" }
   | { status: "error"; message: string };
 
@@ -64,6 +65,11 @@ function blobPathname(fileName: string) {
   return `${BLOB_UPLOAD_PATH_PREFIX}${Date.now()}-${csvName}`;
 }
 
+function boundedProgress(percentage: number | undefined) {
+  if (!Number.isFinite(percentage)) return 0;
+  return Math.max(0, Math.min(100, Math.round(percentage ?? 0)));
+}
+
 export default function FaqDeflectionUpload() {
   const [companyName, setCompanyName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
@@ -84,19 +90,26 @@ export default function FaqDeflectionUpload() {
     [accountId, companyName, contactEmail, supportPlatform, upload.status],
   );
   const canSubmit = fieldsReady && submit.status !== "uploading" && submit.status !== "submitting";
+  const isRetry = submit.status === "error";
 
   const startSubmit = async () => {
     if (upload.status !== "ready" || !fieldsReady) return;
     const trimmedAccountId = accountId.trim();
 
     try {
-      setSubmit({ status: "uploading" });
+      setSubmit({ status: "uploading", percentage: 0 });
       const blob = await uploadBlob(blobPathname(upload.fileName), upload.file, {
         access: "private",
         contentType: "text/csv",
         handleUploadUrl: BLOB_UPLOAD_ENDPOINT,
         clientPayload: JSON.stringify({ account_id: trimmedAccountId }),
         multipart: upload.fileSize > 4 * 1024 * 1024,
+        onUploadProgress: (event) => {
+          setSubmit({
+            status: "uploading",
+            percentage: boundedProgress(event.percentage),
+          });
+        },
       });
 
       setSubmit({ status: "submitting" });
@@ -266,6 +279,30 @@ export default function FaqDeflectionUpload() {
                   <p>{upload.message}</p>
                 </div>
               )}
+              {submit.status === "uploading" && (
+                <div
+                  className="rounded-lg border border-primary-500/25 bg-primary-500/10 p-4"
+                  data-atlas-deflection-upload-progress
+                >
+                  <div className="flex items-center justify-between gap-3 text-xs font-medium text-primary-100">
+                    <span>Uploading CSV to private Blob</span>
+                    <span>{submit.percentage}%</span>
+                  </div>
+                  <div
+                    className="mt-3 h-2 overflow-hidden rounded-full bg-surface-900"
+                    role="progressbar"
+                    aria-label="CSV upload progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={submit.percentage}
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary-300 transition-[width]"
+                      style={{ width: `${submit.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             <button
@@ -284,6 +321,11 @@ export default function FaqDeflectionUpload() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Creating report
                 </>
+              ) : isRetry ? (
+                <>
+                  <RotateCcw size={16} />
+                  Retry upload
+                </>
               ) : (
                 <>
                   <Send size={16} />
@@ -292,7 +334,9 @@ export default function FaqDeflectionUpload() {
               )}
             </button>
             {submit.status === "error" && (
-              <p className="mt-3 text-xs leading-5 text-amber-200">{submit.message}</p>
+              <p className="mt-3 text-xs leading-5 text-amber-200" data-atlas-deflection-retry>
+                {submit.message} Retry keeps the selected CSV and starts a new private upload.
+              </p>
             )}
           </form>
 
