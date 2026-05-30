@@ -15,12 +15,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 SUPPORT_PLATFORMS = frozenset({"zendesk", "intercom", "help_scout", "other"})
+CSV_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
 SUBMIT_PATH = "/api/v1/content-ops/deflection-reports/submit"
 SNAPSHOT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/snapshot"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
@@ -73,6 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=_env("ATLAS_API_BASE_URL"))
     parser.add_argument("--token", default=_env("ATLAS_B2B_JWT", "ATLAS_TOKEN"))
     parser.add_argument("--account-id", default=_env("ATLAS_ACCOUNT_ID", "ATLAS_FAQ_SEARCH_ACCOUNT_ID"))
+    parser.add_argument("--csv-file", type=Path, default=_env("ATLAS_DEFLECTION_SUBMIT_CSV_FILE") or None)
     parser.add_argument("--blob-url", default=_env("ATLAS_DEFLECTION_SUBMIT_BLOB_URL"))
     parser.add_argument("--support-platform", default=_env("ATLAS_DEFLECTION_SUPPORT_PLATFORM") or "zendesk")
     parser.add_argument("--company-name", default=_env("ATLAS_DEFLECTION_COMPANY_NAME"))
@@ -104,8 +107,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("ATLAS_B2B_JWT, ATLAS_TOKEN, or --token is required")
     if not _clean(args.account_id):
         errors.append("ATLAS_ACCOUNT_ID, ATLAS_FAQ_SEARCH_ACCOUNT_ID, or --account-id is required")
-    if not _clean(args.blob_url):
-        errors.append("ATLAS_DEFLECTION_SUBMIT_BLOB_URL or --blob-url is required")
+    if _clean(args.csv_file):
+        errors.extend(_csv_file_errors(Path(args.csv_file)))
+    elif not _clean(args.blob_url):
+        errors.append(
+            "ATLAS_DEFLECTION_SUBMIT_CSV_FILE/--csv-file or "
+            "ATLAS_DEFLECTION_SUBMIT_BLOB_URL/--blob-url is required"
+        )
     else:
         errors.extend(_blob_url_errors(_clean(args.blob_url)))
     if _clean(args.support_platform) not in SUPPORT_PLATFORMS:
@@ -162,11 +170,40 @@ def _blob_url_errors(blob_url: str) -> list[str]:
     return []
 
 
+def _csv_file_errors(csv_file: Path) -> list[str]:
+    try:
+        path = csv_file.expanduser()
+        stat = path.stat()
+    except OSError:
+        return ["--csv-file must point to a readable support-ticket CSV file"]
+    if not path.is_file():
+        return ["--csv-file must point to a file"]
+    if stat.st_size <= 0:
+        return ["--csv-file must not be empty"]
+    if stat.st_size > CSV_UPLOAD_MAX_BYTES:
+        return ["--csv-file must be 50 MB or smaller"]
+    return []
+
+
+def _submit_mode(args: argparse.Namespace) -> str:
+    return "multipart" if _clean(args.csv_file) else "json_blob_url"
+
+
+def _csv_file_size(args: argparse.Namespace) -> int | None:
+    if not _clean(args.csv_file):
+        return None
+    try:
+        return Path(args.csv_file).expanduser().stat().st_size
+    except OSError:
+        return None
+
+
 def _required_input_status(args: argparse.Namespace) -> dict[str, dict[str, bool]]:
     return {
         "base_url": {"present": bool(_clean(args.base_url))},
         "token": {"present": bool(_clean(args.token))},
         "account_id": {"present": bool(_clean(args.account_id))},
+        "csv_file": {"present": bool(_clean(args.csv_file))},
         "blob_url": {"present": bool(_clean(args.blob_url))},
         "company_name": {"present": bool(_clean(args.company_name))},
         "contact_email": {"present": bool(_clean(args.contact_email))},
@@ -195,27 +232,26 @@ def _submit_body(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _submit_fields(args: argparse.Namespace) -> dict[str, str]:
+    return {
+        "support_platform": _clean(args.support_platform),
+        "company_name": _clean(args.company_name),
+        "contact_email": _clean(args.contact_email),
+        "limit": str(int(args.limit)),
+    }
+
+
 def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:
     return urllib.request.urlopen(request, timeout=timeout)
 
 
-def _json_request(
+def _parse_http_json_response(
     method: str,
     url: str,
     *,
-    token: str,
+    request: urllib.request.Request,
     timeout: float,
-    body: Mapping[str, Any] | None = None,
 ) -> HttpJsonResponse:
-    encoded_body = None
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {token}",
-    }
-    if body is not None:
-        encoded_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(url, data=encoded_body, headers=headers, method=method)
     try:
         with _open_http_request(request, timeout=timeout) as response:
             status = int(getattr(response, "status", None) or response.getcode())
@@ -242,6 +278,92 @@ def _json_request(
             errors=(f"{method} {url} returned invalid JSON: {exc.msg}",),
         )
     return HttpJsonResponse(status=status, payload=payload, raw_text=raw[:2000])
+
+
+def _json_request(
+    method: str,
+    url: str,
+    *,
+    token: str,
+    timeout: float,
+    body: Mapping[str, Any] | None = None,
+) -> HttpJsonResponse:
+    encoded_body = None
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    if body is not None:
+        encoded_body = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=encoded_body, headers=headers, method=method)
+    return _parse_http_json_response(method, url, request=request, timeout=timeout)
+
+
+def _multipart_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
+
+
+def _encode_multipart_body(
+    fields: Mapping[str, str],
+    *,
+    file_field: str,
+    file_path: Path,
+    file_bytes: bytes,
+) -> tuple[bytes, str]:
+    boundary = f"atlas-deflection-{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+    for name, value in fields.items():
+        chunks.extend((
+            f"--{boundary}\r\n".encode("ascii"),
+            (
+                'Content-Disposition: form-data; '
+                f'name="{_multipart_escape(name)}"\r\n\r\n'
+            ).encode("utf-8"),
+            value.encode("utf-8"),
+            b"\r\n",
+        ))
+    filename = _multipart_escape(file_path.name or "support-tickets.csv")
+    chunks.extend((
+        f"--{boundary}\r\n".encode("ascii"),
+        (
+            'Content-Disposition: form-data; '
+            f'name="{_multipart_escape(file_field)}"; filename="{filename}"\r\n'
+            "Content-Type: text/csv\r\n\r\n"
+        ).encode("utf-8"),
+        file_bytes,
+        b"\r\n",
+        f"--{boundary}--\r\n".encode("ascii"),
+    ))
+    return b"".join(chunks), boundary
+
+
+def _multipart_submit_request(
+    url: str,
+    *,
+    token: str,
+    timeout: float,
+    fields: Mapping[str, str],
+    csv_file: Path,
+) -> HttpJsonResponse:
+    file_path = csv_file.expanduser()
+    body, boundary = _encode_multipart_body(
+        fields,
+        file_field="csv_file",
+        file_path=file_path,
+        file_bytes=file_path.read_bytes(),
+    )
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    return _parse_http_json_response("POST", url, request=request, timeout=timeout)
 
 
 def _forbidden_key_paths(value: Any, *, prefix: str = "$") -> list[str]:
@@ -294,7 +416,11 @@ def _validate_snapshot(snapshot: Any, *, label: str) -> list[str]:
     return errors
 
 
-def _validate_submit_envelope(payload: Any) -> tuple[str, Mapping[str, Any] | None, dict[str, Any], list[str]]:
+def _validate_submit_envelope(
+    payload: Any,
+    *,
+    submit_mode: str = "json_blob_url",
+) -> tuple[str, Mapping[str, Any] | None, dict[str, Any], list[str]]:
     errors: list[str] = []
     diagnostics: dict[str, Any] = {}
     if not isinstance(payload, Mapping):
@@ -358,6 +484,7 @@ def _validate_submit_envelope(payload: Any) -> tuple[str, Mapping[str, Any] | No
                     "submitted_row_count",
                     "truncated_row_count",
                     "max_source_material_rows",
+                    "uploaded_bytes",
                     "blob_bytes",
                     "support_platform",
                 )
@@ -365,6 +492,13 @@ def _validate_submit_envelope(payload: Any) -> tuple[str, Mapping[str, Any] | No
             }
             if metadata.get("source") != "portfolio_deflection_submit":
                 errors.append("input_provider.metadata.source must be portfolio_deflection_submit")
+            expected_byte_key = "uploaded_bytes" if submit_mode == "multipart" else "blob_bytes"
+            expected_byte_value = metadata.get(expected_byte_key)
+            if not isinstance(expected_byte_value, int) or expected_byte_value <= 0:
+                errors.append(
+                    f"input_provider.metadata.{expected_byte_key} must be a positive integer "
+                    f"for {submit_mode} submit"
+                )
     return request_id, snapshot if isinstance(snapshot, Mapping) else None, diagnostics, errors
 
 
@@ -387,6 +521,8 @@ def _preflight_summary(
         "phase": "preflight",
         "preflight_errors": list(errors),
         "required_inputs": _required_input_status(args),
+        "submit_mode": _submit_mode(args),
+        "csv_file_size": _csv_file_size(args),
         "blob_host": _redacted_blob_host(_clean(args.blob_url)),
         "submit": {"ok": False, "skipped": True, "not_run_reason": reason},
         "snapshot": {"ok": False, "skipped": True, "not_run_reason": reason},
@@ -417,13 +553,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     start = time.perf_counter()
     errors: list[str] = []
     submit_url = _join_url(_clean(args.base_url), _clean(args.submit_path))
-    submit_response = _json_request(
-        "POST",
-        submit_url,
-        token=_clean(args.token),
-        timeout=float(args.timeout),
-        body=_submit_body(args),
-    )
+    submit_mode = _submit_mode(args)
+    if submit_mode == "multipart":
+        submit_response = _multipart_submit_request(
+            submit_url,
+            token=_clean(args.token),
+            timeout=float(args.timeout),
+            fields=_submit_fields(args),
+            csv_file=Path(args.csv_file),
+        )
+    else:
+        submit_response = _json_request(
+            "POST",
+            submit_url,
+            token=_clean(args.token),
+            timeout=float(args.timeout),
+            body=_submit_body(args),
+        )
     submit_errors = list(submit_response.errors)
     request_id = ""
     submit_snapshot: Mapping[str, Any] | None = None
@@ -432,7 +578,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         submit_errors.append(f"submit status must be 200, got {submit_response.status}")
     else:
         request_id, submit_snapshot, diagnostics, envelope_errors = _validate_submit_envelope(
-            submit_response.payload
+            submit_response.payload,
+            submit_mode=submit_mode,
         )
         submit_errors.extend(envelope_errors)
     errors.extend(submit_errors)
@@ -492,6 +639,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "ok": not errors,
         "phase": "complete",
         "request_id": request_id or None,
+        "submit_mode": submit_mode,
+        "csv_file_size": _csv_file_size(args),
         "blob_host": _redacted_blob_host(_clean(args.blob_url)),
         "submit": {
             **_status_summary(submit_response),

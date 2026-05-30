@@ -55,7 +55,54 @@ def _base_args(tmp_path: Path) -> list[str]:
     ]
 
 
-def _submit_payload(*, request_id: str = "content-ops-123", snapshot: Any = SNAPSHOT) -> dict[str, Any]:
+def _base_csv_args(tmp_path: Path, csv_file: Path) -> list[str]:
+    return [
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-secret",
+        "--account-id",
+        "acct-123",
+        "--csv-file",
+        str(csv_file),
+        "--support-platform",
+        "zendesk",
+        "--company-name",
+        "Acme Co.",
+        "--contact-email",
+        "lead@example.com",
+        "--output-result",
+        str(tmp_path / "result.json"),
+    ]
+
+
+def _write_csv(tmp_path: Path) -> Path:
+    csv_file = tmp_path / "tickets.csv"
+    csv_file.write_text(
+        "ticket_id,subject,body\n"
+        "1,Export reports,How do I export reports?\n",
+        encoding="utf-8",
+    )
+    return csv_file
+
+
+def _submit_payload(
+    *,
+    request_id: str = "content-ops-123",
+    snapshot: Any = SNAPSHOT,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    base_metadata = {
+        "source": "portfolio_deflection_submit",
+        "source_row_count": 3,
+        "submitted_row_count": 3,
+        "truncated_row_count": 0,
+        "max_source_material_rows": 1000,
+        "blob_bytes": 200,
+        "support_platform": "zendesk",
+    }
+    if metadata is not None:
+        base_metadata = metadata
     return {
         "status": "completed",
         "request_id": request_id,
@@ -75,15 +122,7 @@ def _submit_payload(*, request_id: str = "content-ops-123", snapshot: Any = SNAP
         ],
         "input_provider": {
             "provider": "portfolio_deflection_submit",
-            "metadata": {
-                "source": "portfolio_deflection_submit",
-                "source_row_count": 3,
-                "submitted_row_count": 3,
-                "truncated_row_count": 0,
-                "max_source_material_rows": 1000,
-                "blob_bytes": 200,
-                "support_platform": "zendesk",
-            },
+            "metadata": base_metadata,
             "warnings": [],
         },
     }
@@ -111,12 +150,22 @@ class FakeResponse:
 
 def _fake_open(sequence: list[tuple[int, Any]], calls: list[dict[str, Any]]):
     def _open(request, *, timeout):
-        body = json.loads(request.data.decode("utf-8")) if request.data else None
+        headers = dict(request.header_items())
+        header_lookup = {key.lower(): value for key, value in headers.items()}
+        content_type = header_lookup.get("content-type", "")
+        body_bytes = request.data or b""
+        body_text = body_bytes.decode("utf-8", errors="replace") if body_bytes else ""
+        body = None
+        if body_bytes and content_type.startswith("application/json"):
+            body = json.loads(body_text)
         calls.append({
             "url": request.full_url,
             "method": request.get_method(),
-            "headers": dict(request.header_items()),
+            "headers": headers,
+            "content_type": content_type,
             "body": body,
+            "body_text": body_text,
+            "body_bytes": body_bytes,
             "timeout": timeout,
         })
         status, payload = sequence.pop(0)
@@ -164,6 +213,29 @@ def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
     ]
 
 
+def test_validate_args_fails_closed_for_missing_csv_file(tmp_path) -> None:
+    args = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-secret",
+        "--account-id",
+        "acct-123",
+        "--csv-file",
+        str(tmp_path / "missing.csv"),
+        "--support-platform",
+        "zendesk",
+        "--company-name",
+        "Acme Co.",
+        "--contact-email",
+        "lead@example.com",
+    ])
+
+    assert smoke._validate_args(args) == [
+        "--csv-file must point to a readable support-ticket CSV file"
+    ]
+
+
 def test_validate_submit_envelope_accepts_locked_gated_result() -> None:
     request_id, snapshot, diagnostics, errors = smoke._validate_submit_envelope(_submit_payload())
 
@@ -172,6 +244,38 @@ def test_validate_submit_envelope_accepts_locked_gated_result() -> None:
     assert snapshot == SNAPSHOT
     assert diagnostics["provider"] == "portfolio_deflection_submit"
     assert diagnostics["metadata"]["source_row_count"] == 3
+
+
+def test_validate_submit_envelope_requires_json_blob_byte_counter() -> None:
+    payload = _submit_payload(metadata={
+        "source": "portfolio_deflection_submit",
+        "source_row_count": 3,
+        "submitted_row_count": 3,
+        "truncated_row_count": 0,
+        "max_source_material_rows": 1000,
+        "support_platform": "zendesk",
+    })
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(payload)
+
+    assert (
+        "input_provider.metadata.blob_bytes must be a positive integer for json_blob_url submit"
+        in errors
+    )
+
+
+def test_validate_submit_envelope_requires_multipart_upload_byte_counter() -> None:
+    payload = _submit_payload()
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        payload,
+        submit_mode="multipart",
+    )
+
+    assert (
+        "input_provider.metadata.uploaded_bytes must be a positive integer for multipart submit"
+        in errors
+    )
 
 
 def test_validate_submit_envelope_rejects_missing_deflection_step() -> None:
@@ -252,6 +356,54 @@ def test_run_success_posts_submit_and_probes_snapshot_and_locked_artifact(monkey
     serialized = json.dumps(summary)
     assert "token-secret" not in serialized
     assert "signed-secret" not in serialized
+
+
+def test_run_success_posts_multipart_csv_and_probes_locked_artifact(monkeypatch, tmp_path):
+    csv_file = _write_csv(tmp_path)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open(
+            [
+                (
+                    200,
+                    _submit_payload(
+                        metadata={
+                            "source": "portfolio_deflection_submit",
+                            "source_row_count": 3,
+                            "submitted_row_count": 3,
+                            "truncated_row_count": 0,
+                            "max_source_material_rows": 1000,
+                            "uploaded_bytes": csv_file.stat().st_size,
+                            "support_platform": "zendesk",
+                        }
+                    ),
+                ),
+                (200, SNAPSHOT),
+                (403, {"detail": "payment_required"}),
+            ],
+            calls,
+        ),
+    )
+    args = smoke._build_parser().parse_args(_base_csv_args(tmp_path, csv_file))
+
+    summary = smoke.run(args)
+
+    assert summary["ok"] is True
+    assert summary["submit_mode"] == "multipart"
+    assert summary["csv_file_size"] == csv_file.stat().st_size
+    assert summary["blob_host"] == ""
+    assert calls[0]["body"] is None
+    assert calls[0]["content_type"].startswith("multipart/form-data; boundary=")
+    assert 'name="csv_file"; filename="tickets.csv"' in calls[0]["body_text"]
+    assert "How do I export reports?" in calls[0]["body_text"]
+    assert 'name="support_platform"' in calls[0]["body_text"]
+    assert "blob_url" not in calls[0]["body_text"]
+    assert summary["submit"]["diagnostics"]["metadata"]["uploaded_bytes"] == csv_file.stat().st_size
+    serialized = json.dumps(summary)
+    assert "token-secret" not in serialized
+    assert "How do I export reports?" not in serialized
 
 
 def test_run_fails_closed_when_snapshot_does_not_match_submit(monkeypatch, tmp_path):
@@ -375,3 +527,39 @@ def test_main_preflight_writes_redacted_result(tmp_path, capsys):
     serialized = captured.out + result_path.read_text(encoding="utf-8")
     assert "token-secret" not in serialized
     assert "signed-secret" not in serialized
+
+
+def test_main_multipart_preflight_records_mode_without_csv_contents(tmp_path, capsys):
+    csv_file = _write_csv(tmp_path)
+    result_path = tmp_path / "preflight.json"
+
+    exit_code = smoke.main([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-secret",
+        "--account-id",
+        "acct-123",
+        "--csv-file",
+        str(csv_file),
+        "--support-platform",
+        "zendesk",
+        "--company-name",
+        "Acme Co.",
+        "--contact-email",
+        "lead@example.com",
+        "--preflight-only",
+        "--json",
+        "--output-result",
+        str(result_path),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["submit_mode"] == "multipart"
+    assert payload["csv_file_size"] == csv_file.stat().st_size
+    serialized = captured.out + result_path.read_text(encoding="utf-8")
+    assert "token-secret" not in serialized
+    assert "How do I export reports?" not in serialized

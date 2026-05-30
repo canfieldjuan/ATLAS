@@ -1,7 +1,8 @@
 # Content Ops FAQ Deflection Submit Handoff Runbook
 
 Use this runbook to prove the deployed ATLAS API can consume the portfolio's
-signed support-ticket CSV blob and return the gated deflection report response.
+support-ticket CSV over the authenticated submit handoff and return the gated
+deflection report response.
 
 ## Required Inputs
 
@@ -12,9 +13,12 @@ signed support-ticket CSV blob and return the gated deflection report response.
 - `ATLAS_ACCOUNT_ID` or `ATLAS_FAQ_SEARCH_ACCOUNT_ID`: the account id that
   maps to the bearer token. The submit route derives account scope from auth;
   the portfolio needs this value for Stripe Checkout metadata.
-- `ATLAS_DEFLECTION_SUBMIT_BLOB_URL`: HTTPS support-ticket CSV blob URL. A
-  private signed URL is preferred; the URL must live long enough for the sync
-  submit call.
+- `ATLAS_DEFLECTION_SUBMIT_CSV_FILE`: local support-ticket CSV fixture for the
+  preferred multipart hosted smoke. Use a representative private-Blob export
+  downloaded by the operator or portfolio server-side code path.
+- `ATLAS_DEFLECTION_SUBMIT_BLOB_URL`: optional legacy HTTPS support-ticket CSV
+  blob URL. This fallback remains available for rollback coverage but is not
+  the preferred production PII posture.
 - `ATLAS_DEFLECTION_COMPANY_NAME`: company name to include in the report title.
 - `ATLAS_DEFLECTION_CONTACT_EMAIL`: buyer/contact email.
 - `ATLAS_DEFLECTION_SUPPORT_PLATFORM`: `zendesk`, `intercom`, `help_scout`, or
@@ -68,7 +72,28 @@ python scripts/smoke_content_ops_deflection_submit_handoff.py \
   --json
 ```
 
-The smoke sends:
+With `ATLAS_DEFLECTION_SUBMIT_CSV_FILE` or `--csv-file`, the smoke sends:
+
+```http
+POST /api/v1/content-ops/deflection-reports/submit
+Content-Type: multipart/form-data
+```
+
+Form fields:
+
+```text
+csv_file=@tickets.csv
+support_platform=zendesk
+company_name=Acme Co.
+contact_email=lead@example.com
+limit=1000
+```
+
+This matches the production handoff: the portfolio reads its private Blob
+server-side, then posts raw CSV bytes to ATLAS with the existing bearer token.
+Do not expose raw support-ticket CSVs through a public signed proxy.
+
+If no CSV file is provided, the smoke falls back to the legacy JSON contract:
 
 ```json
 {
@@ -80,7 +105,7 @@ The smoke sends:
 }
 ```
 
-to `/api/v1/content-ops/deflection-reports/submit`, then verifies:
+Both submit modes then verify:
 
 - Submit returns `200` with `status: "completed"`.
 - The top-level `request_id` is non-empty.
@@ -88,7 +113,9 @@ to `/api/v1/content-ops/deflection-reports/submit`, then verifies:
 - The free snapshot has `summary` and `top_questions` and does not contain
   answer, evidence, source id, Markdown, or full FAQ result fields.
 - `full_report` is `{ "status": "locked", "reason": "payment_required" }`.
-- Submit diagnostics identify `portfolio_deflection_submit`.
+- Submit diagnostics identify `portfolio_deflection_submit` and include the
+  expected byte counter (`uploaded_bytes` for multipart, `blob_bytes` for the
+  legacy JSON path).
 - `GET /api/v1/content-ops/deflection-reports/{request_id}/snapshot` returns
   `200` with the same snapshot.
 - `GET /api/v1/content-ops/deflection-reports/{request_id}/artifact` returns
@@ -143,9 +170,11 @@ Use this only after the first paid-unlock smoke path is expected to succeed.
 
 ## Interpreting Results
 
-The result artifact records HTTP statuses, the returned `request_id`, compact
-submit diagnostics, and deterministic errors. It intentionally redacts the
-bearer token and signed blob query string; only the blob host is recorded.
+The result artifact records HTTP statuses, submit mode, CSV file size when
+multipart is used, the returned `request_id`, compact submit diagnostics, and
+deterministic errors. It intentionally redacts the bearer token, signed blob
+query string, and CSV contents; only the blob host is recorded for the legacy
+JSON path.
 
 Exit codes:
 
