@@ -58,6 +58,32 @@ class FAQMacroPublishSummary:
         return data
 
 
+@dataclass(frozen=True)
+class FAQMacroPublishAttempt:
+    """Persisted FAQ macro publish attempt summary."""
+
+    id: str
+    faq_id: str
+    draft_status: str
+    ok: bool
+    publishable_count: int = 0
+    skipped_count: int = 0
+    published_count: int = 0
+    updated_count: int = 0
+    failed_count: int = 0
+    pending_reconcile_count: int = 0
+    draft_status_updated: bool = False
+    skipped: Sequence[JsonDict] = field(default_factory=tuple)
+    results: Sequence[JsonDict] = field(default_factory=tuple)
+    created_at: str = ""
+
+    def as_dict(self) -> JsonDict:
+        data = asdict(self)
+        data["skipped"] = [dict(item) for item in self.skipped]
+        data["results"] = [dict(item) for item in self.results]
+        return data
+
+
 class FAQMacroPublishAttemptRepository(Protocol):
     """Persistence port for append-only FAQ macro publish attempt history."""
 
@@ -68,6 +94,15 @@ class FAQMacroPublishAttemptRepository(Protocol):
         scope: TenantScope,
     ) -> None:
         """Persist one publish attempt summary for a tenant."""
+
+    async def list_attempts(
+        self,
+        faq_id: str,
+        *,
+        scope: TenantScope,
+        limit: int,
+    ) -> Sequence[FAQMacroPublishAttempt]:
+        """Return recent publish attempt summaries for one tenant-scoped FAQ."""
 
 
 @dataclass(frozen=True)
@@ -197,6 +232,7 @@ def _clean(value: object) -> str:
 
 
 __all__ = [
+    "FAQMacroPublishAttempt",
     "FAQMacroPublishAttemptRepository",
     "FAQMacroPublishSummary",
     "FAQMacroWritebackPublishService",

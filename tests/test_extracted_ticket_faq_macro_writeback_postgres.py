@@ -74,6 +74,27 @@ def _row(**overrides) -> dict:
     return row
 
 
+def _attempt_row(**overrides) -> dict:
+    row = {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "faq_draft_id": "11111111-1111-1111-1111-111111111111",
+        "draft_status": "approved",
+        "ok": True,
+        "publishable_count": 1,
+        "skipped_count": 0,
+        "published_count": 0,
+        "updated_count": 1,
+        "failed_count": 0,
+        "pending_reconcile_count": 0,
+        "draft_status_updated": True,
+        "skipped": "[]",
+        "results": '[{"status":"updated","external_id":"macro-123"}]',
+        "created_at": "2026-05-30 12:00:00+00:00",
+    }
+    row.update(overrides)
+    return row
+
+
 def test_ticket_faq_macro_writeback_migration_adds_scoped_unique_mapping() -> None:
     sql = MIGRATION.read_text()
 
@@ -334,3 +355,45 @@ async def test_record_publish_attempt_persists_summary_with_tenant_scope() -> No
         "[]",
         '[{"status":"updated","external_id":"macro-123","error":""}]',
     )
+
+
+@pytest.mark.asyncio
+async def test_list_publish_attempts_filters_by_tenant_faq_and_limit() -> None:
+    pool = _Pool()
+    pool.fetch_rows = [_attempt_row()]
+    repo = PostgresFAQMacroPublishAttemptRepository(pool)
+
+    attempts = await repo.list_attempts(
+        " 11111111-1111-1111-1111-111111111111 ",
+        scope=TenantScope(account_id="acct-1"),
+        limit=5,
+    )
+
+    call = pool.fetch_calls[0]
+    assert "FROM ticket_faq_macro_publish_attempts" in call["query"]
+    assert "account_id = $1" in call["query"]
+    assert "faq_draft_id = $2" in call["query"]
+    assert "ORDER BY created_at DESC, id DESC" in call["query"]
+    assert "LIMIT $3" in call["query"]
+    assert call["args"] == (
+        "acct-1",
+        "11111111-1111-1111-1111-111111111111",
+        5,
+    )
+    assert len(attempts) == 1
+    assert attempts[0].as_dict() == {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "faq_id": "11111111-1111-1111-1111-111111111111",
+        "draft_status": "approved",
+        "ok": True,
+        "publishable_count": 1,
+        "skipped_count": 0,
+        "published_count": 0,
+        "updated_count": 1,
+        "failed_count": 0,
+        "pending_reconcile_count": 0,
+        "draft_status_updated": True,
+        "skipped": [],
+        "results": [{"status": "updated", "external_id": "macro-123"}],
+        "created_at": "2026-05-30 12:00:00+00:00",
+    }

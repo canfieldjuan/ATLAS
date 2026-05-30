@@ -52,6 +52,21 @@ class _Pool:
         return self.execute_result
 
 
+class _FAQMacroPublishHistoryPool(_Pool):
+    def __init__(self, *, draft_row=None, attempt_rows=None) -> None:
+        super().__init__(rows=[])
+        self.draft_row = dict(draft_row) if draft_row is not None else None
+        self.attempt_rows = list(attempt_rows or [])
+
+    async def fetch(self, query, *args):
+        self.fetch_calls.append((str(query), args))
+        if "FROM ticket_faq_markdown" in str(query):
+            return [self.draft_row] if self.draft_row is not None else []
+        if "FROM ticket_faq_macro_publish_attempts" in str(query):
+            return self.attempt_rows
+        return []
+
+
 class _PublicLandingPagePool(_Pool):
     async def fetch(self, query, *args):
         self.fetch_calls.append((str(query), args))
@@ -443,6 +458,31 @@ def _publishable_ticket_faq_row():
         }],
         "metadata": {"corpus_id": "corpus-1"},
     })
+    return row
+
+
+def _publish_attempt_row(**overrides):
+    row = {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "faq_draft_id": "11111111-1111-1111-1111-111111111111",
+        "draft_status": "approved",
+        "ok": True,
+        "publishable_count": 1,
+        "skipped_count": 0,
+        "published_count": 1,
+        "updated_count": 0,
+        "failed_count": 0,
+        "pending_reconcile_count": 0,
+        "draft_status_updated": True,
+        "skipped": [],
+        "results": [{
+            "status": "published",
+            "external_id": "external-1",
+            "external_url": "https://example.zendesk.com/macros/1",
+        }],
+        "created_at": "2026-05-30 12:00:00+00:00",
+    }
+    row.update(overrides)
     return row
 
 
@@ -1590,6 +1630,99 @@ def test_generated_asset_router_publish_macros_surfaces_pending_reconcile() -> N
         1,
         False,
     )
+
+
+def test_generated_asset_router_lists_faq_macro_publish_attempts() -> None:
+    pool = _FAQMacroPublishHistoryPool(
+        draft_row=_publishable_ticket_faq_row(),
+        attempt_rows=[_publish_attempt_row()],
+    )
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).get(
+        "/content-assets/faq_markdown/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macro-attempts?limit=3"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "acct_1"
+    assert body["asset"] == "faq_markdown"
+    assert body["faq_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["count"] == 1
+    assert body["limit"] == 3
+    assert body["attempts"][0] == {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "faq_id": "11111111-1111-1111-1111-111111111111",
+        "draft_status": "approved",
+        "ok": True,
+        "publishable_count": 1,
+        "skipped_count": 0,
+        "published_count": 1,
+        "updated_count": 0,
+        "failed_count": 0,
+        "pending_reconcile_count": 0,
+        "draft_status_updated": True,
+        "skipped": [],
+        "results": [{
+            "status": "published",
+            "external_id": "external-1",
+            "external_url": "https://example.zendesk.com/macros/1",
+        }],
+        "created_at": "2026-05-30 12:00:00+00:00",
+    }
+    get_query, get_args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in get_query
+    assert get_args == ("11111111-1111-1111-1111-111111111111", "acct_1")
+    attempts_query, attempts_args = pool.fetch_calls[1]
+    assert "FROM ticket_faq_macro_publish_attempts" in attempts_query
+    assert attempts_args == ("acct_1", "11111111-1111-1111-1111-111111111111", 3)
+
+
+def test_generated_asset_router_publish_attempts_is_faq_only() -> None:
+    pool = _FAQMacroPublishHistoryPool(
+        draft_row=_publishable_ticket_faq_row(),
+        attempt_rows=[_publish_attempt_row()],
+    )
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).get(
+        "/content-assets/report/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macro-attempts"
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "only faq_markdown drafts can list macro publish attempts"
+    )
+    assert pool.fetch_calls == []
+
+
+def test_generated_asset_router_publish_attempts_404s_missing_faq() -> None:
+    pool = _FAQMacroPublishHistoryPool(
+        draft_row=None,
+        attempt_rows=[_publish_attempt_row()],
+    )
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).get(
+        "/content-assets/faq_markdown/drafts/"
+        "11111111-1111-1111-1111-111111111111/publish-macro-attempts"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "FAQ draft not found"
+    assert len(pool.fetch_calls) == 1
+    get_query, get_args = pool.fetch_calls[0]
+    assert "FROM ticket_faq_markdown" in get_query
+    assert get_args == ("11111111-1111-1111-1111-111111111111", "acct_1")
 
 
 def test_generated_asset_router_reviews_blog_post_with_host_defined_status() -> None:
