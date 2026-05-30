@@ -93,6 +93,50 @@ function renderPaidArtifact(report) {
         </section>`;
 }
 
+function renderArtifactRetryScript({ requestId, accountId, shouldRetry }) {
+  if (!shouldRetry) return "";
+
+  return `\n  <script data-atlas-deflection-artifact-retry>
+    (() => {
+      const retryMessage = document.getElementById("checkout-message");
+      const retryRequestId = ${scriptJson(requestId)};
+      const retryAccountId = ${scriptJson(accountId)};
+      const retryDelays = [1500, 3000, 5000, 8000, 13000];
+      let retryAttempt = 0;
+      const reportUrl = () => "/api/content-ops/deflection/report?request_id="
+        + encodeURIComponent(retryRequestId)
+        + "&account_id="
+        + encodeURIComponent(retryAccountId);
+      const pollArtifactUnlock = async () => {
+        if (retryMessage) retryMessage.textContent = "Checking unlock status...";
+        try {
+          const response = await fetch(reportUrl(), {
+            headers: { "Accept": "application/json" }
+          });
+          const payload = await response.json().catch(() => null);
+          if (response.ok && payload && payload.artifact_status === "unlocked") {
+            window.location.reload();
+            return;
+          }
+        } catch {
+          // Keep the paid boundary fail-closed; the customer can refresh manually.
+        }
+        if (retryAttempt >= retryDelays.length) {
+          if (retryMessage) retryMessage.textContent = "Payment is confirmed. Refresh in a moment if the report is still locked.";
+          return;
+        }
+        const delay = retryDelays[retryAttempt];
+        retryAttempt += 1;
+        window.setTimeout(pollArtifactUnlock, delay);
+      };
+      if (retryRequestId && retryAccountId) {
+        window.setTimeout(pollArtifactUnlock, retryDelays[retryAttempt]);
+        retryAttempt += 1;
+      }
+    })();
+  </script>`;
+}
+
 function renderResultPage({ requestId, accountId, checkoutStatus = "", report = null }) {
   const safeRequestId = escapeHtml(requestId);
   const safeAccountId = escapeHtml(accountId);
@@ -100,6 +144,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
   const resultHref = resultPath(requestId || "missing-request", accountId, "");
   const artifactStatus = report && report.ok ? report.artifact_status : "snapshot_unavailable";
   const isUnlocked = artifactStatus === "unlocked";
+  const shouldRetryArtifact = checkoutStatus === "success" && artifactStatus === "locked";
   const buttonDisabled = requestId && accountId && !isUnlocked ? "" : "disabled";
   const unlockHeading = isUnlocked ? "Full report unlocked" : "Unlock full report";
   const unlockCopy = isUnlocked
@@ -157,6 +202,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     data-atlas-deflection-request-id="${safeRequestId}"
     data-atlas-deflection-account-id="${safeAccountId}"
     data-atlas-deflection-report-source="${CHECKOUT_SOURCE}"
+    data-atlas-deflection-artifact-retry="${shouldRetryArtifact ? "true" : "false"}"
   >
     <a href="/services">Services</a>
     <div class="grid">
@@ -209,6 +255,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
       });
     }
   </script>
+  ${renderArtifactRetryScript({ requestId, accountId, shouldRetry: shouldRetryArtifact })}
 </body>
 </html>`;
 }
