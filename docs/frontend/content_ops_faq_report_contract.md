@@ -230,3 +230,8 @@ for a current compact FAQ example and
 for a current compact deflection report example. See
 [`content_ops_faq_deflection_snapshot_example.json`](./content_ops_faq_deflection_snapshot_example.json)
 for the free snapshot shape rendered before payment.
+
+See
+[`content_ops_faq_deflection_checkout_contract.md`](./content_ops_faq_deflection_checkout_contract.md)
+for the Stripe Checkout metadata, paid-gate endpoints, and portfolio/ATLAS trust
+boundary used to unlock the full report.
