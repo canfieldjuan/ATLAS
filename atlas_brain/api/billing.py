@@ -335,17 +335,23 @@ async def stripe_webhook(request: Request):
     # Log event -- pass dict for JSONB column, add ::jsonb cast for asyncpg
     import json
     payload_str = json.dumps(event.data.object.to_dict() if hasattr(event.data.object, 'to_dict') else {})
-    await pool.execute(
-        """
-        INSERT INTO billing_events (account_id, stripe_event_id, event_type, payload)
-        VALUES ($1, $2, $3, $4::jsonb)
-        ON CONFLICT (stripe_event_id) DO NOTHING
-        """,
-        account_id,
-        event.id,
-        event_type,
-        payload_str,
-    )
+    try:
+        await pool.execute(
+            """
+            INSERT INTO billing_events (account_id, stripe_event_id, event_type, payload)
+            VALUES ($1, $2, $3, $4::jsonb)
+            ON CONFLICT (stripe_event_id) DO NOTHING
+            """,
+            account_id,
+            event.id,
+            event_type,
+            payload_str,
+        )
+    except Exception:
+        logger.exception(
+            "Stripe webhook side effect completed but billing_events audit insert failed: event=%s",
+            event.id,
+        )
 
     return {"status": "ok"}
 
