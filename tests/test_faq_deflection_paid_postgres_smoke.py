@@ -25,6 +25,7 @@ class _Pool:
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.delete_result = "DELETE 1"
 
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
@@ -49,6 +50,11 @@ class _Pool:
             row["paid"] = True
             row["payment_reference"] = payment_reference
             return "UPDATE 1"
+        if "DELETE FROM content_ops_deflection_reports" in query:
+            account_id, request_id = args
+            if self.delete_result == "DELETE 1":
+                self.rows.pop((str(account_id), str(request_id)), None)
+            return self.delete_result
         raise AssertionError(query)
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
@@ -174,6 +180,52 @@ async def test_deflection_paid_postgres_smoke_seeds_locks_marks_paid_and_rereads
     assert saved["payment_reference"] == "cs_smoke_paid_flow"
 
 
+@pytest.mark.asyncio
+async def test_deflection_paid_postgres_smoke_can_cleanup_successful_smoke_row() -> None:
+    pool = _Pool()
+
+    code, payload = await smoke.run_deflection_paid_postgres_smoke(
+        _args(
+            request_id="smoke-cleanup",
+            payment_reference="cs_smoke_cleanup",
+            cleanup_on_success=True,
+        ),
+        pool,
+    )
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["cleanup_requested"] is True
+    assert payload["cleanup_deleted"] is True
+    assert (_ACCOUNT_ID, "smoke-cleanup") not in pool.rows
+    assert len(pool.execute_calls) == 3
+    assert "DELETE FROM content_ops_deflection_reports" in pool.execute_calls[2][0]
+    assert pool.execute_calls[2][1] == (_ACCOUNT_ID, "smoke-cleanup")
+
+
+@pytest.mark.asyncio
+async def test_deflection_paid_postgres_smoke_reports_cleanup_miss() -> None:
+    pool = _Pool()
+    pool.delete_result = "DELETE 0"
+
+    code, payload = await smoke.run_deflection_paid_postgres_smoke(
+        _args(
+            request_id="smoke-cleanup-miss",
+            payment_reference="cs_smoke_cleanup_miss",
+            cleanup_on_success=True,
+        ),
+        pool,
+    )
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["error"] == "cleanup_failed"
+    assert payload["cleanup_requested"] is True
+    assert payload["cleanup_deleted"] is False
+    assert payload["paid_after_checkout"] is True
+    assert pool.rows[(_ACCOUNT_ID, "smoke-cleanup-miss")]["paid"] is True
+
+
 def _args(**overrides: Any) -> argparse.Namespace:
     values: dict[str, Any] = {
         "database_url": "postgres://example",
@@ -183,6 +235,7 @@ def _args(**overrides: Any) -> argparse.Namespace:
         "amount_cents": 150000,
         "currency": "usd",
         "confirm_postgres_write": True,
+        "cleanup_on_success": False,
         "output": None,
         "json": True,
     }

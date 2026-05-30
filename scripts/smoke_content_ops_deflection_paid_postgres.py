@@ -21,6 +21,9 @@ from atlas_brain.api import billing  # noqa: E402
 from extracted_content_pipeline.deflection_report_access import (  # noqa: E402
     PostgresDeflectionReportArtifactStore,
 )
+from extracted_content_pipeline.storage._jsonb_helpers import (  # noqa: E402
+    parse_command_tag,
+)
 
 
 SKIPPED_EXIT = 2
@@ -64,6 +67,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--confirm-postgres-write",
         action="store_true",
         help="Required before creating or updating the Postgres smoke row.",
+    )
+    parser.add_argument(
+        "--cleanup-on-success",
+        action="store_true",
+        help="Delete the ephemeral smoke row after the paid-gate proof succeeds.",
     )
     parser.add_argument(
         "--output",
@@ -187,6 +195,24 @@ async def run_deflection_paid_postgres_smoke(
             account_id=account_id,
             request_id=request_id,
         )
+    cleanup_requested = bool(getattr(args, "cleanup_on_success", False))
+    cleanup_deleted = False
+    if cleanup_requested:
+        cleanup_deleted = await _cleanup_ephemeral_report(
+            pool,
+            account_id=account_id,
+            request_id=request_id,
+        )
+        if not cleanup_deleted:
+            return _failed(
+                "cleanup_failed",
+                account_id=account_id,
+                request_id=request_id,
+                payment_reference=unlocked.payment_reference,
+                cleanup_requested=True,
+                cleanup_deleted=False,
+                paid_after_checkout=True,
+            )
     return (
         0,
         {
@@ -197,6 +223,8 @@ async def run_deflection_paid_postgres_smoke(
             "payment_reference": unlocked.payment_reference,
             "locked_before_paid": not locked.paid,
             "paid_after_checkout": unlocked.paid,
+            "cleanup_requested": cleanup_requested,
+            "cleanup_deleted": cleanup_deleted,
             "snapshot_summary": dict(unlocked.snapshot.get("summary") or {}),
             "artifact_summary": dict((unlocked.artifact or {}).get("summary") or {}),
         },
@@ -273,6 +301,27 @@ def _request_id(args: argparse.Namespace) -> str:
 
 def _payment_reference(args: argparse.Namespace) -> str:
     return _clean(getattr(args, "payment_reference", "")) or f"cs_{uuid4().hex}"
+
+
+async def _cleanup_ephemeral_report(
+    pool: Any,
+    *,
+    account_id: str,
+    request_id: str,
+) -> bool:
+    if not request_id.startswith(SMOKE_REQUEST_PREFIX):
+        return False
+    result = await pool.execute(
+        """
+        DELETE FROM content_ops_deflection_reports
+        WHERE account_id = $1
+          AND request_id = $2
+          AND request_id LIKE 'smoke-%'
+        """,
+        account_id,
+        request_id,
+    )
+    return parse_command_tag(result)
 
 
 def _not_run(reason: str, **extra: Any) -> tuple[int, dict[str, Any]]:
