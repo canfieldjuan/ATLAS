@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { upload as uploadBlob } from "@vercel/blob/client";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -12,7 +13,9 @@ import {
 import { SeoHead } from "@/components/seo/SeoHead";
 
 const SUBMIT_ENDPOINT = "/api/content-ops/deflection/submit";
-const MAX_CSV_BYTES = 4 * 1024 * 1024;
+const BLOB_UPLOAD_ENDPOINT = "/api/content-ops/deflection/upload";
+const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
+const MAX_CSV_BYTES = 50 * 1024 * 1024;
 const SUPPORT_PLATFORMS = [
   { value: "zendesk", label: "Zendesk" },
   { value: "intercom", label: "Intercom" },
@@ -27,6 +30,7 @@ type UploadState =
 
 type SubmitState =
   | { status: "idle" }
+  | { status: "uploading" }
   | { status: "submitting" }
   | { status: "error"; message: string };
 
@@ -46,9 +50,18 @@ function fileState(file: File | undefined): UploadState {
     return { status: "invalid", message: "The selected CSV is empty." };
   }
   if (file.size > MAX_CSV_BYTES) {
-    return { status: "invalid", message: "CSV exports must be 4 MB or smaller." };
+    return { status: "invalid", message: "CSV exports must be 50 MB or smaller." };
   }
   return { status: "ready", file, fileName: file.name, fileSize: file.size };
+}
+
+function blobPathname(fileName: string) {
+  const cleaned = fileName
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const csvName = cleaned.endsWith(".csv") ? cleaned : "tickets.csv";
+  return `${BLOB_UPLOAD_PATH_PREFIX}${Date.now()}-${csvName}`;
 }
 
 export default function FaqDeflectionUpload() {
@@ -70,23 +83,36 @@ export default function FaqDeflectionUpload() {
       ),
     [accountId, companyName, contactEmail, supportPlatform, upload.status],
   );
-  const canSubmit = fieldsReady && submit.status !== "submitting";
+  const canSubmit = fieldsReady && submit.status !== "uploading" && submit.status !== "submitting";
 
   const startSubmit = async () => {
     if (upload.status !== "ready" || !fieldsReady) return;
-    setSubmit({ status: "submitting" });
-    const form = new FormData();
-    form.set("csv_file", upload.file);
-    form.set("support_platform", supportPlatform);
-    form.set("company_name", companyName.trim());
-    form.set("contact_email", contactEmail.trim());
-    form.set("limit", "1000");
+    const trimmedAccountId = accountId.trim();
 
     try {
+      setSubmit({ status: "uploading" });
+      const blob = await uploadBlob(blobPathname(upload.fileName), upload.file, {
+        access: "private",
+        contentType: "text/csv",
+        handleUploadUrl: BLOB_UPLOAD_ENDPOINT,
+        clientPayload: JSON.stringify({ account_id: trimmedAccountId }),
+        multipart: upload.fileSize > 4 * 1024 * 1024,
+      });
+
+      setSubmit({ status: "submitting" });
       const response = await fetch(SUBMIT_ENDPOINT, {
         method: "POST",
-        headers: { "X-Atlas-Account-Id": accountId.trim() },
-        body: form,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Atlas-Account-Id": trimmedAccountId,
+        },
+        body: JSON.stringify({
+          blob_pathname: blob.pathname,
+          support_platform: supportPlatform,
+          company_name: companyName.trim(),
+          contact_email: contactEmail.trim(),
+          limit: "1000",
+        }),
       });
       const payload = (await response.json().catch(() => null)) as {
         result_path?: unknown;
@@ -102,7 +128,7 @@ export default function FaqDeflectionUpload() {
       }
       window.location.assign(payload.result_path);
     } catch {
-      setSubmit({ status: "error", message: "FAQ deflection submit could not be reached." });
+      setSubmit({ status: "error", message: "FAQ deflection upload could not be completed." });
     }
   };
 
@@ -122,6 +148,7 @@ export default function FaqDeflectionUpload() {
         className="mx-auto max-w-6xl px-6 py-10 md:py-14"
         data-atlas-deflection-upload
         data-atlas-deflection-submit-endpoint={SUBMIT_ENDPOINT}
+        data-atlas-deflection-upload-endpoint={BLOB_UPLOAD_ENDPOINT}
       >
         <Link
           to="/services"
@@ -218,8 +245,9 @@ export default function FaqDeflectionUpload() {
                 onChange={(event) => setUpload(fileState(event.target.files?.[0]))}
               />
               <span className="mt-3 block text-xs text-surface-200/60">
-                4 MB cap. CSV bytes are forwarded through the portfolio server
-                to ATLAS; the service JWT never reaches the browser.
+                50 MB cap. CSV bytes are first stored in private Vercel Blob,
+                then forwarded to ATLAS server-side; service tokens never reach
+                the browser.
               </span>
             </label>
 
@@ -246,7 +274,12 @@ export default function FaqDeflectionUpload() {
               data-atlas-deflection-submit
               disabled={!canSubmit}
             >
-              {submit.status === "submitting" ? (
+              {submit.status === "uploading" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Uploading CSV
+                </>
+              ) : submit.status === "submitting" ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Creating report
@@ -281,14 +314,14 @@ export default function FaqDeflectionUpload() {
               <div>
                 <dt className="text-surface-200/60">Submit mode</dt>
                 <dd className="mt-1 font-mono text-xs text-surface-100">
-                  portfolio_server_forwarding
+                  private_blob_persistence
                 </dd>
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              The portfolio forwards the multipart CSV server-side, then sends
-              the browser to the hosted result page for snapshot hydration and
-              Checkout.
+              The portfolio persists the CSV to private Blob, reads it back on
+              the server, then sends the browser to the hosted result page for
+              snapshot hydration and Checkout.
             </p>
           </aside>
         </div>
