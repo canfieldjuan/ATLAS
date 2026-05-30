@@ -45,6 +45,31 @@ class _BlobResponse:
         return None
 
 
+class _Upload:
+    def __init__(self, data: bytes, *, filename: str = "tickets.csv") -> None:
+        self._data = data
+        self.filename = filename
+
+    async def read(self, _size: int) -> bytes:
+        return self._data
+
+
+class _FormRequest:
+    def __init__(
+        self,
+        form: dict[str, Any],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self._form = form
+        self.headers = headers or {"content-type": "multipart/form-data; boundary=test"}
+        self.form_kwargs: dict[str, Any] | None = None
+
+    async def form(self, **kwargs: Any) -> dict[str, Any]:
+        self.form_kwargs = dict(kwargs)
+        return self._form
+
+
 def _csv_bytes(rows: list[str]) -> bytes:
     return ("\n".join(rows) + "\n").encode("utf-8")
 
@@ -170,6 +195,136 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     with pytest.raises(api_module.HTTPException) as locked:
         await artifact.endpoint(request_id=payload["request_id"])
     assert locked.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message,resolution_text,pain_category",
+        (
+            "ticket-export-1,Export attribution,"
+            "How do I export attribution reports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        (
+            "ticket-export-2,Report download,"
+            "Where is the report download for attribution exports?,"
+            "Open Analytics and click Download report.,exports"
+        ),
+        "ticket-sso-1,SSO setup,How do I enable SSO for my team?,,auth",
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "help-scout",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "limit": "2",
+    })
+    payload = await submit.endpoint(request)
+
+    assert request.form_kwargs == {
+        "max_part_size": api_module._MAX_DEFLECTION_SUBMIT_BLOB_BYTES
+    }
+    assert payload["status"] == "completed"
+    assert payload["request_id"].startswith("content-ops-")
+    gated_result = payload["steps"][0]["result"]
+    assert gated_result["request_id"] == payload["request_id"]
+    assert gated_result["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
+    assert "markdown" not in str(gated_result)
+    assert "ticket-export-1" not in str(gated_result)
+    assert payload["input_provider"]["metadata"] == {
+        "included_row_count": 2,
+        "max_source_material_rows": 2,
+        "skipped_row_count": 0,
+        "source": "portfolio_deflection_submit",
+        "source_period": "Uploaded support tickets",
+        "source_row_count": 3,
+        "submitted_row_count": 2,
+        "support_platform": "help_scout",
+        "truncated_row_count": 1,
+        "uploaded_bytes": len(csv_data),
+    }
+
+    snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
+    assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_multipart_without_csv_file() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+        }))
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "csv_file is required"
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_oversize_uploaded_csv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_MAX_DEFLECTION_SUBMIT_BLOB_BYTES", 10)
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "csv_file": _Upload(b"01234567890"),
+            "support_platform": "intercom",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+        }))
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "reason": "deflection_submit_csv_too_large",
+        "max_file_bytes": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_oversize_multipart_content_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_MAX_DEFLECTION_SUBMIT_BLOB_BYTES", 10)
+    monkeypatch.setattr(api_module, "_MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES", 3)
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest(
+        {
+            "csv_file": _Upload(b"small"),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+        },
+        headers={
+            "content-type": "multipart/form-data; boundary=test",
+            "content-length": "14",
+        },
+    )
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(request)
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "reason": "deflection_submit_csv_too_large",
+        "max_file_bytes": 10,
+    }
+    assert request.form_kwargs is None
 
 
 @pytest.mark.asyncio
