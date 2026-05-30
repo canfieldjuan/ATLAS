@@ -110,9 +110,9 @@ await test("checkout endpoint validates request and account identifiers", () => 
   ]);
 });
 
-await test("hosted result page rejects script-breaking account_id input", () => {
+await test("hosted result page rejects script-breaking account_id input", async () => {
   const res = mockResponse();
-  resultPageHandler(
+  await resultPageHandler(
     {
       url: "/services/faq-deflection/results/content-ops-abc123?account_id=%3C%2Fscript%3E%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E",
       headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
