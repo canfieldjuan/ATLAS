@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from html.parser import HTMLParser
 import json
 import math
 import os
@@ -53,6 +54,17 @@ class HttpResult:
     text: str
     payload: Any = None
     errors: tuple[str, ...] = ()
+
+
+class UnlockCtaParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attrs: dict[str, str] | None = None
+
+    def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key: value or "" for key, value in attrs}
+        if "data-atlas-deflection-unlock" in attr_map and self.attrs is None:
+            self.attrs = attr_map
 
 
 def _load_dotenv_files() -> None:
@@ -229,10 +241,28 @@ def _page_errors(html: str, *, request_id: str, account_id: str) -> list[str]:
     for marker in REQUIRED_PAGE_MARKERS:
         if marker not in html:
             errors.append(f"portfolio result page missing marker: {marker}")
+    unlock_attrs = _unlock_cta_attrs(html)
+    if unlock_attrs is None:
+        errors.append("portfolio result page missing unlock CTA element")
+    else:
+        for attr, expected in (
+            ("data-checkout-source", "content_ops_deflection_report"),
+            ("data-checkout-request_id", request_id),
+            ("data-checkout-account_id", account_id),
+        ):
+            actual = unlock_attrs.get(attr)
+            if actual != expected:
+                errors.append(f"portfolio result page unlock CTA {attr} must be {expected}")
     for value, label in ((request_id, "request_id"), (account_id, "account_id")):
         if value not in html:
             errors.append(f"portfolio result page missing {label} value")
     return errors
+
+
+def _unlock_cta_attrs(html: str) -> dict[str, str] | None:
+    parser = UnlockCtaParser()
+    parser.feed(html)
+    return parser.attrs
 
 
 def _result_payload(
