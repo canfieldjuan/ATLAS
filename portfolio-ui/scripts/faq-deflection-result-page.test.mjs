@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import handler, {
   CHECKOUT_SOURCE,
   buildStripeCheckoutBody,
+  checkoutUrls,
   resultPath,
   validateConfiguredPrice,
   validatePayload,
@@ -201,6 +202,62 @@ await test("checkout return path preserves result identifiers", () => {
     path,
     "/services/faq-deflection/results/content-ops-abc123?account_id=2b2b950d-f64b-4852-bc30-f92a34cdf169&checkout=success",
   );
+});
+
+await test("hosted result page handles the Checkout cancel return token", () => {
+  const requestId = "content-ops-abc123";
+  const accountId = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
+  const previousSuccessUrl = process.env.DEFLECTION_CHECKOUT_SUCCESS_URL;
+  const previousCancelUrl = process.env.DEFLECTION_CHECKOUT_CANCEL_URL;
+  delete process.env.DEFLECTION_CHECKOUT_SUCCESS_URL;
+  delete process.env.DEFLECTION_CHECKOUT_CANCEL_URL;
+  let checkoutStatus;
+  try {
+    const urls = checkoutUrls(
+      {
+        headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      },
+      requestId,
+      accountId,
+    );
+    assert.deepEqual(urls.errors, []);
+    assert.equal(
+      urls.cancelUrl,
+      `https://portfolio.example.com${resultPath(requestId, accountId, "cancel")}`,
+    );
+    checkoutStatus = new URL(urls.cancelUrl).searchParams.get("checkout");
+    assert.equal(checkoutStatus, "cancel");
+  } finally {
+    if (previousSuccessUrl === undefined) {
+      delete process.env.DEFLECTION_CHECKOUT_SUCCESS_URL;
+    } else {
+      process.env.DEFLECTION_CHECKOUT_SUCCESS_URL = previousSuccessUrl;
+    }
+    if (previousCancelUrl === undefined) {
+      delete process.env.DEFLECTION_CHECKOUT_CANCEL_URL;
+    } else {
+      process.env.DEFLECTION_CHECKOUT_CANCEL_URL = previousCancelUrl;
+    }
+  }
+
+  const html = renderResultPage({
+    requestId,
+    accountId,
+    checkoutStatus,
+    report: {
+      ok: true,
+      snapshot: {
+        summary: { generated: 1, drafted_answer_count: 0, no_proven_answer_count: 1 },
+        top_questions: [],
+      },
+      artifact_status: "locked",
+    },
+  });
+  assert.match(html, /Checkout was cancelled/);
+  assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
+  assert.doesNotMatch(html, /script data-atlas-deflection-artifact-retry/);
+  assert.match(html, /Continue to Checkout/);
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
 
 await test("handler creates Stripe Checkout without calling privileged ATLAS paid route", async () => {
