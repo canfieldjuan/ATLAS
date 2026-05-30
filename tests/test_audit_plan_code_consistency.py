@@ -96,6 +96,21 @@ def test_audit_claims_reports_missing_path_and_function(auditor):
     assert missing_functions == ["function_that_does_not_exist"]
 
 
+def test_audit_claims_ignores_gitignored_local_session_state(auditor):
+    plan = textwrap.dedent("""\
+        # Example
+
+        ## Scope (this PR)
+
+        `SESSION_STATE.local.md`
+    """)
+
+    missing_paths, missing_functions = auditor.audit_claims(plan)
+
+    assert missing_paths == []
+    assert missing_functions == []
+
+
 def test_audit_claims_accepts_existing_root_path_and_function(auditor):
     plan = textwrap.dedent("""\
         # Example

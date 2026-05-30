@@ -87,6 +87,7 @@ atlas-ui/.vite/
 
 # Progress logs (session artifacts)
 PROGRESS_*.md
+SESSION_STATE.local.md
 
 # Hybrid reasoning checks JSON report output
 artifacts/

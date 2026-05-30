@@ -148,6 +148,41 @@ If the plan changes mid-implementation (you discovered something the
 plan missed), update the plan doc in the same commit. The plan and
 code ship together.
 
+### 3a.1. Session ownership map
+
+Every builder session must maintain a local `SESSION_STATE.local.md`
+at the repository root, using `docs/SESSION_STATE_TEMPLATE.md` as the
+shape. This file is ignored by git because it is volatile session
+state, but it is mandatory working context.
+
+Update the map:
+
+- at session start or after compaction/restart reorientation;
+- before opening a PR;
+- after pushing a PR update;
+- after merging a PR;
+- before handing back to the operator.
+
+The map must name the current lane, current task, owned active PR
+number/title/branch/plan/head SHA when one exists, PRs this session may
+touch, PRs this session must not touch, and the last safe action.
+
+Before inspecting comments, pushing updates, closing, or merging any
+PR, the builder must verify all of the following:
+
+1. `gh pr list --state open` has been checked in this resume window.
+2. `git log --oneline -15 origin/main` has been checked for already
+   landed work.
+3. The target PR is listed in `SESSION_STATE.local.md` under "Owned
+   Active PR" or "PRs This Session May Touch".
+4. The local branch and expected head SHA match the target PR when a
+   merge or force-push is about to happen.
+
+If any check fails, stop and ask the operator. A PR in the same lane is
+not automatically owned. A PR that "looks abandoned" is not owned. A PR
+opened by another session is not owned unless the operator explicitly
+reassigns it and the map is updated first.
+
 ### 3b. Per-package guardrails
 
 Touching a package under `extracted_*/` requires the package's audit
