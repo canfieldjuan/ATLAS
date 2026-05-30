@@ -197,6 +197,84 @@ def test_main_posts_signed_webhook_and_unlocks_artifact(monkeypatch, tmp_path, c
     }
 
 
+def test_main_replays_signed_webhook_and_requires_idempotent_response(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def _open(request, *, timeout):
+        body = request.data or b""
+        calls.append({
+            "url": request.full_url,
+            "method": request.get_method(),
+            "headers": dict(request.header_items()),
+            "body": body.decode("utf-8"),
+            "timeout": timeout,
+        })
+        get_count = len([c for c in calls if c["method"] == "GET"])
+        post_count = len([c for c in calls if c["method"] == "POST"])
+        if request.get_method() == "GET" and get_count == 1:
+            raise _http_error(request.full_url, 403, {"detail": "payment_required"})
+        if request.get_method() == "POST" and post_count == 1:
+            return FakeResponse(200, {"status": "ok"})
+        if request.get_method() == "POST":
+            return FakeResponse(200, {"status": "already_processed"})
+        return FakeResponse(200, ARTIFACT)
+
+    monkeypatch.setattr(smoke, "_open_http_request", _open)
+    monkeypatch.setattr(smoke.time, "time", lambda: 1700000000)
+
+    code = smoke.main([*_base_args(tmp_path), "--replay-webhook", "--json"])
+
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert printed == payload
+    assert payload["ok"] is True
+    assert payload["webhook"] == {"status": 200}
+    assert payload["replay_webhook"] == {
+        "status": 200,
+        "payload_status": "already_processed",
+    }
+    assert payload["after_artifact"]["status"] == 200
+
+    assert [call["method"] for call in calls] == ["GET", "POST", "POST", "GET"]
+    first_webhook = calls[1]
+    replay_webhook = calls[2]
+    assert replay_webhook["url"] == first_webhook["url"]
+    assert replay_webhook["body"] == first_webhook["body"]
+    assert (
+        replay_webhook["headers"]["Stripe-signature"]
+        == first_webhook["headers"]["Stripe-signature"]
+    )
+
+
+def test_main_rejects_replay_webhook_without_already_processed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[str] = []
+
+    def _open(request, *, timeout):
+        calls.append(request.get_method())
+        if request.get_method() == "GET":
+            raise _http_error(request.full_url, 403, {"detail": "payment_required"})
+        return FakeResponse(200, {"status": "ok"})
+
+    monkeypatch.setattr(smoke, "_open_http_request", _open)
+
+    code = smoke.main([*_base_args(tmp_path), "--replay-webhook"])
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+
+    assert code == 1
+    assert calls == ["GET", "POST", "POST"]
+    assert payload["replay_webhook"] == {"status": 200, "payload_status": "ok"}
+    assert payload["after_artifact"]["status"] is None
+    assert payload["errors"] == ["stripe webhook replay status must be already_processed"]
+
+
 def test_main_stops_before_webhook_when_artifact_is_not_locked(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
 

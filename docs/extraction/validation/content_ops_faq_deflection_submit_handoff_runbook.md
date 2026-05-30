@@ -136,6 +136,11 @@ deflection metadata, and then confirms the artifact route returns the full paid
 report. The event id and Checkout session id are generated when omitted, so a
 fresh run does not reuse Stripe webhook idempotency keys.
 
+To also prove the deployed duplicate-event guard, add `--replay-webhook`. That
+posts the same signed event a second time and requires the webhook response to
+return `{"status": "already_processed"}` before the final paid artifact fetch.
+Use this only after the first paid-unlock smoke path is expected to succeed.
+
 ## Interpreting Results
 
 The result artifact records HTTP statuses, the returned `request_id`, compact
