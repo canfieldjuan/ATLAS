@@ -38,7 +38,7 @@ class ConfigZendeskMacroCredentialsProvider:
 
 @dataclass(frozen=True)
 class TenantZendeskMacroCredentialsProvider:
-    """Zendesk credential source backed by tenant storage with config fallback."""
+    """Zendesk credential source backed by tenant storage with unscoped fallback."""
 
     pool: Any
     fallback_provider: ZendeskMacroCredentialsProvider
@@ -47,15 +47,18 @@ class TenantZendeskMacroCredentialsProvider:
         self,
         scope: TenantScope,
     ) -> ZendeskMacroCredentials | None:
-        if scope.account_id:
+        account_id = _scope_text(scope.account_id)
+        if account_id:
             from ._content_ops_zendesk_credentials import (
                 lookup_zendesk_credentials,
             )
 
             return await lookup_zendesk_credentials(
                 self.pool,
-                account_id=scope.account_id,
+                account_id=account_id,
             )
+        if _has_tenant_markers(scope):
+            return None
         return await self.fallback_provider.credentials_for_scope(scope)
 
 
@@ -112,6 +115,20 @@ async def _maybe_await(value: Any) -> Any:
 
 def _config_value(config: Any, name: str) -> str:
     return str(getattr(config, name, "") or "").strip()
+
+
+def _scope_text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def _has_tenant_markers(scope: TenantScope) -> bool:
+    if _scope_text(scope.user_id):
+        return True
+    return any(
+        _scope_text(value)
+        for values in (scope.allowed_vendors or (), scope.roles or ())
+        for value in values
+    )
 
 
 __all__ = [

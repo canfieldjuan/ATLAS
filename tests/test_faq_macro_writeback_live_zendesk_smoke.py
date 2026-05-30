@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Sequence
 
 import pytest
@@ -144,6 +145,36 @@ async def test_live_zendesk_smoke_requires_tenant_credentials_before_provider_ca
 
     assert code == smoke.SKIPPED_EXIT
     assert payload["not_run_reason"] == "zendesk_credentials_missing"
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_live_zendesk_smoke_fails_closed_for_user_scope_without_account_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = _PublishProvider()
+    monkeypatch.setattr(
+        smoke,
+        "_host_config",
+        lambda: SimpleNamespace(
+            content_ops_zendesk_email="fallback@example.com",
+            content_ops_zendesk_api_token="fallback-token",
+            content_ops_zendesk_subdomain="fallback",
+            content_ops_zendesk_base_url="",
+        ),
+    )
+
+    code, payload = await smoke.run_live_zendesk_smoke(
+        _args(account_id="", user_id="operator-1"),
+        pool=object(),
+        faq_repository=_FAQRepo(_approved_draft()),
+        provider=provider,
+        attempt_repository=_AttemptRepo(),
+    )
+
+    assert code == smoke.SKIPPED_EXIT
+    assert payload["not_run_reason"] == "zendesk_credentials_missing"
+    assert payload["account_id"] == ""
     assert provider.calls == []
 
 
