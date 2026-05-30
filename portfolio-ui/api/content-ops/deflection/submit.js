@@ -200,6 +200,11 @@ async function getPrivateBlob(pathname, options) {
   return get(pathname, options);
 }
 
+async function deletePrivateBlob(pathname, options) {
+  const { del } = await import("@vercel/blob");
+  return del(pathname, options);
+}
+
 async function readPrivateCsvBlob({
   pathname,
   token,
@@ -226,6 +231,7 @@ async function readPrivateCsvBlob({
     }
     return {
       ok: true,
+      pathname: safePathname,
       body: body.body,
       contentType: clean(result.blob?.contentType) || "text/csv",
       fileName: fileNameFromPathname(safePathname),
@@ -235,12 +241,31 @@ async function readPrivateCsvBlob({
   }
 }
 
+async function cleanupPrivateCsvBlob({
+  pathname,
+  token,
+  deleteBlobImpl = deletePrivateBlob,
+}) {
+  const safePathname = validBlobPathname(pathname);
+  if (!safePathname) return { ok: false, skipped: true, error: "invalid_blob_reference" };
+  try {
+    await deleteBlobImpl(safePathname, { token });
+    return { ok: true };
+  } catch (error) {
+    console.warn("faq_deflection_private_blob_cleanup_failed", {
+      error: clean(error?.message) || "unknown",
+    });
+    return { ok: false, error: "private_blob_cleanup_failed" };
+  }
+}
+
 async function submitPrivateBlob({
   config,
   blobToken,
   payload,
   fetchImpl = fetch,
   getBlobImpl = getPrivateBlob,
+  deleteBlobImpl = deletePrivateBlob,
 }) {
   const blob = await readPrivateCsvBlob({
     pathname: payload?.blob_pathname,
@@ -256,7 +281,13 @@ async function submitPrivateBlob({
   form.set("contact_email", clean(payload?.contact_email));
   form.set("limit", clean(payload?.limit) || "1000");
 
-  return forwardSubmit({ config, contentType: "", body: form, fetchImpl });
+  const result = await forwardSubmit({ config, contentType: "", body: form, fetchImpl });
+  await cleanupPrivateCsvBlob({
+    pathname: blob.pathname,
+    token: blobToken,
+    deleteBlobImpl,
+  });
+  return result;
 }
 
 export {
@@ -265,6 +296,7 @@ export {
   MAX_CSV_BYTES,
   MAX_MULTIPART_OVERHEAD_BYTES,
   SUBMIT_PATH,
+  cleanupPrivateCsvBlob,
   forwardSubmit,
   projectSubmitPayload,
   readPrivateCsvBlob,
