@@ -54,7 +54,9 @@ It builds tenant scope from `--account-id`, resolves tenant Zendesk
 credentials through the same host provider used by the generated-asset publish
 route, checks the selected FAQ draft has at least one publishable verified
 macro, then calls `FAQMacroWritebackPublishService` with the Postgres FAQ
-repository, Zendesk provider, and attempt-history repository. Missing
+repository, Zendesk provider, and attempt-history repository. The Zendesk
+provider receives a static wrapper around the already-validated credentials so
+the optional base-url guard applies to the actual network write. Missing
 confirmation, missing credentials, unexpected Zendesk endpoint, missing draft,
 or no publishable macros return a non-zero skipped payload before any Zendesk
 transport call.
@@ -81,7 +83,7 @@ transport call.
 ## Verification
 
 - `python -m pytest tests/test_faq_macro_writeback_live_zendesk_smoke.py -q`
-  (6 passed)
+  (7 passed)
 - `python -m py_compile scripts/smoke_content_ops_faq_macro_live_zendesk.py tests/test_faq_macro_writeback_live_zendesk_smoke.py`
 - `python scripts/audit_plan_doc.py plans/PR-FAQ-Macro-Writeback-Live-Smoke.md`
 - `python scripts/audit_plan_code_consistency.py plans/PR-FAQ-Macro-Writeback-Live-Smoke.md`
@@ -94,10 +96,10 @@ transport call.
 
 | Area | Estimate |
 |---|---:|
-| Plan | ~95 |
+| Plan | ~110 |
 | Smoke script | ~275 |
-| Tests | ~290 |
-| Total | ~660 |
+| Tests | ~325 |
+| Total | ~710 |
 
 The estimate is above the 400 LOC soft cap because the live-write guard needs
 focused negative fixtures for each branch that prevents accidental Zendesk

@@ -31,6 +31,7 @@ from extracted_content_pipeline.faq_macro_writeback_publish import (  # noqa: E4
     FAQMacroWritebackPublishService,
 )
 from extracted_content_pipeline.faq_macro_writeback_zendesk import (  # noqa: E402
+    StaticZendeskMacroCredentialsProvider,
     ZendeskMacroCredentialsProvider,
     ZendeskMacroPublishProvider,
 )
@@ -159,7 +160,7 @@ async def run_live_zendesk_smoke(
         )
 
     publish_provider = provider or ZendeskMacroPublishProvider(
-        credentials_provider=credentials_source,
+        credentials_provider=StaticZendeskMacroCredentialsProvider(credentials),
         mapping_repository=PostgresFAQMacroWritebackMappingRepository(pool),
     )
     service = FAQMacroWritebackPublishService(

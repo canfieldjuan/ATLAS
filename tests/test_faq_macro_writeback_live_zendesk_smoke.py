@@ -185,6 +185,38 @@ async def test_live_zendesk_smoke_requires_publishable_faq_before_provider_call(
 
 
 @pytest.mark.asyncio
+async def test_live_zendesk_smoke_reuses_validated_credentials_for_publish_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = _credentials()
+    source = _CredentialSource(credentials)
+    captured: dict[str, Any] = {}
+
+    def build_provider(**kwargs: Any) -> _PublishProvider:
+        captured.update(kwargs)
+        return _PublishProvider()
+
+    monkeypatch.setattr(smoke, "ZendeskMacroPublishProvider", build_provider)
+
+    code, payload = await smoke.run_live_zendesk_smoke(
+        _args(expected_zendesk_base_url="https://acme.zendesk.com"),
+        pool=object(),
+        credentials_provider=source,
+        faq_repository=_FAQRepo(_approved_draft()),
+        attempt_repository=_AttemptRepo(),
+    )
+
+    publish_credentials_source = captured["credentials_provider"]
+    assert code == 0
+    assert payload["ok"] is True
+    assert publish_credentials_source is not source
+    assert await publish_credentials_source.credentials_for_scope(
+        TenantScope(account_id="other-account")
+    ) is credentials
+    assert source.calls == [TenantScope(account_id="acct-1", user_id=None)]
+
+
+@pytest.mark.asyncio
 async def test_live_zendesk_smoke_publishes_with_service_and_records_attempt() -> None:
     faq_repo = _FAQRepo(_approved_draft())
     provider = _PublishProvider()
