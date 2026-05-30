@@ -47,7 +47,8 @@ class _FAQRepo:
 
 
 class _AttemptRepo:
-    def __init__(self) -> None:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
         self.calls: list[dict[str, object]] = []
 
     async def record_attempt(
@@ -56,6 +57,8 @@ class _AttemptRepo:
         *,
         scope: TenantScope,
     ) -> None:
+        if self.fail:
+            raise RuntimeError("attempt write failed")
         self.calls.append({"summary": summary, "scope": scope})
 
 
@@ -289,3 +292,51 @@ async def test_publish_service_does_not_mark_dry_run_results_published() -> None
     assert summary.published_count == 0
     assert summary.updated_count == 0
     assert repo.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_keeps_success_when_attempt_history_write_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repo = _FAQRepo(_draft())
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo(fail=True)
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert summary.ok is True
+    assert summary.published_count == 1
+    assert repo.update_calls == [{
+        "faq_id": "faq-draft-1",
+        "status": "published",
+        "scope": TenantScope(account_id="acct-1"),
+    }]
+    assert "failed to record FAQ macro publish attempt" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_publish_service_skips_attempt_history_without_account_scope() -> None:
+    repo = _FAQRepo(_draft())
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(),
+    )
+
+    assert summary.ok is True
+    assert attempts.calls == []

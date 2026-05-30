@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+import logging
 from typing import Protocol, Sequence
 
 from .campaign_ports import JsonDict, TenantScope
@@ -18,6 +19,7 @@ from .ticket_faq_ports import TicketFAQRepository
 
 PUBLISHED_FAQ_STATUS = "published"
 SUCCESSFUL_MACRO_STATUSES = frozenset({"published", "updated"})
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -129,7 +131,19 @@ class FAQMacroWritebackPublishService:
     ) -> None:
         if self.attempt_repository is None or not summary.found:
             return
-        await self.attempt_repository.record_attempt(summary, scope=scope)
+        if not scope.account_id:
+            logger.info(
+                "skipping FAQ macro publish attempt history without account scope faq_id=%s",
+                summary.faq_id,
+            )
+            return
+        try:
+            await self.attempt_repository.record_attempt(summary, scope=scope)
+        except Exception:
+            logger.exception(
+                "failed to record FAQ macro publish attempt faq_id=%s",
+                summary.faq_id,
+            )
 
 
 def _summary(

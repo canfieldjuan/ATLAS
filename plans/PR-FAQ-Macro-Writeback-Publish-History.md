@@ -70,7 +70,8 @@ Parked hardening: none
 
 ## Verification
 
-- python -m pytest tests/test_extracted_ticket_faq_macro_writeback_publish.py tests/test_extracted_ticket_faq_macro_writeback_postgres.py tests/test_extracted_content_asset_api.py -k 'publish_macros or macro_writeback or publish_attempt or record_publish_attempt or ticket_faq_macro' -q -- 20 passed, 59 deselected.
+- python -m pytest tests/test_extracted_ticket_faq_macro_writeback_publish.py -q -- 8 passed.
+- python -m pytest tests/test_extracted_ticket_faq_macro_writeback_publish.py tests/test_extracted_ticket_faq_macro_writeback_postgres.py tests/test_extracted_content_asset_api.py -k 'publish_macros or macro_writeback or publish_attempt or record_publish_attempt or ticket_faq_macro' -q -- 22 passed, 59 deselected.
 - python -m py_compile extracted_content_pipeline/faq_macro_writeback_publish.py extracted_content_pipeline/faq_macro_writeback_postgres.py extracted_content_pipeline/api/generated_assets.py tests/test_extracted_ticket_faq_macro_writeback_publish.py tests/test_extracted_ticket_faq_macro_writeback_postgres.py tests/test_extracted_content_asset_api.py -- passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py -- passed; 135 matching tests enrolled.
 - bash scripts/validate_extracted_content_pipeline.sh -- passed.
@@ -88,9 +89,13 @@ Parked hardening: none
 
 | Area | Estimated LOC |
 |---|---:|
-| Plan | ~96 |
+| Plan | ~97 |
 | Migration | ~36 |
 | Service/adapter | ~80 |
 | Route wiring | ~2 |
-| Tests | ~147 |
-| Total | ~361 |
+| Tests | ~199 |
+| Total | ~414 |
+
+This is above the 400 LOC soft cap after review because the fix adds
+source-level failure isolation and regression coverage for both audit-write
+exceptions and unscoped publish attempts.
