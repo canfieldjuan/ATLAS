@@ -195,6 +195,12 @@ const processPhases: ProcessPhase[] = [
 
 const servicesCrossLinks = [
   {
+    to: "/services/faq-deflection",
+    title: "FAQ Deflection Upload",
+    blurb:
+      "Prepare a support-ticket CSV for the guarded FAQ deflection report handoff.",
+  },
+  {
     to: "/projects",
     title: "Project Deep Dives",
     blurb:

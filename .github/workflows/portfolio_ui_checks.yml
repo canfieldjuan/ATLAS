@@ -37,6 +37,9 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Test FAQ deflection upload shell
+        run: npm run test:deflection-upload-shell
+
       - name: Test FAQ deflection result page
         run: npm run test:deflection-result
 

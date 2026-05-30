@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test:deflection-upload-shell": "node scripts/faq-deflection-upload-shell.test.mjs",
     "test:deflection-atlas-proxy": "node scripts/faq-deflection-atlas-proxy.test.mjs",
     "test:deflection-result": "node scripts/faq-deflection-result-page.test.mjs",
     "preview": "vite preview"

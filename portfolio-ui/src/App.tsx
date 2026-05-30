@@ -6,6 +6,7 @@ const Home = lazy(() => import("@/pages/Home"));
 const Projects = lazy(() => import("@/pages/Projects"));
 const ProjectDetail = lazy(() => import("@/pages/ProjectDetail"));
 const Services = lazy(() => import("@/pages/Services"));
+const FaqDeflectionUpload = lazy(() => import("@/pages/FaqDeflectionUpload"));
 const FaqDeflectionResult = lazy(() => import("@/pages/FaqDeflectionResult"));
 const Systems = lazy(() => import("@/pages/Systems"));
 const Insights = lazy(() => import("@/pages/Insights"));
@@ -31,6 +32,7 @@ export default function App() {
           <Route path="/projects" element={<Projects />} />
           <Route path="/projects/:slug" element={<ProjectDetail />} />
           <Route path="/services" element={<Services />} />
+          <Route path="/services/faq-deflection" element={<FaqDeflectionUpload />} />
           <Route
             path="/services/faq-deflection/results/:requestId"
             element={<FaqDeflectionResult />}
