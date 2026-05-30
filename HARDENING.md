@@ -30,17 +30,6 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
-## 2026-05-30
-
-### FAQ deflection blob submit DNS-rebinding TOCTOU
-- File/location: `extracted_content_pipeline/api/control_surfaces.py` `_validate_blob_host_resolution` / `_read_bounded_https_blob`
-- Description: Blob submit validates resolved host IPs before fetch, but urllib re-resolves during connect, leaving a DNS-rebinding time-of-check/time-of-use gap.
-- Why it matters: The endpoint is customer-reachable for paid deflection report submits, so broad GA should pin the validated IP at connection construction or restrict fetches to trusted blob hosts.
-- Effort: M
-- Category: security
-- Owner/session: Codex FAQ deflection blob redirect hardening
-- Found during: PR-FAQ-Deflection-Blob-Redirect-Hardening
-
 ## 2026-05-29
 
 ### atlas-intel-ui npm audit vulnerabilities
