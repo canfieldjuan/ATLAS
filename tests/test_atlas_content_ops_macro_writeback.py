@@ -39,6 +39,18 @@ class _Config:
     content_ops_zendesk_base_url: str = ""
 
 
+class _FailingFallbackCredentialsProvider:
+    def __init__(self) -> None:
+        self.calls: list[TenantScope] = []
+
+    async def credentials_for_scope(
+        self,
+        scope: TenantScope,
+    ) -> ZendeskMacroCredentials | None:
+        self.calls.append(scope)
+        raise AssertionError("config fallback should not run for tenant scopes")
+
+
 def test_zendesk_macro_credentials_from_config() -> None:
     credentials = zendesk_macro_credentials_from_config(_Config(
         content_ops_zendesk_email=" agent@example.com ",
@@ -200,6 +212,72 @@ async def test_tenant_zendesk_credentials_provider_falls_back_to_config_without_
     assert credentials is not None
     assert credentials.email == "fallback@example.com"
     assert credentials.normalized_base_url() == "https://fallback.zendesk.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    (
+        TenantScope(user_id="user-1"),
+        TenantScope(allowed_vendors=("Acme",)),
+        TenantScope(roles=("content-admin",)),
+        TenantScope(account_id=" ", user_id="user-1"),
+    ),
+)
+async def test_tenant_zendesk_credentials_provider_fails_closed_for_tenant_markers_without_account_id(
+    scope: TenantScope,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain import _content_ops_zendesk_credentials
+
+    async def lookup(pool, *, account_id):
+        raise AssertionError("tenant lookup should not run without account_id")
+
+    monkeypatch.setattr(_content_ops_zendesk_credentials, "lookup_zendesk_credentials", lookup)
+    fallback = _FailingFallbackCredentialsProvider()
+    provider = TenantZendeskMacroCredentialsProvider(
+        pool=_Pool(),
+        fallback_provider=fallback,
+    )
+
+    credentials = await provider.credentials_for_scope(scope)
+
+    assert credentials is None
+    assert fallback.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tenant_zendesk_credentials_provider_trims_account_id_for_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain import _content_ops_zendesk_credentials
+
+    tenant_credentials = ZendeskMacroCredentials(
+        email="tenant@example.com",
+        api_token="tenant-token",
+        subdomain="tenant",
+    )
+    calls: list[str] = []
+
+    async def lookup(pool, *, account_id):
+        del pool
+        calls.append(account_id)
+        return tenant_credentials
+
+    monkeypatch.setattr(_content_ops_zendesk_credentials, "lookup_zendesk_credentials", lookup)
+    fallback = _FailingFallbackCredentialsProvider()
+    provider = TenantZendeskMacroCredentialsProvider(
+        pool=_Pool(),
+        fallback_provider=fallback,
+    )
+
+    credentials = await provider.credentials_for_scope(
+        TenantScope(account_id=" 11111111-1111-1111-1111-111111111111 ")
+    )
+
+    assert credentials is tenant_credentials
+    assert calls == ["11111111-1111-1111-1111-111111111111"]
+    assert fallback.calls == []
 
 
 @pytest.mark.asyncio
