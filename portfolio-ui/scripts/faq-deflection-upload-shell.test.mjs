@@ -3,17 +3,30 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import submitHandler, {
+  BLOB_UPLOAD_PATH_PREFIX,
+  MAX_BLOB_CSV_BYTES,
   MAX_CSV_BYTES,
   MAX_MULTIPART_OVERHEAD_BYTES,
   SUBMIT_PATH,
   forwardSubmit,
+  readPrivateCsvBlob,
+  submitPrivateBlob,
 } from "../api/content-ops/deflection/submit.js";
+import {
+  CSV_CONTENT_TYPES,
+  MAX_BLOB_CSV_BYTES as MAX_UPLOAD_CSV_BYTES,
+  uploadTokenConfig,
+} from "../api/content-ops/deflection/upload.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = await readFile(resolve(root, "src/App.tsx"), "utf8");
 const servicesSource = await readFile(resolve(root, "src/pages/Services.tsx"), "utf8");
 const uploadSource = await readFile(resolve(root, "src/pages/FaqDeflectionUpload.tsx"), "utf8");
 const submitSource = await readFile(resolve(root, "api/content-ops/deflection/submit.js"), "utf8");
+const blobUploadRouteSource = await readFile(
+  resolve(root, "api/content-ops/deflection/upload.js"),
+  "utf8",
+);
 const packageJson = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
 
 const ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
@@ -21,6 +34,7 @@ const ENV = {
   ATLAS_API_BASE_URL: "https://atlas.example.com",
   ATLAS_B2B_JWT: "secret-service-token",
   ATLAS_ACCOUNT_ID: ACCOUNT_ID,
+  BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_token",
 };
 const MULTIPART_BODY = Buffer.from(
   [
@@ -119,15 +133,23 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-support-platform",
     "data-atlas-deflection-account-id-input",
     "data-atlas-deflection-submit",
+    "data-atlas-deflection-upload-endpoint",
   ]) {
     assert.match(uploadSource, new RegExp(marker));
   }
-  assert.match(uploadSource, /MAX_CSV_BYTES = 4 \* 1024 \* 1024/);
+  assert.match(uploadSource, /MAX_CSV_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(uploadSource, /@vercel\/blob\/client/);
+  assert.doesNotMatch(blobUploadRouteSource, /^import .*@vercel\/blob\/client/m);
+  assert.match(blobUploadRouteSource, /import\("@vercel\/blob\/client"\)/);
+  assert.match(uploadSource, /access: "private"/);
+  assert.match(uploadSource, /blob_pathname: blob\.pathname/);
+  assert.match(uploadSource, /private_blob_persistence/);
   assert.match(uploadSource, /value: "help_scout"/);
   assert.match(uploadSource, /value: "other", label: "Freshdesk \/ other"/);
   assert.doesNotMatch(uploadSource, /value: "freshdesk"/);
   assert.doesNotMatch(uploadSource, /value: "help-scout"/);
-  assert.match(uploadSource, /new FormData/);
+  assert.doesNotMatch(uploadSource, /new FormData/);
+  assert.match(uploadSource, /JSON\.stringify/);
   assert.match(uploadSource, /X-Atlas-Account-Id/);
   assert.doesNotMatch(uploadSource, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
   assert.doesNotMatch(uploadSource, /Authorization/);
@@ -136,6 +158,8 @@ await test("upload shell exposes live submit markers and avoids browser credenti
 
 await test("portfolio submit endpoint pins raw multipart body handling", () => {
   assert.match(submitSource, /bodyParser:\s*false/);
+  assert.doesNotMatch(submitSource, /^import .*@vercel\/blob/m);
+  assert.match(submitSource, /import\("@vercel\/blob"\)/);
 });
 
 await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", async () => {
@@ -176,6 +200,112 @@ await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", as
   assert.equal(Buffer.compare(calls[0].options.body, MULTIPART_BODY), 0);
   assert.equal(calls[0].options.signal instanceof AbortSignal, true);
   assert.equal(res.body.includes(ENV.ATLAS_B2B_JWT), false);
+});
+
+await test("private blob upload token config fails closed on path and account binding", () => {
+  const ok = uploadTokenConfig(
+    `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+    JSON.stringify({ account_id: ACCOUNT_ID }),
+    ENV,
+  );
+  assert.equal(ok.ok, true);
+  assert.equal(ok.token, ENV.BLOB_READ_WRITE_TOKEN);
+  assert.equal(ok.options.maximumSizeInBytes, MAX_UPLOAD_CSV_BYTES);
+  assert.deepEqual(ok.options.allowedContentTypes, CSV_CONTENT_TYPES);
+  assert.equal(ok.options.addRandomSuffix, true);
+
+  assert.deepEqual(
+    uploadTokenConfig("other/tickets.csv", JSON.stringify({ account_id: ACCOUNT_ID }), ENV),
+    { ok: false, errors: ["invalid_blob_pathname"] },
+  );
+  assert.deepEqual(uploadTokenConfig(`${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`, "{}", ENV), {
+    ok: false,
+    errors: ["invalid_account_id"],
+  });
+});
+
+await test("private blob submit reads server-side blob and forwards ATLAS multipart", async () => {
+  const calls = [];
+  const csv = "ticket_id,message\nticket-1,How do I export reports?";
+  const result = await submitPrivateBlob({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      support_platform: "zendesk",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    getBlobImpl: async (pathname, options) => {
+      assert.equal(pathname, `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`);
+      assert.deepEqual(options, {
+        access: "private",
+        token: ENV.BLOB_READ_WRITE_TOKEN,
+        useCache: false,
+      });
+      return {
+        statusCode: 200,
+        stream: new Blob([csv], { type: "text/csv" }).stream(),
+        blob: {
+          size: Buffer.byteLength(csv),
+          contentType: "text/csv",
+        },
+      };
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ request_id: "content-ops-private123" });
+        },
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.result_path.includes("content-ops-private123"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
+  assert.equal("Content-Type" in calls[0].options.headers, false);
+  assert.equal(calls[0].options.body instanceof FormData, true);
+  assert.equal(calls[0].options.body.get("support_platform"), "zendesk");
+  assert.equal(calls[0].options.body.get("company_name"), "Acme Co.");
+  assert.equal(await calls[0].options.body.get("csv_file").text(), csv);
+});
+
+await test("private blob reader rejects unsafe or oversized blob references", async () => {
+  assert.deepEqual(
+    await readPrivateCsvBlob({
+      pathname: "../tickets.csv",
+      token: ENV.BLOB_READ_WRITE_TOKEN,
+      getBlobImpl: async () => {
+        throw new Error("must not call blob store");
+      },
+    }),
+    { ok: false, statusCode: 400, error: "invalid_blob_reference" },
+  );
+
+  assert.deepEqual(
+    await readPrivateCsvBlob({
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      token: ENV.BLOB_READ_WRITE_TOKEN,
+      getBlobImpl: async () => ({
+        statusCode: 200,
+        stream: new Blob(["x"]).stream(),
+        blob: { size: MAX_BLOB_CSV_BYTES + 1, contentType: "text/csv" },
+      }),
+    }),
+    { ok: false, statusCode: 413, error: "deflection_submit_csv_too_large" },
+  );
 });
 
 await test("portfolio submit forwarding times out hung ATLAS calls", async () => {
@@ -272,7 +402,7 @@ await test("portfolio submit endpoint hides missing config details", async () =>
   assert.equal(res.body.includes("ATLAS_B2B_JWT"), false);
 });
 
-await test("portfolio submit endpoint only accepts POST multipart requests", async () => {
+await test("portfolio submit endpoint only accepts POST multipart or JSON blob requests", async () => {
   const getRes = mockResponse();
   await submitHandler(request({ method: "GET" }), getRes);
   assert.equal(getRes.statusCode, 405);
@@ -282,16 +412,17 @@ await test("portfolio submit endpoint only accepts POST multipart requests", asy
     error: "method_not_allowed",
   });
 
-  const jsonRes = mockResponse();
-  await submitHandler(request({ headers: { "content-type": "application/json" } }), jsonRes);
-  assert.equal(jsonRes.statusCode, 415);
-  assert.deepEqual(JSON.parse(jsonRes.body), {
+  const textRes = mockResponse();
+  await submitHandler(request({ headers: { "content-type": "text/plain" } }), textRes);
+  assert.equal(textRes.statusCode, 415);
+  assert.deepEqual(JSON.parse(textRes.body), {
     ok: false,
     error: "multipart_required",
   });
 });
 
 await test("upload shell test is enrolled in package scripts", () => {
+  assert.equal(packageJson.dependencies["@vercel/blob"], "^2.4.0");
   assert.equal(
     packageJson.scripts["test:deflection-upload-shell"],
     "node scripts/faq-deflection-upload-shell.test.mjs",
