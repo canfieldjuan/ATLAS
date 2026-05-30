@@ -197,6 +197,13 @@ but silently ignoring them recreates the diff-only review gap.
 GitHub Actions still runs the same wrapper after the PR opens. Treat CI
 as the final enforcement layer, not the first reviewer.
 
+After opening or updating a PR, the builder does **not** wait for CI,
+automated review, or human review comments. Report the PR URL, the
+local verification already run, and any immediately visible PR status,
+then stop. The operator will tell the builder when checks are green or
+when review comments are ready to inspect. Only resume PR inspection,
+comment handling, or merge decisions after that operator signal.
+
 ### 3d. Thin-slice and hardening triage
 
 Every plan names a slice phase in `Scope (this PR)`, and the PR body
