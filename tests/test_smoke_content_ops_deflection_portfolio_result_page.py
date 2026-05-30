@@ -164,6 +164,31 @@ def test_page_errors_require_portfolio_hooks_and_metadata_values() -> None:
     assert "portfolio result page missing account_id value" in errors
 
 
+def test_page_errors_bind_checkout_metadata_to_unlock_cta() -> None:
+    html = """
+    <main data-atlas-deflection-result>
+      <section data-atlas-deflection-request-id="content-ops-123">
+        content-ops-123 acct-123 content_ops_deflection_report request_id account_id
+      </section>
+      <a data-atlas-deflection-unlock
+         data-checkout-source="content_ops_deflection_report"
+         data-checkout-request_id="stale-request"
+         data-checkout-account_id="stale-account">Unlock full report</a>
+    </main>
+    """
+
+    errors = smoke._page_errors(
+        html,
+        request_id="content-ops-123",
+        account_id="acct-123",
+    )
+
+    assert errors == [
+        "portfolio result page unlock CTA data-checkout-request_id must be content-ops-123",
+        "portfolio result page unlock CTA data-checkout-account_id must be acct-123",
+    ]
+
+
 def test_snapshot_errors_reject_paid_report_leaks() -> None:
     snapshot = {
         **SNAPSHOT,
