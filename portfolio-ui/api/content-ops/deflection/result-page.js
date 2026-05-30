@@ -164,6 +164,8 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
   const statusBanner =
     checkoutStatus === "success"
       ? `<div class="notice success">Checkout returned successfully. ATLAS unlocks the paid report only after Stripe sends the verified webhook.</div>`
+      : checkoutStatus === "cancel"
+        ? `<div class="notice">Checkout was cancelled. The report is still locked; you can restart Checkout when ready.</div>`
       : "";
 
   return `<!doctype html>

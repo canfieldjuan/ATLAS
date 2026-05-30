@@ -304,6 +304,25 @@ await test("hosted result page retries artifact status after successful checkout
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
 
+await test("hosted result page explains cancelled checkout without retrying", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    checkoutStatus: "cancel",
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "locked",
+    },
+  });
+  assert.match(html, /Checkout was cancelled/);
+  assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
+  assert.doesNotMatch(html, /script data-atlas-deflection-artifact-retry/);
+  assert.match(html, /Continue to Checkout/);
+  assert.match(html, /<button type="button" data-atlas-deflection-unlock >/);
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+});
+
 await test("hosted result page does not retry once artifact is unlocked", () => {
   const html = renderResultPage({
     requestId: REQUEST_ID,
