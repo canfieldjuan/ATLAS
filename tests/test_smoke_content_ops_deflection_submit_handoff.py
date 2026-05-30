@@ -326,6 +326,53 @@ def test_validate_submit_envelope_rejects_singular_source_id_leak() -> None:
     assert any("$.top_questions[0].source_id" in error for error in errors)
 
 
+def test_stale_multipart_submit_route_detector_identifies_json_body_422() -> None:
+    response = smoke.HttpJsonResponse(
+        status=422,
+        payload={
+            "detail": [
+                {
+                    "type": "model_attributes_type",
+                    "loc": ["body"],
+                    "msg": "Input should be a valid dictionary or object to extract fields from",
+                }
+            ]
+        },
+        raw_text="",
+    )
+
+    errors = smoke._stale_multipart_submit_route_errors(response, submit_mode="multipart")
+
+    assert errors == [
+        "deployed submit route rejected multipart as a JSON body; "
+        "expected multipart CSV Request route, so the host is likely "
+        "serving stale route code or importing a stale extracted_content_pipeline"
+    ]
+
+
+def test_stale_multipart_submit_route_detector_rejects_json_mode() -> None:
+    response = smoke.HttpJsonResponse(
+        status=422,
+        payload={"detail": [{"type": "model_attributes_type", "loc": ["body"]}]},
+        raw_text="",
+    )
+
+    assert smoke._stale_multipart_submit_route_errors(
+        response,
+        submit_mode="json_blob_url",
+    ) == []
+
+
+def test_stale_multipart_submit_route_detector_rejects_unrelated_422() -> None:
+    response = smoke.HttpJsonResponse(
+        status=422,
+        payload={"detail": [{"type": "missing", "loc": ["body", "csv_file"]}]},
+        raw_text="",
+    )
+
+    assert smoke._stale_multipart_submit_route_errors(response, submit_mode="multipart") == []
+
+
 def test_run_success_posts_submit_and_probes_snapshot_and_locked_artifact(monkeypatch, tmp_path):
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -401,6 +448,52 @@ def test_run_success_posts_multipart_csv_and_probes_locked_artifact(monkeypatch,
     assert 'name="support_platform"' in calls[0]["body_text"]
     assert "blob_url" not in calls[0]["body_text"]
     assert summary["submit"]["diagnostics"]["metadata"]["uploaded_bytes"] == csv_file.stat().st_size
+    serialized = json.dumps(summary)
+    assert "token-secret" not in serialized
+    assert "How do I export reports?" not in serialized
+
+
+def test_run_fails_with_stale_multipart_submit_route_diagnostic(monkeypatch, tmp_path):
+    csv_file = _write_csv(tmp_path)
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open(
+            [
+                (
+                    422,
+                    {
+                        "detail": [
+                            {
+                                "type": "model_attributes_type",
+                                "loc": ["body"],
+                                "msg": (
+                                    "Input should be a valid dictionary or object to "
+                                    "extract fields from"
+                                ),
+                            }
+                        ]
+                    },
+                )
+            ],
+            calls,
+        ),
+    )
+    args = smoke._build_parser().parse_args(_base_csv_args(tmp_path, csv_file))
+
+    summary = smoke.run(args)
+
+    assert summary["ok"] is False
+    assert len(calls) == 1
+    assert summary["snapshot"]["not_run_reason"] == "submit_failed"
+    assert summary["artifact"]["not_run_reason"] == "submit_failed"
+    assert (
+        "deployed submit route rejected multipart as a JSON body; expected multipart CSV "
+        "Request route, so the host is likely serving stale route code or importing a "
+        "stale extracted_content_pipeline"
+    ) in summary["errors"]
+    assert "submit status must be 200, got 422" in summary["errors"]
     serialized = json.dumps(summary)
     assert "token-secret" not in serialized
     assert "How do I export reports?" not in serialized
