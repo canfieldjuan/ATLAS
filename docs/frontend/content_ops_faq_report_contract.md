@@ -7,9 +7,9 @@ The canonical customer-facing deflection report producer is
 `extracted_content_pipeline.faq_deflection_report.DeflectionReportArtifact.as_dict()`.
 
 Use this contract for Content Ops `faq_markdown` execute results, persisted FAQ
-detail hydration, Content Ops `faq_deflection_report` execute results, and
-landing-page demos that render the full generated FAQ or deflection report
-artifact.
+detail hydration, Content Ops `faq_deflection_report` execute results, paid
+deflection report artifacts, free deflection snapshots, and landing-page demos
+that render the generated FAQ or deflection report artifact.
 
 Do not use the compact search result row as the full report. Search returns a
 ranked match preview; detail hydration returns the generated report.
@@ -70,6 +70,40 @@ The report Markdown always contains these customer-facing sections:
 - `No Proven Answer Yet`
 - `Vocabulary Gaps`
 - `Evidence Appendix`
+
+## Deflection Snapshot
+
+The hosted free results page receives this shape before payment. It is the
+canonical projection returned in `result.snapshot` from gated
+`faq_deflection_report` execute responses and from
+`GET /content-ops/deflection-reports/{request_id}/snapshot`.
+
+```ts
+type DeflectionSnapshot = {
+  summary: {
+    generated: number;
+    drafted_answer_count: number;
+    no_proven_answer_count: number;
+  };
+  top_questions: DeflectionSnapshotQuestion[];
+};
+
+type DeflectionSnapshotQuestion = {
+  rank: number;
+  question: string;
+  weighted_frequency: number;
+  customer_wording: string;
+};
+```
+
+This shape intentionally excludes paid deliverable fields:
+
+- no `markdown`
+- no `faq_result`
+- no answer text or `steps`
+- no `evidence_quotes`
+- no `source_ids`
+- no vocabulary term mappings
 
 ## FAQ Item
 
@@ -174,6 +208,9 @@ type TicketFAQSearchResponse = {
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
 - For `faq_deflection_report`, render top-level `markdown` as the deliverable.
   Use `summary` for proof badges and `faq_result` for drill-down cards.
+- For unpaid deflection results, render only `DeflectionSnapshot.summary` and
+  `DeflectionSnapshot.top_questions`. Do not infer answer text, evidence, or
+  source IDs from the snapshot.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
   system found repeated customer wording but no uploaded resolution evidence, so
@@ -190,4 +227,6 @@ type TicketFAQSearchResponse = {
 See [`content_ops_faq_report_example.json`](./content_ops_faq_report_example.json)
 for a current compact FAQ example and
 [`content_ops_faq_deflection_report_example.json`](./content_ops_faq_deflection_report_example.json)
-for a current compact deflection report example.
+for a current compact deflection report example. See
+[`content_ops_faq_deflection_snapshot_example.json`](./content_ops_faq_deflection_snapshot_example.json)
+for the free snapshot shape rendered before payment.
