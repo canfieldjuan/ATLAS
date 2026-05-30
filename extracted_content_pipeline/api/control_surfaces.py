@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import logging
 import math
+import ssl
 import tempfile
 import ipaddress
 import socket
 import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -1278,17 +1279,25 @@ def _load_deflection_submit_blob_rows_sync(
 
 
 def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
-    url = _validate_https_blob_fetch_target(blob_url)
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Atlas-Content-Ops/1.0"},
-    )
+    target = _validate_https_blob_fetch_target(blob_url)
+    response: Any | None = None
     try:
-        with _open_https_blob_request(
-            request,
+        response = _open_https_blob_request(
+            target,
             timeout=_DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
-        ) as response:
-            data = response.read(max_bytes + 1)
+        )
+        status = int(getattr(response, "status", 0) or 0)
+        if 300 <= status < 400:
+            raise HTTPException(
+                status_code=400,
+                detail="Blob URL redirects are not allowed.",
+            )
+        if status < 200 or status >= 300:
+            raise HTTPException(
+                status_code=400,
+                detail="Blob URL could not be fetched.",
+            )
+        data = response.read(max_bytes + 1)
     except urllib.error.HTTPError as exc:
         if 300 <= int(getattr(exc, "code", 0) or 0) < 400:
             raise HTTPException(
@@ -1304,6 +1313,9 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
             status_code=400,
             detail="Blob URL could not be fetched.",
         ) from exc
+    finally:
+        if response is not None:
+            _close_https_blob_response(response)
     if len(data) > max_bytes:
         raise HTTPException(
             status_code=413,
@@ -1315,18 +1327,96 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
     return data
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
-        return None
+@dataclass(frozen=True)
+class _BlobFetchTarget:
+    url: str
+    host: str
+    port: int
+    path: str
+    host_header: str
+    connect_host: str
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        host: str,
+        *,
+        port: int,
+        connect_host: str,
+        timeout: int,
+    ) -> None:
+        super().__init__(
+            host,
+            port=port,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+        self._connect_host = connect_host
+
+    def connect(self) -> None:
+        self.sock = self._create_connection(
+            (self._connect_host, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=self.host)
+
+
+_PINNED_HTTPS_CONNECTION_CLASS = _PinnedHTTPSConnection
+
+
+class _PinnedBlobResponse:
+    def __init__(
+        self,
+        response: http.client.HTTPResponse,
+        connection: http.client.HTTPSConnection,
+    ) -> None:
+        self._response = response
+        self._connection = connection
+        self.status = response.status
+
+    def read(self, size: int) -> bytes:
+        return self._response.read(size)
+
+    def close(self) -> None:
+        self._response.close()
+        self._connection.close()
 
 
 def _open_https_blob_request(
-    request: urllib.request.Request,
+    target: _BlobFetchTarget,
     *,
     timeout: int,
 ) -> Any:
-    opener = urllib.request.build_opener(_NoRedirectHandler)
-    return opener.open(request, timeout=timeout)
+    connection = _PINNED_HTTPS_CONNECTION_CLASS(
+        target.host,
+        port=target.port,
+        connect_host=target.connect_host,
+        timeout=timeout,
+    )
+    try:
+        connection.request(
+            "GET",
+            target.path,
+            headers={
+                "Host": target.host_header,
+                "User-Agent": "Atlas-Content-Ops/1.0",
+            },
+        )
+        response = connection.getresponse()
+        return _PinnedBlobResponse(response, connection)
+    except Exception:
+        connection.close()
+        raise
+
+
+def _close_https_blob_response(response: Any) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
 
 
 def _validate_https_blob_url(value: Any) -> str:
@@ -1334,6 +1424,10 @@ def _validate_https_blob_url(value: Any) -> str:
     parsed = urllib.parse.urlparse(text)
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError("blob_url must be an https URL")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError("blob_url must be an https URL") from exc
     host = parsed.hostname or ""
     if not host or _is_blocked_blob_host(host):
         raise ValueError("blob_url host is not allowed")
@@ -1342,33 +1436,53 @@ def _validate_https_blob_url(value: Any) -> str:
     return text
 
 
-def _validate_https_blob_fetch_target(value: Any) -> str:
+def _validate_https_blob_fetch_target(value: Any) -> _BlobFetchTarget:
     url = _validate_https_blob_url(value)
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or ""
+    port = parsed.port or 443
     try:
-        _validate_blob_host_resolution(host)
+        connect_host = _validate_blob_host_resolution(host, port)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return url
+    path = urllib.parse.urlunparse((
+        "",
+        "",
+        parsed.path or "/",
+        parsed.params,
+        parsed.query,
+        "",
+    ))
+    return _BlobFetchTarget(
+        url=url,
+        host=host,
+        port=port,
+        path=path,
+        host_header=parsed.netloc,
+        connect_host=connect_host,
+    )
 
 
-def _validate_blob_host_resolution(host: str) -> None:
-    # This preflight closes common hostname-to-private SSRF cases. urllib still
-    # resolves again at connect time, so a full DNS-rebinding defense would pin
-    # the validated IP at connection construction.
+def _validate_blob_host_resolution(host: str, port: int) -> str:
     try:
-        resolved = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        resolved = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise ValueError("blob_url host could not be resolved") from exc
     if not resolved:
         raise ValueError("blob_url host could not be resolved")
+    connect_host: str | None = None
     for item in resolved:
         sockaddr = item[4]
         if not sockaddr:
             raise ValueError("blob_url host could not be resolved")
-        if _is_blocked_blob_host(str(sockaddr[0])):
+        address = str(sockaddr[0])
+        if _is_blocked_blob_host(address):
             raise ValueError("blob_url host is not allowed")
+        if connect_host is None:
+            connect_host = address
+    if connect_host is None:
+        raise ValueError("blob_url host could not be resolved")
+    return connect_host
 
 
 def _is_blocked_blob_host(host: str) -> bool:

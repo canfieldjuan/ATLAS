@@ -26,11 +26,16 @@ def _route(router: Any, path: str, method: str) -> Any:
 
 
 class _BlobResponse:
-    def __init__(self, data: bytes) -> None:
+    def __init__(self, data: bytes, *, status: int = 200) -> None:
         self._data = data
+        self.status = status
+        self.closed = False
 
     def read(self, _size: int) -> bytes:
         return self._data
+
+    def close(self) -> None:
+        self.closed = True
 
     def __enter__(self) -> "_BlobResponse":
         return self
@@ -46,11 +51,11 @@ def _csv_bytes(rows: list[str]) -> bytes:
 def _install_blob(
     monkeypatch: pytest.MonkeyPatch,
     data: bytes,
-) -> list[tuple[str, int]]:
-    calls: list[tuple[str, int]] = []
+) -> list[tuple[str, str, int]]:
+    calls: list[tuple[str, str, int]] = []
 
-    def _open(request: Any, *, timeout: int) -> _BlobResponse:
-        calls.append((request.full_url, timeout))
+    def _open(target: Any, *, timeout: int) -> _BlobResponse:
+        calls.append((target.url, target.connect_host, timeout))
         return _BlobResponse(data)
 
     monkeypatch.setattr(api_module, "_open_https_blob_request", _open)
@@ -121,6 +126,7 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
 
     assert calls == [(
         "https://portfolio.example/blob/tickets.csv",
+        "93.184.216.34",
         api_module._DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
     )]
     assert payload["status"] == "completed"
@@ -173,6 +179,23 @@ async def test_deflection_submit_rejects_non_https_blob_url() -> None:
     with pytest.raises(api_module.HTTPException) as exc:
         await submit.endpoint({
             "blob_url": "http://portfolio.example/blob/tickets.csv",
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+        })
+
+    assert exc.value.status_code == 422
+    assert "blob_url must be an https URL" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_blob_url_with_invalid_port() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint({
+            "blob_url": "https://portfolio.example:99999/blob/tickets.csv",
             "support_platform": "zendesk",
             "company_name": "Acme Co.",
             "contact_email": "lead@acme.example",
@@ -310,10 +333,10 @@ async def test_deflection_submit_rejects_blob_redirects(
     _install_public_dns(monkeypatch)
     calls: list[str] = []
 
-    def _open(request: Any, *, timeout: int) -> _BlobResponse:
-        calls.append(request.full_url)
+    def _open(target: Any, *, timeout: int) -> _BlobResponse:
+        calls.append(target.url)
         raise urllib.error.HTTPError(
-            request.full_url,
+            target.url,
             302,
             "Found",
             {"Location": "http://169.254.169.254/latest/meta-data"},
@@ -337,50 +360,137 @@ async def test_deflection_submit_rejects_blob_redirects(
     assert exc.value.detail == "Blob URL redirects are not allowed."
 
 
-def test_deflection_submit_opener_disables_redirects() -> None:
-    handler = api_module._NoRedirectHandler()
+def test_read_bounded_https_blob_rejects_redirect_status_without_following() -> None:
+    response = _BlobResponse(b"", status=302)
 
-    assert handler.redirect_request(None, None, 302, "Found", {}, "https://x") is None
+    with pytest.raises(api_module.HTTPException) as exc:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            _install_public_dns(monkeypatch)
+            monkeypatch.setattr(
+                api_module,
+                "_open_https_blob_request",
+                lambda _target, *, timeout: response,
+            )
+            api_module._read_bounded_https_blob(
+                "https://portfolio.example/blob/tickets.csv",
+                max_bytes=100,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Blob URL redirects are not allowed."
+    assert response.closed
 
 
-def test_read_bounded_https_blob_rejects_redirects_through_no_redirect_opener(
+def test_read_bounded_https_blob_rejects_non_success_status() -> None:
+    response = _BlobResponse(b"expired", status=403)
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            _install_public_dns(monkeypatch)
+            monkeypatch.setattr(
+                api_module,
+                "_open_https_blob_request",
+                lambda _target, *, timeout: response,
+            )
+            api_module._read_bounded_https_blob(
+                "https://portfolio.example/blob/tickets.csv",
+                max_bytes=100,
+            )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Blob URL could not be fetched."
+    assert response.closed
+
+
+def test_read_bounded_https_blob_uses_validated_ip_for_pinned_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_public_dns(monkeypatch)
-    handlers: list[Any] = []
-    calls: list[tuple[str, int]] = []
+    csv_data = _csv_bytes(["ticket_id,message", "ticket-1,How do I export?"])
+    calls: list[tuple[str, int, str, int, str, dict[str, str]]] = []
 
-    class _RedirectingOpener:
-        def open(self, request: Any, *, timeout: int) -> Any:
-            calls.append((request.full_url, timeout))
-            raise urllib.error.HTTPError(
-                request.full_url,
-                302,
-                "Found",
-                {"Location": "http://169.254.169.254/latest/meta-data"},
-                None,
-            )
+    class _PinnedConnection:
+        def __init__(
+            self,
+            host: str,
+            *,
+            port: int,
+            connect_host: str,
+            timeout: int,
+        ) -> None:
+            self.host = host
+            self.port = port
+            self.connect_host = connect_host
+            self.timeout = timeout
+            self.closed = False
 
-    def _build_opener(*opener_handlers: Any) -> _RedirectingOpener:
-        handlers.extend(opener_handlers)
-        return _RedirectingOpener()
+        def request(
+            self,
+            method: str,
+            path: str,
+            *,
+            headers: dict[str, str],
+        ) -> None:
+            calls.append((
+                self.host,
+                self.port,
+                self.connect_host,
+                self.timeout,
+                f"{method} {path}",
+                headers,
+            ))
 
-    monkeypatch.setattr(api_module.urllib.request, "build_opener", _build_opener)
+        def getresponse(self) -> _BlobResponse:
+            return _BlobResponse(csv_data)
 
-    with pytest.raises(api_module.HTTPException) as exc:
-        api_module._read_bounded_https_blob(
-            "https://portfolio.example/blob/tickets.csv",
-            max_bytes=100,
-        )
+        def close(self) -> None:
+            self.closed = True
 
-    assert any(
-        handler is api_module._NoRedirectHandler
-        or isinstance(handler, api_module._NoRedirectHandler)
-        for handler in handlers
+    monkeypatch.setattr(api_module, "_PINNED_HTTPS_CONNECTION_CLASS", _PinnedConnection)
+
+    data = api_module._read_bounded_https_blob(
+        "https://portfolio.example:444/blob/tickets.csv?sig=abc",
+        max_bytes=1000,
     )
+
+    assert data == csv_data
     assert calls == [(
-        "https://portfolio.example/blob/tickets.csv",
+        "portfolio.example",
+        444,
+        "93.184.216.34",
         api_module._DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
+        "GET /blob/tickets.csv?sig=abc",
+        {
+            "Host": "portfolio.example:444",
+            "User-Agent": "Atlas-Content-Ops/1.0",
+        },
     )]
-    assert exc.value.status_code == 400
-    assert exc.value.detail == "Blob URL redirects are not allowed."
+
+
+def test_pinned_https_connection_uses_validated_ip_but_original_sni() -> None:
+    calls: list[tuple[str, object]] = []
+
+    class _Context:
+        def wrap_socket(self, sock: object, *, server_hostname: str) -> object:
+            calls.append(("sni", server_hostname))
+            return ("tls", sock, server_hostname)
+
+    connection = api_module._PinnedHTTPSConnection(
+        "portfolio.example",
+        port=443,
+        connect_host="93.184.216.34",
+        timeout=15,
+    )
+    connection._context = _Context()
+    connection._create_connection = lambda address, timeout, source_address: calls.append((
+        "connect",
+        (address, timeout, source_address),
+    )) or "socket"
+
+    connection.connect()
+
+    assert calls == [
+        ("connect", (("93.184.216.34", 443), 15, None)),
+        ("sni", "portfolio.example"),
+    ]
+    assert connection.sock == ("tls", "socket", "portfolio.example")
