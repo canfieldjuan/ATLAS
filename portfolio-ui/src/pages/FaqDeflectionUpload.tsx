@@ -5,24 +5,30 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileSpreadsheet,
-  LockKeyhole,
+  Loader2,
+  Send,
   Upload,
 } from "lucide-react";
 import { SeoHead } from "@/components/seo/SeoHead";
 
 const SUBMIT_ENDPOINT = "/api/content-ops/deflection/submit";
-const MAX_CSV_BYTES = 50 * 1024 * 1024;
+const MAX_CSV_BYTES = 4 * 1024 * 1024;
 const SUPPORT_PLATFORMS = [
   { value: "zendesk", label: "Zendesk" },
   { value: "intercom", label: "Intercom" },
-  { value: "help-scout", label: "Help Scout" },
-  { value: "freshdesk", label: "Freshdesk" },
+  { value: "help_scout", label: "Help Scout" },
+  { value: "other", label: "Freshdesk / other" },
 ] as const;
 
 type UploadState =
   | { status: "empty" }
-  | { status: "ready"; fileName: string; fileSize: number }
+  | { status: "ready"; file: File; fileName: string; fileSize: number }
   | { status: "invalid"; message: string };
+
+type SubmitState =
+  | { status: "idle" }
+  | { status: "submitting" }
+  | { status: "error"; message: string };
 
 function formatBytes(bytes: number) {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -40,9 +46,9 @@ function fileState(file: File | undefined): UploadState {
     return { status: "invalid", message: "The selected CSV is empty." };
   }
   if (file.size > MAX_CSV_BYTES) {
-    return { status: "invalid", message: "CSV exports must be 50 MB or smaller." };
+    return { status: "invalid", message: "CSV exports must be 4 MB or smaller." };
   }
-  return { status: "ready", fileName: file.name, fileSize: file.size };
+  return { status: "ready", file, fileName: file.name, fileSize: file.size };
 }
 
 export default function FaqDeflectionUpload() {
@@ -51,6 +57,7 @@ export default function FaqDeflectionUpload() {
   const [accountId, setAccountId] = useState("");
   const [supportPlatform, setSupportPlatform] = useState<string>(SUPPORT_PLATFORMS[0].value);
   const [upload, setUpload] = useState<UploadState>({ status: "empty" });
+  const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
 
   const fieldsReady = useMemo(
     () =>
@@ -63,6 +70,41 @@ export default function FaqDeflectionUpload() {
       ),
     [accountId, companyName, contactEmail, supportPlatform, upload.status],
   );
+  const canSubmit = fieldsReady && submit.status !== "submitting";
+
+  const startSubmit = async () => {
+    if (upload.status !== "ready" || !fieldsReady) return;
+    setSubmit({ status: "submitting" });
+    const form = new FormData();
+    form.set("csv_file", upload.file);
+    form.set("support_platform", supportPlatform);
+    form.set("company_name", companyName.trim());
+    form.set("contact_email", contactEmail.trim());
+    form.set("limit", "1000");
+
+    try {
+      const response = await fetch(SUBMIT_ENDPOINT, {
+        method: "POST",
+        headers: { "X-Atlas-Account-Id": accountId.trim() },
+        body: form,
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        result_path?: unknown;
+        error?: unknown;
+      } | null;
+      if (!response.ok || !payload || typeof payload.result_path !== "string") {
+        const message =
+          payload && typeof payload.error === "string"
+            ? payload.error
+            : "FAQ deflection submit could not be started.";
+        setSubmit({ status: "error", message });
+        return;
+      }
+      window.location.assign(payload.result_path);
+    } catch {
+      setSubmit({ status: "error", message: "FAQ deflection submit could not be reached." });
+    }
+  };
 
   return (
     <>
@@ -92,7 +134,10 @@ export default function FaqDeflectionUpload() {
         <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
           <form
             className="rounded-lg border border-surface-700/60 bg-surface-800/35 p-6"
-            onSubmit={(event) => event.preventDefault()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void startSubmit();
+            }}
           >
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary-500/15 text-primary-300">
@@ -173,8 +218,8 @@ export default function FaqDeflectionUpload() {
                 onChange={(event) => setUpload(fileState(event.target.files?.[0]))}
               />
               <span className="mt-3 block text-xs text-surface-200/60">
-                50 MB cap. CSV bytes stay on the portfolio side until the server
-                submit contract is enabled.
+                4 MB cap. CSV bytes are forwarded through the portfolio server
+                to ATLAS; the service JWT never reaches the browser.
               </span>
             </label>
 
@@ -197,14 +242,25 @@ export default function FaqDeflectionUpload() {
 
             <button
               type="submit"
-              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-surface-700 px-4 py-3 text-sm font-semibold text-surface-200/65"
-              data-atlas-deflection-submit-guard
-              disabled
-              aria-disabled="true"
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-3 text-sm font-semibold text-surface-900 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-surface-700 disabled:text-surface-200/65"
+              data-atlas-deflection-submit
+              disabled={!canSubmit}
             >
-              <LockKeyhole size={16} />
-              Submit pending backend contract
+              {submit.status === "submitting" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Creating report
+                </>
+              ) : (
+                <>
+                  <Send size={16} />
+                  Create locked report
+                </>
+              )}
             </button>
+            {submit.status === "error" && (
+              <p className="mt-3 text-xs leading-5 text-amber-200">{submit.message}</p>
+            )}
           </form>
 
           <aside className="h-fit rounded-lg border border-surface-700/60 bg-surface-800/45 p-6">
@@ -223,15 +279,16 @@ export default function FaqDeflectionUpload() {
                 </dd>
               </div>
               <div>
-                <dt className="text-surface-200/60">Current response</dt>
+                <dt className="text-surface-200/60">Submit mode</dt>
                 <dd className="mt-1 font-mono text-xs text-surface-100">
-                  deflection_submit_backend_pending
+                  portfolio_server_forwarding
                 </dd>
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              The live handoff remains closed until the ATLAS multipart submit
-              contract is merged on main.
+              The portfolio forwards the multipart CSV server-side, then sends
+              the browser to the hosted result page for snapshot hydration and
+              Checkout.
             </p>
           </aside>
         </div>
