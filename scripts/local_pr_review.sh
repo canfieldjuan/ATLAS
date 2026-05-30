@@ -97,7 +97,7 @@ run_check "Pre-push audit wrapper" bash scripts/pre_push_audit.sh
 
 if [ -f scripts/audit_extracted_pipeline_ci_enrollment.py ]; then
     run_check "Extracted pipeline CI enrollment" \
-        python scripts/audit_extracted_pipeline_ci_enrollment.py
+        python scripts/audit_extracted_pipeline_ci_enrollment.py --atlas-brain-tests-from "$base_ref"
 else
     echo
     echo "==> Extracted pipeline CI enrollment"
