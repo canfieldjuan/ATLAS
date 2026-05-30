@@ -145,12 +145,22 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
   const artifactStatus = report && report.ok ? report.artifact_status : "snapshot_unavailable";
   const isUnlocked = artifactStatus === "unlocked";
   const shouldRetryArtifact = checkoutStatus === "success" && artifactStatus === "locked";
-  const buttonDisabled = requestId && accountId && !isUnlocked ? "" : "disabled";
-  const unlockHeading = isUnlocked ? "Full report unlocked" : "Unlock full report";
+  const buttonDisabled = requestId && accountId && !isUnlocked && !shouldRetryArtifact ? "" : "disabled";
+  const unlockHeading = isUnlocked
+    ? "Full report unlocked"
+    : shouldRetryArtifact
+      ? "Payment processing"
+      : "Unlock full report";
   const unlockCopy = isUnlocked
     ? "ATLAS has released the paid artifact for this request."
-    : "$1,500 one-time Stripe Checkout session.";
-  const unlockButtonLabel = isUnlocked ? "Report unlocked" : "Continue to Checkout";
+    : shouldRetryArtifact
+      ? "Stripe returned successfully. This page is checking for the verified ATLAS unlock."
+      : "$1,500 one-time Stripe Checkout session.";
+  const unlockButtonLabel = isUnlocked
+    ? "Report unlocked"
+    : shouldRetryArtifact
+      ? "Checking unlock status"
+      : "Continue to Checkout";
   const statusBanner =
     checkoutStatus === "success"
       ? `<div class="notice success">Checkout returned successfully. ATLAS unlocks the paid report only after Stripe sends the verified webhook.</div>`

@@ -274,11 +274,14 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /artifact_status/);
   assert.match(html, /locked/);
   assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
+  assert.match(html, /Unlock full report/);
+  assert.match(html, /Continue to Checkout/);
+  assert.match(html, /<button type="button" data-atlas-deflection-unlock >/);
   assert.doesNotMatch(html, /# Paid report/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
 
-await test("hosted result page retries artifact status after successful checkout", () => {
+await test("hosted result page retries artifact status after successful checkout without duplicate checkout", () => {
   const html = renderResultPage({
     requestId: REQUEST_ID,
     accountId: ACCOUNT_ID,
@@ -291,6 +294,9 @@ await test("hosted result page retries artifact status after successful checkout
   });
   assert.match(html, /data-atlas-deflection-artifact-retry="true"/);
   assert.match(html, /script data-atlas-deflection-artifact-retry/);
+  assert.match(html, /Payment processing/);
+  assert.match(html, /Checking unlock status/);
+  assert.match(html, /<button type="button" data-atlas-deflection-unlock disabled>/);
   assert.match(html, /\/api\/content-ops\/deflection\/report\?request_id=/);
   assert.match(html, /payload\.artifact_status === "unlocked"/);
   assert.match(html, /window\.location\.reload\(\)/);
