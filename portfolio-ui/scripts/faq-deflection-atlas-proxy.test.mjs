@@ -273,8 +273,46 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /How do I reset billing access\?/);
   assert.match(html, /artifact_status/);
   assert.match(html, /locked/);
+  assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
   assert.doesNotMatch(html, /# Paid report/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+});
+
+await test("hosted result page retries artifact status after successful checkout", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    checkoutStatus: "success",
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "locked",
+    },
+  });
+  assert.match(html, /data-atlas-deflection-artifact-retry="true"/);
+  assert.match(html, /script data-atlas-deflection-artifact-retry/);
+  assert.match(html, /\/api\/content-ops\/deflection\/report\?request_id=/);
+  assert.match(html, /payload\.artifact_status === "unlocked"/);
+  assert.match(html, /window\.location\.reload\(\)/);
+  assert.doesNotMatch(html, /payload\.artifact\b/);
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+});
+
+await test("hosted result page does not retry once artifact is unlocked", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    checkoutStatus: "success",
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "unlocked",
+      artifact: PAID_ARTIFACT,
+    },
+  });
+  assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
+  assert.doesNotMatch(html, /script data-atlas-deflection-artifact-retry/);
+  assert.match(html, /data-atlas-deflection-paid-report/);
 });
 
 await test("hosted result page renders escaped paid artifact only after unlock", () => {
