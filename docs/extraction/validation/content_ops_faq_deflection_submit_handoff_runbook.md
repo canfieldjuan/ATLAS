@@ -115,6 +115,27 @@ metadata keys (`content_ops_deflection_report`, `request_id`, `account_id`),
 keeps the free snapshot limited to summary/top-question data, and confirms the
 artifact endpoint still returns `403` before payment.
 
+## Stripe Paid-Unlock Smoke
+
+After the hosted result page smoke passes and before using the same request for
+manual recovery, validate the signed Stripe webhook trust path with:
+
+- `ATLAS_SAAS_STRIPE_WEBHOOK_SECRET` or `STRIPE_WEBHOOK_SECRET`: deployed ATLAS
+  Stripe webhook signing secret.
+- `ATLAS_DEFLECTION_REQUEST_ID`: `request_id` returned by the submit smoke.
+
+```bash
+python scripts/smoke_content_ops_deflection_stripe_paid_unlock.py \
+  --output-result /tmp/faq-deflection-stripe-paid-unlock.json \
+  --json
+```
+
+The smoke confirms the artifact route is locked before the webhook, posts a
+Stripe-compatible signed `checkout.session.completed` event with the required
+deflection metadata, and then confirms the artifact route returns the full paid
+report. The event id and Checkout session id are generated when omitted, so a
+fresh run does not reuse Stripe webhook idempotency keys.
+
 ## Interpreting Results
 
 The result artifact records HTTP statuses, the returned `request_id`, compact
@@ -127,5 +148,5 @@ Exit codes:
 - `1`: ATLAS returned a response that violated the handoff contract.
 - `2`: required inputs were missing or unsafe for hosted proof.
 
-Stripe webhook paid-unlock validation is a separate follow-up. This smoke
-expects the artifact route to stay locked before payment.
+Run the paid-unlock smoke only after the pre-payment submit and result-page
+smokes pass. It intentionally consumes the request by marking the report paid.
