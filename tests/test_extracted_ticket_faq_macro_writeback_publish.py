@@ -46,6 +46,22 @@ class _FAQRepo:
         return True
 
 
+class _AttemptRepo:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict[str, object]] = []
+
+    async def record_attempt(
+        self,
+        summary,
+        *,
+        scope: TenantScope,
+    ) -> None:
+        if self.fail:
+            raise RuntimeError("attempt write failed")
+        self.calls.append({"summary": summary, "scope": scope})
+
+
 class _Provider:
     def __init__(self, statuses: tuple[str, ...]) -> None:
         self.statuses = statuses
@@ -121,7 +137,12 @@ async def test_publish_service_publishes_approved_verified_faq_and_marks_status(
     scope = TenantScope(account_id="acct-1", user_id="user-1")
     repo = _FAQRepo(_draft())
     provider = _Provider(("published",))
-    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
 
     summary = await service.publish_faq_draft(" faq-draft-1 ", scope=scope)
 
@@ -138,6 +159,7 @@ async def test_publish_service_publishes_approved_verified_faq_and_marks_status(
         "status": "published",
         "scope": scope,
     }]
+    assert attempts.calls == [{"summary": summary, "scope": scope}]
 
 
 @pytest.mark.asyncio
@@ -195,7 +217,12 @@ async def test_publish_service_keeps_status_when_items_are_skipped() -> None:
 async def test_publish_service_surfaces_pending_reconcile_without_status_update() -> None:
     repo = _FAQRepo(_draft())
     provider = _PendingProvider()
-    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
 
     summary = await service.publish_faq_draft(
         "faq-draft-1",
@@ -207,13 +234,22 @@ async def test_publish_service_surfaces_pending_reconcile_without_status_update(
     assert summary.pending_reconcile_count == 1
     assert summary.results[0]["error"] == "zendesk_macro_mapping_pending_reconcile"
     assert repo.update_calls == []
+    assert attempts.calls == [{
+        "summary": summary,
+        "scope": TenantScope(account_id="acct-1"),
+    }]
 
 
 @pytest.mark.asyncio
 async def test_publish_service_reports_missing_draft_without_provider_call() -> None:
     repo = _FAQRepo(None)
     provider = _Provider(("published",))
-    service = FAQMacroWritebackPublishService(faq_repository=repo, provider=provider)
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
 
     summary = await service.publish_faq_draft(
         "missing-faq",
@@ -237,6 +273,7 @@ async def test_publish_service_reports_missing_draft_without_provider_call() -> 
     }
     assert provider.calls == []
     assert repo.update_calls == []
+    assert attempts.calls == []
 
 
 @pytest.mark.asyncio
@@ -255,3 +292,51 @@ async def test_publish_service_does_not_mark_dry_run_results_published() -> None
     assert summary.published_count == 0
     assert summary.updated_count == 0
     assert repo.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_publish_service_keeps_success_when_attempt_history_write_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repo = _FAQRepo(_draft())
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo(fail=True)
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert summary.ok is True
+    assert summary.published_count == 1
+    assert repo.update_calls == [{
+        "faq_id": "faq-draft-1",
+        "status": "published",
+        "scope": TenantScope(account_id="acct-1"),
+    }]
+    assert "failed to record FAQ macro publish attempt" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_publish_service_skips_attempt_history_without_account_scope() -> None:
+    repo = _FAQRepo(_draft())
+    provider = _Provider(("published",))
+    attempts = _AttemptRepo()
+    service = FAQMacroWritebackPublishService(
+        faq_repository=repo,
+        provider=provider,
+        attempt_repository=attempts,
+    )
+
+    summary = await service.publish_faq_draft(
+        "faq-draft-1",
+        scope=TenantScope(),
+    )
+
+    assert summary.ok is True
+    assert attempts.calls == []
