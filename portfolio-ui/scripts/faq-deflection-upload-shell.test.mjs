@@ -8,6 +8,7 @@ import submitHandler, {
   MAX_CSV_BYTES,
   MAX_MULTIPART_OVERHEAD_BYTES,
   SUBMIT_PATH,
+  cleanupPrivateCsvBlob,
   forwardSubmit,
   readPrivateCsvBlob,
   submitPrivateBlob,
@@ -168,6 +169,7 @@ await test("portfolio submit endpoint pins raw multipart body handling", () => {
   assert.match(submitSource, /bodyParser:\s*false/);
   assert.doesNotMatch(submitSource, /^import .*@vercel\/blob/m);
   assert.match(submitSource, /import\("@vercel\/blob"\)/);
+  assert.match(submitSource, /const \{ del \} = await import\("@vercel\/blob"\)/);
 });
 
 await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", async () => {
@@ -234,6 +236,7 @@ await test("private blob upload token config fails closed on path and account bi
 
 await test("private blob submit reads server-side blob and forwards ATLAS multipart", async () => {
   const calls = [];
+  const deleteCalls = [];
   const csv = "ticket_id,message\nticket-1,How do I export reports?";
   const result = await submitPrivateBlob({
     config: {
@@ -276,6 +279,9 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
         },
       };
     },
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
   });
 
   assert.equal(result.ok, true);
@@ -288,6 +294,126 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
   assert.equal(calls[0].options.body.get("support_platform"), "zendesk");
   assert.equal(calls[0].options.body.get("company_name"), "Acme Co.");
   assert.equal(await calls[0].options.body.get("csv_file").text(), csv);
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+});
+
+await test("private blob cleanup preserves ATLAS failure result", async () => {
+  const deleteCalls = [];
+  const csv = "ticket_id,message\nticket-1,How do I export reports?";
+  const result = await submitPrivateBlob({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      support_platform: "zendesk",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    getBlobImpl: async () => ({
+      statusCode: 200,
+      stream: new Blob([csv], { type: "text/csv" }).stream(),
+      blob: {
+        size: Buffer.byteLength(csv),
+        contentType: "text/csv",
+      },
+    }),
+    fetchImpl: async () => ({
+      ok: false,
+      status: 502,
+      async text() {
+        return JSON.stringify({ error: "upstream failed" });
+      },
+    }),
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 502,
+    error: "atlas_submit_failed",
+    atlas_status: 502,
+  });
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+});
+
+await test("private blob cleanup failure does not mask submit success", async () => {
+  const csv = "ticket_id,message\nticket-1,How do I export reports?";
+  const previousWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = await submitPrivateBlob({
+      config: {
+        baseUrl: ENV.ATLAS_API_BASE_URL,
+        token: ENV.ATLAS_B2B_JWT,
+        accountId: ACCOUNT_ID,
+        timeoutMs: 1000,
+      },
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      payload: {
+        blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+        support_platform: "zendesk",
+        company_name: "Acme Co.",
+        contact_email: "lead@acme.example",
+        limit: "1000",
+      },
+      getBlobImpl: async () => ({
+        statusCode: 200,
+        stream: new Blob([csv], { type: "text/csv" }).stream(),
+        blob: {
+          size: Buffer.byteLength(csv),
+          contentType: "text/csv",
+        },
+      }),
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ request_id: "content-ops-cleanup123" });
+        },
+      }),
+      deleteBlobImpl: async () => {
+        throw new Error("delete unavailable");
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.payload.request_id, "content-ops-cleanup123");
+  } finally {
+    console.warn = previousWarn;
+  }
+});
+
+await test("private blob cleanup rejects unsafe references before deleting", async () => {
+  let deleteCalled = false;
+  assert.deepEqual(
+    await cleanupPrivateCsvBlob({
+      pathname: "../tickets.csv",
+      token: ENV.BLOB_READ_WRITE_TOKEN,
+      deleteBlobImpl: async () => {
+        deleteCalled = true;
+      },
+    }),
+    { ok: false, skipped: true, error: "invalid_blob_reference" },
+  );
+  assert.equal(deleteCalled, false);
 });
 
 await test("private blob reader rejects unsafe or oversized blob references", async () => {
