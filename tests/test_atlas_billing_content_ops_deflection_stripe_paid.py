@@ -17,9 +17,16 @@ class _Pool:
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.update_result = "UPDATE 1"
         self.fail_billing_event_insert = False
+        self.processed_event_ids: set[str] = set()
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append((query, args))
+        if (
+            "FROM billing_events" in query
+            and args
+            and args[0] in self.processed_event_ids
+        ):
+            return "billing-event-id"
         return None
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -28,6 +35,8 @@ class _Pool:
             return self.update_result
         if self.fail_billing_event_insert and "INSERT INTO billing_events" in query:
             raise RuntimeError("billing event insert failed")
+        if "INSERT INTO billing_events" in query:
+            self.processed_event_ids.add(str(args[1]))
         return "INSERT 0 1"
 
 
@@ -214,6 +223,51 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
     assert insert_args[0] is None
     assert insert_args[1] == "evt_deflection_paid"
     assert insert_args[2] == "checkout.session.completed"
+    assert pool.processed_event_ids == {"evt_deflection_paid"}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_skips_processed_deflection_checkout_before_paid_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    event = SimpleNamespace(
+        id="evt_deflection_paid_duplicate",
+        type="checkout.session.completed",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.processed_event_ids.add("evt_deflection_paid_duplicate")
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.stripe_webhook(request)
+
+    assert response == {"status": "already_processed"}
+    assert pool.fetchval_calls[0][1] == ("evt_deflection_paid_duplicate",)
+    assert pool.execute_calls == []
 
 
 @pytest.mark.asyncio
@@ -264,6 +318,71 @@ async def test_stripe_webhook_keeps_paid_unlock_when_audit_insert_fails(
     assert "INSERT INTO billing_events" in insert_query
     assert insert_args[1] == "evt_deflection_paid_audit_failure"
     assert "billing_events audit insert failed" in caplog.text
+    assert pool.processed_event_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_retry_after_audit_failure_restores_idempotency(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    event = SimpleNamespace(
+        id="evt_deflection_paid_retry",
+        type="checkout.session.completed",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.fail_billing_event_insert = True
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    assert await billing.stripe_webhook(request) == {"status": "ok"}
+    assert pool.processed_event_ids == set()
+    assert "billing_events audit insert failed" in caplog.text
+
+    pool.fail_billing_event_insert = False
+    assert await billing.stripe_webhook(request) == {"status": "ok"}
+    assert pool.processed_event_ids == {"evt_deflection_paid_retry"}
+
+    assert await billing.stripe_webhook(request) == {"status": "already_processed"}
+
+    update_calls = [
+        call
+        for call in pool.execute_calls
+        if "UPDATE content_ops_deflection_reports" in call[0]
+    ]
+    insert_calls = [
+        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
+    ]
+    assert len(update_calls) == 2
+    assert all(
+        call[1] == (account_id, "req-123", "cs_test_deflection")
+        for call in update_calls
+    )
+    assert len(insert_calls) == 2
 
 
 @pytest.mark.asyncio
