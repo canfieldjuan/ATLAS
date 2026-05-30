@@ -29,6 +29,7 @@ import { clsx } from 'clsx'
 import {
   exportGeneratedAssetDraftsCsv,
   fetchGeneratedAssetDrafts,
+  fetchGeneratedFaqMacroPublishAttempts,
   publishGeneratedFaqMacros,
   repairGeneratedLandingPageDraft,
   reviewGeneratedAssetDraft,
@@ -37,6 +38,8 @@ import {
   type GeneratedAssetDraft,
   type GeneratedLandingPageDraftUpdate,
   type GeneratedAssetMacroPublishSummary,
+  type GeneratedAssetMacroPublishAttempt,
+  type GeneratedAssetMacroPublishAttemptsResponse,
   type GeneratedAssetListResponse,
   type GeneratedAssetType,
 } from '../api/contentOps'
@@ -129,6 +132,21 @@ type MacroPublishOutcome =
   | { kind: 'success'; draftId: string; summary: GeneratedAssetMacroPublishSummary }
   | { kind: 'error'; draftId: string; message: string }
 
+type MacroPublishHistoryState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; draftId: string }
+  | { kind: 'loaded'; draftId: string; response: GeneratedAssetMacroPublishAttemptsResponse }
+  | { kind: 'error'; draftId: string; message: string }
+
+type MacroPublishCounts = Pick<
+  GeneratedAssetMacroPublishSummary,
+  | 'published_count'
+  | 'updated_count'
+  | 'skipped_count'
+  | 'failed_count'
+  | 'pending_reconcile_count'
+>
+
 const ASSETS: Array<{
   id: GeneratedAssetType
   label: string
@@ -183,6 +201,8 @@ export default function ContentOpsAssetsReview() {
   const [detailRow, setDetailRow] = useState<GeneratedAssetDraft | null>(null)
   const [macroPublishOutcome, setMacroPublishOutcome] =
     useState<MacroPublishOutcome>({ kind: 'idle' })
+  const [macroPublishHistory, setMacroPublishHistory] =
+    useState<MacroPublishHistoryState>({ kind: 'idle' })
 
   const params = useMemo(
     () => ({
@@ -202,6 +222,7 @@ export default function ContentOpsAssetsReview() {
       setData(result)
       setSelectedIds(new Set())
       setDetailRow(null)
+      setMacroPublishHistory({ kind: 'idle' })
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)))
     } finally {
@@ -213,6 +234,36 @@ export default function ContentOpsAssetsReview() {
   useEffect(() => {
     void load(false)
   }, [load])
+
+  useEffect(() => {
+    const id = detailRow && asset === 'faq_markdown' ? assetId(detailRow) : ''
+    if (!id) {
+      setMacroPublishHistory({ kind: 'idle' })
+      return
+    }
+
+    let active = true
+    setMacroPublishHistory({ kind: 'loading', draftId: id })
+    fetchGeneratedFaqMacroPublishAttempts(id, { limit: 5 })
+      .then((response) => {
+        if (active) {
+          setMacroPublishHistory({ kind: 'loaded', draftId: id, response })
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setMacroPublishHistory({
+            kind: 'error',
+            draftId: id,
+            message: err instanceof Error ? err.message : String(err),
+          })
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [asset, detailRow])
 
   const handleReview = async (row: GeneratedAssetDraft, nextStatus: 'approved' | 'rejected') => {
     const id = assetId(row)
@@ -546,6 +597,7 @@ export default function ContentOpsAssetsReview() {
           row={detailRow}
           asset={asset}
           saving={busyId === assetId(detailRow)}
+          publishHistory={macroPublishHistory}
           onSaveLandingPage={handleSaveLandingPageDraft}
           onRepairLandingPage={handleRepairLandingPageDraft}
           onClose={() => setDetailRow(null)}
@@ -782,7 +834,7 @@ function MacroPublishResultBanner({ outcome }: { outcome: MacroPublishOutcome })
   )
 }
 
-function macroPublishCountLabels(summary: GeneratedAssetMacroPublishSummary): string[] {
+function macroPublishCountLabels(summary: MacroPublishCounts): string[] {
   return [
     { count: summary.published_count, label: 'published' },
     { count: summary.updated_count, label: 'updated' },
@@ -794,10 +846,132 @@ function macroPublishCountLabels(summary: GeneratedAssetMacroPublishSummary): st
     .map(({ count, label }) => `${count} ${label}`)
 }
 
+
+function MacroPublishHistoryPanel({ history }: { history: MacroPublishHistoryState }) {
+  return (
+    <section className="mt-6">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-200">Macro publish history</h3>
+        {history.kind === "loaded" && (
+          <span className="text-xs text-slate-500">
+            {history.response.count} of {history.response.limit} recent
+          </span>
+        )}
+      </div>
+      <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-4">
+        {history.kind === "idle" && (
+          <p className="text-sm text-slate-400">Open an FAQ draft to load publish history.</p>
+        )}
+        {history.kind === "loading" && (
+          <div className="flex items-center text-sm text-slate-400">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Loading publish history...
+          </div>
+        )}
+        {history.kind === "error" && (
+          <p className="text-sm text-rose-200">
+            Could not load publish history for {history.draftId}: {history.message}
+          </p>
+        )}
+        {history.kind === "loaded" && history.response.attempts.length === 0 && (
+          <p className="text-sm text-slate-400">No macro publish attempts recorded yet.</p>
+        )}
+        {history.kind === "loaded" && history.response.attempts.length > 0 && (
+          <div className="space-y-3">
+            {history.response.attempts.map((attempt) => (
+              <MacroPublishAttemptRow key={attempt.id} attempt={attempt} />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function MacroPublishAttemptRow({ attempt }: { attempt: GeneratedAssetMacroPublishAttempt }) {
+  const counts = macroPublishCountLabels(attempt)
+  const tone = attempt.ok
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-100"
+    : attempt.pending_reconcile_count > 0 || attempt.skipped_count > 0
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
+      : "border-rose-500/30 bg-rose-500/10 text-rose-100"
+  const title = attempt.ok
+    ? "Published"
+    : attempt.pending_reconcile_count > 0
+      ? "Needs reconcile"
+      : attempt.failed_count > 0
+        ? "Failed"
+        : "Needs review"
+
+  return (
+    <div className={clsx("rounded-md border p-3", tone)}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium">{title}</div>
+        <div className="font-mono text-xs opacity-80">{attempt.created_at || attempt.id}</div>
+      </div>
+      <div className="mt-1 text-xs opacity-90">
+        Draft status: {attempt.draft_status}
+        {attempt.draft_status_updated ? "; moved after publish." : "; status unchanged."}
+      </div>
+      {counts.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          {counts.map((count) => (
+            <span
+              key={count}
+              className="rounded border border-current/20 bg-slate-950/30 px-2 py-0.5"
+            >
+              {count}
+            </span>
+          ))}
+        </div>
+      )}
+      {attempt.skipped.length > 0 && (
+        <div className="mt-3 text-xs opacity-90">
+          Skipped: {attempt.skipped.map(macroPublishSkippedLabel).join("; ")}
+        </div>
+      )}
+      {attempt.results.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+          {attempt.results.slice(0, 4).map((result, index) => (
+            <span
+              key={`${result.external_id || "result"}-${index}`}
+              className="rounded border border-current/20 bg-slate-950/30 px-2 py-0.5"
+            >
+              {macroPublishResultLabel(result)}
+            </span>
+          ))}
+          {attempt.results.length > 4 && (
+            <span className="rounded border border-current/20 bg-slate-950/30 px-2 py-0.5">
+              +{attempt.results.length - 4} more
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function macroPublishSkippedLabel(item: Record<string, unknown>): string {
+  const question = textValue(item.question) || "macro"
+  const reason = textValue(item.reason) || "skipped"
+  return `${question}: ${reason}`
+}
+
+function macroPublishResultLabel(result: Record<string, unknown>): string {
+  const status = textValue(result.status) || "unknown"
+  const externalId = textValue(result.external_id)
+  const error = textValue(result.error)
+  if (externalId) return `${status} ${externalId}`
+  if (error) return `${status}: ${error}`
+  return status
+}
+
+
 function AssetDetailDrawer({
   row,
   asset,
   saving,
+  publishHistory,
   onSaveLandingPage,
   onRepairLandingPage,
   onClose,
@@ -805,6 +979,7 @@ function AssetDetailDrawer({
   row: GeneratedAssetDraft
   asset: GeneratedAssetType
   saving: boolean
+  publishHistory: MacroPublishHistoryState
   onSaveLandingPage: (
     row: GeneratedAssetDraft,
     update: GeneratedLandingPageDraftUpdate,
@@ -1055,6 +1230,10 @@ function AssetDetailDrawer({
               ))}
             </div>
           </section>
+        )}
+
+        {asset === 'faq_markdown' && (
+          <MacroPublishHistoryPanel history={publishHistory} />
         )}
 
         {preview && (
