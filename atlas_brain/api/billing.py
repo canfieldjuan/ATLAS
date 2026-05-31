@@ -3,6 +3,7 @@
 import logging
 import uuid as _uuid
 from collections.abc import Mapping
+from hashlib import sha256
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -47,6 +48,7 @@ LLM_PLAN_LIMITS = {
 }
 
 PRICE_TO_PLAN = {}  # populated at module init from config
+STRIPE_API_VERSION = "2026-05-27.dahlia"
 
 
 def _init_price_map():
@@ -76,13 +78,45 @@ def _init_price_map():
         PRICE_TO_PLAN[cfg.stripe_llm_pro_price_id] = "llm_pro"
 
 
+def _warn_if_unrestricted_stripe_key(secret_key: str) -> None:
+    if secret_key.startswith("sk_"):
+        logger.warning(
+            "ATLAS_SAAS_STRIPE_SECRET_KEY is configured with a full Stripe secret key; "
+            "use a restricted rk_ key scoped to Atlas billing operations when possible"
+        )
+
+
+def _configure_stripe_module(stripe_module: Any, secret_key: str) -> Any:
+    stripe_module.api_key = secret_key
+    stripe_module.api_version = STRIPE_API_VERSION
+    _warn_if_unrestricted_stripe_key(secret_key)
+    return stripe_module
+
+
+def _stripe_customer_idempotency_key(account_id: str) -> str:
+    return f"atlas-customer:{account_id}"
+
+
+def _stripe_checkout_idempotency_key(
+    *,
+    account_id: str,
+    user_id: str,
+    price_id: str,
+    success_url: str,
+    cancel_url: str,
+) -> str:
+    digest = sha256(
+        "\0".join((price_id, success_url, cancel_url)).encode("utf-8")
+    ).hexdigest()[:32]
+    return f"atlas-checkout:{account_id}:{user_id}:{digest}"
+
+
 def _get_stripe():
     import stripe
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
-    stripe.api_key = cfg.stripe_secret_key
-    return stripe
+    return _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
 
 # -- Request/Response schemas --
@@ -182,6 +216,7 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
             email=user_row["email"] if user_row else "",
             name=account["name"],
             metadata={"account_id": str(user.account_id)},
+            idempotency_key=_stripe_customer_idempotency_key(str(user.account_id)),
             timeout=10,
         )
         customer_id = customer.id
@@ -203,6 +238,13 @@ async def create_checkout(req: CheckoutRequest, user: AuthUser = Depends(require
         success_url=req.success_url,
         cancel_url=req.cancel_url,
         metadata={"account_id": str(user.account_id)},
+        idempotency_key=_stripe_checkout_idempotency_key(
+            account_id=str(user.account_id),
+            user_id=str(user.user_id),
+            price_id=price_id,
+            success_url=req.success_url,
+            cancel_url=req.cancel_url,
+        ),
         timeout=10,
     )
 
@@ -267,7 +309,7 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=503, detail="Stripe not configured")
 
     import stripe
-    stripe.api_key = cfg.stripe_secret_key
+    _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
     body = await request.body()
     if len(body) > 65536:

@@ -17,7 +17,7 @@ from ..config import settings
 from ..storage.database import get_db_pool
 
 # Import PLAN_LIMITS for default asin limit
-from .billing import PLAN_LIMITS
+from .billing import PLAN_LIMITS, _configure_stripe_module
 
 logger = logging.getLogger("atlas.api.auth")
 
@@ -216,7 +216,7 @@ async def register(req: RegisterRequest):
     if cfg.stripe_secret_key:
         try:
             import stripe
-            stripe.api_key = cfg.stripe_secret_key
+            _configure_stripe_module(stripe, cfg.stripe_secret_key)
             customer = stripe.Customer.create(
                 email=req.email,
                 name=req.account_name,
