@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Protocol, Sequence
 
@@ -167,6 +169,18 @@ class DryRunMacroPublishProvider:
         return tuple(MacroPublishResult(macro=macro, status="dry_run") for macro in macros)
 
 
+def macro_content_hash(macro: SupportMacroDraft) -> str:
+    """Return a stable digest of the customer-facing macro content."""
+
+    payload = {
+        "title": _clean_text(macro.title),
+        "body": _canonical_body(macro.body),
+        "category": _clean_text(macro.category),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def build_macro_writeback_preview(
     drafts: Sequence[TicketFAQDraft],
 ) -> MacroWritebackPreview:
@@ -236,6 +250,11 @@ def _macro_body(item: Mapping[str, Any]) -> str:
         return "\n".join(f"{index}. {step}" for index, step in enumerate(steps, start=1))
 
     return _clean_text(item.get("answer"))
+
+
+def _canonical_body(value: Any) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    return "\n".join(line.rstrip() for line in text.split("\n"))
 
 
 def _item_id(

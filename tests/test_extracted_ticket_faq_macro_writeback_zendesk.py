@@ -9,6 +9,7 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.faq_macro_writeback import (
     MacroWritebackMapping,
     SupportMacroDraft,
+    macro_content_hash,
 )
 from extracted_content_pipeline.faq_macro_writeback_zendesk import (
     StaticZendeskMacroCredentialsProvider,
@@ -159,11 +160,13 @@ async def test_zendesk_provider_creates_macro_and_persists_mapping() -> None:
     assert saved.metadata == {
         "title": "Why was I charged twice?",
         "category": "billing",
+        "content_hash": macro_content_hash(_macro()),
     }
     assert "secret-token" not in saved.as_dict()["metadata"].values()
     reserved = repo.reserve_calls[0]["mapping"]
     assert reserved.publish_status == "pending"
     assert reserved.external_id == ""
+    assert reserved.metadata["content_hash"] == macro_content_hash(_macro())
 
 
 @pytest.mark.asyncio
@@ -258,6 +261,7 @@ async def test_zendesk_provider_reconciles_pending_mapping_before_update() -> No
     assert reconciled.external_id == "123"
     assert reconciled.external_url == "https://example.zendesk.com/api/v2/macros/123"
     assert saved.external_url == "https://example.zendesk.com/api/v2/macros/123"
+    assert saved.metadata["content_hash"] == macro_content_hash(_macro())
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.faq_macro_writeback import (
     DryRunMacroPublishProvider,
     build_macro_writeback_preview,
+    macro_content_hash,
 )
 from extracted_content_pipeline.ticket_faq_markdown import build_ticket_faq_markdown
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
@@ -129,6 +130,40 @@ def test_macro_writeback_preview_falls_back_to_numbered_steps() -> None:
         "1. Open Settings.\n"
         "2. Choose Reset password."
     )
+
+
+def test_macro_content_hash_tracks_customer_facing_body_changes() -> None:
+    preview = build_macro_writeback_preview([
+        _draft(
+            items=(
+                {
+                    "faq_item_id": "faq-item-1",
+                    "topic": "billing confusion",
+                    "question": "How do I export?",
+                    "resolution_text": "Open Reports and choose Export.",
+                    "answer_evidence_status": "resolution_evidence",
+                },
+            )
+        )
+    ])
+    original = preview.macros[0]
+    same_content = type(original)(
+        title="  How   do I export? ",
+        body="Open Reports and choose Export.\n",
+        category=" billing confusion ",
+        faq_draft_id=original.faq_draft_id,
+        faq_item_id=original.faq_item_id,
+    )
+    changed_body = type(original)(
+        title=original.title,
+        body="Open Reports, choose Export, then select CSV.",
+        category=original.category,
+        faq_draft_id=original.faq_draft_id,
+        faq_item_id=original.faq_item_id,
+    )
+
+    assert macro_content_hash(original) == macro_content_hash(same_content)
+    assert macro_content_hash(original) != macro_content_hash(changed_body)
 
 
 def test_macro_writeback_preview_uses_real_faq_generator_resolution_steps() -> None:

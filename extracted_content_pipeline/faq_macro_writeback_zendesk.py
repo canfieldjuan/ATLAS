@@ -15,6 +15,7 @@ from .faq_macro_writeback import (
     MacroWritebackMapping,
     MacroWritebackMappingRepository,
     SupportMacroDraft,
+    macro_content_hash,
 )
 
 
@@ -209,10 +210,7 @@ class ZendeskMacroPublishProvider:
                         faq_item_id=macro.faq_item_id,
                         external_id="",
                         publish_status="pending",
-                        metadata={
-                            "title": macro.title,
-                            "category": macro.category,
-                        },
+                        metadata=_mapping_metadata(macro),
                     ),
                     scope=scope,
                 )
@@ -253,10 +251,7 @@ class ZendeskMacroPublishProvider:
                             fallback=existing.external_url if existing else "",
                         ),
                         publish_status="published",
-                        metadata={
-                            "title": macro.title,
-                            "category": macro.category,
-                        },
+                        metadata=_mapping_metadata(macro),
                     ),
                     scope=scope,
                 )
@@ -394,10 +389,7 @@ class ZendeskMacroPublishProvider:
                 external_id=external_id,
                 external_url=_clean(match.get("url")),
                 publish_status="published",
-                metadata={
-                    "title": macro.title,
-                    "category": macro.category,
-                },
+                metadata=_mapping_metadata(macro),
             ),
             scope=scope,
         )
@@ -421,6 +413,14 @@ def _description(macro: SupportMacroDraft) -> str:
     if macro.category:
         return f"FAQ macro generated from {macro.category} support tickets."
     return "FAQ macro generated from support tickets."
+
+
+def _mapping_metadata(macro: SupportMacroDraft) -> JsonDict:
+    return {
+        "title": macro.title,
+        "category": macro.category,
+        "content_hash": macro_content_hash(macro),
+    }
 
 
 def _headers(credentials: ZendeskMacroCredentials) -> dict[str, str]:
