@@ -22,12 +22,21 @@ import {
   emitDeflectionServerEvent,
   sanitizeDeflectionEventFields,
 } from "../api/content-ops/deflection/events.js";
+import {
+  parseArgs as parseSubmitSmokeArgs,
+  runSubmitSmoke,
+  validationErrors as submitSmokeValidationErrors,
+} from "./faq-deflection-submit-live-smoke.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = await readFile(resolve(root, "src/App.tsx"), "utf8");
 const servicesSource = await readFile(resolve(root, "src/pages/Services.tsx"), "utf8");
 const uploadSource = await readFile(resolve(root, "src/pages/FaqDeflectionUpload.tsx"), "utf8");
 const submitSource = await readFile(resolve(root, "api/content-ops/deflection/submit.js"), "utf8");
+const submitSmokeSource = await readFile(
+  resolve(root, "scripts/faq-deflection-submit-live-smoke.mjs"),
+  "utf8",
+);
 const blobUploadRouteSource = await readFile(
   resolve(root, "api/content-ops/deflection/upload.js"),
   "utf8",
@@ -174,6 +183,34 @@ await test("portfolio submit endpoint pins raw multipart body handling", () => {
   assert.doesNotMatch(submitSource, /^import .*@vercel\/blob/m);
   assert.match(submitSource, /import\("@vercel\/blob"\)/);
   assert.match(submitSource, /const \{ del \} = await import\("@vercel\/blob"\)/);
+});
+
+await test("submit live smoke exercises the production private blob helper", async () => {
+  assert.match(submitSmokeSource, /submitPrivateBlob/);
+  assert.match(submitSmokeSource, /local_csv_fixture/);
+  assert.doesNotMatch(submitSmokeSource, /ATLAS_B2B_JWT[^\\n]*console\\.log/);
+  assert.deepEqual(
+    submitSmokeValidationErrors({
+      baseUrl: "http://localhost:8000",
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+    }),
+    ["ATLAS_API_BASE_URL or --base-url must point to a deployed HTTPS host"],
+  );
+
+  const options = parseSubmitSmokeArgs(["--preflight-only"], {
+    ATLAS_API_BASE_URL: ENV.ATLAS_API_BASE_URL,
+    ATLAS_B2B_JWT: ENV.ATLAS_B2B_JWT,
+    ATLAS_ACCOUNT_ID: ACCOUNT_ID,
+  });
+  assert.deepEqual(await runSubmitSmoke(options), {
+    ok: true,
+    status: "preflight_ok",
+    source_mode: "local_csv_fixture",
+  });
 });
 
 await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", async () => {
@@ -619,5 +656,9 @@ await test("upload shell test is enrolled in package scripts", () => {
   assert.equal(
     packageJson.scripts["test:deflection-upload-shell"],
     "node scripts/faq-deflection-upload-shell.test.mjs",
+  );
+  assert.equal(
+    packageJson.scripts["smoke:deflection-submit-live"],
+    "node scripts/faq-deflection-submit-live-smoke.mjs",
   );
 });
