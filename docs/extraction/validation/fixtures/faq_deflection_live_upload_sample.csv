@@ -1,0 +1,13 @@
+ticket_id,created_at,subject,message,status,tags
+TCK-1001,2026-05-01T14:22:00Z,Export reports,How do I export the weekly analytics report as a CSV?,closed,"reports,export"
+TCK-1002,2026-05-02T09:10:00Z,Invite teammate,Where can I invite another teammate to the workspace?,closed,"account,team"
+TCK-1003,2026-05-03T18:45:00Z,Reset password,How do I reset my password before tomorrow's meeting?,closed,"login,password"
+TCK-1004,2026-05-04T12:05:00Z,Billing receipt,Can you send me a copy of last month's billing receipt?,closed,"billing,receipt"
+TCK-1005,2026-05-05T16:33:00Z,Slack notifications,How do I turn off Slack notifications for resolved tickets?,closed,"notifications,slack"
+TCK-1006,2026-05-06T11:48:00Z,API key rotation,What is the safest way to rotate our API key?,closed,"api,security"
+TCK-1007,2026-05-07T20:15:00Z,Duplicate contacts,Why are duplicate contacts showing up after the CRM sync?,closed,"crm,sync"
+TCK-1008,2026-05-08T08:40:00Z,Two-factor setup,Where do I enable two-factor authentication for my account?,closed,"security,2fa"
+TCK-1009,2026-05-09T13:27:00Z,Dashboard filters,Can saved dashboard filters be shared with my team?,closed,"dashboard,filters"
+TCK-1010,2026-05-10T17:02:00Z,Cancel subscription,How do I cancel my subscription at the end of the billing cycle?,closed,"billing,cancel"
+TCK-1011,2026-05-11T10:19:00Z,Import CSV,What columns are required when importing a customer CSV?,closed,"import,csv"
+TCK-1012,2026-05-12T15:54:00Z,SAML login,Does the Growth plan support SAML login?,closed,"sso,saml"
