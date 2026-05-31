@@ -214,6 +214,7 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
 
     assert response == {"status": "ok"}
     assert fake_stripe.api_key == "sk_test"
+    assert fake_stripe.api_version == billing.STRIPE_API_VERSION
     assert pool.fetchval_calls[0][1] == ("evt_deflection_paid",)
     update_query, update_args = pool.execute_calls[0]
     insert_query, insert_args = pool.execute_calls[1]

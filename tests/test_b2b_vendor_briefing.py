@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from atlas_brain.api import b2b_vendor_briefing as briefing_api
+from atlas_brain.api import billing
 from atlas_brain.auth.dependencies import AuthUser, require_auth
 from atlas_brain.autonomous.tasks import b2b_vendor_briefing as briefing_mod
 from atlas_brain.services.b2b import vendor_briefing_ports as briefing_ports
@@ -143,6 +144,7 @@ def test_vendor_checkout_trims_customer_email_before_stripe(monkeypatch):
     create = MagicMock(return_value=fake_session)
     fake_stripe = SimpleNamespace(
         api_key=None,
+        api_version=None,
         StripeError=Exception,
         checkout=SimpleNamespace(Session=SimpleNamespace(create=create)),
     )
@@ -162,6 +164,8 @@ def test_vendor_checkout_trims_customer_email_before_stripe(monkeypatch):
 
     assert response.status_code == 200
     kwargs = create.call_args.kwargs
+    assert fake_stripe.api_key == "sk_test"
+    assert fake_stripe.api_version == billing.STRIPE_API_VERSION
     assert kwargs["customer_email"] == "ops@example.com"
     assert kwargs["metadata"]["vendor_name"] == "Zendesk"
     assert "vendor=Zendesk" in kwargs["success_url"]
@@ -173,6 +177,7 @@ def test_vendor_checkout_omits_blank_customer_email(monkeypatch):
     create = MagicMock(return_value=SimpleNamespace(id="cs_test", url="https://checkout.test/session"))
     fake_stripe = SimpleNamespace(
         api_key=None,
+        api_version=None,
         StripeError=Exception,
         checkout=SimpleNamespace(Session=SimpleNamespace(create=create)),
     )
@@ -195,6 +200,7 @@ def test_checkout_session_info_rejects_blank_session_id_before_stripe(monkeypatc
     retrieve = MagicMock(side_effect=AssertionError("Stripe should not be called"))
     fake_stripe = SimpleNamespace(
         api_key=None,
+        api_version=None,
         StripeError=Exception,
         checkout=SimpleNamespace(Session=SimpleNamespace(retrieve=retrieve)),
     )
@@ -207,6 +213,39 @@ def test_checkout_session_info_rejects_blank_session_id_before_stripe(monkeypatc
 
     assert response.status_code == 422
     assert response.json()["detail"] == "session_id is required"
+
+
+def test_checkout_session_info_pins_stripe_api_version(monkeypatch):
+    monkeypatch.setattr(briefing_api.settings.saas_auth, "stripe_secret_key", "sk_test", raising=False)
+    session = SimpleNamespace(
+        customer_details=SimpleNamespace(email="ops@example.com"),
+        customer_email=None,
+        metadata={"vendor_name": "Zendesk", "tier": "standard"},
+        payment_status="unpaid",
+    )
+    retrieve = MagicMock(return_value=session)
+    fake_stripe = SimpleNamespace(
+        api_key=None,
+        api_version=None,
+        StripeError=Exception,
+        checkout=SimpleNamespace(Session=SimpleNamespace(retrieve=retrieve)),
+    )
+    import sys
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    app = _make_app()
+
+    with TestClient(app) as client:
+        response = client.get("/b2b/briefings/checkout-session?session_id=cs_test_12345")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "email": "ops@example.com",
+        "vendor_name": "Zendesk",
+        "tier": "standard",
+    }
+    assert fake_stripe.api_key == "sk_test"
+    assert fake_stripe.api_version == billing.STRIPE_API_VERSION
+    retrieve.assert_called_once_with("cs_test_12345")
 
 
 def test_report_data_rejects_blank_token_before_db_touch(monkeypatch):

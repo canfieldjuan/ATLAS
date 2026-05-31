@@ -21,6 +21,7 @@ from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..services.crm_provider import get_crm_provider
 from ..storage.database import get_db_pool
+from .billing import _configure_stripe_module
 from ..autonomous.tasks.b2b_vendor_briefing import (
     build_gate_url,
     build_vendor_briefing,
@@ -561,7 +562,7 @@ async def vendor_checkout(body: VendorCheckoutRequest):
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
-    stripe.api_key = cfg.stripe_secret_key
+    _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
     price_id = (
         cfg.stripe_vendor_standard_price_id
@@ -614,7 +615,7 @@ async def checkout_session_info(session_id: str = Query(..., min_length=10)):
     cfg = settings.saas_auth
     if not cfg.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe not configured")
-    stripe.api_key = cfg.stripe_secret_key
+    _configure_stripe_module(stripe, cfg.stripe_secret_key)
 
     try:
         session = stripe.checkout.Session.retrieve(session_id)
