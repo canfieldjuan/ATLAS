@@ -236,6 +236,33 @@ def test_validate_args_fails_closed_for_missing_csv_file(tmp_path) -> None:
     ]
 
 
+def test_validate_args_defaults_to_checked_fixture_when_no_source_is_provided() -> None:
+    args = smoke._build_parser().parse_args([
+        "--base-url",
+        "https://atlas.example.com",
+        "--token",
+        "token-secret",
+        "--account-id",
+        "acct-123",
+        "--support-platform",
+        "zendesk",
+        "--company-name",
+        "Acme Co.",
+        "--contact-email",
+        "lead@example.com",
+    ])
+
+    assert smoke._validate_args(args) == []
+    assert args.csv_file == smoke.DEFAULT_CSV_FILE
+
+
+def test_validate_args_keeps_explicit_blob_source_over_default_fixture() -> None:
+    args = smoke._build_parser().parse_args(_base_args(Path("/tmp")))
+
+    assert smoke._validate_args(args) == []
+    assert args.csv_file is None
+
+
 def test_validate_submit_envelope_accepts_locked_gated_result() -> None:
     request_id, snapshot, diagnostics, errors = smoke._validate_submit_envelope(_submit_payload())
 
