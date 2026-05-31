@@ -78,6 +78,18 @@ await test("result page exposes validation markers and checkout metadata", () =>
   assert.match(html, /content_ops_deflection_report/);
   assert.match(html, /content-ops-abc123/);
   assert.match(html, /2b2b950d-f64b-4852-bc30-f92a34cdf169/);
+  assert.match(html, /data-checkout-source="content_ops_deflection_report"/);
+  assert.match(html, /data-checkout-request_id="content-ops-abc123"/);
+  assert.match(
+    html,
+    /data-checkout-account_id="2b2b950d-f64b-4852-bc30-f92a34cdf169"/,
+  );
+  assert.match(resultPageSource, /data-checkout-source=/);
+  assert.match(resultPageSource, /data-checkout-request_id=/);
+  assert.match(resultPageSource, /data-checkout-account_id=/);
+  assert.match(pageSource, /data-checkout-source=/);
+  assert.match(pageSource, /data-checkout-request_id=/);
+  assert.match(pageSource, /data-checkout-account_id=/);
 });
 
 await test("result pages never embed ATLAS service credentials or paid-route calls", () => {
