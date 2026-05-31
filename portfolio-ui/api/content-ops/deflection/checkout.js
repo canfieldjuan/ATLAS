@@ -32,6 +32,25 @@ function stripeAuthHeaders(stripeSecretKey) {
   };
 }
 
+function stripeCheckoutKeyConfig(env = process.env) {
+  const restrictedKey = clean(env.ATLAS_SAAS_STRIPE_RAK);
+  if (restrictedKey) {
+    if (!restrictedKey.startsWith("rk_")) {
+      return { ok: false, error: "checkout_restricted_key_invalid" };
+    }
+    return { ok: true, key: restrictedKey, source: "restricted" };
+  }
+
+  const fallbackKey = clean(env.STRIPE_SECRET_KEY || env.ATLAS_SAAS_STRIPE_SECRET_KEY);
+  if (!fallbackKey) {
+    return { ok: false, error: "checkout_not_configured" };
+  }
+  if (fallbackKey.startsWith("sk_live_")) {
+    return { ok: false, error: "checkout_restricted_key_required" };
+  }
+  return { ok: true, key: fallbackKey, source: "fallback" };
+}
+
 function publicBaseUrl(req) {
   const configured = clean(process.env.DEFLECTION_CHECKOUT_PUBLIC_BASE_URL);
   if (configured) return configured.replace(/\/+$/, "");
@@ -173,6 +192,7 @@ export {
   buildStripeCheckoutBody,
   checkoutUrls,
   resultPath,
+  stripeCheckoutKeyConfig,
   validateConfiguredPrice,
   validatePayload,
 };
@@ -184,9 +204,9 @@ export default async function handler(req, res) {
     return;
   }
 
-  const stripeSecretKey = clean(process.env.STRIPE_SECRET_KEY);
-  if (!stripeSecretKey) {
-    json(res, 503, { error: "checkout_not_configured" });
+  const stripeKey = stripeCheckoutKeyConfig();
+  if (!stripeKey.ok) {
+    json(res, 503, { error: stripeKey.error });
     return;
   }
 
@@ -209,10 +229,12 @@ export default async function handler(req, res) {
     json(res, 503, { error: "checkout_url_not_configured", details: urls.errors });
     return;
   }
-  const priceValidation = await validateConfiguredPrice(stripeSecretKey);
-  if (!priceValidation.ok) {
-    json(res, 503, { error: "checkout_price_not_configured", details: priceValidation.message });
-    return;
+  if (stripeKey.source !== "restricted") {
+    const priceValidation = await validateConfiguredPrice(stripeKey.key);
+    if (!priceValidation.ok) {
+      json(res, 503, { error: "checkout_price_not_configured", details: priceValidation.message });
+      return;
+    }
   }
 
   const body = buildStripeCheckoutBody({
@@ -221,7 +243,7 @@ export default async function handler(req, res) {
     successUrl: urls.successUrl,
     cancelUrl: urls.cancelUrl,
   });
-  const session = await createCheckoutSession(body, stripeSecretKey);
+  const session = await createCheckoutSession(body, stripeKey.key);
   if (!session.ok) {
     json(res, 502, { error: "stripe_checkout_failed", details: session.message });
     return;

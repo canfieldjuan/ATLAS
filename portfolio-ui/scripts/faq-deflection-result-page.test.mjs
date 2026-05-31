@@ -7,6 +7,7 @@ import handler, {
   buildStripeCheckoutBody,
   checkoutUrls,
   resultPath,
+  stripeCheckoutKeyConfig,
   validateConfiguredPrice,
   validatePayload,
 } from "../api/content-ops/deflection/checkout.js";
@@ -204,6 +205,93 @@ await test("configured Stripe Price must validate against webhook floor before C
   assert.equal(calls[0].url, "https://api.stripe.com/v1/prices/price_deflection_low");
 });
 
+await test("restricted Checkout key skips configured Price read preflight", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
+  const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  const calls = [];
+  process.env.STRIPE_SECRET_KEY = "sk_live_full_secret";
+  process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
+  process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = "price_deflection_report";
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { url: "https://checkout.stripe.com/c/session" };
+      },
+    };
+  };
+
+  const req = {
+    method: "POST",
+    headers: {
+      host: "portfolio.example.com",
+      "x-forwarded-proto": "https",
+    },
+    body: {
+      request_id: "content-ops-abc123",
+      account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    },
+  };
+  const res = mockResponse();
+
+  try {
+    await handler(req, res);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSecret === undefined) {
+      delete process.env.STRIPE_SECRET_KEY;
+    } else {
+      process.env.STRIPE_SECRET_KEY = previousSecret;
+    }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
+    if (previousPriceId === undefined) {
+      delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+    } else {
+      process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+  }
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), { url: "https://checkout.stripe.com/c/session" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://api.stripe.com/v1/checkout/sessions");
+  assert.equal(calls[0].options.body.get("line_items[0][price]"), "price_deflection_report");
+});
+
+await test("checkout key config prefers restricted key and rejects live secret fallback", () => {
+  assert.deepEqual(
+    stripeCheckoutKeyConfig({
+      ATLAS_SAAS_STRIPE_RAK: "rk_test_checkout_only",
+      STRIPE_SECRET_KEY: "sk_live_full_secret",
+    }),
+    { ok: true, key: "rk_test_checkout_only", source: "restricted" },
+  );
+  assert.deepEqual(
+    stripeCheckoutKeyConfig({ STRIPE_SECRET_KEY: "sk_test_preview" }),
+    { ok: true, key: "sk_test_preview", source: "fallback" },
+  );
+  assert.deepEqual(
+    stripeCheckoutKeyConfig({ ATLAS_SAAS_STRIPE_SECRET_KEY: "sk_test_atlas_preview" }),
+    { ok: true, key: "sk_test_atlas_preview", source: "fallback" },
+  );
+  assert.deepEqual(stripeCheckoutKeyConfig({ STRIPE_SECRET_KEY: "sk_live_full_secret" }), {
+    ok: false,
+    error: "checkout_restricted_key_required",
+  });
+  assert.deepEqual(stripeCheckoutKeyConfig({ ATLAS_SAAS_STRIPE_RAK: "sk_test_wrong" }), {
+    ok: false,
+    error: "checkout_restricted_key_invalid",
+  });
+});
+
 await test("checkout return path preserves result identifiers", () => {
   const path = resultPath(
     "content-ops-abc123",
@@ -276,9 +364,11 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
   assert.doesNotMatch(checkoutSource, /\/content-ops\/deflection-reports\/.+\/paid/);
   const previousFetch = globalThis.fetch;
   const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   const calls = [];
   process.env.STRIPE_SECRET_KEY = "sk_test_123";
+  process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
   delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
@@ -313,6 +403,11 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
     } else {
       process.env.STRIPE_SECRET_KEY = previousSecret;
     }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
     if (previousPriceId === undefined) {
       delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
     } else {
@@ -324,6 +419,56 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
   assert.deepEqual(JSON.parse(res.body), { url: "https://checkout.stripe.com/c/session" });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://api.stripe.com/v1/checkout/sessions");
+  assert.equal(
+    calls[0].options.headers.Authorization,
+    `Basic ${Buffer.from("rk_test_checkout_only:").toString("base64")}`,
+  );
   assert.equal(calls[0].options.body.get("metadata[source]"), CHECKOUT_SOURCE);
   assert.equal(calls[0].options.body.get("metadata[request_id]"), "content-ops-abc123");
+});
+
+await test("handler rejects live full secret fallback before calling Stripe", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousSecret = process.env.STRIPE_SECRET_KEY;
+  const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
+  const calls = [];
+  process.env.STRIPE_SECRET_KEY = "sk_live_full_secret";
+  delete process.env.ATLAS_SAAS_STRIPE_RAK;
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    throw new Error("Stripe should not be called");
+  };
+
+  const req = {
+    method: "POST",
+    headers: {
+      host: "portfolio.example.com",
+      "x-forwarded-proto": "https",
+    },
+    body: {
+      request_id: "content-ops-abc123",
+      account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    },
+  };
+  const res = mockResponse();
+
+  try {
+    await handler(req, res);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousSecret === undefined) {
+      delete process.env.STRIPE_SECRET_KEY;
+    } else {
+      process.env.STRIPE_SECRET_KEY = previousSecret;
+    }
+    if (previousRak === undefined) {
+      delete process.env.ATLAS_SAAS_STRIPE_RAK;
+    } else {
+      process.env.ATLAS_SAAS_STRIPE_RAK = previousRak;
+    }
+  }
+
+  assert.equal(res.statusCode, 503);
+  assert.deepEqual(JSON.parse(res.body), { error: "checkout_restricted_key_required" });
+  assert.equal(calls.length, 0);
 });
