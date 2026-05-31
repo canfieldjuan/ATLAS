@@ -24,6 +24,7 @@ import {
 } from "../api/content-ops/deflection/events.js";
 import {
   parseArgs as parseSubmitSmokeArgs,
+  runRouteHandlerSmoke,
   runSubmitSmoke,
   validationErrors as submitSmokeValidationErrors,
 } from "./faq-deflection-submit-live-smoke.mjs";
@@ -187,7 +188,9 @@ await test("portfolio submit endpoint pins raw multipart body handling", () => {
 
 await test("submit live smoke exercises the production private blob helper", async () => {
   assert.match(submitSmokeSource, /submitPrivateBlob/);
+  assert.match(submitSmokeSource, /submitHandler/);
   assert.match(submitSmokeSource, /local_csv_fixture/);
+  assert.match(submitSmokeSource, /portfolio_submit_route/);
   assert.doesNotMatch(submitSmokeSource, /ATLAS_B2B_JWT[^\\n]*console\\.log/);
   assert.deepEqual(
     submitSmokeValidationErrors({
@@ -200,6 +203,33 @@ await test("submit live smoke exercises the production private blob helper", asy
     }),
     ["ATLAS_API_BASE_URL or --base-url must point to a deployed HTTPS host"],
   );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+      routeHandler: true,
+    }).includes("--route-handler requires --blob-pathname"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      csvFile: "tickets.csv",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+      routeHandler: true,
+    }).includes("--route-handler cannot use --csv-file"),
+    true,
+  );
 
   const options = parseSubmitSmokeArgs(["--preflight-only"], {
     ATLAS_API_BASE_URL: ENV.ATLAS_API_BASE_URL,
@@ -210,6 +240,65 @@ await test("submit live smoke exercises the production private blob helper", asy
     ok: true,
     status: "preflight_ok",
     source_mode: "local_csv_fixture",
+  });
+
+  const routeOptions = parseSubmitSmokeArgs([
+    "--route-handler",
+    "--preflight-only",
+    "--blob-pathname",
+    `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+  ], {
+    ...ENV,
+  });
+  assert.deepEqual(await runSubmitSmoke(routeOptions), {
+    ok: true,
+    status: "preflight_ok",
+    source_mode: "portfolio_submit_route",
+  });
+});
+
+await test("submit live smoke route-handler mode omits buyer account header", async () => {
+  const options = parseSubmitSmokeArgs([
+    "--route-handler",
+    "--blob-pathname",
+    `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+  ], {
+    ...ENV,
+  });
+  const result = await runRouteHandlerSmoke(options, async (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.headers["content-type"], "application/json");
+    assert.equal("x-atlas-account-id" in req.headers, false);
+    assert.equal(process.env.ATLAS_API_BASE_URL, ENV.ATLAS_API_BASE_URL);
+    assert.equal(process.env.ATLAS_B2B_JWT, ENV.ATLAS_B2B_JWT);
+    assert.equal(process.env.ATLAS_ACCOUNT_ID, ACCOUNT_ID);
+    assert.equal(process.env.BLOB_READ_WRITE_TOKEN, ENV.BLOB_READ_WRITE_TOKEN);
+    assert.deepEqual(JSON.parse(req.body), {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      support_platform: "zendesk",
+      company_name: "Atlas Smoke Co.",
+      contact_email: "smoke@example.com",
+      limit: "1000",
+    });
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({
+      ok: true,
+      request_id: "content-ops-route123",
+      account_id: ACCOUNT_ID,
+      result_path: `/services/faq-deflection/results/content-ops-route123?account_id=${ACCOUNT_ID}`,
+    }));
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    source_mode: "portfolio_submit_route",
+    statusCode: 200,
+    request_id: "content-ops-route123",
+    account_id: ACCOUNT_ID,
+    result_path: `/services/faq-deflection/results/content-ops-route123?account_id=${ACCOUNT_ID}`,
+    error: undefined,
+    atlas_status: undefined,
+    base_host: "atlas.example.com",
   });
 });
 
