@@ -13,11 +13,12 @@ deflection report response.
 - `ATLAS_ACCOUNT_ID` or `ATLAS_FAQ_SEARCH_ACCOUNT_ID`: the account id that
   maps to the bearer token. The submit route derives account scope from auth;
   the portfolio needs this value for Stripe Checkout metadata.
-- `ATLAS_DEFLECTION_SUBMIT_CSV_FILE`: local support-ticket CSV fixture for the
-  preferred multipart hosted smoke. For synthetic live validation, use
+- `ATLAS_DEFLECTION_SUBMIT_CSV_FILE`: optional local support-ticket CSV for the
+  preferred multipart hosted smoke. When omitted and no blob URL is provided,
+  the smoke uses
   `docs/extraction/validation/fixtures/faq_deflection_live_upload_sample.csv`.
-  For customer data, use a representative private-Blob export downloaded by the
-  operator or portfolio server-side code path.
+  For customer data, point this to a representative private-Blob export
+  downloaded by the operator or portfolio server-side code path.
 - `ATLAS_DEFLECTION_SUBMIT_BLOB_URL`: optional legacy HTTPS support-ticket CSV
   blob URL. This fallback remains available for rollback coverage but is not
   the preferred production PII posture.
@@ -78,7 +79,9 @@ It has 12 synthetic closed support tickets with repeated export, billing,
 security, and team/admin themes so the generated free snapshot has meaningful
 clusters without storing customer data.
 
-To use it with the hosted ATLAS submit smoke:
+The hosted ATLAS submit smoke uses this fixture by default when neither
+`ATLAS_DEFLECTION_SUBMIT_CSV_FILE` nor `ATLAS_DEFLECTION_SUBMIT_BLOB_URL` is
+set. To override the default explicitly:
 
 ```bash
 export ATLAS_DEFLECTION_SUBMIT_CSV_FILE=docs/extraction/validation/fixtures/faq_deflection_live_upload_sample.csv

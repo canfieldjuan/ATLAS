@@ -20,6 +20,14 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CSV_FILE = (
+    ROOT
+    / "docs"
+    / "extraction"
+    / "validation"
+    / "fixtures"
+    / "faq_deflection_live_upload_sample.csv"
+)
 LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 SUPPORT_PLATFORMS = frozenset({"zendesk", "intercom", "help_scout", "other"})
 CSV_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
@@ -67,6 +75,11 @@ def _env(*names: str) -> str:
     return ""
 
 
+def _env_path(*names: str) -> Path | None:
+    value = _env(*names)
+    return Path(value) if value else None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     _load_dotenv_files()
     parser = argparse.ArgumentParser(
@@ -75,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=_env("ATLAS_API_BASE_URL"))
     parser.add_argument("--token", default=_env("ATLAS_B2B_JWT", "ATLAS_TOKEN"))
     parser.add_argument("--account-id", default=_env("ATLAS_ACCOUNT_ID", "ATLAS_FAQ_SEARCH_ACCOUNT_ID"))
-    parser.add_argument("--csv-file", type=Path, default=_env("ATLAS_DEFLECTION_SUBMIT_CSV_FILE") or None)
+    parser.add_argument("--csv-file", type=Path, default=_env_path("ATLAS_DEFLECTION_SUBMIT_CSV_FILE"))
     parser.add_argument("--blob-url", default=_env("ATLAS_DEFLECTION_SUBMIT_BLOB_URL"))
     parser.add_argument("--support-platform", default=_env("ATLAS_DEFLECTION_SUPPORT_PLATFORM") or "zendesk")
     parser.add_argument("--company-name", default=_env("ATLAS_DEFLECTION_COMPANY_NAME"))
@@ -97,7 +110,13 @@ def _clean(value: Any) -> str:
     return str(value).strip()
 
 
+def _apply_default_csv_file(args: argparse.Namespace) -> None:
+    if not _clean(args.csv_file) and not _clean(args.blob_url):
+        args.csv_file = DEFAULT_CSV_FILE
+
+
 def _validate_args(args: argparse.Namespace) -> list[str]:
+    _apply_default_csv_file(args)
     errors: list[str] = []
     if not _clean(args.base_url):
         errors.append("ATLAS_API_BASE_URL or --base-url is required")
