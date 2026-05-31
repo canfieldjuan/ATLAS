@@ -14,8 +14,10 @@ deflection report response.
   maps to the bearer token. The submit route derives account scope from auth;
   the portfolio needs this value for Stripe Checkout metadata.
 - `ATLAS_DEFLECTION_SUBMIT_CSV_FILE`: local support-ticket CSV fixture for the
-  preferred multipart hosted smoke. Use a representative private-Blob export
-  downloaded by the operator or portfolio server-side code path.
+  preferred multipart hosted smoke. For synthetic live validation, use
+  `docs/extraction/validation/fixtures/faq_deflection_live_upload_sample.csv`.
+  For customer data, use a representative private-Blob export downloaded by the
+  operator or portfolio server-side code path.
 - `ATLAS_DEFLECTION_SUBMIT_BLOB_URL`: optional legacy HTTPS support-ticket CSV
   blob URL. This fallback remains available for rollback coverage but is not
   the preferred production PII posture.
@@ -62,6 +64,37 @@ python scripts/smoke_content_ops_deflection_submit_handoff.py \
 
 Preflight exits `0` only when all required inputs are present and shaped for a
 hosted proof. It does not fetch the blob or call ATLAS.
+
+## Checked Fixture
+
+The repo includes a non-sensitive CSV fixture for live upload and snapshot
+generation:
+
+```text
+docs/extraction/validation/fixtures/faq_deflection_live_upload_sample.csv
+```
+
+It has 12 synthetic closed support tickets with repeated export, billing,
+security, and team/admin themes so the generated free snapshot has meaningful
+clusters without storing customer data.
+
+To use it with the hosted ATLAS submit smoke:
+
+```bash
+export ATLAS_DEFLECTION_SUBMIT_CSV_FILE=docs/extraction/validation/fixtures/faq_deflection_live_upload_sample.csv
+export ATLAS_DEFLECTION_COMPANY_NAME="Atlas Fixture Co."
+export ATLAS_DEFLECTION_CONTACT_EMAIL="ops@example.com"
+export ATLAS_DEFLECTION_SUPPORT_PLATFORM="zendesk"
+```
+
+To test the public portfolio upload page, select the same CSV file in the
+browser. The page uploads it to private Vercel Blob, posts only the private
+Blob pathname and buyer fields to the portfolio submit route, then redirects to
+an account-less result URL:
+
+```text
+/services/faq-deflection/results/{request_id}
+```
 
 ## Hosted Smoke
 
@@ -157,8 +190,8 @@ python scripts/smoke_content_ops_deflection_portfolio_result_page.py \
 ```
 
 The smoke verifies the hosted page renders the same `request_id` and
-`account_id`, exposes stable result/unlock hooks, preserves the Checkout
-metadata keys (`content_ops_deflection_report`, `request_id`, `account_id`),
+exposes stable result/unlock hooks, preserves the Checkout source and
+`request_id` metadata, rejects account ids in the public result URL and HTML,
 keeps the free snapshot limited to summary/top-question data, and confirms the
 artifact endpoint still returns `403` before payment.
 
