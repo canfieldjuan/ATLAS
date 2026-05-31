@@ -3,6 +3,10 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = (
@@ -48,3 +52,15 @@ def test_live_upload_fixture_covers_snapshot_worthy_themes() -> None:
 
     for theme in ("export", "billing", "security", "team"):
         assert theme in text
+
+
+def test_live_upload_fixture_ingests_as_support_ticket_package() -> None:
+    package = build_support_ticket_input_package(_rows())
+
+    assert package.metadata["source_row_count"] == 12
+    assert package.metadata["included_row_count"] == 12
+    assert package.metadata["skipped_row_count"] == 0
+    assert package.metadata["truncated_row_count"] == 0
+    assert package.metadata["support_ticket_resolution_evidence_present"] is False
+    assert len(package.inputs["source_material"]) == 12
+    assert package.warnings == ()
