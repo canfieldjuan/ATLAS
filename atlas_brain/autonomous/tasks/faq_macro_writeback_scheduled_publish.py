@@ -119,7 +119,6 @@ async def run_scheduled_faq_macro_writeback(*, candidate_repository: Any, publis
         "drafts_published_ok": 0,
         "drafts_failed": 0,
         "tenants": [],
-        "_skip_synthesis": "Scheduled FAQ macro writeback complete",
     }
     if tenants_deferred:
         logger.warning(
@@ -152,6 +151,7 @@ async def run_scheduled_faq_macro_writeback(*, candidate_repository: Any, publis
             tenant_result["drafts"].append(item)
         tenant_result["status"] = "processed" if faq_ids else "no_candidates"
         result["tenants"].append(tenant_result)
+    result["_skip_synthesis"] = summarize_scheduled_faq_macro_writeback(result)
     return result
 
 
@@ -213,3 +213,15 @@ async def _has_unpublished_macro(
 
 def _clean(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def summarize_scheduled_faq_macro_writeback(result: dict[str, Any]) -> str:
+    return (
+        "Scheduled FAQ macro writeback complete: "
+        f"{int(result.get('tenants_checked') or 0)} tenants checked, "
+        f"{int(result.get('tenants_deferred_by_limit') or 0)} deferred, "
+        f"{int(result.get('tenants_skipped_no_credentials') or 0)} skipped without Zendesk credentials, "
+        f"{int(result.get('drafts_selected') or 0)} drafts selected, "
+        f"{int(result.get('drafts_published_ok') or 0)} published, "
+        f"{int(result.get('drafts_failed') or 0)} failed."
+    )

@@ -114,7 +114,8 @@ class HeadlessRunner:
         if isinstance(meta, str):
             import json as _json
             meta = _json.loads(meta)
-        handler_name = (meta or {}).get("builtin_handler")
+        meta = meta or {}
+        handler_name = meta.get("builtin_handler")
         if not handler_name:
             return AgentResult(
                 success=False,
@@ -136,8 +137,33 @@ class HeadlessRunner:
         try:
             result = await handler(task)
 
+            if isinstance(result, dict):
+                skip_msg = self._is_trivial_result(result)
+                if skip_msg and meta.get("notify_skipped_result"):
+                    logger.info(
+                        "Notifying skipped-synthesis result for task '%s'",
+                        task.name,
+                    )
+                    try:
+                        await self._notify_result(skip_msg, task)
+                    except Exception:
+                        logger.warning(
+                            "Failed to notify skipped-synthesis result for task '%s'",
+                            task.name,
+                            exc_info=True,
+                        )
+                    return AgentResult(
+                        success=True,
+                        response_text=skip_msg,
+                        metadata={
+                            "raw_result": result,
+                            "synthesis_skipped": True,
+                            "skipped_result_notification_attempted": True,
+                        },
+                    )
+
             # Post-processing: LLM synthesis via skill
-            skill_name = (task.metadata or {}).get("synthesis_skill")
+            skill_name = meta.get("synthesis_skill")
             if skill_name and isinstance(result, dict):
                 skip_msg = self._is_trivial_result(result)
                 if skip_msg:
@@ -152,7 +178,7 @@ class HeadlessRunner:
                         metadata={"raw_result": result, "synthesis_skipped": True},
                     )
                 else:
-                    synthesis_llm = (task.metadata or {}).get("synthesis_llm")
+                    synthesis_llm = meta.get("synthesis_llm")
                     synthesized = await self._synthesize_with_skill(
                         result, skill_name, task.name, synthesis_llm=synthesis_llm,
                     )
