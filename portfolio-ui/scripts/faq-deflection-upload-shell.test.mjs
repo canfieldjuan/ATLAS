@@ -145,7 +145,6 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-company",
     "data-atlas-deflection-contact-email",
     "data-atlas-deflection-support-platform",
-    "data-atlas-deflection-account-id-input",
     "data-atlas-deflection-submit",
     "data-atlas-deflection-upload-endpoint",
     "data-atlas-deflection-upload-progress",
@@ -166,13 +165,14 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /starts a new private upload/);
   assert.match(uploadSource, /blob_pathname: blob\.pathname/);
   assert.match(uploadSource, /private_blob_persistence/);
+  assert.match(uploadSource, /Bound server-side to the configured report workspace/);
   assert.match(uploadSource, /value: "help_scout"/);
   assert.match(uploadSource, /value: "other", label: "Freshdesk \/ other"/);
   assert.doesNotMatch(uploadSource, /value: "freshdesk"/);
   assert.doesNotMatch(uploadSource, /value: "help-scout"/);
   assert.doesNotMatch(uploadSource, /new FormData/);
   assert.match(uploadSource, /JSON\.stringify/);
-  assert.match(uploadSource, /X-Atlas-Account-Id/);
+  assert.doesNotMatch(uploadSource, /X-Atlas-Account-Id|account_id/);
   assert.doesNotMatch(uploadSource, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
   assert.doesNotMatch(uploadSource, /Authorization/);
   assert.doesNotMatch(uploadSource, /\/paid\b/);
@@ -256,7 +256,7 @@ await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", as
 await test("private blob upload token config fails closed on path and account binding", () => {
   const ok = uploadTokenConfig(
     `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
-    JSON.stringify({ account_id: ACCOUNT_ID }),
+    "",
     ENV,
   );
   assert.equal(ok.ok, true);
@@ -269,9 +269,20 @@ await test("private blob upload token config fails closed on path and account bi
     uploadTokenConfig("other/tickets.csv", JSON.stringify({ account_id: ACCOUNT_ID }), ENV),
     { ok: false, errors: ["invalid_blob_pathname"] },
   );
-  assert.deepEqual(uploadTokenConfig(`${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`, "{}", ENV), {
+  assert.deepEqual(
+    uploadTokenConfig(
+      `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      JSON.stringify({ account_id: "3b2b950d-f64b-4852-bc30-f92a34cdf169" }),
+      ENV,
+    ),
+    { ok: false, errors: ["invalid_account_id"] },
+  );
+  assert.deepEqual(uploadTokenConfig(`${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`, "{}", {
+    ...ENV,
+    ATLAS_ACCOUNT_ID: "",
+  }), {
     ok: false,
-    errors: ["invalid_account_id"],
+    errors: ["atlas_account_missing"],
   });
 });
 
@@ -587,6 +598,40 @@ await test("portfolio submit endpoint rejects account mismatch before ATLAS", as
   assert.equal(fetchCalled, false);
   assert.equal(res.statusCode, 400);
   assert.deepEqual(JSON.parse(res.body), { ok: false, error: "invalid_account_id" });
+
+  const blobRes = mockResponse();
+  await withEnv(ENV, async () => {
+    await submitHandler(
+      request({
+        headers: {
+          "content-type": "application/json",
+          "x-atlas-account-id": "3b2b950d-f64b-4852-bc30-f92a34cdf169",
+        },
+        body: JSON.stringify({ blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv` }),
+      }),
+      blobRes,
+    );
+  });
+  assert.equal(blobRes.statusCode, 400);
+  assert.deepEqual(JSON.parse(blobRes.body), { ok: false, error: "invalid_account_id" });
+});
+
+await test("private blob submit uses configured account when browser omits account header", async () => {
+  const res = mockResponse();
+  await withEnv(ENV, async () => {
+    await submitHandler(
+      request({
+        headers: {
+          "content-type": "application/json",
+          "x-atlas-account-id": undefined,
+        },
+        body: JSON.stringify({ blob_pathname: "../tickets.csv" }),
+      }),
+      res,
+    );
+  });
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(JSON.parse(res.body), { ok: false, error: "invalid_blob_reference" });
 });
 
 await test("portfolio submit endpoint rejects oversize bodies before ATLAS", async () => {

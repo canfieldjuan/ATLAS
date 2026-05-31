@@ -331,7 +331,15 @@ export default async function handler(req, res) {
     return;
   }
 
-  const accountId = header(req, "x-atlas-account-id");
+  const requestedAccountId = header(req, "x-atlas-account-id");
+  const accountId = isPrivateBlobSubmit ? submitConfig.accountId : requestedAccountId;
+  if (
+    requestedAccountId &&
+    (!UUID_RE.test(requestedAccountId) || requestedAccountId !== submitConfig.accountId)
+  ) {
+    json(res, 400, { ok: false, error: "invalid_account_id" });
+    return;
+  }
   if (!accountId || !UUID_RE.test(accountId) || accountId !== submitConfig.accountId) {
     json(res, 400, { ok: false, error: "invalid_account_id" });
     return;
