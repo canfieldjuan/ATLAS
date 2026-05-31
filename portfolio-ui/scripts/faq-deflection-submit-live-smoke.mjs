@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import {
+import submitHandler, {
   BLOB_UPLOAD_PATH_PREFIX,
   MAX_BLOB_CSV_BYTES,
   submitPrivateBlob,
@@ -40,6 +40,7 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
     outputResult: clean(sourceEnv.ATLAS_DEFLECTION_SUBMIT_RESULT_FILE),
     json: false,
     preflightOnly: false,
+    routeHandler: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,6 +49,8 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
       options.json = true;
     } else if (arg === "--preflight-only") {
       options.preflightOnly = true;
+    } else if (arg === "--route-handler") {
+      options.routeHandler = true;
     } else if (arg.startsWith("--")) {
       const key = arg.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
       const value = argv[index + 1];
@@ -92,6 +95,12 @@ function validationErrors(options) {
   if (clean(options.blobPathname) && !clean(options.blobToken)) {
     errors.push("BLOB_READ_WRITE_TOKEN or --blob-token is required with --blob-pathname");
   }
+  if (options.routeHandler && !clean(options.blobPathname)) {
+    errors.push("--route-handler requires --blob-pathname");
+  }
+  if (options.routeHandler && clean(options.csvFile)) {
+    errors.push("--route-handler cannot use --csv-file");
+  }
   if (clean(options.blobPathname) && clean(options.csvFile)) {
     errors.push("use either --blob-pathname or --csv-file, not both");
   }
@@ -133,15 +142,123 @@ function resultPayload(result, options, sourceMode) {
   };
 }
 
+function routePayloadFromOptions(options) {
+  return {
+    blob_pathname: clean(options.blobPathname),
+    support_platform: clean(options.supportPlatform),
+    company_name: clean(options.companyName),
+    contact_email: clean(options.contactEmail),
+    limit: clean(options.limit),
+  };
+}
+
+function mockRouteResponse() {
+  return {
+    statusCode: 200,
+    headers: {},
+    body: "",
+    setHeader(name, value) {
+      this.headers[name] = value;
+    },
+    end(value) {
+      this.body = value || "";
+    },
+  };
+}
+
+async function withRouteEnv(options, fn) {
+  const nextEnv = {
+    ATLAS_API_BASE_URL: clean(options.baseUrl),
+    ATLAS_B2B_JWT: clean(options.token),
+    ATLAS_TOKEN: "",
+    ATLAS_ACCOUNT_ID: clean(options.accountId),
+    BLOB_READ_WRITE_TOKEN: clean(options.blobToken),
+    ATLAS_PROXY_TIMEOUT_MS: String(options.timeoutMs),
+  };
+  const previous = {};
+  for (const key of Object.keys(nextEnv)) {
+    previous[key] = process.env[key];
+    if (nextEnv[key]) {
+      process.env[key] = nextEnv[key];
+    } else {
+      delete process.env[key];
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(nextEnv)) {
+      if (previous[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous[key];
+      }
+    }
+  }
+}
+
+function routeResultPayload(statusCode, payload, options) {
+  const ok = statusCode >= 200 && statusCode < 300 && payload?.ok === true;
+  return {
+    ok,
+    source_mode: "portfolio_submit_route",
+    statusCode,
+    request_id: payload?.request_id,
+    account_id: payload?.account_id,
+    result_path: payload?.result_path,
+    error: ok ? undefined : clean(payload?.error) || "portfolio_submit_route_failed",
+    atlas_status: payload?.atlas_status,
+    base_host: URL.canParse(options.baseUrl) ? new URL(options.baseUrl).host : "",
+  };
+}
+
+async function runRouteHandlerSmoke(options, handlerImpl = submitHandler) {
+  const res = mockRouteResponse();
+  const req = {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(routePayloadFromOptions(options)),
+  };
+  await withRouteEnv(options, async () => {
+    await handlerImpl(req, res);
+  });
+  let payload = {};
+  try {
+    payload = res.body ? JSON.parse(res.body) : {};
+  } catch {
+    return {
+      ok: false,
+      source_mode: "portfolio_submit_route",
+      statusCode: res.statusCode,
+      error: "portfolio_submit_route_invalid_json",
+      base_host: URL.canParse(options.baseUrl) ? new URL(options.baseUrl).host : "",
+    };
+  }
+  const projected = routeResultPayload(res.statusCode, payload, options);
+  if (projected.ok && !REQUEST_ID_RE.test(clean(projected.request_id))) {
+    return { ...projected, ok: false, error: "invalid_request_id" };
+  }
+  return projected;
+}
+
 async function runSubmitSmoke(options) {
   const errors = validationErrors(options);
   if (errors.length > 0) {
     return { ok: false, status: "preflight_failed", errors };
   }
 
-  const sourceMode = clean(options.blobPathname) ? "private_blob" : "local_csv_fixture";
+  const sourceMode = options.routeHandler
+    ? "portfolio_submit_route"
+    : clean(options.blobPathname)
+      ? "private_blob"
+      : "local_csv_fixture";
   if (options.preflightOnly) {
     return { ok: true, status: "preflight_ok", source_mode: sourceMode };
+  }
+  if (options.routeHandler) {
+    return runRouteHandlerSmoke(options);
   }
 
   const payload = {
@@ -211,4 +328,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
     });
 }
 
-export { parseArgs, runSubmitSmoke, validationErrors };
+export { parseArgs, runRouteHandlerSmoke, runSubmitSmoke, validationErrors };
