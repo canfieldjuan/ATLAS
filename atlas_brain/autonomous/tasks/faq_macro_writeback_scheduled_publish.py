@@ -51,23 +51,41 @@ class StoredOnlyZendeskMacroCredentialsProvider:
         return await lookup_zendesk_credentials(self.pool, account_id=scope.account_id)
 
 
-@dataclass(frozen=True)
+@dataclass
 class PostgresScheduledFAQMacroCandidateRepository:
     pool: Any
     faq_repository: TicketFAQRepository
     mapping_repository: MacroWritebackMappingRepository
+    last_enrolled_tenant_count: int = 0
 
     async def list_tenants(self, *, limit: int) -> Sequence[ZendeskTenant]:
         rows = await self.pool.fetch(
             """
-            SELECT DISTINCT z.account_id::text AS account_id
-              FROM content_ops_zendesk_credentials z
-             WHERE z.revoked_at IS NULL
-             ORDER BY z.account_id ASC
+            WITH enrolled AS (
+                SELECT DISTINCT z.account_id::text AS account_id
+                  FROM content_ops_zendesk_credentials z
+                 WHERE z.revoked_at IS NULL
+            ),
+            last_publish AS (
+                SELECT account_id::text AS account_id, MAX(updated_at) AS last_published_at
+                  FROM ticket_faq_macro_writebacks
+                 WHERE platform = $2
+                   AND publish_status = 'published'
+                 GROUP BY account_id
+            )
+            SELECT e.account_id,
+                   COUNT(*) OVER() AS enrolled_count
+              FROM enrolled e
+              LEFT JOIN last_publish p ON p.account_id = e.account_id
+             ORDER BY p.last_published_at ASC NULLS FIRST,
+                      hashtext(e.account_id || date_trunc('hour', NOW())::text) ASC,
+                      e.account_id ASC
              LIMIT $1
             """,
             max(1, int(limit)),
+            ZENDESK_PLATFORM,
         )
+        self.last_enrolled_tenant_count = int(rows[0]["enrolled_count"] or 0) if rows else 0
         return tuple(ZendeskTenant(account_id=str(row["account_id"] or "")) for row in rows)
 
     async def list_candidate_faq_ids(self, tenant: ZendeskTenant, *, limit: int) -> Sequence[str]:
@@ -89,15 +107,26 @@ class PostgresScheduledFAQMacroCandidateRepository:
 
 async def run_scheduled_faq_macro_writeback(*, candidate_repository: Any, publish_service: Any, max_tenants: int, max_drafts_per_tenant: int) -> dict[str, Any]:
     tenants = await candidate_repository.list_tenants(limit=max_tenants)
+    enrolled_tenant_count = int(getattr(candidate_repository, "last_enrolled_tenant_count", len(tenants)) or len(tenants))
+    tenants_deferred = max(0, enrolled_tenant_count - len(tenants))
     result: dict[str, Any] = {
+        "enrolled_tenants": enrolled_tenant_count,
         "tenants_checked": len(tenants),
+        "tenants_deferred_by_limit": tenants_deferred,
         "tenants_skipped_no_credentials": 0,
         "drafts_selected": 0,
         "drafts_published_ok": 0,
         "drafts_failed": 0,
         "tenants": [],
-        "_skip_synthesis": True,
+        "_skip_synthesis": "Scheduled FAQ macro writeback complete",
     }
+    if tenants_deferred:
+        logger.warning(
+            "scheduled FAQ macro publish deferred %s of %s enrolled tenants due to max_tenants=%s",
+            tenants_deferred,
+            enrolled_tenant_count,
+            max_tenants,
+        )
     for tenant in tenants:
         tenant_result: dict[str, Any] = {"account_id": tenant.account_id, "drafts": []}
         if not tenant.has_zendesk_credentials:

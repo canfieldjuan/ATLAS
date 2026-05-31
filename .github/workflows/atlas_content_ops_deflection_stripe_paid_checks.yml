@@ -7,13 +7,11 @@ on:
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"
       - "atlas_brain/api/billing.py"
-      - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/config.py"
       - "extracted_content_pipeline/deflection_report_access.py"
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
-      - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_b2b_vendor_briefing.py"
   push:
     branches:
@@ -23,13 +21,11 @@ on:
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"
       - "atlas_brain/api/billing.py"
-      - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/config.py"
       - "extracted_content_pipeline/deflection_report_access.py"
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
-      - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_b2b_vendor_briefing.py"
 
 jobs:
@@ -56,7 +52,6 @@ jobs:
           python -m pytest \
             tests/test_atlas_billing_stripe_hardening.py \
             tests/test_b2b_vendor_briefing.py \
-            tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
             tests/test_atlas_billing_content_ops_deflection_stripe_paid.py \
             tests/test_atlas_billing_content_ops_deflection_paid_flow.py \
             -q

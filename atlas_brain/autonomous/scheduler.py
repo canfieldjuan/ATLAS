@@ -966,6 +966,11 @@ class TaskScheduler:
                     settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_interval_seconds
                 ),
             }
+            _enabled_overrides = {
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled
+                ),
+            }
 
             # Resolve configurable cron expressions at runtime
             _cron_overrides = {
@@ -1003,6 +1008,8 @@ class TaskScheduler:
                 # Apply runtime interval override if the definition left it as None
                 if task_def.get("interval_seconds") is None and task_def["name"] in _interval_overrides:
                     task_def = {**task_def, "interval_seconds": _interval_overrides[task_def["name"]]}
+                if task_def["name"] in _enabled_overrides:
+                    task_def = {**task_def, "enabled": _enabled_overrides[task_def["name"]]}
                 existing = await repo.get_by_name(task_def["name"])
                 if existing is not None:
                     # Merge any new metadata keys from the definition into the existing row.

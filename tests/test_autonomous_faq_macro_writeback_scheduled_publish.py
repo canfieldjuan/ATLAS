@@ -46,9 +46,10 @@ class _MappingRepo:
 
 
 class _TenantRepo:
-    def __init__(self, tenants, candidates) -> None:
+    def __init__(self, tenants, candidates, *, enrolled_count: int | None = None) -> None:
         self.tenants = tuple(tenants)
         self.candidates = candidates
+        self.last_enrolled_tenant_count = enrolled_count if enrolled_count is not None else len(self.tenants)
 
     async def list_tenants(self, *, limit: int):
         return self.tenants[:limit]
@@ -105,6 +106,46 @@ async def test_scheduled_publish_skips_missing_credentials_and_isolates_failures
     assert result["drafts_failed"] == 1
     assert result["drafts_published_ok"] == 1
     assert result["tenants"][1]["drafts"][0]["error"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_publish_reports_tenant_cap_truncation(caplog) -> None:
+    tenants = tuple(ZendeskTenant(f"acct-{idx:02d}") for idx in range(25))
+
+    result = await run_scheduled_faq_macro_writeback(
+        candidate_repository=_TenantRepo(tenants, {}, enrolled_count=27),
+        publish_service=_PublishService(),
+        max_tenants=25,
+        max_drafts_per_tenant=10,
+    )
+
+    assert result["enrolled_tenants"] == 27
+    assert result["tenants_checked"] == 25
+    assert result["tenants_deferred_by_limit"] == 2
+    assert "deferred 2 of 27 enrolled tenants" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_postgres_tenant_selection_rotates_by_publish_recency() -> None:
+    class _Pool:
+        async def fetch(self, query, limit, platform):
+            assert "MAX(updated_at) AS last_published_at" in query
+            assert "ORDER BY p.last_published_at ASC NULLS FIRST" in query
+            assert "COUNT(*) OVER() AS enrolled_count" in query
+            assert limit == 25
+            assert platform == ZENDESK_PLATFORM
+            return ({"account_id": "acct-never", "enrolled_count": 26},)
+
+    repo = PostgresScheduledFAQMacroCandidateRepository(
+        pool=_Pool(),
+        faq_repository=_FAQRepo(()),
+        mapping_repository=_MappingRepo(),
+    )
+
+    tenants = await repo.list_tenants(limit=25)
+
+    assert tenants == (ZendeskTenant("acct-never"),)
+    assert repo.last_enrolled_tenant_count == 26
 
 
 @pytest.mark.asyncio

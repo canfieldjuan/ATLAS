@@ -1,0 +1,49 @@
+name: Atlas Content Ops Macro Writeback Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
+      - "atlas_brain/autonomous/tasks/__init__.py"
+      - "atlas_brain/config.py"
+      - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_scheduler.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
+      - "atlas_brain/autonomous/tasks/__init__.py"
+      - "atlas_brain/config.py"
+      - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
+      - "tests/test_scheduler.py"
+
+jobs:
+  atlas-content-ops-macro-writeback-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops macro writeback scheduler tests
+        run: |
+          python -m pytest \
+            tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
+            tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_seed_respects_opt_in \
+            -q

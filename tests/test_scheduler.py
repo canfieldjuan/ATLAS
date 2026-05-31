@@ -720,3 +720,50 @@ class TestDefaults:
 
         assert repo.create.await_count == 2
         assert s.register_and_schedule.await_count == 2
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_content_ops_faq_macro_writeback_default_seed_respects_opt_in(self, mock_repo_fn, monkeypatch):
+        s = _scheduler()
+        s._DEFAULT_TASKS = [
+            {
+                "name": "content_ops_faq_macro_writeback_scheduled_publish",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": None,
+                "timeout_seconds": 600,
+                "metadata": {"builtin_handler": "content_ops_faq_macro_writeback_scheduled_publish"},
+            },
+        ]
+
+        repo = AsyncMock()
+        repo.get_by_name = AsyncMock(return_value=None)
+        repo.create = AsyncMock(
+            return_value=ScheduledTask(
+                id=uuid4(),
+                name="content_ops_faq_macro_writeback_scheduled_publish",
+                task_type="builtin",
+                schedule_type="interval",
+                interval_seconds=3600,
+                timeout_seconds=600,
+                enabled=False,
+            )
+        )
+        mock_repo_fn.return_value = repo
+        monkeypatch.setattr(s, "register_and_schedule", AsyncMock())
+        from atlas_brain.config import settings
+
+        monkeypatch.setattr(
+            settings.b2b_campaign,
+            "content_ops_faq_macro_writeback_scheduled_enabled",
+            False,
+        )
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_interval_overrides", lambda: {})
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_default_tasks", lambda: [])
+
+        await s._ensure_default_tasks()
+
+        create_kwargs = repo.create.await_args.kwargs
+        assert create_kwargs["enabled"] is False
+        assert create_kwargs["interval_seconds"] == 3600
+        s.register_and_schedule.assert_not_awaited()
