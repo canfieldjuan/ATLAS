@@ -851,6 +851,15 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "llm_provider_cost_sync"},
         },
         {
+            "name": "content_ops_faq_macro_writeback_scheduled_publish",
+            "description": "Publish approved verified Content Ops FAQ drafts to tenant Zendesk macros",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_campaign
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "content_ops_faq_macro_writeback_scheduled_publish"},
+        },
+        {
             "name": "falsification_check",
             "description": "Nightly check of cached reasoning conclusions against fresh vendor signals",
             "task_type": "builtin",
@@ -953,6 +962,14 @@ class TaskScheduler:
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
                 "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_interval_seconds
+                ),
+            }
+            _enabled_overrides = {
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled
+                ),
             }
 
             # Resolve configurable cron expressions at runtime
@@ -991,6 +1008,8 @@ class TaskScheduler:
                 # Apply runtime interval override if the definition left it as None
                 if task_def.get("interval_seconds") is None and task_def["name"] in _interval_overrides:
                     task_def = {**task_def, "interval_seconds": _interval_overrides[task_def["name"]]}
+                if task_def["name"] in _enabled_overrides:
+                    task_def = {**task_def, "enabled": _enabled_overrides[task_def["name"]]}
                 existing = await repo.get_by_name(task_def["name"])
                 if existing is not None:
                     # Merge any new metadata keys from the definition into the existing row.
@@ -1094,6 +1113,9 @@ class TaskScheduler:
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_interval_seconds
+                ),
             }
 
             # Merge pipeline interval overrides

@@ -4788,6 +4788,17 @@ class B2BCampaignConfig(BaseSettings):
         ),
         description="Zendesk base URL override for hosted Content Ops FAQ macro writeback.",
     )
+    content_ops_faq_macro_writeback_scheduled_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_FAQ_MACRO_WRITEBACK_SCHEDULED_ENABLED"),
+        description="Enable autonomous publishing of approved Content Ops FAQ drafts to tenant Zendesk macros.",
+    )
+    content_ops_faq_macro_writeback_scheduled_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_FAQ_MACRO_WRITEBACK_SCHEDULED_INTERVAL_SECONDS"),
+        description="Interval for autonomous Content Ops FAQ-to-Zendesk macro publishing.",
+    )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
