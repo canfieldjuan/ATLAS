@@ -93,20 +93,17 @@ function renderPaidArtifact(report) {
         </section>`;
 }
 
-function renderArtifactRetryScript({ requestId, accountId, shouldRetry }) {
+function renderArtifactRetryScript({ requestId, shouldRetry }) {
   if (!shouldRetry) return "";
 
   return `\n  <script data-atlas-deflection-artifact-retry>
     (() => {
       const retryMessage = document.getElementById("checkout-message");
       const retryRequestId = ${scriptJson(requestId)};
-      const retryAccountId = ${scriptJson(accountId)};
       const retryDelays = [1500, 3000, 5000, 8000, 13000];
       let retryAttempt = 0;
       const reportUrl = () => "/api/content-ops/deflection/report?request_id="
-        + encodeURIComponent(retryRequestId)
-        + "&account_id="
-        + encodeURIComponent(retryAccountId);
+        + encodeURIComponent(retryRequestId);
       const pollArtifactUnlock = async () => {
         if (retryMessage) retryMessage.textContent = "Checking unlock status...";
         try {
@@ -129,7 +126,7 @@ function renderArtifactRetryScript({ requestId, accountId, shouldRetry }) {
         retryAttempt += 1;
         window.setTimeout(pollArtifactUnlock, delay);
       };
-      if (retryRequestId && retryAccountId) {
+      if (retryRequestId) {
         window.setTimeout(pollArtifactUnlock, retryDelays[retryAttempt]);
         retryAttempt += 1;
       }
@@ -139,13 +136,12 @@ function renderArtifactRetryScript({ requestId, accountId, shouldRetry }) {
 
 function renderResultPage({ requestId, accountId, checkoutStatus = "", report = null }) {
   const safeRequestId = escapeHtml(requestId);
-  const safeAccountId = escapeHtml(accountId);
   const safeCheckoutStatus = escapeHtml(checkoutStatus);
   const resultHref = resultPath(requestId || "missing-request", accountId, "");
   const artifactStatus = report && report.ok ? report.artifact_status : "snapshot_unavailable";
   const isUnlocked = artifactStatus === "unlocked";
   const shouldRetryArtifact = checkoutStatus === "success" && artifactStatus === "locked";
-  const buttonDisabled = requestId && accountId && !isUnlocked && !shouldRetryArtifact ? "" : "disabled";
+  const buttonDisabled = requestId && !isUnlocked && !shouldRetryArtifact ? "" : "disabled";
   const unlockHeading = isUnlocked
     ? "Full report unlocked"
     : shouldRetryArtifact
@@ -212,7 +208,6 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     class="shell"
     data-atlas-deflection-result
     data-atlas-deflection-request-id="${safeRequestId}"
-    data-atlas-deflection-account-id="${safeAccountId}"
     data-atlas-deflection-report-source="${CHECKOUT_SOURCE}"
     data-atlas-deflection-artifact-retry="${shouldRetryArtifact ? "true" : "false"}"
   >
@@ -232,7 +227,6 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
         <dl class="meta">
           <div><dt>Checkout metadata source</dt><dd>${CHECKOUT_SOURCE}</dd></div>
           <div><dt>request_id</dt><dd>${safeRequestId || "Missing request id"}</dd></div>
-          <div><dt>account_id</dt><dd>${safeAccountId || "Missing account id"}</dd></div>
           <div><dt>canonical result path</dt><dd>${escapeHtml(resultHref)}</dd></div>
           <div><dt>artifact_status</dt><dd>${escapeHtml(artifactStatus)}</dd></div>
           <div><dt>checkout</dt><dd>${safeCheckoutStatus || "locked"}</dd></div>
@@ -242,7 +236,6 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
           data-atlas-deflection-unlock
           data-checkout-source="${CHECKOUT_SOURCE}"
           data-checkout-request_id="${safeRequestId}"
-          data-checkout-account_id="${safeAccountId}"
           ${buttonDisabled}
         >${unlockButtonLabel}</button>
         <p id="checkout-message" class="muted" role="status"></p>
@@ -253,8 +246,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     const button = document.querySelector("[data-atlas-deflection-unlock]");
     const message = document.getElementById("checkout-message");
     const requestId = ${scriptJson(requestId)};
-    const accountId = ${scriptJson(accountId)};
-    if (button && requestId && accountId) {
+    if (button && requestId) {
       button.addEventListener("click", async () => {
         button.disabled = true;
         message.textContent = "Opening Checkout...";
@@ -262,7 +254,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
           const response = await fetch("/api/content-ops/deflection/checkout", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ request_id: requestId, account_id: accountId })
+            body: JSON.stringify({ request_id: requestId })
           });
           const payload = await response.json();
           if (!response.ok || !payload.url) throw new Error(payload.error || "checkout_failed");
@@ -274,7 +266,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
       });
     }
   </script>
-  ${renderArtifactRetryScript({ requestId, accountId, shouldRetry: shouldRetryArtifact })}
+  ${renderArtifactRetryScript({ requestId, shouldRetry: shouldRetryArtifact })}
 </body>
 </html>`;
 }
@@ -301,7 +293,7 @@ export default async function handler(req, res) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   const report =
-    requestId && accountId
+    requestId
       ? await loadDeflectionReport({ requestId, accountId })
       : null;
   res.end(

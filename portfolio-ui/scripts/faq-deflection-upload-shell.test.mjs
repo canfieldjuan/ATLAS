@@ -286,7 +286,7 @@ await test("submit live smoke route-handler mode omits buyer account header", as
       ok: true,
       request_id: "content-ops-route123",
       account_id: ACCOUNT_ID,
-      result_path: `/services/faq-deflection/results/content-ops-route123?account_id=${ACCOUNT_ID}`,
+      result_path: "/services/faq-deflection/results/content-ops-route123",
     }));
   });
   assert.deepEqual(result, {
@@ -295,7 +295,7 @@ await test("submit live smoke route-handler mode omits buyer account header", as
     statusCode: 200,
     request_id: "content-ops-route123",
     account_id: ACCOUNT_ID,
-    result_path: `/services/faq-deflection/results/content-ops-route123?account_id=${ACCOUNT_ID}`,
+    result_path: "/services/faq-deflection/results/content-ops-route123",
     error: undefined,
     atlas_status: undefined,
     base_host: "atlas.example.com",
@@ -330,7 +330,7 @@ await test("portfolio submit endpoint forwards raw multipart bytes to ATLAS", as
     ok: true,
     request_id: "content-ops-abc123",
     account_id: ACCOUNT_ID,
-    result_path: `/services/faq-deflection/results/content-ops-abc123?account_id=${ACCOUNT_ID}`,
+    result_path: "/services/faq-deflection/results/content-ops-abc123",
   });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
