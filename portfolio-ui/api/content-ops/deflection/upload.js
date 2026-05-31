@@ -48,7 +48,7 @@ function uploadTokenConfig(pathname, clientPayload, env = process.env) {
   if (!pathname.startsWith(BLOB_UPLOAD_PATH_PREFIX) || !pathname.toLowerCase().endsWith(".csv")) {
     errors.push("invalid_blob_pathname");
   }
-  if (!accountId || accountId !== config.accountId) {
+  if (accountId && accountId !== config.accountId) {
     errors.push("invalid_account_id");
   }
   if (errors.length > 0) return { ok: false, errors };

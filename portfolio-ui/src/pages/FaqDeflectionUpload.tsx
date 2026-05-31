@@ -73,7 +73,6 @@ function boundedProgress(percentage: number | undefined) {
 export default function FaqDeflectionUpload() {
   const [companyName, setCompanyName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
-  const [accountId, setAccountId] = useState("");
   const [supportPlatform, setSupportPlatform] = useState<string>(SUPPORT_PLATFORMS[0].value);
   const [upload, setUpload] = useState<UploadState>({ status: "empty" });
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
@@ -83,18 +82,16 @@ export default function FaqDeflectionUpload() {
       Boolean(
         companyName.trim() &&
           contactEmail.trim() &&
-          accountId.trim() &&
           supportPlatform &&
           upload.status === "ready",
       ),
-    [accountId, companyName, contactEmail, supportPlatform, upload.status],
+    [companyName, contactEmail, supportPlatform, upload.status],
   );
   const canSubmit = fieldsReady && submit.status !== "uploading" && submit.status !== "submitting";
   const isRetry = submit.status === "error";
 
   const startSubmit = async () => {
     if (upload.status !== "ready" || !fieldsReady) return;
-    const trimmedAccountId = accountId.trim();
 
     try {
       setSubmit({ status: "uploading", percentage: 0 });
@@ -102,7 +99,6 @@ export default function FaqDeflectionUpload() {
         access: "private",
         contentType: "text/csv",
         handleUploadUrl: BLOB_UPLOAD_ENDPOINT,
-        clientPayload: JSON.stringify({ account_id: trimmedAccountId }),
         multipart: upload.fileSize > 4 * 1024 * 1024,
         onUploadProgress: (event) => {
           setSubmit({
@@ -117,7 +113,6 @@ export default function FaqDeflectionUpload() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Atlas-Account-Id": trimmedAccountId,
         },
         body: JSON.stringify({
           blob_pathname: blob.pathname,
@@ -233,16 +228,12 @@ export default function FaqDeflectionUpload() {
                 </select>
               </label>
 
-              <label className="block">
-                <span className="text-sm font-medium text-surface-100">ATLAS account ID</span>
-                <input
-                  className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-3 font-mono text-xs text-white outline-none transition focus:border-primary-400"
-                  data-atlas-deflection-account-id-input
-                  value={accountId}
-                  onChange={(event) => setAccountId(event.target.value)}
-                  placeholder="2b2b950d-f64b-4852-bc30-f92a34cdf169"
-                />
-              </label>
+              <div className="rounded-lg border border-surface-700/70 bg-surface-900/60 px-3 py-3">
+                <span className="text-sm font-medium text-surface-100">ATLAS account</span>
+                <p className="mt-2 text-xs leading-5 text-surface-200/65">
+                  Bound server-side to the configured report workspace.
+                </p>
+              </div>
             </div>
 
             <label className="mt-6 block rounded-lg border border-dashed border-surface-600 bg-surface-900/55 p-5 transition focus-within:border-primary-400">
