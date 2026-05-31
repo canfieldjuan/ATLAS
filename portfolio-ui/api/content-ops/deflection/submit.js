@@ -5,9 +5,7 @@ import { emitDeflectionServerEvent } from "./events.js";
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SUBMIT_PATH = "/api/v1/content-ops/deflection-reports/submit";
-const MAX_CSV_BYTES = 4 * 1024 * 1024;
 const MAX_BLOB_CSV_BYTES = 50 * 1024 * 1024;
-const MAX_MULTIPART_OVERHEAD_BYTES = 256 * 1024;
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
 
 export const config = {
@@ -44,52 +42,6 @@ function privateBlobSubmitConfig(env = process.env) {
   const blobToken = clean(env.BLOB_READ_WRITE_TOKEN);
   if (!blobToken) result.errors.push("blob_token_missing");
   return { ...result, blobToken };
-}
-
-function rejectOversizeContentLength(req) {
-  const raw = header(req, "content-length");
-  if (!raw) return null;
-  const length = Number.parseInt(raw, 10);
-  if (!Number.isFinite(length)) return null;
-  if (length > MAX_CSV_BYTES + MAX_MULTIPART_OVERHEAD_BYTES) {
-    return {
-      ok: false,
-      statusCode: 413,
-      error: "deflection_submit_csv_too_large",
-    };
-  }
-  return null;
-}
-
-async function readRawBody(req, maxBytes = MAX_CSV_BYTES + MAX_MULTIPART_OVERHEAD_BYTES) {
-  if (Buffer.isBuffer(req.body)) {
-    if (req.body.length > maxBytes) return { ok: false, statusCode: 413 };
-    return { ok: true, body: req.body };
-  }
-  if (typeof req.body === "string") {
-    const body = Buffer.from(req.body);
-    if (body.length > maxBytes) return { ok: false, statusCode: 413 };
-    return { ok: true, body };
-  }
-  if (req.body instanceof ArrayBuffer) {
-    const body = Buffer.from(req.body);
-    if (body.length > maxBytes) return { ok: false, statusCode: 413 };
-    return { ok: true, body };
-  }
-
-  const chunks = [];
-  let total = 0;
-  try {
-    for await (const chunk of req) {
-      const buffer = Buffer.from(chunk);
-      total += buffer.length;
-      if (total > maxBytes) return { ok: false, statusCode: 413 };
-      chunks.push(buffer);
-    }
-  } catch {
-    return { ok: false, statusCode: 400 };
-  }
-  return { ok: true, body: Buffer.concat(chunks) };
 }
 
 async function readJsonBody(req) {
@@ -298,8 +250,6 @@ async function submitPrivateBlob({
 export {
   BLOB_UPLOAD_PATH_PREFIX,
   MAX_BLOB_CSV_BYTES,
-  MAX_CSV_BYTES,
-  MAX_MULTIPART_OVERHEAD_BYTES,
   SUBMIT_PATH,
   cleanupPrivateCsvBlob,
   forwardSubmit,
@@ -318,21 +268,22 @@ export default async function handler(req, res) {
 
   const contentType = header(req, "content-type");
   const isPrivateBlobSubmit = contentType.includes("application/json");
-  if (!contentType.includes("multipart/form-data") && !isPrivateBlobSubmit) {
-    json(res, 415, { ok: false, error: "multipart_required" });
+  if (contentType.includes("multipart/form-data")) {
+    json(res, 410, { ok: false, error: "direct_multipart_deprecated" });
+    return;
+  }
+  if (!isPrivateBlobSubmit) {
+    json(res, 415, { ok: false, error: "private_blob_json_required" });
     return;
   }
 
-  const { config: submitConfig, blobToken, errors } = isPrivateBlobSubmit
-    ? privateBlobSubmitConfig()
-    : publicSubmitConfig();
+  const { config: submitConfig, blobToken, errors } = privateBlobSubmitConfig();
   if (errors.length > 0) {
     json(res, 503, { ok: false, error: "atlas_submit_not_configured" });
     return;
   }
 
   const requestedAccountId = header(req, "x-atlas-account-id");
-  const accountId = isPrivateBlobSubmit ? submitConfig.accountId : requestedAccountId;
   if (
     requestedAccountId &&
     (!UUID_RE.test(requestedAccountId) || requestedAccountId !== submitConfig.accountId)
@@ -340,63 +291,24 @@ export default async function handler(req, res) {
     json(res, 400, { ok: false, error: "invalid_account_id" });
     return;
   }
-  if (!accountId || !UUID_RE.test(accountId) || accountId !== submitConfig.accountId) {
+  if (!submitConfig.accountId || !UUID_RE.test(submitConfig.accountId)) {
     json(res, 400, { ok: false, error: "invalid_account_id" });
     return;
   }
 
-  if (isPrivateBlobSubmit) {
-    let payload;
-    try {
-      payload = await readJsonBody(req);
-    } catch {
-      json(res, 400, { ok: false, error: "invalid_blob_submit" });
-      return;
-    }
-
-    const result = await submitPrivateBlob({
-      config: submitConfig,
-      blobToken,
-      payload,
-    });
-    if (!result.ok) {
-      json(res, result.statusCode, {
-        ok: false,
-        error: result.error,
-        atlas_status: result.atlas_status,
-      });
-      return;
-    }
-    json(res, 200, result.payload);
-    return;
-  }
-
-  const oversize = rejectOversizeContentLength(req);
-  if (oversize) {
-    json(res, oversize.statusCode, { ok: false, error: oversize.error });
-    return;
-  }
-
-  const bodyResult = await readRawBody(req);
-  if (!bodyResult.ok) {
-    json(res, bodyResult.statusCode, {
-      ok: false,
-      error:
-        bodyResult.statusCode === 413
-          ? "deflection_submit_csv_too_large"
-          : "deflection_submit_body_unreadable",
-    });
-    return;
-  }
-
-  let result;
+  let payload;
   try {
-    result = await forwardSubmit({ config: submitConfig, contentType, body: bodyResult.body });
+    payload = await readJsonBody(req);
   } catch {
-    json(res, 502, { ok: false, error: "atlas_submit_unreachable" });
+    json(res, 400, { ok: false, error: "invalid_blob_submit" });
     return;
   }
 
+  const result = await submitPrivateBlob({
+    config: submitConfig,
+    blobToken,
+    payload,
+  });
   if (!result.ok) {
     json(res, result.statusCode, {
       ok: false,
