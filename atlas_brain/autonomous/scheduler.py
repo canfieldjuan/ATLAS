@@ -851,6 +851,15 @@ class TaskScheduler:
             "metadata": {"builtin_handler": "llm_provider_cost_sync"},
         },
         {
+            "name": "content_ops_faq_macro_writeback_scheduled_publish",
+            "description": "Publish approved verified Content Ops FAQ drafts to tenant Zendesk macros",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.b2b_campaign
+            "timeout_seconds": 600,
+            "metadata": {"builtin_handler": "content_ops_faq_macro_writeback_scheduled_publish"},
+        },
+        {
             "name": "falsification_check",
             "description": "Nightly check of cached reasoning conclusions against fresh vendor signals",
             "task_type": "builtin",
@@ -953,6 +962,9 @@ class TaskScheduler:
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
                 "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_interval_seconds
+                ),
             }
 
             # Resolve configurable cron expressions at runtime
@@ -1094,6 +1106,9 @@ class TaskScheduler:
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_interval_seconds
+                ),
             }
 
             # Merge pipeline interval overrides

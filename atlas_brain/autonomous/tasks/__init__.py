@@ -61,6 +61,7 @@ _BUILTIN_TASKS = [
     ("b2b_witness_quality_maintenance", "run", "b2b_witness_quality_maintenance"),
     ("b2b_evidence_claim_audit", "run", "b2b_evidence_claim_audit"),
     ("provider_cost_sync", "run", "llm_provider_cost_sync"),
+    ("faq_macro_writeback_scheduled_publish", "run", "content_ops_faq_macro_writeback_scheduled_publish"),
     ("cleaning_sms_reminder", "run", "cleaning_sms_reminder"),
 ]
 
