@@ -60,8 +60,7 @@ def _page_html() -> str:
       <section data-atlas-deflection-request-id="content-ops-123"></section>
       <a data-atlas-deflection-unlock
          data-checkout-source="content_ops_deflection_report"
-         data-checkout-request_id="content-ops-123"
-         data-checkout-account_id="acct-123">Unlock full report</a>
+         data-checkout-request_id="content-ops-123">Unlock full report</a>
     </main>
     """
 
@@ -135,6 +134,19 @@ def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
     ]
 
 
+def test_validate_args_rejects_account_id_in_public_result_url(tmp_path) -> None:
+    args = smoke._build_parser().parse_args([
+        *_base_args(tmp_path),
+        "--result-url",
+        "https://portfolio.example.com/deflection/result/content-ops-123?account_id=acct-123",
+    ])
+
+    assert smoke._validate_args(args) == [
+        "--result-url must not include account_id",
+        "--result-url must not include the account_id value",
+    ]
+
+
 def test_preflight_only_writes_missing_inputs_without_network(monkeypatch, tmp_path, capsys) -> None:
     def _unexpected(*_args, **_kwargs):
         raise AssertionError("preflight must not call network")
@@ -161,19 +173,17 @@ def test_page_errors_require_portfolio_hooks_and_metadata_values() -> None:
 
     assert "portfolio result page missing marker: data-atlas-deflection-unlock" in errors
     assert "portfolio result page missing marker: content_ops_deflection_report" in errors
-    assert "portfolio result page missing account_id value" in errors
 
 
-def test_page_errors_bind_checkout_metadata_to_unlock_cta() -> None:
+def test_page_errors_bind_checkout_request_to_unlock_cta() -> None:
     html = """
     <main data-atlas-deflection-result>
       <section data-atlas-deflection-request-id="content-ops-123">
-        content-ops-123 acct-123 content_ops_deflection_report request_id account_id
+        content-ops-123 content_ops_deflection_report request_id
       </section>
       <a data-atlas-deflection-unlock
          data-checkout-source="content_ops_deflection_report"
-         data-checkout-request_id="stale-request"
-         data-checkout-account_id="stale-account">Unlock full report</a>
+         data-checkout-request_id="stale-request">Unlock full report</a>
     </main>
     """
 
@@ -185,8 +195,31 @@ def test_page_errors_bind_checkout_metadata_to_unlock_cta() -> None:
 
     assert errors == [
         "portfolio result page unlock CTA data-checkout-request_id must be content-ops-123",
-        "portfolio result page unlock CTA data-checkout-account_id must be acct-123",
     ]
+
+
+def test_page_errors_reject_browser_exposed_account_id() -> None:
+    html = """
+    <main data-atlas-deflection-result>
+      <section data-atlas-deflection-request-id="content-ops-123">
+        content-ops-123 content_ops_deflection_report request_id acct-123
+      </section>
+      <a data-atlas-deflection-unlock
+         data-checkout-source="content_ops_deflection_report"
+         data-checkout-request_id="content-ops-123"
+         data-checkout-account_id="acct-123">Unlock full report</a>
+    </main>
+    """
+
+    errors = smoke._page_errors(
+        html,
+        request_id="content-ops-123",
+        account_id="acct-123",
+    )
+
+    assert "portfolio result page unlock CTA must not expose account_id" in errors
+    assert "portfolio result page must not expose account_id marker" in errors
+    assert "portfolio result page must not expose account_id value" in errors
 
 
 def test_snapshot_errors_reject_paid_report_leaks() -> None:

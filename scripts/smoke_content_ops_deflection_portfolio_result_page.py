@@ -39,7 +39,6 @@ REQUIRED_PAGE_MARKERS = (
     "data-atlas-deflection-unlock",
     "content_ops_deflection_report",
     "request_id",
-    "account_id",
 )
 
 try:
@@ -119,12 +118,32 @@ def _hosted_url_errors(value: str, *, label: str) -> list[str]:
     return []
 
 
+def _result_url_account_errors(value: str, *, account_id: str) -> list[str]:
+    errors: list[str] = []
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except ValueError:
+        return []
+    public_location = f"{parsed.path}?{parsed.query}"
+    if "account_id" in public_location:
+        errors.append("--result-url must not include account_id")
+    if account_id and account_id in public_location:
+        errors.append("--result-url must not include the account_id value")
+    return errors
+
+
 def _validate_args(args: argparse.Namespace) -> list[str]:
     errors: list[str] = []
     if not _clean(args.result_url):
         errors.append("ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL or --result-url is required")
     else:
         errors.extend(_hosted_url_errors(_clean(args.result_url), label="--result-url"))
+        errors.extend(
+            _result_url_account_errors(
+                _clean(args.result_url),
+                account_id=_clean(args.account_id),
+            )
+        )
     if not _clean(args.base_url):
         errors.append("ATLAS_API_BASE_URL or --base-url is required")
     else:
@@ -248,14 +267,18 @@ def _page_errors(html: str, *, request_id: str, account_id: str) -> list[str]:
         for attr, expected in (
             ("data-checkout-source", "content_ops_deflection_report"),
             ("data-checkout-request_id", request_id),
-            ("data-checkout-account_id", account_id),
         ):
             actual = unlock_attrs.get(attr)
             if actual != expected:
                 errors.append(f"portfolio result page unlock CTA {attr} must be {expected}")
-    for value, label in ((request_id, "request_id"), (account_id, "account_id")):
-        if value not in html:
-            errors.append(f"portfolio result page missing {label} value")
+        if "data-checkout-account_id" in unlock_attrs:
+            errors.append("portfolio result page unlock CTA must not expose account_id")
+    if request_id not in html:
+        errors.append("portfolio result page missing request_id value")
+    if "account_id" in html:
+        errors.append("portfolio result page must not expose account_id marker")
+    if account_id and account_id in html:
+        errors.append("portfolio result page must not expose account_id value")
     return errors
 
 
