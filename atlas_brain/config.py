@@ -4788,6 +4788,16 @@ class B2BCampaignConfig(BaseSettings):
         ),
         description="Zendesk base URL override for hosted Content Ops FAQ macro writeback.",
     )
+    content_ops_intercom_access_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_INTERCOM_ACCESS_TOKEN"),
+        description="Intercom access token for hosted Content Ops FAQ macro writeback.",
+    )
+    content_ops_intercom_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_INTERCOM_BASE_URL"),
+        description="Intercom API base URL override for hosted Content Ops FAQ macro writeback.",
+    )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",
