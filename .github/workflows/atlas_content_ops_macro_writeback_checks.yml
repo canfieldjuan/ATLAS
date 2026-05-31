@@ -4,23 +4,27 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_scheduler.py"
+      - "tests/test_synthesis.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
       - "atlas_brain/config.py"
       - "tests/test_autonomous_faq_macro_writeback_scheduled_publish.py"
       - "tests/test_scheduler.py"
+      - "tests/test_synthesis.py"
 
 jobs:
   atlas-content-ops-macro-writeback-checks:
@@ -46,4 +50,8 @@ jobs:
           python -m pytest \
             tests/test_autonomous_faq_macro_writeback_scheduled_publish.py \
             tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_seed_respects_opt_in \
+            tests/test_scheduler.py::TestDefaults::test_content_ops_faq_macro_writeback_default_notifies_skipped_summary \
+            tests/test_synthesis.py::TestRunBuiltinSynthesis::test_skip_synthesis_notify_opt_in_uses_fallback_message \
+            tests/test_synthesis.py::TestRunBuiltinSynthesis::test_skip_synthesis_notify_failure_is_nonfatal \
+            tests/test_synthesis.py::TestRunBuiltinSynthesis::test_skip_synthesis_without_notify_opt_in_keeps_existing_response_shape \
             -q

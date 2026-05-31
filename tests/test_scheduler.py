@@ -664,6 +664,21 @@ class TestDefaults:
         s = _scheduler()
         assert s.scheduled_count == 0
 
+    def test_content_ops_faq_macro_writeback_default_notifies_skipped_summary(self):
+        s = _scheduler()
+        task_def = next(
+            task
+            for task in s._DEFAULT_TASKS
+            if task["name"] == "content_ops_faq_macro_writeback_scheduled_publish"
+        )
+
+        assert (
+            task_def["metadata"]["builtin_handler"]
+            == "content_ops_faq_macro_writeback_scheduled_publish"
+        )
+        assert task_def["metadata"]["notify_skipped_result"] is True
+        assert task_def["metadata"]["notify_tags"] == "ticket,repeat"
+
     @pytest.mark.asyncio
     @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
     async def test_ensure_default_tasks_continues_when_seeded_task_registration_fails(self, mock_repo_fn, monkeypatch):

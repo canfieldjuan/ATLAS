@@ -25,8 +25,9 @@ from atlas_brain.storage.models import ScheduledTask
 def _builtin_task(
     handler: str = "gmail_digest",
     synthesis_skill: str | None = None,
+    metadata: dict | None = None,
 ) -> ScheduledTask:
-    metadata = {"builtin_handler": handler}
+    metadata = {"builtin_handler": handler, **(metadata or {})}
     if synthesis_skill:
         metadata["synthesis_skill"] = synthesis_skill
     return ScheduledTask(
@@ -271,3 +272,60 @@ class TestRunBuiltinSynthesis:
 
         assert result.success is True
         assert result.response_text == str(SAMPLE_RAW_RESULT)
+
+    @pytest.mark.asyncio
+    async def test_skip_synthesis_notify_opt_in_uses_fallback_message(self, runner):
+        async def skipped_handler(task):
+            return {
+                "count": 2,
+                "_skip_synthesis": "Scheduled FAQ macro writeback complete: 2 published.",
+            }
+
+        runner.register_builtin("skipped_digest", skipped_handler)
+        runner._notify_result = AsyncMock()
+        task = _builtin_task(
+            handler="skipped_digest",
+            metadata={"notify_skipped_result": True},
+        )
+
+        result = await runner._run_builtin(task)
+
+        assert result.success is True
+        assert result.response_text == "Scheduled FAQ macro writeback complete: 2 published."
+        assert result.metadata["synthesis_skipped"] is True
+        assert result.metadata["skipped_result_notification_attempted"] is True
+        runner._notify_result.assert_awaited_once_with(result.response_text, task)
+
+    @pytest.mark.asyncio
+    async def test_skip_synthesis_notify_failure_is_nonfatal(self, runner):
+        async def skipped_handler(task):
+            return {"_skip_synthesis": "Scheduled FAQ macro writeback complete."}
+
+        runner.register_builtin("skipped_digest", skipped_handler)
+        runner._notify_result = AsyncMock(side_effect=RuntimeError("ntfy unavailable"))
+        task = _builtin_task(
+            handler="skipped_digest",
+            metadata={"notify_skipped_result": True},
+        )
+
+        result = await runner._run_builtin(task)
+
+        assert result.success is True
+        assert result.response_text == "Scheduled FAQ macro writeback complete."
+
+    @pytest.mark.asyncio
+    async def test_skip_synthesis_without_notify_opt_in_keeps_existing_response_shape(self, runner):
+        async def skipped_handler(task):
+            return {"_skip_synthesis": "Scheduled FAQ macro writeback complete."}
+
+        runner.register_builtin("skipped_digest", skipped_handler)
+        runner._notify_result = AsyncMock()
+        task = _builtin_task(handler="skipped_digest")
+
+        result = await runner._run_builtin(task)
+
+        assert result.success is True
+        assert result.response_text == str(
+            {"_skip_synthesis": "Scheduled FAQ macro writeback complete."}
+        )
+        runner._notify_result.assert_not_awaited()

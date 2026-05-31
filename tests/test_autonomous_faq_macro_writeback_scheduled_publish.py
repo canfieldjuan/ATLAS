@@ -7,6 +7,7 @@ from atlas_brain.autonomous.tasks.faq_macro_writeback_scheduled_publish import (
     StoredOnlyZendeskMacroCredentialsProvider,
     ZendeskTenant,
     run_scheduled_faq_macro_writeback,
+    summarize_scheduled_faq_macro_writeback,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.faq_macro_writeback import (
@@ -141,6 +142,10 @@ async def test_scheduled_publish_skips_missing_credentials_and_isolates_failures
     assert result["drafts_failed"] == 1
     assert result["drafts_published_ok"] == 1
     assert result["tenants"][1]["drafts"][0]["error"] == "RuntimeError"
+    assert result["_skip_synthesis"] == (
+        "Scheduled FAQ macro writeback complete: 2 tenants checked, 0 deferred, "
+        "1 skipped without Zendesk credentials, 2 drafts selected, 1 published, 1 failed."
+    )
 
 
 @pytest.mark.asyncio
@@ -158,6 +163,24 @@ async def test_scheduled_publish_reports_tenant_cap_truncation(caplog) -> None:
     assert result["tenants_checked"] == 25
     assert result["tenants_deferred_by_limit"] == 2
     assert "deferred 2 of 27 enrolled tenants" in caplog.text
+
+
+def test_scheduled_publish_summary_includes_aggregate_counts() -> None:
+    summary = summarize_scheduled_faq_macro_writeback(
+        {
+            "tenants_checked": 3,
+            "tenants_deferred_by_limit": 2,
+            "tenants_skipped_no_credentials": 1,
+            "drafts_selected": 5,
+            "drafts_published_ok": 4,
+            "drafts_failed": 1,
+        }
+    )
+
+    assert summary == (
+        "Scheduled FAQ macro writeback complete: 3 tenants checked, 2 deferred, "
+        "1 skipped without Zendesk credentials, 5 drafts selected, 4 published, 1 failed."
+    )
 
 
 @pytest.mark.asyncio

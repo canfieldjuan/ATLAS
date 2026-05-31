@@ -857,7 +857,11 @@ class TaskScheduler:
             "schedule_type": "interval",
             "interval_seconds": None,  # resolved from settings.b2b_campaign
             "timeout_seconds": 600,
-            "metadata": {"builtin_handler": "content_ops_faq_macro_writeback_scheduled_publish"},
+            "metadata": {
+                "builtin_handler": "content_ops_faq_macro_writeback_scheduled_publish",
+                "notify_skipped_result": True,
+                "notify_tags": "ticket,repeat",
+            },
         },
         {
             "name": "falsification_check",
