@@ -23,14 +23,14 @@ function reportRequestErrors({ requestId, accountId }, config) {
   if (!requestId || !REQUEST_ID_RE.test(requestId)) {
     errors.push("request_id must be a valid Content Ops request id");
   }
-  if (!accountId || !UUID_RE.test(accountId)) {
+  if (accountId && !UUID_RE.test(accountId)) {
     errors.push("account_id must be a valid ATLAS account UUID");
   }
   if (!config.baseUrl) errors.push("ATLAS_API_BASE_URL is not configured");
   if (!config.token) errors.push("ATLAS_B2B_JWT is not configured");
   if (!config.accountId || !UUID_RE.test(config.accountId)) {
     errors.push("ATLAS_ACCOUNT_ID is not configured");
-  } else if (accountId && accountId !== config.accountId) {
+  } else if (accountId && UUID_RE.test(accountId) && accountId !== config.accountId) {
     errors.push("account_id does not match the configured ATLAS account");
   }
   return errors;
@@ -176,7 +176,7 @@ async function loadDeflectionReport({
 }) {
   const config = configFromEnv(env);
   const cleanedRequestId = clean(requestId);
-  const cleanedAccountId = clean(accountId);
+  const cleanedAccountId = clean(accountId) || config.accountId;
   const errors = reportRequestErrors(
     { requestId: cleanedRequestId, accountId: cleanedAccountId },
     config,

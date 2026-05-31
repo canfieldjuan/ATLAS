@@ -148,11 +148,10 @@ function formatCount(value: number) {
 export default function FaqDeflectionResult() {
   const { requestId } = useParams();
   const [searchParams] = useSearchParams();
-  const accountId = searchParams.get("account_id")?.trim() ?? "";
   const checkoutStatus = searchParams.get("checkout")?.trim() ?? "";
   const [snapshotState, setSnapshotState] = useState<SnapshotState>({ status: "missing" });
   const [checkout, setCheckout] = useState<CheckoutState>({ status: "idle" });
-  const canCheckout = Boolean(requestId && accountId && checkout.status !== "submitting");
+  const canCheckout = Boolean(requestId && checkout.status !== "submitting");
 
   useEffect(() => {
     setSnapshotState(readStoredSnapshot(requestId));
@@ -169,13 +168,13 @@ export default function FaqDeflectionResult() {
   }, [snapshotState]);
 
   const startCheckout = async () => {
-    if (!requestId || !accountId) return;
+    if (!requestId) return;
     setCheckout({ status: "submitting" });
     try {
       const response = await fetch(CHECKOUT_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: requestId, account_id: accountId }),
+        body: JSON.stringify({ request_id: requestId }),
       });
       const payload = (await response.json().catch(() => null)) as { url?: unknown; error?: unknown } | null;
       if (!response.ok || !payload || typeof payload.url !== "string") {
@@ -210,7 +209,6 @@ export default function FaqDeflectionResult() {
         className="mx-auto max-w-6xl px-6 py-10 md:py-14"
         data-atlas-deflection-result
         data-atlas-deflection-request-id={requestId ?? ""}
-        data-atlas-deflection-account-id={accountId}
         data-atlas-deflection-report-source={CHECKOUT_SOURCE}
       >
         <Link
@@ -324,12 +322,6 @@ export default function FaqDeflectionResult() {
                   {requestId || "Missing request id"}
                 </dd>
               </div>
-              <div>
-                <dt className="text-surface-200/60">account_id</dt>
-                <dd className="mt-1 break-all font-mono text-xs text-surface-100">
-                  {accountId || "Missing account id"}
-                </dd>
-              </div>
             </dl>
 
             <button
@@ -338,7 +330,6 @@ export default function FaqDeflectionResult() {
               data-atlas-deflection-unlock
               data-checkout-source={CHECKOUT_SOURCE}
               data-checkout-request_id={requestId ?? ""}
-              data-checkout-account_id={accountId}
               disabled={!canCheckout}
               onClick={startCheckout}
             >
@@ -355,12 +346,6 @@ export default function FaqDeflectionResult() {
               )}
             </button>
 
-            {!accountId && (
-              <p className="mt-3 text-xs leading-5 text-amber-200">
-                Missing account_id. Return to the submit flow to create a
-                Checkout session for the right ATLAS tenant.
-              </p>
-            )}
             {checkout.status === "error" && (
               <p className="mt-3 text-xs leading-5 text-amber-200">{checkout.message}</p>
             )}

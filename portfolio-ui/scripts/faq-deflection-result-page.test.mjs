@@ -50,6 +50,25 @@ function mockResponse() {
   };
 }
 
+async function withEnv(nextEnv, fn) {
+  const previous = {};
+  for (const key of Object.keys(nextEnv)) {
+    previous[key] = process.env[key];
+    process.env[key] = nextEnv[key];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(nextEnv)) {
+      if (previous[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous[key];
+      }
+    }
+  }
+}
+
 await test("route is wired at the hosted FAQ deflection result path", () => {
   assert.match(appSource, /FaqDeflectionResult/);
   assert.match(appSource, /\/services\/faq-deflection\/results\/:requestId/);
@@ -69,7 +88,6 @@ await test("result page exposes validation markers and checkout metadata", () =>
     "data-atlas-deflection-request-id",
     "data-atlas-deflection-unlock",
     "request_id",
-    "account_id",
   ]) {
     assert.match(pageSource, new RegExp(marker));
     assert.match(resultPageSource, new RegExp(marker));
@@ -78,19 +96,15 @@ await test("result page exposes validation markers and checkout metadata", () =>
   assert.match(pageSource, /content_ops_deflection_report/);
   assert.match(html, /content_ops_deflection_report/);
   assert.match(html, /content-ops-abc123/);
-  assert.match(html, /2b2b950d-f64b-4852-bc30-f92a34cdf169/);
   assert.match(html, /data-checkout-source="content_ops_deflection_report"/);
   assert.match(html, /data-checkout-request_id="content-ops-abc123"/);
-  assert.match(
-    html,
-    /data-checkout-account_id="2b2b950d-f64b-4852-bc30-f92a34cdf169"/,
-  );
+  assert.doesNotMatch(html, /2b2b950d-f64b-4852-bc30-f92a34cdf169/);
+  assert.doesNotMatch(html, /data-checkout-account_id|data-atlas-deflection-account-id/);
+  assert.doesNotMatch(pageSource, /account_id|data-checkout-account_id|data-atlas-deflection-account-id/);
   assert.match(resultPageSource, /data-checkout-source=/);
   assert.match(resultPageSource, /data-checkout-request_id=/);
-  assert.match(resultPageSource, /data-checkout-account_id=/);
   assert.match(pageSource, /data-checkout-source=/);
   assert.match(pageSource, /data-checkout-request_id=/);
-  assert.match(pageSource, /data-checkout-account_id=/);
 });
 
 await test("result pages never embed ATLAS service credentials or paid-route calls", () => {
@@ -107,21 +121,89 @@ await test("snapshot guard names paid report fields that must not render pre-pay
   assert.match(pageSource, /collectForbiddenKeys/);
 });
 
-await test("checkout endpoint validates request and account identifiers", () => {
+await test("checkout endpoint validates request and configured account identifiers", async () => {
+  const env = { ATLAS_ACCOUNT_ID: "2b2b950d-f64b-4852-bc30-f92a34cdf169" };
   const valid = validatePayload({
     request_id: "content-ops-abc123",
-    account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
-  });
+  }, env);
   assert.deepEqual(valid.errors, []);
+  assert.equal(valid.accountId, "2b2b950d-f64b-4852-bc30-f92a34cdf169");
+
+  const legacy = validatePayload({
+    request_id: "content-ops-abc123",
+    account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+  }, env);
+  assert.deepEqual(legacy.errors, []);
 
   const invalid = validatePayload({
     request_id: "../bad",
     account_id: "not-a-uuid",
-  });
+  }, env);
   assert.deepEqual(invalid.errors, [
     "request_id must be a valid Content Ops request id",
     "account_id must be a valid ATLAS account UUID",
   ]);
+
+  const mismatch = validatePayload({
+    request_id: "content-ops-abc123",
+    account_id: "3b2b950d-f64b-4852-bc30-f92a34cdf169",
+  }, env);
+  assert.deepEqual(mismatch.errors, [
+    "account_id does not match the configured ATLAS account",
+  ]);
+});
+
+await test("hosted result page loads report with configured account when URL omits account id", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      status: calls.length === 1 ? 200 : 403,
+      async text() {
+        return JSON.stringify(
+          calls.length === 1
+            ? {
+                summary: { generated: 1, drafted_answer_count: 0, no_proven_answer_count: 1 },
+                top_questions: [
+                  {
+                    rank: 1,
+                    question: "How do I export reports?",
+                    weighted_frequency: 3,
+                    customer_wording: "export reports",
+                  },
+                ],
+              }
+            : { detail: "locked" },
+        );
+      },
+    };
+  };
+  const res = mockResponse();
+  try {
+    await withEnv({
+      ATLAS_API_BASE_URL: "https://atlas.example.com",
+      ATLAS_B2B_JWT: "secret-service-token",
+      ATLAS_ACCOUNT_ID: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    }, async () => {
+      await resultPageHandler(
+        {
+          url: "/services/faq-deflection/results/content-ops-abc123",
+          headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+          query: { request_id: "content-ops-abc123" },
+        },
+        res,
+      );
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.length, 2);
+  assert.match(res.body, /How do I export reports\?/);
+  assert.match(res.body, /data-atlas-deflection-artifact-retry="false"/);
+  assert.doesNotMatch(res.body, /account_id=/);
 });
 
 await test("hosted result page rejects script-breaking account_id input", async () => {
@@ -143,11 +225,11 @@ await test("hosted result page rejects script-breaking account_id input", async 
 
 await test("rendered inline script escapes script terminators defensively", () => {
   const html = renderResultPage({
-    requestId: "content-ops-abc123",
-    accountId: "</script><img src=x onerror=alert(1)>",
+    requestId: "</script><img src=x onerror=alert(1)>",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
   });
-  assert.doesNotMatch(html, /const accountId = "<\/script>/);
-  assert.match(html, /const accountId = "\\u003c\/script>/);
+  assert.doesNotMatch(html, /const requestId = "<\/script>/);
+  assert.match(html, /const requestId = "\\u003c\/script>/);
 });
 
 await test("checkout body carries the Stripe metadata contract and one-time price", () => {
@@ -210,10 +292,12 @@ await test("restricted Checkout key skips configured Price read preflight", asyn
   const previousSecret = process.env.STRIPE_SECRET_KEY;
   const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
   const calls = [];
   process.env.STRIPE_SECRET_KEY = "sk_live_full_secret";
   process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
   process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = "price_deflection_report";
+  process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
     return {
@@ -233,7 +317,6 @@ await test("restricted Checkout key skips configured Price read preflight", asyn
     },
     body: {
       request_id: "content-ops-abc123",
-      account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
     },
   };
   const res = mockResponse();
@@ -256,6 +339,11 @@ await test("restricted Checkout key skips configured Price read preflight", asyn
       delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
     } else {
       process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+    if (previousAccountId === undefined) {
+      delete process.env.ATLAS_ACCOUNT_ID;
+    } else {
+      process.env.ATLAS_ACCOUNT_ID = previousAccountId;
     }
   }
 
@@ -300,7 +388,7 @@ await test("checkout return path preserves result identifiers", () => {
   );
   assert.equal(
     path,
-    "/services/faq-deflection/results/content-ops-abc123?account_id=2b2b950d-f64b-4852-bc30-f92a34cdf169&checkout=success",
+    "/services/faq-deflection/results/content-ops-abc123?checkout=success",
   );
 });
 
@@ -366,9 +454,11 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
   const previousSecret = process.env.STRIPE_SECRET_KEY;
   const previousRak = process.env.ATLAS_SAAS_STRIPE_RAK;
   const previousPriceId = process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
+  const previousAccountId = process.env.ATLAS_ACCOUNT_ID;
   const calls = [];
   process.env.STRIPE_SECRET_KEY = "sk_test_123";
   process.env.ATLAS_SAAS_STRIPE_RAK = "rk_test_checkout_only";
+  process.env.ATLAS_ACCOUNT_ID = "2b2b950d-f64b-4852-bc30-f92a34cdf169";
   delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
@@ -389,7 +479,6 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
     },
     body: {
       request_id: "content-ops-abc123",
-      account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
     },
   };
   const res = mockResponse();
@@ -412,6 +501,11 @@ await test("handler creates Stripe Checkout without calling privileged ATLAS pai
       delete process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID;
     } else {
       process.env.STRIPE_DEFLECTION_REPORT_PRICE_ID = previousPriceId;
+    }
+    if (previousAccountId === undefined) {
+      delete process.env.ATLAS_ACCOUNT_ID;
+    } else {
+      process.env.ATLAS_ACCOUNT_ID = previousAccountId;
     }
   }
 
@@ -447,7 +541,6 @@ await test("handler rejects live full secret fallback before calling Stripe", as
     },
     body: {
       request_id: "content-ops-abc123",
-      account_id: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
     },
   };
   const res = mockResponse();

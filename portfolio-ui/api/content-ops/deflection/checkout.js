@@ -73,24 +73,31 @@ async function readBody(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function validatePayload(payload) {
+function validatePayload(payload, env = process.env) {
   const requestId = clean(payload?.request_id);
-  const accountId = clean(payload?.account_id);
+  const requestedAccountId = clean(payload?.account_id);
+  const accountId = clean(env.ATLAS_ACCOUNT_ID);
   const errors = [];
   if (!requestId || !REQUEST_ID_RE.test(requestId)) {
     errors.push("request_id must be a valid Content Ops request id");
   }
   if (!accountId || !UUID_RE.test(accountId)) {
+    errors.push("ATLAS_ACCOUNT_ID must be configured as an ATLAS account UUID");
+  }
+  if (requestedAccountId && !UUID_RE.test(requestedAccountId)) {
     errors.push("account_id must be a valid ATLAS account UUID");
+  } else if (requestedAccountId && requestedAccountId !== accountId) {
+    errors.push("account_id does not match the configured ATLAS account");
   }
   return { requestId, accountId, errors };
 }
 
-function resultPath(requestId, accountId, checkout) {
+function resultPath(requestId, _accountId = "", checkout = "") {
   const path = `/services/faq-deflection/results/${encodeURIComponent(requestId)}`;
-  const params = new URLSearchParams({ account_id: accountId });
+  const params = new URLSearchParams();
   if (checkout) params.set("checkout", checkout);
-  return `${path}?${params.toString()}`;
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function checkoutUrls(req, requestId, accountId) {
@@ -218,7 +225,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { requestId, accountId, errors } = validatePayload(payload);
+  const { requestId, accountId, errors } = validatePayload(payload, process.env);
   if (errors.length > 0) {
     json(res, 400, { error: "invalid_checkout_request", details: errors });
     return;

@@ -88,7 +88,7 @@ function assertUnlockCta(html, { disabled }) {
   const button = match[0];
   assert.match(button, /data-checkout-source="content_ops_deflection_report"/);
   assert.match(button, new RegExp(`data-checkout-request_id="${REQUEST_ID}"`));
-  assert.match(button, new RegExp(`data-checkout-account_id="${ACCOUNT_ID}"`));
+  assert.doesNotMatch(button, /data-checkout-account_id=/);
   if (disabled) {
     assert.match(button, /\sdisabled(?:\s|>)/);
   } else {
@@ -127,6 +127,20 @@ await test("proxy rejects account mismatch before calling ATLAS", async () => {
   assert.equal(result.statusCode, 400);
   assert.deepEqual(result.details, ["account_id does not match the configured ATLAS account"]);
   assert.equal(calls.length, 0);
+});
+
+await test("proxy uses configured account when browser omits account id", async () => {
+  const { calls, fetchImpl } = mockFetch([response(SNAPSHOT, 200), response({}, 403)]);
+  const result = await loadDeflectionReport({
+    requestId: REQUEST_ID,
+    env: ENV,
+    fetchImpl,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.account_id, ACCOUNT_ID);
+  assert.equal(result.artifact_status, "locked");
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${atlasPath(REQUEST_ID, "snapshot")}`);
+  assert.equal(calls[1].url, `${ENV.ATLAS_API_BASE_URL}${atlasPath(REQUEST_ID, "artifact")}`);
 });
 
 await test("proxy returns locked snapshot envelope without artifact payload", async () => {
@@ -231,8 +245,8 @@ await test("public report API hides config details from browser responses", asyn
     const req = {
       method: "GET",
       headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
-      query: { request_id: REQUEST_ID, account_id: ACCOUNT_ID },
-      url: `/api/content-ops/deflection/report?request_id=${REQUEST_ID}&account_id=${ACCOUNT_ID}`,
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/report?request_id=${REQUEST_ID}`,
     };
     const res = mockResponse();
     await reportHandler(req, res);
@@ -255,8 +269,8 @@ await test("public report API returns sanitized locked envelope and never the to
     const req = {
       method: "GET",
       headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
-      query: { request_id: REQUEST_ID, account_id: ACCOUNT_ID },
-      url: `/api/content-ops/deflection/report?request_id=${REQUEST_ID}&account_id=${ACCOUNT_ID}`,
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/report?request_id=${REQUEST_ID}`,
     };
     const res = mockResponse();
     try {
@@ -314,6 +328,7 @@ await test("hosted result page retries artifact status after successful checkout
   assert.match(html, /\/api\/content-ops\/deflection\/report\?request_id=/);
   assert.match(html, /payload\.artifact_status === "unlocked"/);
   assert.match(html, /window\.location\.reload\(\)/);
+  assert.doesNotMatch(html, /account_id=/);
   assert.doesNotMatch(html, /payload\.artifact\b/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
