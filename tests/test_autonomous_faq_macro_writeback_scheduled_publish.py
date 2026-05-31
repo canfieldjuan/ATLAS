@@ -9,7 +9,11 @@ from atlas_brain.autonomous.tasks.faq_macro_writeback_scheduled_publish import (
     run_scheduled_faq_macro_writeback,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
-from extracted_content_pipeline.faq_macro_writeback import MacroWritebackMapping
+from extracted_content_pipeline.faq_macro_writeback import (
+    MacroWritebackMapping,
+    SupportMacroDraft,
+    macro_content_hash,
+)
 from extracted_content_pipeline.faq_macro_writeback_publish import FAQMacroPublishSummary
 from extracted_content_pipeline.faq_macro_writeback_zendesk import ZENDESK_PLATFORM
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
@@ -33,8 +37,9 @@ class _FAQRepo:
 
 
 class _MappingRepo:
-    def __init__(self, published: set[str] | None = None) -> None:
+    def __init__(self, published: set[str] | None = None, *, published_body: str = "Use the export button.") -> None:
         self.published = published or set()
+        self.published_body = published_body
         self.calls = []
 
     async def get_mapping(self, **kwargs):
@@ -42,7 +47,26 @@ class _MappingRepo:
         faq_id = str(kwargs["faq_draft_id"])
         if faq_id not in self.published:
             return None
-        return MacroWritebackMapping(platform=ZENDESK_PLATFORM, faq_draft_id=faq_id, faq_item_id=str(kwargs["faq_item_id"]), external_id=f"macro-{faq_id}", publish_status="published", metadata={"title": f"{faq_id}?", "category": ""})
+        faq_item_id = str(kwargs["faq_item_id"])
+        return MacroWritebackMapping(
+            platform=ZENDESK_PLATFORM,
+            faq_draft_id=faq_id,
+            faq_item_id=faq_item_id,
+            external_id=f"macro-{faq_id}",
+            publish_status="published",
+            metadata={
+                "title": f"{faq_id}?",
+                "category": "",
+                "content_hash": macro_content_hash(
+                    SupportMacroDraft(
+                        title=f"{faq_id}?",
+                        body=self.published_body,
+                        faq_draft_id=faq_id,
+                        faq_item_id=faq_item_id,
+                    )
+                ),
+            },
+        )
 
 
 class _TenantRepo:
@@ -86,6 +110,17 @@ async def test_candidate_selection_uses_shared_gate_and_mapping_idempotency() ->
     assert candidates == ("allowed",)
     assert faq_repo.calls[0]["status"] == "approved"
     assert all(call["platform"] == ZENDESK_PLATFORM for call in mapping_repo.calls)
+
+
+@pytest.mark.asyncio
+async def test_candidate_selection_republishes_body_only_macro_changes() -> None:
+    faq_repo = _FAQRepo((_draft("body-changed"),))
+    mapping_repo = _MappingRepo({"body-changed"}, published_body="Use the old export button.")
+    repo = PostgresScheduledFAQMacroCandidateRepository(pool=object(), faq_repository=faq_repo, mapping_repository=mapping_repo)
+
+    candidates = await repo.list_candidate_faq_ids(ZendeskTenant("acct-1"), limit=10)
+
+    assert candidates == ("body-changed",)
 
 
 @pytest.mark.asyncio

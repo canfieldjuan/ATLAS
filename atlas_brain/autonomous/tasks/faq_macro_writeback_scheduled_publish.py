@@ -12,6 +12,7 @@ from extracted_content_pipeline.faq_macro_writeback import (
     MacroWritebackMappingRepository,
     SupportMacroDraft,
     build_macro_writeback_preview,
+    macro_content_hash,
 )
 from extracted_content_pipeline.faq_macro_writeback_postgres import (
     PostgresFAQMacroPublishAttemptRepository,
@@ -204,6 +205,7 @@ async def _has_unpublished_macro(
             or not mapping.external_id
             or _clean(mapping.metadata.get("title")) != _clean(macro.title)
             or _clean(mapping.metadata.get("category")) != _clean(macro.category)
+            or _clean(mapping.metadata.get("content_hash")) != macro_content_hash(macro)
         ):
             return True
     return False
