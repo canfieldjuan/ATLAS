@@ -237,7 +237,14 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
           <div><dt>artifact_status</dt><dd>${escapeHtml(artifactStatus)}</dd></div>
           <div><dt>checkout</dt><dd>${safeCheckoutStatus || "locked"}</dd></div>
         </dl>
-        <button type="button" data-atlas-deflection-unlock ${buttonDisabled}>${unlockButtonLabel}</button>
+        <button
+          type="button"
+          data-atlas-deflection-unlock
+          data-checkout-source="${CHECKOUT_SOURCE}"
+          data-checkout-request_id="${safeRequestId}"
+          data-checkout-account_id="${safeAccountId}"
+          ${buttonDisabled}
+        >${unlockButtonLabel}</button>
         <p id="checkout-message" class="muted" role="status"></p>
       </aside>
     </div>

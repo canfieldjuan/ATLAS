@@ -336,6 +336,9 @@ export default function FaqDeflectionResult() {
               type="button"
               className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-3 text-sm font-semibold text-surface-900 transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-surface-700 disabled:text-surface-200/60"
               data-atlas-deflection-unlock
+              data-checkout-source={CHECKOUT_SOURCE}
+              data-checkout-request_id={requestId ?? ""}
+              data-checkout-account_id={accountId}
               disabled={!canCheckout}
               onClick={startCheckout}
             >

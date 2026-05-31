@@ -82,6 +82,20 @@ function mockResponse() {
   };
 }
 
+function assertUnlockCta(html, { disabled }) {
+  const match = html.match(/<button\b[\s\S]*?data-atlas-deflection-unlock[\s\S]*?>/);
+  assert.ok(match, "unlock CTA button must render");
+  const button = match[0];
+  assert.match(button, /data-checkout-source="content_ops_deflection_report"/);
+  assert.match(button, new RegExp(`data-checkout-request_id="${REQUEST_ID}"`));
+  assert.match(button, new RegExp(`data-checkout-account_id="${ACCOUNT_ID}"`));
+  if (disabled) {
+    assert.match(button, /\sdisabled(?:\s|>)/);
+  } else {
+    assert.doesNotMatch(button, /\sdisabled(?:\s|>)/);
+  }
+}
+
 function withEnv(nextEnv, fn) {
   const previous = {};
   for (const key of Object.keys(nextEnv)) {
@@ -276,7 +290,7 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
   assert.match(html, /Unlock full report/);
   assert.match(html, /Continue to Checkout/);
-  assert.match(html, /<button type="button" data-atlas-deflection-unlock >/);
+  assertUnlockCta(html, { disabled: false });
   assert.doesNotMatch(html, /# Paid report/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
@@ -296,7 +310,7 @@ await test("hosted result page retries artifact status after successful checkout
   assert.match(html, /script data-atlas-deflection-artifact-retry/);
   assert.match(html, /Payment processing/);
   assert.match(html, /Checking unlock status/);
-  assert.match(html, /<button type="button" data-atlas-deflection-unlock disabled>/);
+  assertUnlockCta(html, { disabled: true });
   assert.match(html, /\/api\/content-ops\/deflection\/report\?request_id=/);
   assert.match(html, /payload\.artifact_status === "unlocked"/);
   assert.match(html, /window\.location\.reload\(\)/);
@@ -319,7 +333,7 @@ await test("hosted result page explains cancelled checkout without retrying", ()
   assert.match(html, /data-atlas-deflection-artifact-retry="false"/);
   assert.doesNotMatch(html, /script data-atlas-deflection-artifact-retry/);
   assert.match(html, /Continue to Checkout/);
-  assert.match(html, /<button type="button" data-atlas-deflection-unlock >/);
+  assertUnlockCta(html, { disabled: false });
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
 
