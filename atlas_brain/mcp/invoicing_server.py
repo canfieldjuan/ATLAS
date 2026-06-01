@@ -988,14 +988,6 @@ async def approve_and_send(
     if not invoices_to_send:
         return json.dumps({"success": True, "message": f"No {status_filter} invoices found", "processed": 0})
 
-    from ..services.invoice_pdf import render_invoice_pdf
-    from ..services.email_provider import get_email_provider
-    from ..templates.email.invoice import BUSINESS_NAME, BUSINESS_PHONE, BUSINESS_EMAIL
-    from ..config import settings
-
-    save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
-    email_provider = get_email_provider()
-
     results = {
         "processed": 0,
         "sent": 0,
@@ -1045,6 +1037,14 @@ async def approve_and_send(
             })
             results["processed"] += 1
             continue
+
+        from ..config import settings
+        from ..services.email_provider import get_email_provider
+        from ..services.invoice_pdf import render_invoice_pdf
+        from ..templates.email.invoice import BUSINESS_EMAIL, BUSINESS_NAME, BUSINESS_PHONE
+
+        save_base = os.path.expanduser(settings.invoicing.auto_invoice_save_path)
+        email_provider = get_email_provider()
 
         # Generate PDF
         try:

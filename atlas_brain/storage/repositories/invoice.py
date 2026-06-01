@@ -17,6 +17,33 @@ from ..exceptions import DatabaseUnavailableError, DatabaseOperationError
 logger = logging.getLogger("atlas.storage.invoice")
 
 
+def _line_items_are_billable(items: list[dict]) -> bool:
+    """Return True when every line item has positive quantity and unit price."""
+    if not items:
+        return False
+    try:
+        return all(
+            Decimal(str(item.get("quantity", 0))) > 0
+            and Decimal(str(item.get("unit_price", 0))) > 0
+            for item in items
+        )
+    except Exception:
+        return False
+
+
+def _line_items_with_amounts(items: list[dict], *, overwrite: bool) -> list[dict]:
+    """Return line items with calculated amounts, optionally replacing stale values."""
+    normalized: list[dict] = []
+    for item in items:
+        line = dict(item)
+        if overwrite or "amount" not in line:
+            line["amount"] = float(
+                Decimal(str(line.get("quantity", 1))) * Decimal(str(line.get("unit_price", 0)))
+            )
+        normalized.append(line)
+    return normalized
+
+
 class InvoiceRepository:
     """Repository for invoice and payment storage and retrieval."""
 
@@ -271,19 +298,26 @@ class InvoiceRepository:
             )
 
         # Recalculate amounts if line_items or rates change
-        items = line_items if line_items is not None else current["line_items"]
+        items = _line_items_with_amounts(
+            line_items if line_items is not None else current["line_items"],
+            overwrite=line_items is not None,
+        )
         tax_r = tax_rate if tax_rate is not None else float(current["tax_rate"])
         disc = discount_amount if discount_amount is not None else float(current["discount_amount"])
+        metadata = current.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        if (
+            line_items is not None
+            and metadata.get("needs_hours")
+            and _line_items_are_billable(items)
+        ):
+            metadata = {**metadata, "needs_hours": False}
 
         subtotal = sum(
             Decimal(str(item.get("quantity", 1))) * Decimal(str(item.get("unit_price", 0)))
             for item in items
         )
-        for item in items:
-            if "amount" not in item:
-                item["amount"] = float(
-                    Decimal(str(item.get("quantity", 1))) * Decimal(str(item.get("unit_price", 0)))
-                )
         tax_amt = subtotal * Decimal(str(tax_r))
         total = subtotal + tax_amt - Decimal(str(disc))
 
@@ -301,7 +335,8 @@ class InvoiceRepository:
                     total_amount = $9,
                     invoice_for = COALESCE($10, invoice_for),
                     contact_name = COALESCE($11, contact_name),
-                    updated_at = $12
+                    metadata = $12::jsonb,
+                    updated_at = $13
                 WHERE id = $1
                 RETURNING *
                 """,
@@ -316,6 +351,7 @@ class InvoiceRepository:
                 float(total),
                 invoice_for,
                 contact_name,
+                json.dumps(metadata),
                 datetime.now(timezone.utc),
             )
             return self._row_to_dict(row) if row else None
