@@ -1,12 +1,14 @@
 import { useParams, Link } from 'react-router-dom'
-import { lazy, Suspense, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { marked } from 'marked'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import BlogCardVisual from '../components/BlogCardVisual'
 import { POSTS } from '../content/blog'
 import type { ChartSpec, BlogPost as BlogPostType } from '../content/blog'
+import { fetchPublicBlogPost } from '../api/blog'
+import { renderSafeMarkdown, sanitizeRenderedHtml } from '../lib/safeMarkdown'
 
 const BlogChart = lazy(() => import('../components/BlogChartRenderer'))
 
@@ -20,9 +22,18 @@ function formatDate(iso: string) {
 
 const CHART_PLACEHOLDER_RE = /(\{\{chart:[^}]+\}\})/
 
-function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
+type GeneratedPostState = {
+  slug: string
+  post: BlogPostType | null
+}
+
+function renderContentWithCharts(
+  content: string,
+  charts: ChartSpec[] | undefined,
+  escapeRawHtml: boolean,
+) {
   if (!charts || charts.length === 0) {
-    const html = marked.parse(content, { async: false }) as string
+    const html = renderBlogMarkdown(content, escapeRawHtml)
     return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: html }} />
   }
 
@@ -45,21 +56,49 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
           return null
         }
         if (!part.trim()) return null
-        const html = marked.parse(part, { async: false }) as string
+        const html = renderBlogMarkdown(part, escapeRawHtml)
         return <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
       })}
     </div>
   )
 }
 
+function renderBlogMarkdown(markdown: string, escapeRawHtml: boolean): string {
+  if (escapeRawHtml) return renderSafeMarkdown(markdown)
+  const html = marked.parse(markdown, { async: false }) as string
+  return sanitizeRenderedHtml(html)
+}
+
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
-  const post = POSTS.find(p => p.slug === slug)
+  const staticPost = POSTS.find(p => p.slug === slug)
+  const [generatedPostState, setGeneratedPostState] = useState<GeneratedPostState | null>(null)
+  const generatedPostResolvedForSlug = Boolean(generatedPostState && generatedPostState.slug === slug)
+  const generatedPost = generatedPostState && generatedPostState.slug === slug
+    ? generatedPostState.post
+    : null
+  const loadingGeneratedPost = Boolean(slug && !staticPost && !generatedPostResolvedForSlug)
+  const post = staticPost ?? generatedPost
+
+  useEffect(() => {
+    if (!slug || staticPost) return
+    let cancelled = false
+    fetchPublicBlogPost(slug)
+      .then((nextPost) => {
+        if (!cancelled) setGeneratedPostState({ slug, post: nextPost })
+      })
+      .catch(() => {
+        if (!cancelled) setGeneratedPostState({ slug, post: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [slug, staticPost])
 
   const renderedContent = useMemo(() => {
     if (!post) return null
-    return renderContentWithCharts(post.content, post.charts)
-  }, [post])
+    return renderContentWithCharts(post.content, post.charts, !staticPost)
+  }, [post, staticPost])
 
   const seoKeywords = useMemo(() => {
     if (!post) return undefined
@@ -136,6 +175,16 @@ export default function BlogPost() {
       .map(s => POSTS.find(p => p.slug === s))
       .filter((p): p is BlogPostType => !!p)
   }, [post])
+
+  if (!post && loadingGeneratedPost) {
+    return (
+      <PublicLayout>
+        <section className="max-w-3xl mx-auto flex min-h-[40vh] items-center justify-center px-6 py-24">
+          <Loader2 className="h-6 w-6 animate-spin text-cyan-300" />
+        </section>
+      </PublicLayout>
+    )
+  }
 
   if (!post) {
     return (

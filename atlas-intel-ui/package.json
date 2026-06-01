@@ -20,6 +20,7 @@
     "test:content-ops-deflection-report-ui": "node --test scripts/content-ops-deflection-report-ui.test.mjs",
     "test:content-ops-faq-configuration-inputs": "node --test scripts/content-ops-faq-configuration-inputs.test.mjs",
     "test:content-ops-landing-page-e2e-ui": "node --test scripts/content-ops-landing-page-e2e-ui.test.mjs",
+    "test:blog-public-generated-posts": "node --test scripts/blog-public-generated-posts.test.mjs",
     "test:landing-page-prerender": "node --test scripts/verify-landing-page-geo-prerender.test.mjs",
     "test:sitemap-bridge": "node --test scripts/landing-page-sitemap-bridge.test.mjs",
     "verify:blog-geo": "node scripts/verify-blog-geo-prerender.mjs",
