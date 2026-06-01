@@ -93,13 +93,15 @@ feedback until the PR is manually marked ready.
 ### 1g. Teardown on merge
 
 `origin/main` is the only source of truth; local branches and worktrees
-are **disposable**. When a PR merges, tear down its branch and worktree
-the same session:
+are **disposable**. When a PR merges, tear down its worktree and branch
+the same session — **worktree first, then branch** (a branch checked out
+in a worktree cannot be deleted: `git branch -D` fails with `'<branch>'
+is already used by worktree at ...`):
 
+- `git worktree remove <dir>` for any worktree dedicated to it
+  (`--force` if it still holds throwaway state). This frees the branch.
 - `git branch -D <branch>` (squash-merge leaves the local branch
   unmerged by content, so `-d` refuses — `-D` is expected here).
-- `git worktree remove <dir>` for any worktree dedicated to it
-  (`--force` if it still holds throwaway state).
 
 Do **not** let merged branches or finished worktrees linger. They drift
 behind `origin/main`, accumulate stale staged state, and become the

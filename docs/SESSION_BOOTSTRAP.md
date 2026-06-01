@@ -36,7 +36,7 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
 >    - Keep the session short. If you've been alive across several PRs, expect to compact soon; finish the current slice, then let the operator restart you fresh with this bootstrap rather than running on.
 >
-> 7. **Teardown on merge (AGENTS.md §1g):** when your PR merges, delete its branch and worktree the same session (`git branch -D <branch>`, `git worktree remove <dir>`). `origin/main` is the only source of truth; local branches/worktrees are disposable. Leftover branches/worktrees drift behind main and turn into stale dirty state that mirrors already-landed PRs. Never `git clean -f` without a `git clean -nd` dry-run first — untracked secret files (`.env.bak-*`, `*.production.env`) live in the tree and a blanket clean deletes them.
+> 7. **Teardown on merge (AGENTS.md §1g):** when your PR merges, tear down its worktree and branch the same session — **worktree first, then branch** (`git worktree remove <dir>` then `git branch -D <branch>`; deleting a branch still checked out in a worktree fails). `origin/main` is the only source of truth; local branches/worktrees are disposable. Leftover branches/worktrees drift behind main and turn into stale dirty state that mirrors already-landed PRs. Never `git clean -f` without a `git clean -nd` dry-run first — untracked secret files (`.env.bak-*`, `*.production.env`) live in the tree and a blanket clean deletes them.
 
 ---
 
