@@ -1,0 +1,42 @@
+name: Atlas Content Ops Auth Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_auth_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/auth/dependencies.py"
+      - "tests/test_auth_dependencies.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_auth_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/auth/dependencies.py"
+      - "tests/test_auth_dependencies.py"
+
+jobs:
+  atlas-content-ops-auth-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops auth tests
+        run: |
+          python -m pytest \
+            tests/test_auth_dependencies.py \
+            -q
