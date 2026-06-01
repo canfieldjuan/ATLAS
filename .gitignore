@@ -13,6 +13,8 @@ pip-wheel-metadata/
 # Environment
 .env
 .env.local
+.env.bak-preflag-*
+*.production.env
 
 # IDEs
 .idea/
