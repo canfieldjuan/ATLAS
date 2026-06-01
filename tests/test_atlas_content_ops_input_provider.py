@@ -112,6 +112,41 @@ class _FAQRepo:
         return self.pool["drafts"].get(faq_id)
 
 
+class _OpportunityRepo:
+    def __init__(self, pool):
+        self.pool = pool
+
+    async def read_campaign_opportunities(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int,
+        filters=None,
+    ):
+        filters = dict(filters or {})
+        target_id = filters.get("target_id")
+        self.pool["opportunity_calls"].append({
+            "account_id": scope.account_id,
+            "target_mode": target_mode,
+            "limit": limit,
+            "target_id": target_id,
+        })
+        rows = self.pool["opportunities"].get(target_id, ())
+        return tuple(rows)[:limit]
+
+
+def _persisted_ticket_row(target_id: str, *, subject: str | None = None) -> dict[str, object]:
+    return {
+        "target_id": target_id,
+        "ticket_id": target_id,
+        "source_type": "support_ticket",
+        "subject": subject or "Billing renewal question",
+        "message": "How do I confirm my renewal invoice before payment?",
+        "pain_category": "billing",
+    }
+
+
 def test_atlas_content_ops_input_provider_noops_without_source_material() -> None:
     provider = build_content_ops_input_provider()
 
@@ -388,6 +423,133 @@ async def test_atlas_content_ops_input_provider_fetches_selected_faq_ids_by_scop
 
 
 @pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_fetches_persisted_source_targets_by_scope() -> None:
+    pool = {
+        "opportunities": {
+            "ticket-1": [_persisted_ticket_row("ticket-1")],
+            "ticket-2": [_persisted_ticket_row("ticket-2", subject="Login email change")],
+        },
+        "opportunity_calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        opportunity_repository_factory=_OpportunityRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "target_mode": "support_ticket_faq",
+            "inputs": {
+                "source_import_target_ids": ["ticket-1", "ticket-2", "ticket-1"],
+            },
+        },
+    )
+
+    assert pool["opportunity_calls"] == [
+        {
+            "account_id": "acct-1",
+            "target_mode": "support_ticket_faq",
+            "limit": 2,
+            "target_id": "ticket-1",
+        },
+        {
+            "account_id": "acct-1",
+            "target_mode": "support_ticket_faq",
+            "limit": 2,
+            "target_id": "ticket-2",
+        },
+    ]
+    assert package.provider == "atlas_support_ticket_request"
+    assert package.metadata["source_target_id_count"] == 2
+    assert package.metadata["source_target_loaded_count"] == 2
+    assert package.metadata["source_target_missing_id_count"] == 0
+    assert package.metadata["source_target_ambiguous_id_count"] == 0
+    assert package.warnings == ()
+    assert [row["source_id"] for row in package.inputs["source_material"]] == [
+        "ticket-1",
+        "ticket-2",
+    ]
+    assert package.inputs["faq_questions"] == [
+        "How do I confirm my renewal invoice before payment?"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_skips_persisted_targets_without_account_scope() -> None:
+    pool = {
+        "opportunities": {
+            "ticket-1": [_persisted_ticket_row("ticket-1")],
+        },
+        "opportunity_calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        opportunity_repository_factory=_OpportunityRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(),
+        request={"inputs": {"source_import_target_ids": ["ticket-1"]}},
+    )
+
+    assert pool["opportunity_calls"] == []
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["source_target_id_count"] == 1
+    assert package.metadata["source_target_loaded_count"] == 0
+    assert package.metadata["source_target_missing_id_count"] == 1
+    assert package.warnings == ({
+        "code": "source_import_targets_unscoped",
+        "message": (
+            "Persisted import target IDs require an account-scoped Content "
+            "Ops request."
+        ),
+        "missing_count": 1,
+    },)
+
+
+@pytest.mark.asyncio
+async def test_atlas_content_ops_input_provider_fails_safe_on_ambiguous_persisted_targets() -> None:
+    pool = {
+        "opportunities": {
+            "ticket-1": [
+                _persisted_ticket_row("ticket-1", subject="First duplicate"),
+                _persisted_ticket_row("ticket-1", subject="Second duplicate"),
+            ],
+        },
+        "opportunity_calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        opportunity_repository_factory=_OpportunityRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={"inputs": {"source_target_ids": ["ticket-1"]}},
+    )
+
+    assert pool["opportunity_calls"] == [
+        {
+            "account_id": "acct-1",
+            "target_mode": "vendor_retention",
+            "limit": 2,
+            "target_id": "ticket-1",
+        }
+    ]
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["source_target_loaded_count"] == 0
+    assert package.metadata["source_target_ambiguous_id_count"] == 1
+    assert package.warnings == ({
+        "code": "source_import_targets_ambiguous",
+        "message": "One or more persisted import target IDs matched multiple rows.",
+        "ambiguous_count": 1,
+    },)
+
+
+@pytest.mark.asyncio
 async def test_atlas_content_ops_input_provider_warns_for_missing_selected_faq_ids() -> None:
     pool = {"drafts": {}, "calls": []}
     provider = build_content_ops_input_provider(
@@ -582,6 +744,63 @@ async def test_execute_route_generates_support_ticket_faq_at_inline_cap() -> Non
     assert result["saved_ids"] == []
     assert result["items"][0]["ticket_count"] == 1000
     assert len(result["items"][0]["source_ids"]) == 1000
+
+
+@pytest.mark.skipif(
+    api_module.APIRouter is None,
+    reason="fastapi is not installed in this test environment",
+)
+@pytest.mark.asyncio
+async def test_execute_route_generates_faq_from_persisted_source_targets() -> None:
+    pool = {
+        "opportunities": {
+            "ticket-1": [_persisted_ticket_row("ticket-1")],
+            "ticket-2": [_persisted_ticket_row("ticket-2", subject="Login email change")],
+        },
+        "opportunity_calls": [],
+    }
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(
+            pool_provider=lambda: pool,
+            opportunity_repository_factory=_OpportunityRepo,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_markdown=TicketFAQMarkdownService()
+        ),
+        scope_provider=lambda: TenantScope(
+            account_id="acct-persisted-source-execute",
+            user_id="user-persisted-source-execute",
+        ),
+    )
+    route = _router_route(router, "/content-ops/execute", "POST")
+
+    payload = await route.endpoint({
+        "outputs": ["faq_markdown"],
+        "limit": 2,
+        "require_quality_gates": False,
+        "inputs": {
+            "source_import_target_ids": ["ticket-1", "ticket-2"],
+        },
+    })
+
+    assert [call["target_id"] for call in pool["opportunity_calls"]] == [
+        "ticket-1",
+        "ticket-2",
+    ]
+    assert {call["account_id"] for call in pool["opportunity_calls"]} == {
+        "acct-persisted-source-execute"
+    }
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["provider"] == "atlas_support_ticket_request"
+    assert payload["input_provider"]["metadata"]["source_row_count"] == 2
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+    assert payload["input_provider"]["warnings"] == []
+    step = payload["steps"][0]
+    assert step["output"] == "faq_markdown"
+    assert step["status"] == "completed"
+    assert step["result"]["source_count"] == 2
+    assert step["result"]["ticket_source_count"] == 2
 
 
 @pytest.mark.skipif(
