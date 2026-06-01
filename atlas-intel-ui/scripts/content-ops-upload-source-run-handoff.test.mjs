@@ -87,11 +87,31 @@ test('domain import request can opt into full source material', () => {
   )
 })
 
-test('new run import handoff applies source material to the run inputs', () => {
+test('new run import handoff applies persisted target ids to the run inputs', () => {
   assert.ok(newRunSource.includes('include_source_material: true'))
   assert.ok(newRunSource.includes('includeSourceMaterial: true'))
-  assert.ok(newRunSource.includes('function updateSourceMaterialInputJson'))
-  assert.ok(newRunSource.includes('next.source_material = sourceMaterial.map'))
-  assert.ok(newRunSource.includes('Use rows for run'))
-  assert.ok(newRunSource.includes('onApplySourceMaterial(sourceMaterial)'))
+  assert.ok(
+    newRunSource.includes(
+      "const SOURCE_IMPORT_TARGET_IDS_INPUT = 'source_import_target_ids'",
+    ),
+  )
+  assert.ok(newRunSource.includes('function updateSourceImportTargetIdsInputJson'))
+  assert.ok(newRunSource.includes('next[SOURCE_IMPORT_TARGET_IDS_INPUT] = values'))
+  assert.ok(newRunSource.includes('delete next.source_material'))
+  assert.ok(newRunSource.includes('Use targets for run'))
+  assert.ok(
+    newRunSource.includes(
+      'onApplySourceTargetIds(result.targetIds, result.dryRun)',
+    ),
+  )
+  assert.ok(
+    newRunSource.includes(
+      'disabled={result.dryRun || result.targetIds.length === 0}',
+    ),
+  )
+  assert.ok(
+    newRunSource.includes('Dry-run import target IDs are not persisted.'),
+  )
+  assert.equal(newRunSource.includes('next.source_material = sourceMaterial.map'), false)
+  assert.equal(newRunSource.includes('onApplySourceMaterial(sourceMaterial)'), false)
 })
