@@ -78,6 +78,61 @@ def test_configure_stripe_module_pins_api_version_and_warns_on_full_secret_key(
     assert "restricted rk_ key" not in caplog.text
 
 
+def test_stripe_webhook_secret_candidates_trim_and_drop_empty_values() -> None:
+    assert billing._stripe_webhook_secret_candidates(
+        " whsec_live , ,whsec_test\n, whsec_rotated "
+    ) == ("whsec_live", "whsec_test", "whsec_rotated")
+    assert billing._stripe_webhook_secret_candidates(" , ") == ()
+
+
+class _StripeWebhookApi:
+    calls: list[tuple[bytes, str, str]] = []
+    valid_secret = "whsec_valid"
+
+    @classmethod
+    def construct_event(cls, body: bytes, signature: str, secret: str) -> SimpleNamespace:
+        cls.calls.append((body, signature, secret))
+        if secret != cls.valid_secret:
+            raise ValueError(f"bad secret: {secret}")
+        return SimpleNamespace(id="evt_valid", type="checkout.session.completed")
+
+
+def test_construct_stripe_webhook_event_accepts_later_valid_secret() -> None:
+    stripe = SimpleNamespace(Webhook=_StripeWebhookApi)
+    _StripeWebhookApi.calls = []
+
+    event = billing._construct_stripe_webhook_event(
+        stripe,
+        b'{"id":"evt_valid"}',
+        "t=123,v1=sig",
+        "whsec_old, whsec_valid",
+    )
+
+    assert event.id == "evt_valid"
+    assert _StripeWebhookApi.calls == [
+        (b'{"id":"evt_valid"}', "t=123,v1=sig", "whsec_old"),
+        (b'{"id":"evt_valid"}', "t=123,v1=sig", "whsec_valid"),
+    ]
+
+
+def test_construct_stripe_webhook_event_rejects_when_all_secrets_fail() -> None:
+    stripe = SimpleNamespace(Webhook=_StripeWebhookApi)
+    _StripeWebhookApi.calls = []
+
+    with pytest.raises(ValueError, match="bad secret: whsec_other"):
+        billing._construct_stripe_webhook_event(
+            stripe,
+            b'{"id":"evt_bad"}',
+            "t=123,v1=bad",
+            "whsec_old, whsec_other",
+        )
+
+    assert _StripeWebhookApi.calls == [
+        (b'{"id":"evt_bad"}', "t=123,v1=bad", "whsec_old"),
+        (b'{"id":"evt_bad"}', "t=123,v1=bad", "whsec_other"),
+    ]
+
+
 def test_billing_idempotency_keys_are_stable_and_parameter_scoped() -> None:
     account_id = str(uuid.uuid4())
     user_id = str(uuid.uuid4())
