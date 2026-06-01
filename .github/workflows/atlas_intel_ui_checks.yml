@@ -55,6 +55,9 @@ jobs:
       - name: Test public generated blog posts
         run: npm run test:blog-public-generated-posts
 
+      - name: Test generated blog sitemap prerender
+        run: npm run test:blog-generated-sitemap-prerender
+
       - name: Test Content Ops deflection report UI
         run: npm run test:content-ops-deflection-report-ui
 

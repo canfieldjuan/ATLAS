@@ -11,7 +11,6 @@ import { resolve, join } from 'node:path'
 import {
   chartPlaceholderIds,
   collectBlogSourceMetadata,
-  type BlogSourceMetadata,
   type ChartSpec,
   type ChartValue,
   type FaqItem,
@@ -22,6 +21,11 @@ import {
   resolveLandingPagePublicApiBase,
   resolveLandingPageSitemapUrl,
 } from './scripts/landing-page-sitemap-bridge.mjs'
+import {
+  fetchGeneratedBlogPrerenderEntries,
+  fetchGeneratedBlogSitemapUrls,
+  resolveGeneratedBlogPostsUrl,
+} from './scripts/blog-sitemap-bridge.mjs'
 
 const BASE_URL = 'https://atlas-intel-ui-two.vercel.app'
 const DEFAULT_OG_IMAGE = `${BASE_URL}/og-default.png`
@@ -54,6 +58,13 @@ function sitemapPlugin() {
     name: 'generate-sitemap',
     async closeBundle() {
       const posts = collectBlogSourceMetadata(import.meta.dirname)
+      const staticBlogSlugs = posts.map(post => post.slug)
+      const generatedBlogPostsUrl = resolveGeneratedBlogPostsUrl()
+      const generatedBlogUrls = await fetchGeneratedBlogSitemapUrls({
+        postsUrl: generatedBlogPostsUrl,
+        publicSiteUrl: BASE_URL,
+        excludeSlugs: staticBlogSlugs,
+      })
       const generatedLandingPageUrls = await fetchLandingPageSitemapUrls({
         sitemapUrl: resolveLandingPageSitemapUrl(),
         publicSiteUrl: BASE_URL,
@@ -69,6 +80,7 @@ function sitemapPlugin() {
           priority: '0.7',
           changefreq: 'monthly',
         })),
+        ...generatedBlogUrls,
         ...generatedLandingPageUrls,
         { loc: `${BASE_URL}/`, priority: '0.3', changefreq: 'monthly' },
       ])
@@ -119,6 +131,25 @@ interface PublicLandingPagePrerenderEntry {
   path: string
   loc: string
   page: Record<string, unknown>
+}
+
+interface BlogPrerenderPost {
+  slug: string
+  title: string
+  description: string
+  date: string
+  author: string
+  content: string
+  charts: ChartSpec[]
+  faq: FaqItem[]
+  seoTitle?: string
+  seoDescription?: string
+}
+
+interface GeneratedBlogPrerenderEntry {
+  path: string
+  loc: string
+  post: BlogPrerenderPost
 }
 
 interface LandingPageSectionView {
@@ -182,6 +213,18 @@ function renderChartFallbacks(content: string, charts: ChartSpec[]): string {
   )
 }
 
+function escapeGeneratedMarkdownHtml(value: string): string {
+  return value.replace(/[<>]/g, char => (char === '<' ? '&lt;' : '&gt;'))
+}
+
+function sanitizeGeneratedRenderedHtml(html: string): string {
+  return html
+    .replace(/\s(?:on[a-z]+|style)=(["']).*?\1/gi, '')
+    .replace(/\s(href|src)=(["'])(.*?)\2/gi, (_match, attr: string, quote: string, value: string) => (
+      safePublicHref(value) ? ` ${attr}=${quote}${value}${quote}` : ''
+    ))
+}
+
 function buildFaqHtml(faq: FaqItem[]): string {
   if (!faq.length) return ''
 
@@ -199,8 +242,13 @@ ${items}
       </section>`
 }
 
-function buildBlogBodyHtml(post: BlogSourceMetadata): string {
-  const articleHtml = marked.parse(renderChartFallbacks(post.content, post.charts), { async: false }) as string
+function buildBlogBodyHtml(
+  post: BlogPrerenderPost,
+  { trustedHtml = true }: { trustedHtml?: boolean } = {},
+): string {
+  const content = trustedHtml ? post.content : escapeGeneratedMarkdownHtml(post.content)
+  const renderedHtml = marked.parse(renderChartFallbacks(content, post.charts), { async: false }) as string
+  const articleHtml = trustedHtml ? renderedHtml : sanitizeGeneratedRenderedHtml(renderedHtml)
   const faqHtml = buildFaqHtml(post.faq)
   return `
     <article data-prerendered-blog-article="true">
@@ -406,6 +454,64 @@ function landingPageRoute(entry: PublicLandingPagePrerenderEntry): PrerenderedRo
   }
 }
 
+function blogPostRoute(
+  post: BlogPrerenderPost,
+  {
+    path = `/blog/${post.slug}`,
+    canonical = `${BASE_URL}/blog/${post.slug}`,
+    trustedHtml = true,
+  }: { path?: string; canonical?: string; trustedHtml?: boolean } = {},
+): PrerenderedRoute {
+  const seoTitle = post.seoTitle || post.title
+  const seoDesc = post.seoDescription || post.description
+  const faqJsonLd = buildFaqJsonLd(post.faq)
+  const graph: object[] = [
+    {
+      '@type': 'BlogPosting',
+      headline: seoTitle,
+      description: seoDesc,
+      datePublished: post.date,
+      dateModified: post.date,
+      image: DEFAULT_OG_IMAGE,
+      author: {
+        '@type': 'Organization',
+        name: 'Atlas Intelligence',
+        sameAs: ATLAS_SAME_AS,
+      },
+      publisher: {
+        '@type': 'Organization',
+        name: 'Atlas Intelligence',
+        url: BASE_URL,
+        sameAs: ATLAS_SAME_AS,
+        logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
+      },
+      mainEntityOfPage: { '@type': 'WebPage', '@id': canonical },
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
+        { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
+        { '@type': 'ListItem', position: 3, name: seoTitle, item: canonical },
+      ],
+    },
+  ]
+  if (faqJsonLd) graph.push(faqJsonLd)
+
+  return {
+    path,
+    title: `${seoTitle} | Atlas Intelligence`,
+    description: seoDesc,
+    canonical,
+    ogType: 'article',
+    bodyHtml: buildBlogBodyHtml(post, { trustedHtml }),
+    jsonLd: {
+      '@context': 'https://schema.org',
+      '@graph': graph,
+    },
+  }
+}
+
 function prerenderPlugin() {
   return {
     name: 'prerender-public-routes',
@@ -415,6 +521,20 @@ function prerenderPlugin() {
       if (!existsSync(indexHtmlPath)) return
 
       const baseHtml = readFileSync(indexHtmlPath, 'utf-8')
+      const staticPosts = collectBlogSourceMetadata(import.meta.dirname)
+      const staticBlogSlugs = staticPosts.map(post => post.slug)
+      const generatedBlogPostsUrl = resolveGeneratedBlogPostsUrl()
+      const generatedBlogRoutes = (
+        await fetchGeneratedBlogPrerenderEntries({
+          postsUrl: generatedBlogPostsUrl,
+          publicSiteUrl: BASE_URL,
+          excludeSlugs: staticBlogSlugs,
+        }) as GeneratedBlogPrerenderEntry[]
+      ).map(entry => blogPostRoute(entry.post, {
+        path: entry.path,
+        canonical: entry.loc,
+        trustedHtml: false,
+      }))
       const landingPageRoutes = (
         await fetchLandingPagePrerenderEntries({
           sitemapUrl: resolveLandingPageSitemapUrl(),
@@ -423,57 +543,7 @@ function prerenderPlugin() {
         }) as PublicLandingPagePrerenderEntry[]
       ).map(landingPageRoute)
 
-      const blogRoutes: PrerenderedRoute[] = []
-      for (const post of collectBlogSourceMetadata(import.meta.dirname)) {
-        const seoTitle = post.seoTitle || post.title
-        const seoDesc = post.seoDescription || post.description
-        const faqJsonLd = buildFaqJsonLd(post.faq)
-        const graph: object[] = [
-          {
-            '@type': 'BlogPosting',
-            headline: seoTitle,
-            description: seoDesc,
-            datePublished: post.date,
-            dateModified: post.date,
-            image: DEFAULT_OG_IMAGE,
-            author: {
-              '@type': 'Organization',
-              name: 'Atlas Intelligence',
-              sameAs: ATLAS_SAME_AS,
-            },
-            publisher: {
-              '@type': 'Organization',
-              name: 'Atlas Intelligence',
-              url: BASE_URL,
-              sameAs: ATLAS_SAME_AS,
-              logo: { '@type': 'ImageObject', url: DEFAULT_OG_IMAGE },
-            },
-            mainEntityOfPage: { '@type': 'WebPage', '@id': `${BASE_URL}/blog/${post.slug}` },
-          },
-          {
-            '@type': 'BreadcrumbList',
-            itemListElement: [
-              { '@type': 'ListItem', position: 1, name: 'Home', item: `${BASE_URL}/landing` },
-              { '@type': 'ListItem', position: 2, name: 'Blog', item: `${BASE_URL}/blog` },
-              { '@type': 'ListItem', position: 3, name: seoTitle, item: `${BASE_URL}/blog/${post.slug}` },
-            ],
-          },
-        ]
-        if (faqJsonLd) graph.push(faqJsonLd)
-
-        blogRoutes.push({
-          path: `/blog/${post.slug}`,
-          title: `${seoTitle} | Atlas Intelligence`,
-          description: seoDesc,
-          canonical: `${BASE_URL}/blog/${post.slug}`,
-          ogType: 'article',
-          bodyHtml: buildBlogBodyHtml(post),
-          jsonLd: {
-            '@context': 'https://schema.org',
-            '@graph': graph,
-          },
-        })
-      }
+      const blogRoutes = staticPosts.map(post => blogPostRoute(post))
 
       const LANDING_JSON_LD = {
         '@context': 'https://schema.org',
@@ -531,6 +601,7 @@ function prerenderPlugin() {
           ogType: 'website',
         },
         ...blogRoutes,
+        ...generatedBlogRoutes,
         ...landingPageRoutes,
       ]
 
