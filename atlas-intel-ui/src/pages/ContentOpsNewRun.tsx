@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ChevronRight,
   FileUp,
@@ -76,6 +77,7 @@ import {
 import type {
   ContentOpsZendeskCredential,
   GeneratedAssetDraft,
+  GeneratedAssetType,
 } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
@@ -143,6 +145,17 @@ const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
+const GENERATED_ASSET_OUTPUTS: readonly GeneratedAssetType[] = [
+  'blog_post',
+  'report',
+  'landing_page',
+  'sales_brief',
+  'faq_markdown',
+]
+const ID_FILTERED_REVIEW_OUTPUTS = new Set<string>([
+  'blog_post',
+  'landing_page',
+])
 const FAQ_INTENT_RULES_DISPLAY_FALLBACK = {
   label: 'Intent rules',
   placeholder:
@@ -3396,10 +3409,22 @@ function ExecutionStepSummary({
     return <SignalExtractionSummary result={result} />
   }
   if (output === 'email_campaign') {
-    return <GeneratedAssetSummary result={result} generatedLabel="Drafts generated" />
+    return (
+      <GeneratedAssetSummary
+        output={output}
+        result={result}
+        generatedLabel="Drafts generated"
+      />
+    )
   }
   if (['blog_post', 'report', 'landing_page', 'sales_brief'].includes(output)) {
-    return <GeneratedAssetSummary result={result} generatedLabel="Assets generated" />
+    return (
+      <GeneratedAssetSummary
+        output={output}
+        result={result}
+        generatedLabel="Assets generated"
+      />
+    )
   }
   if (output === 'faq_markdown') {
     return <FAQMarkdownExecutionSummary result={result} />
@@ -3833,9 +3858,11 @@ function numberMeta(value: number | null, label: string): string {
 }
 
 function GeneratedAssetSummary({
+  output,
   result,
   generatedLabel,
 }: {
+  output: string
   result: Record<string, unknown>
   generatedLabel: string
 }) {
@@ -3850,6 +3877,7 @@ function GeneratedAssetSummary({
     typeof result.reasoning_contexts_used === 'number'
       ? result.reasoning_contexts_used
       : null
+  const reviewHref = generatedAssetReviewHref(output, savedIds)
 
   if (
     requested === null &&
@@ -3911,8 +3939,36 @@ function GeneratedAssetSummary({
           ))}
         </div>
       )}
+      {reviewHref && (
+        <Link
+          to={reviewHref}
+          className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/40 px-2.5 py-1 text-xs font-medium text-cyan-200 hover:bg-cyan-500/10"
+        >
+          Review generated drafts
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Link>
+      )}
     </div>
   )
+}
+
+function generatedAssetReviewHref(output: string, savedIds: string[]): string | null {
+  if (!isGeneratedAssetOutput(output)) return null
+  const idFiltered = ID_FILTERED_REVIEW_OUTPUTS.has(output)
+  if (idFiltered && savedIds.length === 0) return null
+  const params = new URLSearchParams()
+  params.set('asset', output)
+  params.set('status', 'draft')
+  if (idFiltered) {
+    for (const id of savedIds) {
+      params.append('id', id)
+    }
+  }
+  return `/content-ops/assets?${params.toString()}`
+}
+
+function isGeneratedAssetOutput(output: string): output is GeneratedAssetType {
+  return GENERATED_ASSET_OUTPUTS.includes(output as GeneratedAssetType)
 }
 
 function ReasoningAuditBadge({ audit }: { audit: ContentOpsStepReasoningAudit }) {
