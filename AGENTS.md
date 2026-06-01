@@ -90,6 +90,32 @@ unless the operator explicitly asks for a draft. Automated review tools
 do not review draft PRs, so draft mode burns review time and hides
 feedback until the PR is manually marked ready.
 
+### 1g. Teardown on merge
+
+`origin/main` is the only source of truth; local branches and worktrees
+are **disposable**. When a PR merges, tear down its worktree and branch
+the same session — **worktree first, then branch** (a branch checked out
+in a worktree cannot be deleted: `git branch -D` fails with `'<branch>'
+is already used by worktree at ...`):
+
+- `git worktree remove <dir>` for any worktree dedicated to it
+  (`--force` if it still holds throwaway state). This frees the branch.
+- `git branch -D <branch>` (squash-merge leaves the local branch
+  unmerged by content, so `-d` refuses — `-D` is expected here).
+
+Do **not** let merged branches or finished worktrees linger. They drift
+behind `origin/main`, accumulate stale staged state, and become the
+hundreds-of-commits-behind worktree and the 300-file dirty index that
+just mirrors already-landed PRs — the exact mess a cleanup session has
+to untangle. Before resurrecting anything from a stale local branch,
+check it against `origin/main` first (`git cherry -v origin/main
+<branch>`); the equivalent change has usually already landed.
+
+Cleanup safety: never run `git clean -f` without a `git clean -nd`
+dry-run first, and read the list. Untracked secret files live in the
+tree (`.env.bak-*`, `*.production.env`, gitignored per the env section)
+and a blanket clean — especially with `-x` — deletes them.
+
 ---
 
 ## 2. Reviewer verdict shape
