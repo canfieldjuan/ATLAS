@@ -93,6 +93,44 @@ def _configure_stripe_module(stripe_module: Any, secret_key: str) -> Any:
     return stripe_module
 
 
+def _stripe_webhook_secret_candidates(secret_config: str) -> tuple[str, ...]:
+    """Return ordered Stripe webhook signing secrets from config.
+
+    Stripe exposes separate signing secrets for live, test, and rotated webhook
+    endpoints. A comma-separated value lets ATLAS accept a bounded rotation set
+    without weakening the signed-webhook trust boundary.
+    """
+
+    return tuple(
+        secret.strip()
+        for secret in str(secret_config or "").split(",")
+        if secret.strip()
+    )
+
+
+def _construct_stripe_webhook_event(
+    stripe_module: Any,
+    body: bytes,
+    signature: str,
+    secret_config: str,
+) -> Any:
+    """Verify a Stripe webhook against one or more configured secrets."""
+
+    secrets = _stripe_webhook_secret_candidates(secret_config)
+    if not secrets:
+        raise ValueError("Webhook secret not configured")
+
+    last_error: Exception | None = None
+    for secret in secrets:
+        try:
+            return stripe_module.Webhook.construct_event(body, signature, secret)
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise ValueError("Webhook secret not configured")
+
+
 def _stripe_customer_idempotency_key(account_id: str) -> str:
     return f"atlas-customer:{account_id}"
 
@@ -319,11 +357,16 @@ async def stripe_webhook(request: Request):
     if not sig:
         raise HTTPException(status_code=400, detail="Missing stripe-signature header")
 
-    if not cfg.stripe_webhook_secret:
+    if not _stripe_webhook_secret_candidates(cfg.stripe_webhook_secret):
         raise HTTPException(status_code=503, detail="Webhook secret not configured")
 
     try:
-        event = stripe.Webhook.construct_event(body, sig, cfg.stripe_webhook_secret)
+        event = _construct_stripe_webhook_event(
+            stripe,
+            body,
+            sig,
+            cfg.stripe_webhook_secret,
+        )
     except Exception as e:
         logger.warning("Stripe webhook signature verification failed: %s", e)
         raise HTTPException(status_code=400, detail="Invalid signature")
