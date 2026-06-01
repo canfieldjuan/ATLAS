@@ -64,8 +64,14 @@ jobs:
       - name: Test Content Ops FAQ configuration inputs
         run: npm run test:content-ops-faq-configuration-inputs
 
+      - name: Test Content Ops ingestion routing
+        run: npm run test:content-ops-ingestion-routing
+
       - name: Test Content Ops landing-page review deep link
         run: npm run test:content-ops-landing-page-e2e-ui
+
+      - name: Test Content Ops upload source run handoff
+        run: npm run test:content-ops-upload-source-run-handoff
 
       - name: Test Content Ops blog review public link
         run: npm run test:content-ops-blog-review-public-link
