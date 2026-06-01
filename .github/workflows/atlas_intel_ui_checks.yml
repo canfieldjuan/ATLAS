@@ -52,6 +52,9 @@ jobs:
       - name: Test landing-page prerender verifier
         run: npm run test:landing-page-prerender
 
+      - name: Test public generated blog posts
+        run: npm run test:blog-public-generated-posts
+
       - name: Test Content Ops deflection report UI
         run: npm run test:content-ops-deflection-report-ui
 

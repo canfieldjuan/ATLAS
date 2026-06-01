@@ -11,10 +11,12 @@ async def test_list_published_posts_normalizes_blank_topic_and_query_defaults(mo
     class Pool:
         async def fetch(self, query, *args):
             assert "topic_type = $1" not in query
+            assert "status IN ('published', 'approved')" in query
             assert args == (50, 0)
             return []
 
         async def fetchval(self, query, *args):
+            assert "status IN ('published', 'approved')" in query
             assert args == ()
             return 0
 
@@ -30,6 +32,7 @@ async def test_list_published_posts_trims_active_topic_type(monkeypatch):
     class Pool:
         async def fetch(self, query, *args):
             assert "topic_type = $1" in query
+            assert "status IN ('published', 'approved')" in query
             assert args == ("competitive_set", 25, 5)
             return []
 
@@ -65,5 +68,6 @@ async def test_get_published_post_trims_slug_before_lookup(monkeypatch):
 
     result = await mod.get_published_post("  launch-post  ")
 
+    assert "status IN ('published', 'approved')" in pool.fetchrow.await_args.args[0]
     assert pool.fetchrow.await_args.args[1] == "launch-post"
     assert result == {"post": None}

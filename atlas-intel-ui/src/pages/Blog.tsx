@@ -1,9 +1,11 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import PublicLayout from '../components/PublicLayout'
 import BlogCardVisual from '../components/BlogCardVisual'
 import SeoHead from '../components/SeoHead'
 import { POSTS } from '../content/blog'
+import type { BlogPost } from '../content/blog'
+import { fetchPublicBlogPosts } from '../api/blog'
 
 const AtlasRobotScene = lazy(() => import('../components/AtlasRobotScene'))
 
@@ -18,6 +20,22 @@ function formatDate(iso: string) {
 const BLOG_DESCRIPTION = 'Amazon seller intelligence, review monitoring strategies, and competitive analysis insights.'
 
 export default function Blog() {
+  const [posts, setPosts] = useState<BlogPost[]>(POSTS)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchPublicBlogPosts()
+      .then((generatedPosts) => {
+        if (!cancelled) setPosts(mergeBlogPosts(generatedPosts, POSTS))
+      })
+      .catch(() => {
+        if (!cancelled) setPosts(POSTS)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <>
       <SeoHead
@@ -41,7 +59,7 @@ export default function Blog() {
         {/* Post grid */}
         <section className="max-w-5xl mx-auto px-6 pb-24">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {POSTS.map(post => (
+            {posts.map(post => (
               <Link
                 key={post.slug}
                 to={`/blog/${post.slug}`}
@@ -72,4 +90,11 @@ export default function Blog() {
       </PublicLayout>
     </>
   )
+}
+
+function mergeBlogPosts(generatedPosts: BlogPost[], staticPosts: BlogPost[]): BlogPost[] {
+  const bySlug = new Map<string, BlogPost>()
+  for (const post of staticPosts) bySlug.set(post.slug, post)
+  for (const post of generatedPosts) bySlug.set(post.slug, post)
+  return [...bySlug.values()].sort((a, b) => b.date.localeCompare(a.date))
 }

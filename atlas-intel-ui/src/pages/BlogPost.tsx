@@ -1,12 +1,13 @@
 import { useParams, Link } from 'react-router-dom'
-import { lazy, Suspense, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { marked } from 'marked'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
 import BlogCardVisual from '../components/BlogCardVisual'
 import { POSTS } from '../content/blog'
 import type { ChartSpec, BlogPost as BlogPostType } from '../content/blog'
+import { fetchPublicBlogPost } from '../api/blog'
 
 const BlogChart = lazy(() => import('../components/BlogChartRenderer'))
 
@@ -54,7 +55,33 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
 
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
-  const post = POSTS.find(p => p.slug === slug)
+  const staticPost = POSTS.find(p => p.slug === slug)
+  const [generatedPost, setGeneratedPost] = useState<BlogPostType | null>(null)
+  const [loadingGeneratedPost, setLoadingGeneratedPost] = useState(false)
+  const post = staticPost ?? generatedPost
+
+  useEffect(() => {
+    if (!slug || staticPost) {
+      setGeneratedPost(null)
+      setLoadingGeneratedPost(false)
+      return
+    }
+    let cancelled = false
+    setLoadingGeneratedPost(true)
+    fetchPublicBlogPost(slug)
+      .then((nextPost) => {
+        if (!cancelled) setGeneratedPost(nextPost)
+      })
+      .catch(() => {
+        if (!cancelled) setGeneratedPost(null)
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingGeneratedPost(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [slug, staticPost])
 
   const renderedContent = useMemo(() => {
     if (!post) return null
@@ -136,6 +163,16 @@ export default function BlogPost() {
       .map(s => POSTS.find(p => p.slug === s))
       .filter((p): p is BlogPostType => !!p)
   }, [post])
+
+  if (!post && loadingGeneratedPost) {
+    return (
+      <PublicLayout>
+        <section className="max-w-3xl mx-auto flex min-h-[40vh] items-center justify-center px-6 py-24">
+          <Loader2 className="h-6 w-6 animate-spin text-cyan-300" />
+        </section>
+      </PublicLayout>
+    )
+  }
 
   if (!post) {
     return (

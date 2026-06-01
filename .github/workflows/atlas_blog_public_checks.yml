@@ -1,0 +1,37 @@
+name: Atlas Blog Public Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_blog_public_checks.yml"
+      - "atlas_brain/api/blog_public.py"
+      - "tests/test_blog_public.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_blog_public_checks.yml"
+      - "atlas_brain/api/blog_public.py"
+      - "tests/test_blog_public.py"
+
+jobs:
+  atlas-blog-public-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run public blog API tests
+        run: python -m pytest tests/test_blog_public.py -q
