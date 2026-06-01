@@ -35,4 +35,14 @@ test('blog detail fetches generated post only when slug is not static', () => {
   assert.ok(blogPostPageSource.includes('if (!slug || staticPost)'))
   assert.ok(blogPostPageSource.includes('fetchPublicBlogPost(slug)'))
   assert.ok(blogPostPageSource.includes('loadingGeneratedPost'))
+  assert.ok(!blogPostPageSource.includes('setGeneratedPost(null)'))
+  assert.ok(!blogPostPageSource.includes('setLoadingGeneratedPost(false)'))
+})
+
+test('blog detail sanitizes rendered markdown before html injection', () => {
+  assert.ok(blogPostPageSource.includes('renderSafeMarkdown(content)'))
+  assert.ok(blogPostPageSource.includes('sanitizeRenderedHtml(html)'))
+  assert.ok(blogPostPageSource.includes("element.removeAttribute(attr.name)"))
+  assert.ok(blogPostPageSource.includes("name.startsWith('on')"))
+  assert.ok(blogPostPageSource.includes("!safeUrl(attr.value)"))
 })

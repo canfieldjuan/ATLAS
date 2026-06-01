@@ -86,8 +86,9 @@ the slug from the public API and renders the same `BlogPost` template.
   warning from the local environment.
 - `cd atlas-intel-ui && npm ci` - passed; npm reports the existing 6 audit
   findings already parked in `HARDENING.md`.
-- `cd atlas-intel-ui && npm run test:blog-public-generated-posts` - 3
+- `cd atlas-intel-ui && npm run test:blog-public-generated-posts` - 4
   passed.
+- `cd atlas-intel-ui && npm run lint` - passed.
 - `cd atlas-intel-ui && npm run test:content-ops-landing-page-e2e-ui` - 4
   passed.
 - `cd atlas-intel-ui && npm run test:landing-page-prerender` - 4 passed.

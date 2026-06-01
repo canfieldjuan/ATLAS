@@ -20,10 +20,16 @@ function formatDate(iso: string) {
 }
 
 const CHART_PLACEHOLDER_RE = /(\{\{chart:[^}]+\}\})/
+const UNSAFE_HTML_RE = 'script, iframe, object, embed, link, meta, style, base'
+
+type GeneratedPostState = {
+  slug: string
+  post: BlogPostType | null
+}
 
 function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
   if (!charts || charts.length === 0) {
-    const html = marked.parse(content, { async: false }) as string
+    const html = renderSafeMarkdown(content)
     return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: html }} />
   }
 
@@ -46,37 +52,71 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
           return null
         }
         if (!part.trim()) return null
-        const html = marked.parse(part, { async: false }) as string
+        const html = renderSafeMarkdown(part)
         return <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
       })}
     </div>
   )
 }
 
+function renderSafeMarkdown(markdown: string): string {
+  const html = marked.parse(markdown, { async: false }) as string
+  return sanitizeRenderedHtml(html)
+}
+
+function sanitizeRenderedHtml(html: string): string {
+  const template = document.createElement('template')
+  template.innerHTML = html
+  for (const element of Array.from(template.content.querySelectorAll(UNSAFE_HTML_RE))) {
+    element.remove()
+  }
+  for (const element of Array.from(template.content.querySelectorAll('*'))) {
+    for (const attr of Array.from(element.attributes)) {
+      const name = attr.name.toLowerCase()
+      if (name.startsWith('on') || name === 'style') {
+        element.removeAttribute(attr.name)
+        continue
+      }
+      if ((name === 'href' || name === 'src') && !safeUrl(attr.value)) {
+        element.removeAttribute(attr.name)
+      }
+    }
+  }
+  return template.innerHTML
+}
+
+function safeUrl(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  return (
+    normalized.startsWith('https://') ||
+    normalized.startsWith('http://') ||
+    normalized.startsWith('mailto:') ||
+    normalized.startsWith('tel:') ||
+    normalized.startsWith('/') ||
+    normalized.startsWith('#')
+  )
+}
+
 export default function BlogPost() {
   const { slug } = useParams<{ slug: string }>()
   const staticPost = POSTS.find(p => p.slug === slug)
-  const [generatedPost, setGeneratedPost] = useState<BlogPostType | null>(null)
-  const [loadingGeneratedPost, setLoadingGeneratedPost] = useState(false)
+  const [generatedPostState, setGeneratedPostState] = useState<GeneratedPostState | null>(null)
+  const generatedPostResolvedForSlug = Boolean(generatedPostState && generatedPostState.slug === slug)
+  const generatedPost = generatedPostState && generatedPostState.slug === slug
+    ? generatedPostState.post
+    : null
+  const loadingGeneratedPost = Boolean(slug && !staticPost && !generatedPostResolvedForSlug)
   const post = staticPost ?? generatedPost
 
   useEffect(() => {
-    if (!slug || staticPost) {
-      setGeneratedPost(null)
-      setLoadingGeneratedPost(false)
-      return
-    }
+    if (!slug || staticPost) return
     let cancelled = false
-    setLoadingGeneratedPost(true)
     fetchPublicBlogPost(slug)
       .then((nextPost) => {
-        if (!cancelled) setGeneratedPost(nextPost)
+        if (!cancelled) setGeneratedPostState({ slug, post: nextPost })
       })
       .catch(() => {
-        if (!cancelled) setGeneratedPost(null)
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingGeneratedPost(false)
+        if (!cancelled) setGeneratedPostState({ slug, post: null })
       })
     return () => {
       cancelled = true

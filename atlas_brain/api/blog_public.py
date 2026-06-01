@@ -134,7 +134,7 @@ async def get_published_post(slug: str) -> dict:
     slug = _clean_required_text(slug, "slug")
     pool = get_db_pool()
     row = await pool.fetchrow(
-        """
+        f"""
         SELECT id, slug, title, description, topic_type, tags,
                content, charts, data_context,
                seo_title, seo_description, target_keyword,
@@ -142,7 +142,7 @@ async def get_published_post(slug: str) -> dict:
                llm_model, source_report_date,
                published_at, created_at
         FROM blog_posts
-        WHERE slug = $1 AND status IN ('published', 'approved')
+        WHERE slug = $1 AND {PUBLIC_BLOG_STATUS_FILTER}
         """,
         slug,
     )
