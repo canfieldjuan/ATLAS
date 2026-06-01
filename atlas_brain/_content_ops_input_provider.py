@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from extracted_content_pipeline.campaign_postgres import PostgresIntelligenceRepository
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_input_provider import (
     ContentOpsInputPackage,
@@ -23,6 +24,7 @@ from extracted_content_pipeline.ticket_faq_postgres import PostgresTicketFAQRepo
 
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 FAQRepositoryFactory = Callable[[Any], Any]
+OpportunityRepositoryFactory = Callable[[Any], Any]
 
 _SUPPORT_TICKET_BUNDLE_KEYS = frozenset({
     "support_tickets",
@@ -69,6 +71,11 @@ _SOURCE_FAQ_ID_KEYS = (
     "source_faq_draft_ids",
     "selected_faq_draft_ids",
 )
+_SOURCE_IMPORT_TARGET_ID_KEYS = (
+    "source_import_target_ids",
+    "source_target_ids",
+    "import_target_ids",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,9 @@ class _AtlasSupportTicketInputProvider:
     provider_name: str = "atlas_support_ticket_request"
     pool_provider: PoolProvider | None = None
     faq_repository_factory: FAQRepositoryFactory = PostgresTicketFAQRepository
+    opportunity_repository_factory: OpportunityRepositoryFactory = (
+        PostgresIntelligenceRepository
+    )
 
     def build_content_ops_input_package(
         self,
@@ -87,9 +97,11 @@ class _AtlasSupportTicketInputProvider:
     ) -> ContentOpsInputPackage | Awaitable[ContentOpsInputPackage]:
         source_material = _request_source_material(request)
         source_faq_ids = _request_source_faq_ids(request)
-        if source_faq_ids:
-            return self._build_from_selected_faq_ids(
+        source_target_ids = _request_source_target_ids(request)
+        if source_faq_ids or source_target_ids:
+            return self._build_from_selected_sources(
                 source_faq_ids,
+                source_target_ids,
                 source_material=source_material,
                 scope=scope,
                 request=request,
@@ -106,30 +118,55 @@ class _AtlasSupportTicketInputProvider:
             request=request,
         )
 
-    async def _build_from_selected_faq_ids(
+    async def _build_from_selected_sources(
         self,
         source_faq_ids: Sequence[str],
+        source_target_ids: Sequence[str],
         *,
         source_material: Any,
         scope: TenantScope,
         request: RequestPayload | None,
     ) -> ContentOpsInputPackage:
         valid_faq_ids, invalid_faq_ids = _partition_source_faq_ids(source_faq_ids)
-        loaded, missing = await self._load_selected_faq_drafts(
+        loaded_faqs, missing_faqs = await self._load_selected_faq_drafts(
             valid_faq_ids,
             scope=scope,
         )
-        combined_source_material = _combine_source_material(source_material, loaded)
+        (
+            loaded_targets,
+            missing_targets,
+            ambiguous_targets,
+            target_skip_reason,
+        ) = await self._load_selected_import_targets(
+            source_target_ids,
+            scope=scope,
+            request=request,
+        )
+        combined_source_material = _combine_source_material(
+            source_material,
+            [*loaded_targets, *loaded_faqs],
+        )
         metadata = {
             "selected_faq_id_count": len(source_faq_ids),
-            "selected_faq_loaded_count": len(loaded),
-            "selected_faq_missing_id_count": len(missing),
+            "selected_faq_loaded_count": len(loaded_faqs),
+            "selected_faq_missing_id_count": len(missing_faqs),
             "selected_faq_invalid_id_count": len(invalid_faq_ids),
+            "source_target_id_count": len(source_target_ids),
+            "source_target_loaded_count": len(loaded_targets),
+            "source_target_missing_id_count": len(missing_targets),
+            "source_target_ambiguous_id_count": len(ambiguous_targets),
         }
-        warnings = _selected_faq_warnings(
-            invalid=invalid_faq_ids,
-            missing=missing,
-            repository_configured=self.pool_provider is not None,
+        warnings = (
+            *_selected_faq_warnings(
+                invalid=invalid_faq_ids,
+                missing=missing_faqs,
+                repository_configured=self.pool_provider is not None,
+            ),
+            *_selected_source_target_warnings(
+                missing=missing_targets,
+                ambiguous=ambiguous_targets,
+                skip_reason=target_skip_reason,
+            ),
         )
         if _is_empty_source_material(combined_source_material) or not _is_support_ticket_material(
             combined_source_material
@@ -183,17 +220,57 @@ class _AtlasSupportTicketInputProvider:
             loaded.append(draft.as_dict())
         return loaded, missing
 
+    async def _load_selected_import_targets(
+        self,
+        source_target_ids: Sequence[str],
+        *,
+        scope: TenantScope,
+        request: RequestPayload | None,
+    ) -> tuple[list[dict[str, Any]], list[str], list[str], str | None]:
+        if not source_target_ids:
+            return [], [], [], None
+        if not _clean(getattr(scope, "account_id", None)):
+            return [], list(source_target_ids), [], "missing_account_scope"
+        if self.pool_provider is None:
+            return [], list(source_target_ids), [], "repository_unconfigured"
+        pool = self.pool_provider()
+        if hasattr(pool, "__await__"):
+            pool = await pool
+        repository = self.opportunity_repository_factory(pool)
+        target_mode = _request_target_mode(request)
+        loaded: list[dict[str, Any]] = []
+        missing: list[str] = []
+        ambiguous: list[str] = []
+        for target_id in source_target_ids:
+            rows = await repository.read_campaign_opportunities(
+                scope=scope,
+                target_mode=target_mode,
+                limit=2,
+                filters={"target_id": target_id},
+            )
+            if len(rows) == 1:
+                loaded.append(dict(rows[0]))
+            elif len(rows) > 1:
+                ambiguous.append(target_id)
+            else:
+                missing.append(target_id)
+        return loaded, missing, ambiguous, None
+
 
 def build_content_ops_input_provider(
     *,
     pool_provider: PoolProvider | None = None,
     faq_repository_factory: FAQRepositoryFactory = PostgresTicketFAQRepository,
+    opportunity_repository_factory: OpportunityRepositoryFactory = (
+        PostgresIntelligenceRepository
+    ),
 ) -> _AtlasSupportTicketInputProvider:
     """Return the host's request-aware Content Ops input provider."""
 
     return _AtlasSupportTicketInputProvider(
         pool_provider=pool_provider,
         faq_repository_factory=faq_repository_factory,
+        opportunity_repository_factory=opportunity_repository_factory,
     )
 
 
@@ -217,6 +294,25 @@ def _request_source_faq_ids(request: RequestPayload | None) -> tuple[str, ...]:
         if values:
             return tuple(values)
     return ()
+
+
+def _request_source_target_ids(request: RequestPayload | None) -> tuple[str, ...]:
+    if not isinstance(request, Mapping):
+        return ()
+    inputs = request.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return ()
+    for key in _SOURCE_IMPORT_TARGET_ID_KEYS:
+        values = _string_values(inputs.get(key))
+        if values:
+            return tuple(values)
+    return ()
+
+
+def _request_target_mode(request: RequestPayload | None) -> str:
+    if not isinstance(request, Mapping):
+        return "vendor_retention"
+    return _clean(request.get("target_mode")) or "vendor_retention"
 
 
 def _string_values(value: Any) -> tuple[str, ...]:
@@ -356,6 +452,45 @@ def _selected_faq_warnings(
             "code": "source_faq_drafts_not_found",
             "message": "One or more selected FAQ reports were not found for this account.",
             "missing_count": len(missing),
+        })
+    return tuple(warnings)
+
+
+def _selected_source_target_warnings(
+    *,
+    missing: Sequence[str],
+    ambiguous: Sequence[str],
+    skip_reason: str | None,
+) -> tuple[dict[str, Any], ...]:
+    warnings: list[dict[str, Any]] = []
+    if skip_reason == "missing_account_scope":
+        warnings.append({
+            "code": "source_import_targets_unscoped",
+            "message": (
+                "Persisted import target IDs require an account-scoped Content "
+                "Ops request."
+            ),
+            "missing_count": len(missing),
+        })
+        return tuple(warnings)
+    if skip_reason == "repository_unconfigured":
+        warnings.append({
+            "code": "source_import_target_repository_unconfigured",
+            "message": "Persisted import target selection is not configured for this route.",
+            "missing_count": len(missing),
+        })
+        return tuple(warnings)
+    if missing:
+        warnings.append({
+            "code": "source_import_targets_not_found",
+            "message": "One or more persisted import target IDs were not found for this account.",
+            "missing_count": len(missing),
+        })
+    if ambiguous:
+        warnings.append({
+            "code": "source_import_targets_ambiguous",
+            "message": "One or more persisted import target IDs matched multiple rows.",
+            "ambiguous_count": len(ambiguous),
         })
     return tuple(warnings)
 
