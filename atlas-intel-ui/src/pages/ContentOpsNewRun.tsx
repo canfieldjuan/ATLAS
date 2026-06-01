@@ -145,6 +145,7 @@ const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
+const SOURCE_IMPORT_TARGET_IDS_INPUT = 'source_import_target_ids'
 const GENERATED_ASSET_OUTPUTS: readonly GeneratedAssetType[] = [
   'blog_post',
   'report',
@@ -271,7 +272,7 @@ export default function ContentOpsNewRun() {
     useState<IngestionInspectState>({ kind: 'idle' })
   const [ingestionImportState, setIngestionImportState] =
     useState<IngestionImportState>({ kind: 'idle' })
-  const [sourceMaterialApplyError, setSourceMaterialApplyError] =
+  const [sourceImportTargetApplyError, setSourceImportTargetApplyError] =
     useState<string | null>(null)
   // Codex P2 fix: request-id ref so a stale in-flight preview/plan
   // response can't overwrite a result the user has since invalidated
@@ -375,7 +376,7 @@ export default function ContentOpsNewRun() {
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
-    setSourceMaterialApplyError(null)
+    setSourceImportTargetApplyError(null)
   }
 
   const markIngestionStale = () => {
@@ -388,7 +389,7 @@ export default function ContentOpsNewRun() {
     setIngestionImportState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
-    setSourceMaterialApplyError(null)
+    setSourceImportTargetApplyError(null)
   }
 
   const handleLandingPageRepairAttemptsChange = (value: string) => {
@@ -782,7 +783,7 @@ export default function ContentOpsNewRun() {
     const inlineRows = parsedRows?.ok ? parsedRows.rows : []
 
     setIngestionImportState({ kind: 'submitting' })
-    setSourceMaterialApplyError(null)
+    setSourceImportTargetApplyError(null)
     try {
       const outcome = selectedIngestionFile
         ? await importContentOpsIngestionFile({
@@ -850,16 +851,23 @@ export default function ContentOpsNewRun() {
     }
   }
 
-  const handleApplyImportedSourceMaterial = (
-    sourceMaterial: Array<Record<string, unknown>>,
+  const handleApplyImportedSourceTargetIds = (
+    targetIds: string[],
+    dryRun: boolean,
   ) => {
-    const updated = updateSourceMaterialInputJson(inputsJson, sourceMaterial)
+    if (dryRun) {
+      setSourceImportTargetApplyError(
+        'Dry-run import target IDs are not persisted.',
+      )
+      return
+    }
+    const updated = updateSourceImportTargetIdsInputJson(inputsJson, targetIds)
     if (!updated.ok) {
-      setSourceMaterialApplyError(updated.message)
+      setSourceImportTargetApplyError(updated.message)
       return
     }
     setInputsJson(updated.value)
-    setSourceMaterialApplyError(null)
+    setSourceImportTargetApplyError(null)
     markStale()
   }
 
@@ -1419,8 +1427,8 @@ export default function ContentOpsNewRun() {
           <IngestionInspectResult state={ingestionInspectState} />
           <IngestionImportResult
             state={ingestionImportState}
-            applyError={sourceMaterialApplyError}
-            onApplySourceMaterial={handleApplyImportedSourceMaterial}
+            applyError={sourceImportTargetApplyError}
+            onApplySourceTargetIds={handleApplyImportedSourceTargetIds}
           />
         </section>
 
@@ -2544,11 +2552,11 @@ function supportsAutoDetection(formats: string[]): boolean {
 function IngestionImportResult({
   state,
   applyError,
-  onApplySourceMaterial,
+  onApplySourceTargetIds,
 }: {
   state: IngestionImportState
   applyError: string | null
-  onApplySourceMaterial: (sourceMaterial: Array<Record<string, unknown>>) => void
+  onApplySourceTargetIds: (targetIds: string[], dryRun: boolean) => void
 }) {
   if (state.kind === 'idle' || state.kind === 'submitting') {
     return null
@@ -2595,7 +2603,6 @@ function IngestionImportResult({
   }
 
   const result = state.response.importResult
-  const sourceMaterial = state.response.diagnostics.sourceMaterial
   return (
     <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs">
       <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2611,21 +2618,20 @@ function IngestionImportResult({
         </div>
         <button
           type="button"
-          onClick={() => onApplySourceMaterial(sourceMaterial)}
-          disabled={sourceMaterial.length === 0}
+          onClick={() => onApplySourceTargetIds(result.targetIds, result.dryRun)}
+          disabled={result.dryRun || result.targetIds.length === 0}
           className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Upload className="h-3.5 w-3.5" />
-          Use rows for run
+          Use targets for run
         </button>
       </div>
       <div className="mb-2 text-slate-300">
-        Source material available: {sourceMaterial.length.toLocaleString('en-US')}{' '}
-        row{sourceMaterial.length === 1 ? '' : 's'}
+        Target IDs available: {result.targetIds.length.toLocaleString('en-US')}
       </div>
       {applyError && (
         <div className="mb-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-          Could not apply rows: {applyError}
+          Could not apply import: {applyError}
         </div>
       )}
       {result.targetIds.length > 0 && (
@@ -2857,21 +2863,23 @@ function updateSourceFaqIdsInputJson(
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
 }
 
-function updateSourceMaterialInputJson(
+function updateSourceImportTargetIdsInputJson(
   current: string,
-  sourceMaterial: Array<Record<string, unknown>>,
+  targetIds: string[],
 ): UpdatedInputsJson {
   const parsed = parseInputsJsonObject(current)
   if (!parsed.ok) return parsed
-  if (sourceMaterial.length === 0) {
+  const values = uniqueNonBlankStrings(targetIds)
+  if (values.length === 0) {
     return {
       ok: false,
-      message: 'Imported source material is empty.',
+      message: 'Imported target IDs are empty.',
     }
   }
 
   const next = { ...parsed.value }
-  next.source_material = sourceMaterial.map((row) => ({ ...row }))
+  next[SOURCE_IMPORT_TARGET_IDS_INPUT] = values
+  delete next.source_material
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
 }
 
