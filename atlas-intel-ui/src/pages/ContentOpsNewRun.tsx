@@ -271,6 +271,8 @@ export default function ContentOpsNewRun() {
     useState<IngestionInspectState>({ kind: 'idle' })
   const [ingestionImportState, setIngestionImportState] =
     useState<IngestionImportState>({ kind: 'idle' })
+  const [sourceMaterialApplyError, setSourceMaterialApplyError] =
+    useState<string | null>(null)
   // Codex P2 fix: request-id ref so a stale in-flight preview/plan
   // response can't overwrite a result the user has since invalidated
   // by editing the form. Both preview and plan share the same id
@@ -373,6 +375,7 @@ export default function ContentOpsNewRun() {
     setSubmitState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setPlanState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
     setExecutionState((prev) => (prev.kind === 'idle' ? prev : { kind: 'idle' }))
+    setSourceMaterialApplyError(null)
   }
 
   const markIngestionStale = () => {
@@ -385,6 +388,7 @@ export default function ContentOpsNewRun() {
     setIngestionImportState((prev) =>
       prev.kind === 'idle' ? prev : { kind: 'idle' },
     )
+    setSourceMaterialApplyError(null)
   }
 
   const handleLandingPageRepairAttemptsChange = (value: string) => {
@@ -710,6 +714,7 @@ export default function ContentOpsNewRun() {
             file_format: 'auto',
             max_source_text_chars: catalog.ingestionLimits.maxSourceTextChars,
             sample_limit: catalog.ingestionLimits.maxSampleLimit,
+            include_source_material: false,
             default_fields: parsedDefaultFields.fields,
           })
         : await inspectContentOpsIngestion(
@@ -721,6 +726,7 @@ export default function ContentOpsNewRun() {
               maxSourceTextChars: catalog.ingestionLimits.maxSourceTextChars,
               sampleLimit: catalog.ingestionLimits.maxSampleLimit,
               defaultFields: parsedDefaultFields.fields,
+              includeSourceMaterial: false,
             }),
           )
       if (requestId !== ingestionInspectRequestIdRef.current) return
@@ -776,6 +782,7 @@ export default function ContentOpsNewRun() {
     const inlineRows = parsedRows?.ok ? parsedRows.rows : []
 
     setIngestionImportState({ kind: 'submitting' })
+    setSourceMaterialApplyError(null)
     try {
       const outcome = selectedIngestionFile
         ? await importContentOpsIngestionFile({
@@ -786,6 +793,7 @@ export default function ContentOpsNewRun() {
             file_format: 'auto',
             max_source_text_chars: catalog.ingestionLimits.maxSourceTextChars,
             sample_limit: catalog.ingestionLimits.maxSampleLimit,
+            include_source_material: true,
             default_fields: parsedDefaultFields.fields,
             replace_existing: ingestionReplaceExisting,
             dry_run: ingestionDryRun,
@@ -799,6 +807,7 @@ export default function ContentOpsNewRun() {
               maxSourceTextChars: catalog.ingestionLimits.maxSourceTextChars,
               sampleLimit: catalog.ingestionLimits.maxSampleLimit,
               defaultFields: parsedDefaultFields.fields,
+              includeSourceMaterial: true,
               replaceExisting: ingestionReplaceExisting,
               dryRun: ingestionDryRun,
             }),
@@ -839,6 +848,19 @@ export default function ContentOpsNewRun() {
         message: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  const handleApplyImportedSourceMaterial = (
+    sourceMaterial: Array<Record<string, unknown>>,
+  ) => {
+    const updated = updateSourceMaterialInputJson(inputsJson, sourceMaterial)
+    if (!updated.ok) {
+      setSourceMaterialApplyError(updated.message)
+      return
+    }
+    setInputsJson(updated.value)
+    setSourceMaterialApplyError(null)
+    markStale()
   }
 
   const handleLoadIngestionFile = async (
@@ -1395,7 +1417,11 @@ export default function ContentOpsNewRun() {
           </label>
           <IngestionFileLoadResult state={ingestionFileLoadState} />
           <IngestionInspectResult state={ingestionInspectState} />
-          <IngestionImportResult state={ingestionImportState} />
+          <IngestionImportResult
+            state={ingestionImportState}
+            applyError={sourceMaterialApplyError}
+            onApplySourceMaterial={handleApplyImportedSourceMaterial}
+          />
         </section>
 
         {/* Options */}
@@ -2515,7 +2541,15 @@ function supportsAutoDetection(formats: string[]): boolean {
   return formats.includes('auto')
 }
 
-function IngestionImportResult({ state }: { state: IngestionImportState }) {
+function IngestionImportResult({
+  state,
+  applyError,
+  onApplySourceMaterial,
+}: {
+  state: IngestionImportState
+  applyError: string | null
+  onApplySourceMaterial: (sourceMaterial: Array<Record<string, unknown>>) => void
+}) {
   if (state.kind === 'idle' || state.kind === 'submitting') {
     return null
   }
@@ -2561,18 +2595,39 @@ function IngestionImportResult({ state }: { state: IngestionImportState }) {
   }
 
   const result = state.response.importResult
+  const sourceMaterial = state.response.diagnostics.sourceMaterial
   return (
     <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs">
-      <div className="mb-2 flex flex-wrap items-center gap-3">
-        <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 font-medium text-emerald-200">
-          {result.dryRun ? 'Dry run complete' : 'Import complete'}
-        </span>
-        <span className="text-slate-300">Inserted: {result.inserted}</span>
-        <span className="text-slate-300">Skipped: {result.skipped}</span>
-        {result.replaceExisting && (
-          <span className="text-amber-200">Replace existing enabled</span>
-        )}
+      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 font-medium text-emerald-200">
+            {result.dryRun ? 'Dry run complete' : 'Import complete'}
+          </span>
+          <span className="text-slate-300">Inserted: {result.inserted}</span>
+          <span className="text-slate-300">Skipped: {result.skipped}</span>
+          {result.replaceExisting && (
+            <span className="text-amber-200">Replace existing enabled</span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => onApplySourceMaterial(sourceMaterial)}
+          disabled={sourceMaterial.length === 0}
+          className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          Use rows for run
+        </button>
       </div>
+      <div className="mb-2 text-slate-300">
+        Source material available: {sourceMaterial.length.toLocaleString('en-US')}{' '}
+        row{sourceMaterial.length === 1 ? '' : 's'}
+      </div>
+      {applyError && (
+        <div className="mb-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+          Could not apply rows: {applyError}
+        </div>
+      )}
       {result.targetIds.length > 0 && (
         <Section label="Target ids">
           <div className="break-all font-mono text-[11px] text-slate-300">
@@ -2799,6 +2854,24 @@ function updateSourceFaqIdsInputJson(
     next[SOURCE_FAQ_IDS_INPUT] = values
   }
 
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function updateSourceMaterialInputJson(
+  current: string,
+  sourceMaterial: Array<Record<string, unknown>>,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+  if (sourceMaterial.length === 0) {
+    return {
+      ok: false,
+      message: 'Imported source material is empty.',
+    }
+  }
+
+  const next = { ...parsed.value }
+  next.source_material = sourceMaterial.map((row) => ({ ...row }))
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
 }
 

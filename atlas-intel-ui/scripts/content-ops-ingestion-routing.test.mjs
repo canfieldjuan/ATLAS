@@ -118,6 +118,7 @@ test('uploaded file inspect uses multipart file endpoint', async () => {
     file_format: 'csv',
     max_source_text_chars: 900,
     sample_limit: 5,
+    include_source_material: true,
     default_fields: { company_name: 'Acme' },
   })
 
@@ -138,6 +139,7 @@ test('uploaded file inspect uses multipart file endpoint', async () => {
   assert.equal(init.body.get('file_format'), 'csv')
   assert.equal(init.body.get('max_source_text_chars'), '900')
   assert.equal(init.body.get('sample_limit'), '5')
+  assert.equal(init.body.get('include_source_material'), 'true')
   assert.equal(
     init.body.get('default_fields'),
     JSON.stringify({ company_name: 'Acme' }),
@@ -155,6 +157,7 @@ test('inline inspect uses deprecated JSON compatibility endpoint', async () => {
     max_source_text_chars: 900,
     sample_limit: 5,
     default_fields: { company_name: 'Acme' },
+    include_source_material: true,
   })
 
   assert.equal(calls.length, 1)
@@ -173,6 +176,7 @@ test('inline inspect uses deprecated JSON compatibility endpoint', async () => {
     max_source_text_chars: 900,
     sample_limit: 5,
     default_fields: { company_name: 'Acme' },
+    include_source_material: true,
   })
 })
 
@@ -190,6 +194,7 @@ test('uploaded file import uses multipart file endpoint', async () => {
     file_format: 'csv',
     max_source_text_chars: 1200,
     sample_limit: 3,
+    include_source_material: true,
     default_fields: { company_name: 'Acme' },
     replace_existing: true,
     dry_run: false,
@@ -207,6 +212,7 @@ test('uploaded file import uses multipart file endpoint', async () => {
   assert.equal(init.headers['Content-Type'], undefined)
   assert.ok(init.body instanceof FormData)
   assert.equal(init.body.get('file').name, 'tickets.csv')
+  assert.equal(init.body.get('include_source_material'), 'true')
   assert.equal(init.body.get('replace_existing'), 'true')
   assert.equal(init.body.get('dry_run'), 'false')
 })
@@ -222,6 +228,7 @@ test('inline import uses deprecated JSON compatibility endpoint', async () => {
     max_source_text_chars: 1200,
     sample_limit: 3,
     default_fields: { company_name: 'Acme' },
+    include_source_material: true,
     replace_existing: true,
     dry_run: false,
   })
@@ -243,6 +250,7 @@ test('inline import uses deprecated JSON compatibility endpoint', async () => {
     max_source_text_chars: 1200,
     sample_limit: 3,
     default_fields: { company_name: 'Acme' },
+    include_source_material: true,
     replace_existing: true,
     dry_run: false,
   })

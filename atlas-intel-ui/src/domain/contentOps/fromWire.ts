@@ -306,6 +306,7 @@ export function toWireIngestionInspectRequest(
     max_source_text_chars: domain.maxSourceTextChars,
     sample_limit: domain.sampleLimit,
     default_fields: { ...domain.defaultFields },
+    include_source_material: domain.includeSourceMaterial,
   }
 }
 
@@ -332,6 +333,7 @@ export function fromWireIngestionDiagnostics(
     missingFieldCounts: { ...wire.missing_field_counts },
     sourceTypeCounts: { ...wire.source_type_counts },
     samples: wire.samples.map((row) => ({ ...row })),
+    sourceMaterial: (wire.source_material ?? []).map((row) => ({ ...row })),
     warnings: wire.warnings.map((warning) => ({
       code: warning.code,
       message: warning.message,

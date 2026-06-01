@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import ts from 'typescript'
+
+const newRunSource = readFileSync(
+  new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
+  'utf8',
+)
+
+function loadFromWireModule() {
+  const source = readFileSync(
+    new URL('../src/domain/contentOps/fromWire.ts', import.meta.url),
+    'utf8',
+  )
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+      verbatimModuleSyntax: true,
+    },
+  }).outputText
+
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
+  return import(moduleUrl)
+}
+
+const {
+  fromWireIngestionDiagnostics,
+  toWireIngestionImportRequest,
+} = await loadFromWireModule()
+
+test('domain mapper preserves full ingestion source material separately from samples', () => {
+  const diagnostics = fromWireIngestionDiagnostics({
+    ok: true,
+    mode: 'source_rows',
+    source: 'tickets.csv',
+    opportunity_count: 2,
+    warning_count: 0,
+    warning_counts: {},
+    missing_field_counts: {},
+    source_type_counts: { support_ticket: 2 },
+    samples: [{ target_id: 'ticket-1' }],
+    source_material: [
+      { target_id: 'ticket-1', text: 'Billing question' },
+      { target_id: 'ticket-2', text: 'Setup question' },
+    ],
+    warnings: [],
+  })
+
+  assert.deepEqual(
+    diagnostics.samples.map((row) => row.target_id),
+    ['ticket-1'],
+  )
+  assert.deepEqual(
+    diagnostics.sourceMaterial.map((row) => row.target_id),
+    ['ticket-1', 'ticket-2'],
+  )
+})
+
+test('domain import request can opt into full source material', () => {
+  assert.deepEqual(
+    toWireIngestionImportRequest({
+      rows: [{ target_id: 'ticket-1' }],
+      sourceRows: true,
+      source: 'tickets.csv',
+      targetMode: 'vendor_retention',
+      maxSourceTextChars: 1200,
+      sampleLimit: 25,
+      defaultFields: { company_name: 'Acme' },
+      includeSourceMaterial: true,
+      replaceExisting: false,
+      dryRun: true,
+    }),
+    {
+      rows: [{ target_id: 'ticket-1' }],
+      source_rows: true,
+      source: 'tickets.csv',
+      target_mode: 'vendor_retention',
+      max_source_text_chars: 1200,
+      sample_limit: 25,
+      default_fields: { company_name: 'Acme' },
+      include_source_material: true,
+      replace_existing: false,
+      dry_run: true,
+    },
+  )
+})
+
+test('new run import handoff applies source material to the run inputs', () => {
+  assert.ok(newRunSource.includes('include_source_material: true'))
+  assert.ok(newRunSource.includes('includeSourceMaterial: true'))
+  assert.ok(newRunSource.includes('function updateSourceMaterialInputJson'))
+  assert.ok(newRunSource.includes('next.source_material = sourceMaterial.map'))
+  assert.ok(newRunSource.includes('Use rows for run'))
+  assert.ok(newRunSource.includes('onApplySourceMaterial(sourceMaterial)'))
+})

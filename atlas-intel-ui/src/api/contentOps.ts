@@ -251,6 +251,7 @@ export interface ContentOpsIngestionInspectRequest {
   max_source_text_chars?: number                    // 1..10000
   sample_limit?: number                             // 0..25
   default_fields?: Record<string, unknown>
+  include_source_material?: boolean                 // default false
 }
 
 export interface ContentOpsIngestionImportRequest
@@ -268,6 +269,7 @@ export interface ContentOpsIngestionFileInspectRequest {
   max_source_text_chars?: number
   sample_limit?: number
   default_fields?: Record<string, unknown>
+  include_source_material?: boolean
 }
 
 export interface ContentOpsIngestionFileImportRequest
@@ -293,6 +295,7 @@ export interface ContentOpsIngestionDiagnosticsResponse {
   missing_field_counts: Record<string, number>
   source_type_counts: Record<string, number>
   samples: Array<Record<string, unknown>>
+  source_material?: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
 }
 
@@ -743,6 +746,11 @@ function ingestionFileFormData(
     body.max_source_text_chars,
   )
   appendOptionalNumber(formData, 'sample_limit', body.sample_limit)
+  appendOptionalBoolean(
+    formData,
+    'include_source_material',
+    body.include_source_material,
+  )
   if (body.default_fields) {
     formData.set('default_fields', JSON.stringify(body.default_fields))
   }
