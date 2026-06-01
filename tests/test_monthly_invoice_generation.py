@@ -1263,6 +1263,90 @@ async def test_approve_and_send_skips_needs_hours_drafts():
 
 
 @pytest.mark.asyncio
+async def test_update_invoice_clears_needs_hours_when_line_items_are_billable(monkeypatch):
+    """Filling real hours should unblock a draft for the pending review queue."""
+    import json
+    from decimal import Decimal
+
+    from atlas_brain.storage.repositories import invoice as invoice_repo_mod
+
+    invoice_id = uuid4()
+    persisted_metadata = {}
+
+    class FakePool:
+        is_initialized = True
+
+        async def fetchrow(self, _query, *args):
+            persisted_metadata.update(json.loads(args[11]))
+            return {
+                "id": invoice_id,
+                "invoice_number": "INV-2026-TEST",
+                "status": "draft",
+                "line_items": args[1],
+                "due_date": args[2],
+                "notes": args[3],
+                "tax_rate": Decimal(str(args[4])),
+                "tax_amount": Decimal(str(args[5])),
+                "discount_amount": Decimal(str(args[6])),
+                "subtotal": Decimal(str(args[7])),
+                "total_amount": Decimal(str(args[8])),
+                "invoice_for": args[9],
+                "contact_name": args[10],
+                "amount_paid": Decimal("0"),
+                "amount_due": Decimal(str(args[8])),
+                "metadata": args[11],
+            }
+
+    async def fake_get_by_id(_invoice_id):
+        return {
+            "id": invoice_id,
+            "status": "draft",
+            "line_items": [
+                {"date": "03/07/2026", "description": "Brookstone (hours TBD)", "quantity": 0, "unit_price": 35.0},
+            ],
+            "tax_rate": 0.0,
+            "discount_amount": 0.0,
+            "metadata": {"needs_hours": True},
+        }
+
+    repo = invoice_repo_mod.InvoiceRepository()
+    monkeypatch.setattr(invoice_repo_mod, "get_db_pool", lambda: FakePool())
+    monkeypatch.setattr(repo, "get_by_id", fake_get_by_id)
+
+    billable_items = [
+        {
+            "date": "03/07/2026",
+            "description": "Brookstone cleaning",
+            "quantity": 2.5,
+            "unit_price": 35.0,
+            "amount": 0.0,
+        },
+    ]
+    updated = await repo.update_invoice(invoice_id=invoice_id, line_items=billable_items)
+
+    assert updated is not None
+    assert persisted_metadata["needs_hours"] is False
+    assert updated["metadata"]["needs_hours"] is False
+    assert updated["total_amount"] == 87.5
+    assert updated["line_items"][0]["amount"] == 87.5
+
+
+def test_line_items_are_billable_requires_all_positive_quantities():
+    from atlas_brain.storage.repositories.invoice import _line_items_are_billable
+
+    assert _line_items_are_billable([
+        {"description": "Cleaning", "quantity": 2.5, "unit_price": 35.0},
+    ])
+    assert not _line_items_are_billable([
+        {"description": "Cleaning", "quantity": 0, "unit_price": 35.0},
+    ])
+    assert not _line_items_are_billable([
+        {"description": "Cleaning", "quantity": 2.5, "unit_price": 0},
+    ])
+    assert not _line_items_are_billable([])
+
+
+@pytest.mark.asyncio
 async def test_export_invoice_pdf():
     """export_invoice_pdf should generate PDF bytes for a real invoice."""
     import json
