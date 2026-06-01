@@ -522,6 +522,7 @@ export interface GeneratedAssetListParams {
   slug?: string
   topic_type?: string
   brief_type?: string
+  id?: string | string[]
   format?: string
   limit?: number
 }
@@ -779,6 +780,12 @@ function queryString(params: object): string {
   const search = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
     if (value === undefined || value === null) continue
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        search.append(key, String(item))
+      }
+      continue
+    }
     search.set(key, String(value))
   }
   const query = search.toString()

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import {
   ArrowRight,
   CheckCircle2,
@@ -184,10 +184,49 @@ const inputClassName =
   'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
 const textAreaClassName =
   'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm leading-6 text-slate-100 placeholder:text-slate-600 focus:border-cyan-400 focus:outline-none'
+const ID_FILTERED_ASSETS = new Set<GeneratedAssetType>([
+  'blog_post',
+  'landing_page',
+])
+
+function assetFromSearchParams(params: URLSearchParams): GeneratedAssetType {
+  const asset = params.get('asset')
+  return ASSETS.some((item) => item.id === asset)
+    ? asset as GeneratedAssetType
+    : 'report'
+}
+
+function statusFromSearchParams(params: URLSearchParams): StatusFilter {
+  const status = params.get('status')
+  return STATUSES.includes(status as StatusFilter)
+    ? status as StatusFilter
+    : 'draft'
+}
+
+function idFiltersFromSearchParams(params: URLSearchParams): string[] {
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const raw of params.getAll('id')) {
+    const id = raw.trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+}
+
+function assetSupportsIdFilter(asset: GeneratedAssetType): boolean {
+  return ID_FILTERED_ASSETS.has(asset)
+}
 
 export default function ContentOpsAssetsReview() {
-  const [asset, setAsset] = useState<GeneratedAssetType>('report')
-  const [status, setStatus] = useState<StatusFilter>('draft')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [asset, setAsset] = useState<GeneratedAssetType>(() =>
+    assetFromSearchParams(searchParams),
+  )
+  const [status, setStatus] = useState<StatusFilter>(() =>
+    statusFromSearchParams(searchParams),
+  )
   const [limit, setLimit] = useState(20)
   const [data, setData] = useState<GeneratedAssetListResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -204,12 +243,19 @@ export default function ContentOpsAssetsReview() {
   const [macroPublishHistory, setMacroPublishHistory] =
     useState<MacroPublishHistoryState>({ kind: 'idle' })
 
+  const focusedIds = useMemo(
+    () => idFiltersFromSearchParams(searchParams),
+    [searchParams],
+  )
   const params = useMemo(
     () => ({
       status: status === 'all' ? '' : status,
+      id: assetSupportsIdFilter(asset) && focusedIds.length > 0
+        ? focusedIds
+        : undefined,
       limit,
     }),
-    [limit, status],
+    [asset, focusedIds, limit, status],
   )
 
   const load = useCallback(async (isRefresh = false) => {
@@ -311,6 +357,30 @@ export default function ContentOpsAssetsReview() {
     } finally {
       setExporting(false)
     }
+  }
+
+  const handleAssetChange = (nextAsset: GeneratedAssetType) => {
+    setAsset(nextAsset)
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        next.set('asset', nextAsset)
+        next.delete('id')
+        return next
+      },
+      { replace: true },
+    )
+  }
+
+  const clearFocusedIds = () => {
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        next.delete('id')
+        return next
+      },
+      { replace: true },
+    )
   }
 
   const handleSaveLandingPageDraft = async (
@@ -457,7 +527,7 @@ export default function ContentOpsAssetsReview() {
           <button
             key={item.id}
             type="button"
-            onClick={() => setAsset(item.id)}
+            onClick={() => handleAssetChange(item.id)}
             className={clsx(
               'rounded-lg border p-4 text-left transition',
               asset === item.id
@@ -556,6 +626,21 @@ export default function ContentOpsAssetsReview() {
           </div>
         )}
         <MacroPublishResultBanner outcome={macroPublishOutcome} />
+        {assetSupportsIdFilter(asset) && focusedIds.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-sm text-cyan-100">
+            <span>
+              Showing {focusedIds.length} generated draft
+              {focusedIds.length === 1 ? '' : 's'} from the previous run.
+            </span>
+            <button
+              type="button"
+              onClick={clearFocusedIds}
+              className="rounded-md border border-cyan-500/40 px-2.5 py-1 text-xs font-medium text-cyan-100 hover:bg-cyan-500/10"
+            >
+              Show latest {activeAsset.label.toLowerCase()}
+            </button>
+          </div>
+        )}
         {error && data && (
           <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
             Refresh failed: {error.message}
