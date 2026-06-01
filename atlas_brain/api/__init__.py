@@ -60,7 +60,7 @@ from .b2b_evidence import router as b2b_evidence_router
 from .b2b_vendor_claims import router as b2b_vendor_claims_router
 from .b2b_challenger_claims import router as b2b_challenger_claims_router
 from fastapi import Depends
-from ..auth.dependencies import require_b2b_plan
+from ..auth.dependencies import require_b2b_plan_or_api_key
 
 logger = logging.getLogger("atlas.api")
 
@@ -141,11 +141,10 @@ router.include_router(b2b_challenger_claims_router)
 # returns 503 ("Content Ops execution services are not configured.")
 # until the host wires execution services in a follow-up slice.
 #
-# Auth: gated behind require_b2b_plan("b2b_growth") -- same dependency
-# the existing /api/v1/b2b/campaigns router uses, since Content Ops is
-# the same B2B audience. Without this every /api/v1/content-ops/*
-# endpoint would be reachable without a token (the frontend's
-# ProtectedRoute is UI-only gating).
+# Auth: gated behind require_b2b_plan_or_api_key("b2b_growth") so dashboard
+# JWTs and scoped service API keys both keep the same B2B account boundary.
+# Without this every /api/v1/content-ops/* endpoint would be reachable without
+# a token (the frontend's ProtectedRoute is UI-only gating).
 #
 # The `extracted_content_pipeline` import is inside the try so the
 # host's prod Docker image (which copies only ./atlas_brain) doesn't
@@ -195,13 +194,14 @@ try:
     from ..storage.database import get_db_pool
 
     async def _capture_content_ops_auth_user(
-        user: AuthUser = Depends(require_b2b_plan("b2b_growth")),
+        user: AuthUser = Depends(require_b2b_plan_or_api_key("b2b_growth")),
     ) -> AuthUser:
         """Bridge the per-request AuthUser to the
         `_content_ops_scope` ContextVar so the route's
         `scope_provider` can read it. Composing on top of
-        `require_b2b_plan` keeps the existing auth gate (paying
-        tier check, B2B product check, past-due guard) intact.
+        `require_b2b_plan_or_api_key` keeps the existing auth gate (paying tier
+        check, B2B product check, past-due guard) intact while allowing scoped
+        service API keys.
         Closes the Codex P1 cross-tenant safety issue from
         PR #454 (E2): drafts now persist under the
         authenticated tenant's account_id rather than empty

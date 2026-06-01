@@ -26,6 +26,8 @@ class AuthUser:
     trial_ends_at: Optional[datetime] = field(default=None, repr=False)
     is_admin: bool = False
     is_platform_admin: bool = False
+    auth_method: str = "jwt"
+    api_key_scopes: tuple[str, ...] = field(default_factory=tuple, repr=False)
 
 
 def _synthetic_admin() -> AuthUser:
@@ -221,21 +223,60 @@ def require_b2b_plan(min_plan: str):
     min_idx = B2B_PLAN_ORDER.index(min_plan)
 
     async def _check(user: AuthUser = Depends(require_auth)) -> AuthUser:
-        if user.plan_status == "past_due":
-            raise HTTPException(
-                status_code=402,
-                detail="Payment past due",
-            )
-        if user.product not in ("b2b_retention", "b2b_challenger"):
+        return _enforce_b2b_plan(user, min_plan=min_plan, min_idx=min_idx)
+
+    return _check
+
+
+CONTENT_OPS_API_KEY_SCOPES = frozenset(
+    {
+        "content_ops:*",
+        "content_ops:deflection:*",
+    }
+)
+
+
+def _enforce_b2b_plan(user: AuthUser, *, min_plan: str, min_idx: int) -> AuthUser:
+    if user.plan_status == "past_due":
+        raise HTTPException(
+            status_code=402,
+            detail="Payment past due",
+        )
+    if user.product not in ("b2b_retention", "b2b_challenger"):
+        raise HTTPException(
+            status_code=403,
+            detail="B2B product required",
+        )
+    user_idx = B2B_PLAN_ORDER.index(user.plan) if user.plan in B2B_PLAN_ORDER else -1
+    if user_idx < min_idx:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Plan '{min_plan}' or higher required (current: '{user.plan}')",
+        )
+    return user
+
+
+def _api_key_allows_content_ops(user: AuthUser) -> bool:
+    if user.auth_method != "api_key":
+        return True
+    scopes = {scope.strip() for scope in user.api_key_scopes if scope and scope.strip()}
+    return bool(scopes & CONTENT_OPS_API_KEY_SCOPES)
+
+
+def require_b2b_plan_or_api_key(min_plan: str):
+    """Enforce the B2B plan gate for JWT or scoped service API-key callers."""
+    if min_plan not in B2B_PLAN_ORDER:
+        raise ValueError(
+            f"Invalid B2B plan tier '{min_plan}'. Expected one of {B2B_PLAN_ORDER}"
+        )
+    min_idx = B2B_PLAN_ORDER.index(min_plan)
+
+    async def _check(user: AuthUser = Depends(require_auth_or_api_key)) -> AuthUser:
+        _enforce_b2b_plan(user, min_plan=min_plan, min_idx=min_idx)
+        if not _api_key_allows_content_ops(user):
             raise HTTPException(
                 status_code=403,
-                detail="B2B product required",
-            )
-        user_idx = B2B_PLAN_ORDER.index(user.plan) if user.plan in B2B_PLAN_ORDER else -1
-        if user_idx < min_idx:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Plan '{min_plan}' or higher required (current: '{user.plan}')",
+                detail="Content Ops API key scope required",
             )
         return user
 
@@ -366,6 +407,8 @@ async def require_api_key(request: Request) -> AuthUser:
         trial_ends_at=trial_ends,
         is_admin=False,
         is_platform_admin=False,
+        auth_method="api_key",
+        api_key_scopes=tuple(str(scope) for scope in row.get("scopes") or ()),
     )
 
     client_ip = request.client.host if request.client else None
@@ -381,8 +424,8 @@ async def require_auth_or_api_key(request: Request) -> AuthUser:
     checks. This helper dispatches by token shape so both auth
     methods work.
 
-    Used only by LLM Gateway endpoints (PR-D4); atlas's existing
-    products are dashboard-only and keep their JWT-only chains.
+    Used by LLM Gateway endpoints and selected server-to-server Content Ops
+    routes that need revocable long-lived service credentials.
     """
     if not settings.saas_auth.enabled:
         return _synthetic_admin()
