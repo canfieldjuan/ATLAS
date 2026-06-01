@@ -88,8 +88,10 @@ test('domain import request can opt into full source material', () => {
 })
 
 test('new run import handoff applies persisted target ids to the run inputs', () => {
-  assert.ok(newRunSource.includes('include_source_material: true'))
-  assert.ok(newRunSource.includes('includeSourceMaterial: true'))
+  assert.ok(newRunSource.includes('include_source_material: false'))
+  assert.ok(newRunSource.includes('includeSourceMaterial: false'))
+  assert.equal(newRunSource.includes('include_source_material: true'), false)
+  assert.equal(newRunSource.includes('includeSourceMaterial: true'), false)
   assert.ok(
     newRunSource.includes(
       "const SOURCE_IMPORT_TARGET_IDS_INPUT = 'source_import_target_ids'",
