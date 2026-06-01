@@ -47,6 +47,18 @@ function jsonResponse(payload, status = 200) {
   }
 }
 
+function warningSink() {
+  const warnings = []
+  return {
+    warnings,
+    logger: {
+      warn(message) {
+        warnings.push(message)
+      },
+    },
+  }
+}
+
 test('resolveGeneratedBlogPostsUrl prefers explicit feed and falls back to API base', () => {
   assert.equal(
     resolveGeneratedBlogPostsUrl({
@@ -116,48 +128,74 @@ test('fetchGeneratedBlogPrerenderEntries is a no-op without a feed URL', async (
   assert.deepEqual(entries, [])
 })
 
-test('fetchGeneratedBlogSitemapUrls fails when configured feed is unavailable', async () => {
-  await assert.rejects(
-    fetchGeneratedBlogSitemapUrls({
-      postsUrl: 'https://api.example.com/api/v1/blog/published',
-      publicSiteUrl: SITE_URL,
-      fetchImpl: async () => jsonResponse({}, 503),
-    }),
-    /Failed to fetch generated blog posts: HTTP 503/,
-  )
+test('fetchGeneratedBlogSitemapUrls fail-softs when configured feed is unavailable', async () => {
+  const { logger, warnings } = warningSink()
+  const urls = await fetchGeneratedBlogSitemapUrls({
+    postsUrl: 'https://api.example.com/api/v1/blog/published',
+    publicSiteUrl: SITE_URL,
+    fetchImpl: async () => jsonResponse({}, 503),
+    logger,
+  })
+
+  assert.deepEqual(urls, [])
+  assert.deepEqual(warnings, [
+    'Skipping generated blog feed: Failed to fetch generated blog posts: HTTP 503',
+  ])
 })
 
-test('fetchGeneratedBlogSitemapUrls fails closed on malformed response envelope', async () => {
-  await assert.rejects(
-    fetchGeneratedBlogSitemapUrls({
-      postsUrl: 'https://api.example.com/api/v1/blog/published',
-      publicSiteUrl: SITE_URL,
-      fetchImpl: async () => jsonResponse({ results: [post()] }),
-    }),
-    /Generated blog response posts must be an array/,
-  )
+test('fetchGeneratedBlogSitemapUrls fail-softs on malformed response envelope', async () => {
+  const { logger, warnings } = warningSink()
+  const urls = await fetchGeneratedBlogSitemapUrls({
+    postsUrl: 'https://api.example.com/api/v1/blog/published',
+    publicSiteUrl: SITE_URL,
+    fetchImpl: async () => jsonResponse({ results: [post()] }),
+    logger,
+  })
+
+  assert.deepEqual(urls, [])
+  assert.deepEqual(warnings, [
+    'Skipping generated blog feed: Generated blog response posts must be an array',
+  ])
 })
 
-test('fetchGeneratedBlogSitemapUrls fails closed on malformed public post', async () => {
-  await assert.rejects(
-    fetchGeneratedBlogSitemapUrls({
-      postsUrl: 'https://api.example.com/api/v1/blog/published',
-      publicSiteUrl: SITE_URL,
-      fetchImpl: async () => jsonResponse({ posts: [post({ content: '' })] }),
+test('fetchGeneratedBlogSitemapUrls skips malformed public posts and keeps the batch', async () => {
+  const { logger, warnings } = warningSink()
+  const urls = await fetchGeneratedBlogSitemapUrls({
+    postsUrl: 'https://api.example.com/api/v1/blog/published',
+    publicSiteUrl: SITE_URL,
+    fetchImpl: async () => jsonResponse({
+      posts: [
+        post({ slug: 'bad-post', content: '' }),
+        post({ slug: 'good-post' }),
+      ],
     }),
-    /Generated blog post 1 missing content/,
-  )
+    logger,
+  })
+
+  assert.deepEqual(urls, [{
+    loc: `${SITE_URL}/blog/good-post`,
+    lastmod: '2026-06-01',
+    priority: '0.7',
+    changefreq: 'monthly',
+  }])
+  assert.deepEqual(warnings, [
+    'Skipping generated blog post 1: Generated blog post 1 missing content',
+  ])
 })
 
-test('fetchGeneratedBlogSitemapUrls rejects unsafe generated slugs', async () => {
-  await assert.rejects(
-    fetchGeneratedBlogSitemapUrls({
-      postsUrl: 'https://api.example.com/api/v1/blog/published',
-      publicSiteUrl: SITE_URL,
-      fetchImpl: async () => jsonResponse({ posts: [post({ slug: '../escape' })] }),
-    }),
-    /Generated blog post 1 has unsafe slug/,
-  )
+test('fetchGeneratedBlogSitemapUrls skips unsafe generated slugs', async () => {
+  const { logger, warnings } = warningSink()
+  const urls = await fetchGeneratedBlogSitemapUrls({
+    postsUrl: 'https://api.example.com/api/v1/blog/published',
+    publicSiteUrl: SITE_URL,
+    fetchImpl: async () => jsonResponse({ posts: [post({ slug: '../escape' })] }),
+    logger,
+  })
+
+  assert.deepEqual(urls, [])
+  assert.deepEqual(warnings, [
+    'Skipping generated blog post 1: Generated blog post 1 has unsafe slug',
+  ])
 })
 
 test('vite build wires generated blogs into sitemap and prerender with escaped HTML', () => {

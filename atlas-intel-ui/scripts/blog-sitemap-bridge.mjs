@@ -118,29 +118,50 @@ function blogLoc(publicSiteUrl, slug) {
   return `${siteBase.origin}/blog/${encodeURIComponent(slug)}`
 }
 
+function warn(logger, message) {
+  if (logger && typeof logger.warn === 'function') {
+    logger.warn(message)
+  }
+}
+
 async function fetchGeneratedBlogPosts({
   postsUrl,
   fetchImpl = globalThis.fetch,
+  logger = console,
 } = {}) {
   const feedUrl = clean(postsUrl)
   if (!feedUrl) return []
   if (typeof fetchImpl !== 'function') {
-    throw new Error('Generated blog sitemap bridge requires a fetch implementation')
+    warn(logger, 'Skipping generated blog feed: fetch is unavailable')
+    return []
   }
 
-  const response = await fetchImpl(feedUrl)
-  if (!response || !response.ok) {
-    const status = response?.status ? `HTTP ${response.status}` : 'no response'
-    throw new Error(`Failed to fetch generated blog posts: ${status}`)
+  let envelope
+  try {
+    const response = await fetchImpl(feedUrl)
+    if (!response || !response.ok) {
+      const status = response?.status ? `HTTP ${response.status}` : 'no response'
+      throw new Error(`Failed to fetch generated blog posts: ${status}`)
+    }
+    envelope = recordValue(await response.json(), 'response')
+    if (!Array.isArray(envelope.posts)) {
+      throw new Error('Generated blog response posts must be an array')
+    }
+  } catch (error) {
+    warn(logger, `Skipping generated blog feed: ${error.message}`)
+    return []
   }
 
-  const envelope = recordValue(await response.json(), 'response')
-  if (!Array.isArray(envelope.posts)) {
-    throw new Error('Generated blog response posts must be an array')
+  const posts = []
+  for (const [index, item] of envelope.posts.entries()) {
+    try {
+      const post = generatedBlogPostFromWire(item, index)
+      if (post) posts.push(post)
+    } catch (error) {
+      warn(logger, `Skipping generated blog post ${index + 1}: ${error.message}`)
+    }
   }
-  return envelope.posts
-    .map(generatedBlogPostFromWire)
-    .filter((post) => post !== null)
+  return posts
 }
 
 function excludeSlugSet(excludeSlugs) {
@@ -152,22 +173,27 @@ export async function fetchGeneratedBlogSitemapUrls({
   publicSiteUrl,
   excludeSlugs = [],
   fetchImpl = globalThis.fetch,
+  logger = console,
 } = {}) {
   const excluded = excludeSlugSet(excludeSlugs)
   const seen = new Set()
-  const posts = await fetchGeneratedBlogPosts({ postsUrl, fetchImpl })
+  const posts = await fetchGeneratedBlogPosts({ postsUrl, fetchImpl, logger })
   const urls = []
   for (const post of posts) {
     if (excluded.has(post.slug)) continue
-    const loc = blogLoc(publicSiteUrl, post.slug)
-    if (seen.has(loc)) continue
-    seen.add(loc)
-    urls.push({
-      loc,
-      lastmod: post.date,
-      priority: '0.7',
-      changefreq: 'monthly',
-    })
+    try {
+      const loc = blogLoc(publicSiteUrl, post.slug)
+      if (seen.has(loc)) continue
+      seen.add(loc)
+      urls.push({
+        loc,
+        lastmod: post.date,
+        priority: '0.7',
+        changefreq: 'monthly',
+      })
+    } catch (error) {
+      warn(logger, `Skipping generated blog sitemap URL for ${post.slug}: ${error.message}`)
+    }
   }
   return urls
 }
@@ -177,19 +203,24 @@ export async function fetchGeneratedBlogPrerenderEntries({
   publicSiteUrl,
   excludeSlugs = [],
   fetchImpl = globalThis.fetch,
+  logger = console,
 } = {}) {
   const excluded = excludeSlugSet(excludeSlugs)
   const seen = new Set()
-  const posts = await fetchGeneratedBlogPosts({ postsUrl, fetchImpl })
+  const posts = await fetchGeneratedBlogPosts({ postsUrl, fetchImpl, logger })
   const entries = []
   for (const post of posts) {
     if (excluded.has(post.slug) || seen.has(post.slug)) continue
     seen.add(post.slug)
-    entries.push({
-      path: `/blog/${post.slug}`,
-      loc: blogLoc(publicSiteUrl, post.slug),
-      post,
-    })
+    try {
+      entries.push({
+        path: `/blog/${post.slug}`,
+        loc: blogLoc(publicSiteUrl, post.slug),
+        post,
+      })
+    } catch (error) {
+      warn(logger, `Skipping generated blog prerender entry for ${post.slug}: ${error.message}`)
+    }
   }
   return entries
 }

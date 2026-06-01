@@ -5,6 +5,7 @@ export function fetchGeneratedBlogSitemapUrls(args?: {
   publicSiteUrl?: string
   excludeSlugs?: string[]
   fetchImpl?: typeof fetch
+  logger?: Pick<Console, 'warn'>
 }): Promise<Array<{
   loc: string
   lastmod: string
@@ -17,4 +18,5 @@ export function fetchGeneratedBlogPrerenderEntries(args?: {
   publicSiteUrl?: string
   excludeSlugs?: string[]
   fetchImpl?: typeof fetch
+  logger?: Pick<Console, 'warn'>
 }): Promise<unknown[]>
