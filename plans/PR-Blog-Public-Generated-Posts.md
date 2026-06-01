@@ -27,17 +27,21 @@ Slice phase: Vertical slice
    static posts by slug.
 4. Make `/blog/:slug` fetch generated posts when the slug is not static, while
    preserving the static rendering path for existing prerendered content.
-5. Add focused backend and frontend tests for approved visibility and runtime
-   generated-post fetching.
-6. Enroll both focused suites in CI.
+5. Reuse the public landing-page escape-first Markdown sanitizer for generated
+   blog content before any HTML injection.
+6. Add focused backend and frontend tests for approved visibility, runtime
+   generated-post fetching, and sanitizer wiring.
+7. Enroll both focused suites in CI.
 
 ### Files touched
 
 - `atlas_brain/api/blog_public.py`
 - `tests/test_blog_public.py`
 - `atlas-intel-ui/src/api/blog.ts`
+- `atlas-intel-ui/src/lib/safeMarkdown.ts`
 - `atlas-intel-ui/src/pages/Blog.tsx`
 - `atlas-intel-ui/src/pages/BlogPost.tsx`
+- `atlas-intel-ui/src/pages/PublicLandingPage.tsx`
 - `atlas-intel-ui/scripts/blog-public-generated-posts.test.mjs`
 - `atlas-intel-ui/package.json`
 - `.github/workflows/atlas_intel_ui_checks.yml`
@@ -58,6 +62,10 @@ The frontend adapter converts the backend wire shape into the existing
 generated posts, and merges by slug with generated posts taking precedence. The
 detail page uses the static post immediately when present; otherwise it fetches
 the slug from the public API and renders the same `BlogPost` template.
+Generated blog content uses the same escape-first `renderSafeMarkdown` helper
+as public landing pages, so raw HTML from approved generated content is rendered
+as inert text before the sanitized HTML sink. Static in-repo blog posts keep the
+trusted raw-HTML rendering path so existing prerendered posts do not regress.
 
 ## Intentional
 
@@ -65,6 +73,9 @@ the slug from the public API and renders the same `BlogPost` template.
   for already generated and approved posts.
 - Static posts remain in place for existing prerendered SEO pages and as a
   fallback if the public API is unavailable.
+- Static in-repo blog content keeps its trusted HTML path; only generated blog
+  content uses escape-first rendering because existing static posts are authored
+  as HTML strings.
 - The backend route names remain `/published` to avoid breaking existing
   callers; only the public eligibility predicate expands to include approved
   generated-asset drafts.
@@ -106,10 +117,10 @@ the slug from the public API and renders the same `BlogPost` template.
 | Plan | ~95 |
 | Backend API + tests | ~45 |
 | Frontend API adapter | ~85 |
-| Blog pages | ~120 |
-| Frontend tests + CI enrollment | ~75 |
+| Blog pages + shared sanitizer | ~165 |
+| Frontend tests + CI enrollment | ~90 |
 | Backend CI enrollment | ~35 |
-| **Total** | **~455** |
+| **Total** | **~515** |
 
 The slice may slightly exceed the 400 LOC target because the backend status
 predicate and both frontend public routes must land together to produce a usable

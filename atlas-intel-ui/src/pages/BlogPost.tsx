@@ -8,6 +8,7 @@ import BlogCardVisual from '../components/BlogCardVisual'
 import { POSTS } from '../content/blog'
 import type { ChartSpec, BlogPost as BlogPostType } from '../content/blog'
 import { fetchPublicBlogPost } from '../api/blog'
+import { renderSafeMarkdown, sanitizeRenderedHtml } from '../lib/safeMarkdown'
 
 const BlogChart = lazy(() => import('../components/BlogChartRenderer'))
 
@@ -20,16 +21,19 @@ function formatDate(iso: string) {
 }
 
 const CHART_PLACEHOLDER_RE = /(\{\{chart:[^}]+\}\})/
-const UNSAFE_HTML_RE = 'script, iframe, object, embed, link, meta, style, base'
 
 type GeneratedPostState = {
   slug: string
   post: BlogPostType | null
 }
 
-function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
+function renderContentWithCharts(
+  content: string,
+  charts: ChartSpec[] | undefined,
+  escapeRawHtml: boolean,
+) {
   if (!charts || charts.length === 0) {
-    const html = renderSafeMarkdown(content)
+    const html = renderBlogMarkdown(content, escapeRawHtml)
     return <div className="blog-prose" dangerouslySetInnerHTML={{ __html: html }} />
   }
 
@@ -52,49 +56,17 @@ function renderContentWithCharts(content: string, charts?: ChartSpec[]) {
           return null
         }
         if (!part.trim()) return null
-        const html = renderSafeMarkdown(part)
+        const html = renderBlogMarkdown(part, escapeRawHtml)
         return <div key={i} dangerouslySetInnerHTML={{ __html: html }} />
       })}
     </div>
   )
 }
 
-function renderSafeMarkdown(markdown: string): string {
+function renderBlogMarkdown(markdown: string, escapeRawHtml: boolean): string {
+  if (escapeRawHtml) return renderSafeMarkdown(markdown)
   const html = marked.parse(markdown, { async: false }) as string
   return sanitizeRenderedHtml(html)
-}
-
-function sanitizeRenderedHtml(html: string): string {
-  const template = document.createElement('template')
-  template.innerHTML = html
-  for (const element of Array.from(template.content.querySelectorAll(UNSAFE_HTML_RE))) {
-    element.remove()
-  }
-  for (const element of Array.from(template.content.querySelectorAll('*'))) {
-    for (const attr of Array.from(element.attributes)) {
-      const name = attr.name.toLowerCase()
-      if (name.startsWith('on') || name === 'style') {
-        element.removeAttribute(attr.name)
-        continue
-      }
-      if ((name === 'href' || name === 'src') && !safeUrl(attr.value)) {
-        element.removeAttribute(attr.name)
-      }
-    }
-  }
-  return template.innerHTML
-}
-
-function safeUrl(value: string): boolean {
-  const normalized = value.trim().toLowerCase()
-  return (
-    normalized.startsWith('https://') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('mailto:') ||
-    normalized.startsWith('tel:') ||
-    normalized.startsWith('/') ||
-    normalized.startsWith('#')
-  )
 }
 
 export default function BlogPost() {
@@ -125,8 +97,8 @@ export default function BlogPost() {
 
   const renderedContent = useMemo(() => {
     if (!post) return null
-    return renderContentWithCharts(post.content, post.charts)
-  }, [post])
+    return renderContentWithCharts(post.content, post.charts, !staticPost)
+  }, [post, staticPost])
 
   const seoKeywords = useMemo(() => {
     if (!post) return undefined

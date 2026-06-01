@@ -14,6 +14,14 @@ const blogPostPageSource = readFileSync(
   new URL('../src/pages/BlogPost.tsx', import.meta.url),
   'utf8',
 )
+const publicLandingPageSource = readFileSync(
+  new URL('../src/pages/PublicLandingPage.tsx', import.meta.url),
+  'utf8',
+)
+const safeMarkdownSource = readFileSync(
+  new URL('../src/lib/safeMarkdown.ts', import.meta.url),
+  'utf8',
+)
 
 test('public blog adapter fetches list and detail from backend public routes', () => {
   assert.ok(blogApiSource.includes("const BASE = `${API_BASE}/api/v1/blog`"))
@@ -40,9 +48,21 @@ test('blog detail fetches generated post only when slug is not static', () => {
 })
 
 test('blog detail sanitizes rendered markdown before html injection', () => {
-  assert.ok(blogPostPageSource.includes('renderSafeMarkdown(content)'))
-  assert.ok(blogPostPageSource.includes('sanitizeRenderedHtml(html)'))
-  assert.ok(blogPostPageSource.includes("element.removeAttribute(attr.name)"))
-  assert.ok(blogPostPageSource.includes("name.startsWith('on')"))
-  assert.ok(blogPostPageSource.includes("!safeUrl(attr.value)"))
+  assert.ok(
+    blogPostPageSource.includes(
+      "import { renderSafeMarkdown, sanitizeRenderedHtml } from '../lib/safeMarkdown'",
+    ),
+  )
+  assert.ok(
+    publicLandingPageSource.includes("import { renderSafeMarkdown } from '../lib/safeMarkdown'"),
+  )
+  assert.ok(blogPostPageSource.includes('renderContentWithCharts(post.content, post.charts, !staticPost)'))
+  assert.ok(safeMarkdownSource.includes('markdown.replace(/[<>]/g'))
+  assert.ok(safeMarkdownSource.includes('char === \'<\' ? \'&lt;\' : \'&gt;\''))
+  assert.ok(safeMarkdownSource.includes("element.removeAttribute(attr.name)"))
+  assert.ok(safeMarkdownSource.includes("name.startsWith('on')"))
+  assert.ok(safeMarkdownSource.includes("!safeUrl(attr.value)"))
+  assert.ok(!blogPostPageSource.includes('const UNSAFE_HTML_RE'))
+  assert.ok(!blogPostPageSource.includes('function sanitizeRenderedHtml'))
+  assert.ok(!publicLandingPageSource.includes('function renderSafeMarkdown'))
 })

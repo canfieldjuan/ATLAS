@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { marked } from 'marked'
 import { ArrowRight, Loader2 } from 'lucide-react'
 import {
   fetchPublicLandingPageDraft,
@@ -8,6 +7,7 @@ import {
 } from '../api/contentOps'
 import PublicLayout from '../components/PublicLayout'
 import SeoHead from '../components/SeoHead'
+import { renderSafeMarkdown } from '../lib/safeMarkdown'
 
 type LandingPageSectionView = {
   id: string
@@ -249,44 +249,6 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 
 function textValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function renderSafeMarkdown(markdown: string): string {
-  const escapedMarkdown = markdown.replace(/[<>]/g, (char) =>
-    char === '<' ? '&lt;' : '&gt;',
-  )
-  const html = marked.parse(escapedMarkdown, { async: false }) as string
-  return sanitizeRenderedHtml(html)
-}
-
-function sanitizeRenderedHtml(html: string): string {
-  const template = document.createElement('template')
-  template.innerHTML = html
-  for (const element of Array.from(template.content.querySelectorAll('*'))) {
-    for (const attr of Array.from(element.attributes)) {
-      const name = attr.name.toLowerCase()
-      if (name.startsWith('on') || name === 'style') {
-        element.removeAttribute(attr.name)
-        continue
-      }
-      if ((name === 'href' || name === 'src') && !safeUrl(attr.value)) {
-        element.removeAttribute(attr.name)
-      }
-    }
-  }
-  return template.innerHTML
-}
-
-function safeUrl(value: string): boolean {
-  const normalized = value.trim().toLowerCase()
-  return (
-    normalized.startsWith('https://') ||
-    normalized.startsWith('http://') ||
-    normalized.startsWith('mailto:') ||
-    normalized.startsWith('tel:') ||
-    normalized.startsWith('/') ||
-    normalized.startsWith('#')
-  )
 }
 
 function structuredDataWithCanonical(value: unknown, canonical: string): object | undefined {
