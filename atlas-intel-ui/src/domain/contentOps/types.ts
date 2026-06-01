@@ -202,6 +202,7 @@ export interface ContentOpsIngestionInspectRequest {
   maxSourceTextChars: number
   sampleLimit: number
   defaultFields: Record<string, unknown>
+  includeSourceMaterial: boolean
 }
 
 export interface ContentOpsIngestionImportRequest
@@ -227,6 +228,7 @@ export interface ContentOpsIngestionDiagnostics {
   missingFieldCounts: Record<string, number>
   sourceTypeCounts: Record<string, number>
   samples: Array<Record<string, unknown>>
+  sourceMaterial: Array<Record<string, unknown>>
   warnings: ContentOpsIngestionWarning[]
 }
 

@@ -557,6 +557,7 @@ if BaseModel is not None:
         max_source_text_chars: int = Field(1200, ge=1, le=_MAX_INPUT_STRING_CHARS)
         sample_limit: int = Field(3, ge=0, le=_MAX_INGESTION_SAMPLE_LIMIT)
         default_fields: dict[str, Any] = Field(default_factory=dict)
+        include_source_material: bool = False
 
         @field_validator("rows")
         @classmethod
@@ -873,7 +874,10 @@ def create_content_ops_control_surface_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return report.as_dict()
+        return _ingestion_diagnostics_response(
+            report,
+            include_source_material=_flag_enabled(data.get("include_source_material")),
+        )
 
     @router.post("/ingestion/import", deprecated=True)
     async def import_ingestion(
@@ -893,7 +897,10 @@ def create_content_ops_control_surface_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        diagnostics = report.as_dict()
+        diagnostics = _ingestion_diagnostics_response(
+            report,
+            include_source_material=_flag_enabled(data.get("include_source_material")),
+        )
         if not report.ok:
             raise HTTPException(
                 status_code=400,
@@ -930,6 +937,7 @@ def create_content_ops_control_surface_router(
         max_source_text_chars: int = Form(1200),
         sample_limit: int = Form(3),
         default_fields: str | None = Form(None),
+        include_source_material: bool = Form(False),
     ) -> dict[str, Any]:
         report = await _inspect_uploaded_ingestion_file(
             file,
@@ -941,7 +949,11 @@ def create_content_ops_control_surface_router(
             sample_limit=sample_limit,
             default_fields=default_fields,
         )
-        return _file_ingestion_response(report, source=source)
+        return _file_ingestion_response(
+            report,
+            source=source,
+            include_source_material=_flag_enabled(include_source_material),
+        )
 
     @router.post("/ingestion/files/import")
     async def import_ingestion_file_upload(
@@ -955,6 +967,7 @@ def create_content_ops_control_surface_router(
         default_fields: str | None = Form(None),
         replace_existing: bool = Form(False),
         dry_run: bool = Form(False),
+        include_source_material: bool = Form(False),
     ) -> dict[str, Any]:
         target_mode_value = _clean(target_mode) or "vendor_retention"
         report = await _inspect_uploaded_ingestion_file(
@@ -967,7 +980,11 @@ def create_content_ops_control_surface_router(
             sample_limit=sample_limit,
             default_fields=default_fields,
         )
-        diagnostics = _file_ingestion_response(report, source=source)
+        diagnostics = _file_ingestion_response(
+            report,
+            source=source,
+            include_source_material=_flag_enabled(include_source_material),
+        )
         if not report.ok:
             raise HTTPException(
                 status_code=400,
@@ -1807,9 +1824,43 @@ def _upload_suffix(file: UploadFile, file_format: str) -> str:
     return ".json"
 
 
-def _file_ingestion_response(report: Any, *, source: str | None = None) -> dict[str, Any]:
+def _ingestion_diagnostics_response(
+    report: Any,
+    *,
+    source: str | None = None,
+    include_source_material: bool = False,
+) -> dict[str, Any]:
     payload = report.as_dict()
-    payload["source"] = _clean(source) or payload.get("source") or ""
+    if source is not None:
+        payload["source"] = _clean(source) or payload.get("source") or ""
+    if include_source_material:
+        payload["source_material"] = [
+            dict(row)
+            for row in getattr(report, "opportunities", ())
+            if isinstance(row, Mapping)
+        ]
+    return payload
+
+
+def _flag_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def _file_ingestion_response(
+    report: Any,
+    *,
+    source: str | None = None,
+    include_source_material: bool = False,
+) -> dict[str, Any]:
+    payload = _ingestion_diagnostics_response(
+        report,
+        source=source,
+        include_source_material=include_source_material,
+    )
     payload["ingestion_path"] = "file_upload"
     payload["limits"] = {
         "max_file_bytes": _MAX_INGESTION_FILE_BYTES,

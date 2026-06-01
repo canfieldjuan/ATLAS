@@ -1306,6 +1306,45 @@ async def test_ingestion_inspect_route_reports_source_rows():
     assert payload["opportunity_count"] == 1
     assert payload["source_type_counts"] == {"transcript": 1}
     assert payload["samples"][0]["source_type"] == "transcript"
+    assert "source_material" not in payload
+
+
+@pytest.mark.asyncio
+async def test_ingestion_inspect_route_can_include_full_source_material():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/ingestion/inspect", "POST")
+    payload = await route.endpoint({
+        "source_rows": True,
+        "source": "fixture",
+        "sample_limit": 1,
+        "include_source_material": True,
+        "rows": [
+            {
+                "call_id": "call-1",
+                "company": "Acme",
+                "vendor": "HubSpot",
+                "transcript": "The renewal process is too manual.",
+                "contact_email": "ops@example.com",
+            },
+            {
+                "call_id": "call-2",
+                "company": "Acme",
+                "vendor": "HubSpot",
+                "transcript": "Setup needs a checklist.",
+                "contact_email": "ops@example.com",
+            },
+        ],
+    })
+
+    assert payload["ok"] is True
+    assert len(payload["samples"]) == 1
+    assert [row["target_id"] for row in payload["source_material"]] == [
+        "call-1",
+        "call-2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1430,6 +1469,40 @@ async def test_ingestion_file_inspect_route_accepts_more_than_inline_row_cap():
     assert payload["ok"] is True
     assert payload["opportunity_count"] == 1001
     assert payload["source_type_counts"] == {"support_ticket": 1001}
+    assert "source_material" not in payload
+
+
+@pytest.mark.asyncio
+async def test_ingestion_file_inspect_route_can_include_full_source_material():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+    upload = _ticket_bundle_upload(3)
+
+    route = _route(router, "/ops/ingestion/files/inspect", "POST")
+    payload = await route.endpoint(
+        file=upload,
+        source_rows=True,
+        source="ticket-csv-upload",
+        target_mode="vendor_retention",
+        file_format="json",
+        max_source_text_chars=1200,
+        sample_limit=1,
+        default_fields=json.dumps({
+            "company_name": "Acme",
+            "vendor_name": "Atlas",
+            "contact_email": "support@example.com",
+        }),
+        include_source_material=True,
+    )
+
+    assert payload["ingestion_path"] == "file_upload"
+    assert len(payload["samples"]) == 1
+    assert [row["target_id"] for row in payload["source_material"]] == [
+        "ticket-0",
+        "ticket-1",
+        "ticket-2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1468,10 +1541,13 @@ async def test_ingestion_file_import_route_dry_run_uses_file_parser():
             "contact_email": "support@example.com",
         }),
         dry_run=True,
+        include_source_material=True,
     )
 
     assert payload["diagnostics"]["ingestion_path"] == "file_upload"
     assert payload["diagnostics"]["opportunity_count"] == 1001
+    assert len(payload["diagnostics"]["samples"]) == 3
+    assert len(payload["diagnostics"]["source_material"]) == 1001
     assert payload["import"]["dry_run"] is True
     assert payload["import"]["inserted"] == 1001
     assert payload["import"]["source"] == "ticket-csv-upload"
