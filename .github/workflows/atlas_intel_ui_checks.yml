@@ -64,6 +64,9 @@ jobs:
       - name: Test Content Ops landing-page review deep link
         run: npm run test:content-ops-landing-page-e2e-ui
 
+      - name: Test Content Ops blog review public link
+        run: npm run test:content-ops-blog-review-public-link
+
       - name: Build
         run: npm run build
 

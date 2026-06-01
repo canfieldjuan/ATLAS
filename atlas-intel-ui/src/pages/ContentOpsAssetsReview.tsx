@@ -1083,12 +1083,8 @@ function AssetDetailDrawer({
   const repairHistory = assetRepairHistory(row)
   const structuredData =
     asset === 'landing_page' ? structuredDataSummary(row.structured_data) : null
-  const publicUrl = publicLandingPageUrl(row, asset)
-  const publicUrlPending =
-    asset === 'landing_page' &&
-    Boolean(assetId(row)) &&
-    Boolean(textValue(row.slug)) &&
-    status !== 'approved'
+  const publicUrl = publicAssetUrl(row, asset)
+  const publicUrlPending = publicAssetUrlPending(row, asset)
   const canEditLandingPage =
     asset === 'landing_page' && Boolean(assetId(row)) && status !== 'approved'
   const canRepairLandingPage =
@@ -1288,12 +1284,14 @@ function AssetDetailDrawer({
                     </button>
                   </div>
                   <p className="mt-3 text-xs text-slate-500">
-                    Public rendering is approved-only. This v1 URL is marked noindex.
+                    {asset === 'landing_page'
+                      ? 'Public rendering is approved-only. This v1 URL is marked noindex.'
+                      : 'Public rendering is approved-only. Approved blog posts are available at /blog/:slug.'}
                   </p>
                 </>
               ) : (
                 <p className="text-sm text-slate-400">
-                  Approve this landing page to make its public URL available.
+                  Approve this {asset === 'blog_post' ? 'blog post' : 'landing page'} to make its public URL available.
                 </p>
               )}
             </div>
@@ -2056,16 +2054,33 @@ function assetId(row: GeneratedAssetDraft): string {
   return textValue(row.id)
 }
 
-function publicLandingPageUrl(
+function publicAssetUrl(
   row: GeneratedAssetDraft,
   asset: GeneratedAssetType,
 ): string | null {
-  if (asset !== 'landing_page') return null
   if (textValue(row.status) !== 'approved') return null
-  const id = assetId(row)
   const slug = textValue(row.slug)
-  if (!id || !slug) return null
-  return `${window.location.origin}/lp/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`
+  if (!slug) return null
+  if (asset === 'blog_post') {
+    return `${window.location.origin}/blog/${encodeURIComponent(slug)}`
+  }
+  if (asset === 'landing_page') {
+    const id = assetId(row)
+    if (!id) return null
+    return `${window.location.origin}/lp/${encodeURIComponent(id)}/${encodeURIComponent(slug)}`
+  }
+  return null
+}
+
+function publicAssetUrlPending(
+  row: GeneratedAssetDraft,
+  asset: GeneratedAssetType,
+): boolean {
+  if (textValue(row.status) === 'approved') return false
+  const slug = textValue(row.slug)
+  if (!slug) return false
+  if (asset === 'blog_post') return true
+  return asset === 'landing_page' && Boolean(assetId(row))
 }
 
 function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
