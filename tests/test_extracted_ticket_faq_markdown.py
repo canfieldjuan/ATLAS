@@ -2213,8 +2213,8 @@ def test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits
         "has_action_items": False,
         "resolution_evidence_scoped": False,
     }
-    with pytest.raises(ValueError, match="max_items must be positive"):
-        build_ticket_faq_markdown([], max_items=0)
+    with pytest.raises(ValueError, match="max_items must be positive or 0 for unlimited"):
+        build_ticket_faq_markdown([], max_items=-1)
     with pytest.raises(ValueError, match="max_evidence_per_item must be positive"):
         build_ticket_faq_markdown([], max_evidence_per_item=0)
 
@@ -2745,6 +2745,28 @@ def test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncat
     assert result.output_checks["condensed"] is True
     assert result.items[-1]["topic"] == "other support issues"
     assert result.items[-1]["source_ids"] == ("ticket-8", "ticket-9")
+
+
+def test_build_ticket_faq_markdown_treats_zero_max_items_as_unlimited() -> None:
+    opportunities = [
+        {
+            "source_type": "support_ticket",
+            "source_title": f"Unique issue {index}",
+            "evidence": [{
+                "text": f"How do I handle unique issue {index}?",
+                "source_id": f"ticket-{index}",
+                "source_type": "support_ticket",
+            }],
+        }
+        for index in range(1, 10)
+    ]
+
+    result = build_ticket_faq_markdown(opportunities, max_items=0)
+
+    assert len(result.items) == 9
+    assert result.ticket_source_count == 9
+    assert "other support issues" not in {item["topic"] for item in result.items}
+    assert result.items[-1]["source_ids"] == ("ticket-9",)
 
 
 def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:

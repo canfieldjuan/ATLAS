@@ -928,6 +928,128 @@ async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
     )
 
 
+async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(deflection_snapshot_top_n=2),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            faq_deflection_report=FAQDeflectionReportService(),
+        ),
+        scope_provider=lambda: TenantScope(account_id="acct-faq", user_id="user-faq"),
+        deflection_report_store_provider=lambda: store,
+    )
+    support_tickets = [
+        {
+            "ticket_id": "ticket-sso-1",
+            "source_type": "support_ticket",
+            "subject": "SSO setup",
+            "message": "Can we sync users before enforcing SSO?",
+            "pain_category": "single sign-on rollout",
+            "resolution_text": (
+                "Enable SSO first, verify matching user emails, then enable SCIM."
+            ),
+        },
+        {
+            "ticket_id": "ticket-dashboard-1",
+            "source_type": "support_ticket",
+            "subject": "Dashboard refresh",
+            "message": "Why is the executive dashboard not refreshing?",
+            "pain_category": "warehouse refresh status",
+            "resolution_text": (
+                "Open Data > Sync history, rerun the failed warehouse job, "
+                "then refresh the model."
+            ),
+        },
+        {
+            "ticket_id": "ticket-billing-1",
+            "source_type": "support_ticket",
+            "subject": "Renewal invoice",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "renewal billing review",
+            "resolution_text": (
+                "Open Billing > Invoices, compare the renewal line items, "
+                "then download the PDF."
+            ),
+        },
+        {
+            "ticket_id": "ticket-token-1",
+            "source_type": "support_ticket",
+            "subject": "API token rotation",
+            "message": "How do we rotate API tokens without downtime?",
+            "pain_category": "api token rotation",
+            "resolution_text": (
+                "Create the replacement token, deploy it alongside the old "
+                "token, then revoke the old token."
+            ),
+        },
+    ]
+
+    route = _route(router, "/content-ops/execute", "POST")
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["faq_deflection_report"],
+        "limit": 2,
+        "require_quality_gates": False,
+        "inputs": {
+            "deflection_report_title": "Hosted FAQ Deflection Uncapped",
+            "faq_title": "Hosted FAQ Deflection Source",
+            "source_material": {"support_tickets": support_tickets},
+        },
+    })
+
+    assert payload["status"] == "completed"
+    assert payload["plan"]["steps"][0]["config"]["max_items"] == 2
+
+    step = payload["steps"][0]
+    assert step["output"] == "faq_deflection_report"
+    assert step["status"] == "completed"
+
+    snapshot = step["result"]["snapshot"]
+    assert snapshot["summary"] == {
+        "generated": 4,
+        "drafted_answer_count": 4,
+        "no_proven_answer_count": 0,
+    }
+    assert len(snapshot["top_questions"]) == 2
+    snapshot_payload = json.dumps(snapshot, sort_keys=True)
+    assert "resolution_text" not in snapshot_payload
+    assert "Open Billing" not in snapshot_payload
+    assert "ticket-token-1" not in snapshot_payload
+    assert step["result"]["full_report"]["status"] == "locked"
+
+    await _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/paid",
+        "POST",
+    ).endpoint(
+        payload=api_module.DeflectionReportPaidModel(),
+        request_id=payload["request_id"],
+    )
+    artifact = await _route(
+        router,
+        "/content-ops/deflection-reports/{request_id}/artifact",
+        "GET",
+    ).endpoint(request_id=payload["request_id"])
+
+    faq_result = artifact["faq_result"]
+    assert artifact["summary"]["generated"] == 4
+    assert artifact["summary"]["drafted_answer_count"] == 4
+    assert len(faq_result["items"]) == 4
+    assert "other support issues" not in {item["topic"] for item in faq_result["items"]}
+    source_ids = {
+        source_id
+        for item in faq_result["items"]
+        for source_id in item["source_ids"]
+    }
+    assert source_ids == {
+        "ticket-sso-1",
+        "ticket-dashboard-1",
+        "ticket-billing-1",
+        "ticket-token-1",
+    }
+    assert "Create the replacement token" in artifact["markdown"]
+
+
 async def test_live_execute_route_handles_concurrent_faq_deflection_reports() -> None:
     class _BarrierFAQDeflectionReportService:
         def __init__(self, *, expected: int) -> None:

@@ -40,10 +40,13 @@ from content_ops_faq_cli_rules import (  # noqa: E402
 )
 
 
+UNCAPPED_REPORT_MAX_ITEMS = 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    if args.max_items < 1:
-        raise SystemExit("--max-items must be positive")
+    if args.max_items < 0:
+        raise SystemExit("--max-items must be 0 or positive; deflection reports are uncapped")
     if args.max_evidence_per_item < 1:
         raise SystemExit("--max-evidence-per-item must be positive")
     if args.max_text_chars < 1:
@@ -99,7 +102,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--title", default="Support Ticket Deflection Report")
     parser.add_argument("--faq-title", default=DEFAULT_TITLE)
-    parser.add_argument("--max-items", type=int, default=20)
+    parser.add_argument(
+        "--max-items",
+        type=int,
+        default=UNCAPPED_REPORT_MAX_ITEMS,
+        help=(
+            "Deprecated compatibility flag. Deflection reports are uncapped; "
+            "0 means unlimited and positive values are recorded but not used "
+            "as a display cap."
+        ),
+    )
     parser.add_argument("--max-evidence-per-item", type=int, default=3)
     parser.add_argument("--max-text-chars", type=int, default=1200)
     parser.add_argument("--window-days", type=int)
@@ -189,7 +201,7 @@ def build_report(args: argparse.Namespace):
     faq_result = build_ticket_faq_markdown(
         loaded.opportunities,
         title=args.faq_title,
-        max_items=args.max_items,
+        max_items=UNCAPPED_REPORT_MAX_ITEMS,
         max_evidence_per_item=args.max_evidence_per_item,
         window_days=args.window_days,
         as_of_date=args.as_of_date,
@@ -230,7 +242,8 @@ def _result_payload(
         "config": {
             "title": args.title,
             "faq_title": args.faq_title,
-            "max_items": args.max_items,
+            "max_items": UNCAPPED_REPORT_MAX_ITEMS,
+            "requested_max_items": args.max_items,
             "max_evidence_per_item": args.max_evidence_per_item,
             "max_text_chars": args.max_text_chars,
             "window_days": args.window_days,
