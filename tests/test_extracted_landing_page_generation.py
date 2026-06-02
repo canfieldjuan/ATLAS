@@ -9,6 +9,9 @@ from extracted_content_pipeline.campaign_ports import (
     LLMResponse,
     TenantScope,
 )
+from extracted_content_pipeline.content_image_provider import (
+    ContentImageAsset,
+)
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationConfig,
     LandingPageGenerationService,
@@ -102,6 +105,19 @@ class _ReasoningProvider:
             "target_mode": target_mode,
         })
         return self.context
+
+
+class _ImageProvider:
+    def __init__(self, asset=None, error: Exception | None = None):
+        self.asset = asset
+        self.error = error
+        self.calls = []
+
+    async def select_image(self, request):
+        self.calls.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.asset
 
 
 def _campaign() -> MarketingCampaign:
@@ -224,7 +240,14 @@ def _draft_from_response(
     )
 
 
-def _service(*, responses=None, prompts=None, reasoning_context=None, config=None):
+def _service(
+    *,
+    responses=None,
+    prompts=None,
+    reasoning_context=None,
+    config=None,
+    image_provider=None,
+):
     landing_pages = _LandingPages()
     llm = _LLM(responses or [_valid_response()])
     if prompts is None:
@@ -238,6 +261,7 @@ def _service(*, responses=None, prompts=None, reasoning_context=None, config=Non
         llm=llm,
         skills=skills,
         reasoning_context=reasoning_provider,
+        image_provider=image_provider,
         config=config or LandingPageGenerationConfig(),
     )
     return service, landing_pages, llm, skills, reasoning_provider
@@ -420,6 +444,55 @@ async def test_generate_persists_one_landing_page_per_call_via_save_drafts() -> 
     )
     assert "preventable churn" in draft.sections[0].metadata["answer_summary"]
     assert draft.metadata["generation_model"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_generate_attaches_optional_landing_page_image_before_save() -> None:
+    payload = json.loads(_valid_response())
+    payload["hero"]["image_url"] = ""
+    payload["hero"]["image_alt"] = ""
+    payload["meta"] = {"og_image_url": None}
+    image_provider = _ImageProvider(
+        ContentImageAsset(
+            url="https://images.example.com/landing.jpg",
+            provider="unsplash",
+            alt_text="Support team reviewing customer questions",
+            attribution_name="Ada Lens",
+            attribution_url="https://unsplash.example.com/@ada",
+            source_id="photo-1",
+        )
+    )
+    service, landing_pages, _llm, _skills, _rp = _service(
+        responses=[json.dumps(payload)],
+        config=LandingPageGenerationConfig(quality_gates_enabled=False),
+        image_provider=image_provider,
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 1
+    draft = landing_pages.saved[0]["drafts"][0]
+    assert draft.hero["image_url"] == "https://images.example.com/landing.jpg"
+    assert draft.hero["image_alt"] == "Support team reviewing customer questions"
+    assert draft.meta["og_image_url"] == "https://images.example.com/landing.jpg"
+    assert draft.metadata["content_image"]["provider"] == "unsplash"
+    assert image_provider.calls[0].asset_type == "landing_page"
+    assert image_provider.calls[0].slot == "hero"
+    assert "Acme Q3" in image_provider.calls[0].title
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_landing_page_when_image_provider_fails() -> None:
+    service, landing_pages, _llm, _skills, _rp = _service(
+        image_provider=_ImageProvider(error=RuntimeError("image service unavailable"))
+    )
+
+    result = await service.generate(scope=TenantScope(account_id="acct-1"), campaign=_campaign())
+
+    assert result.generated == 1
+    draft = landing_pages.saved[0]["drafts"][0]
+    assert "image_url" not in draft.hero
+    assert "content_image" not in draft.metadata
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,11 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .content_image_provider import (
+    ContentImageAsset,
+    ContentImageProvider,
+    ContentImageRequest,
+)
 from .services._parse_retry_helpers import (
     accumulate_usage,
     clip_invalid_response,
@@ -425,6 +430,7 @@ class BlogPostGenerationService:
         llm: LLMClient,
         skills: SkillStore,
         reasoning_context: CampaignReasoningContextProvider | None = None,
+        image_provider: ContentImageProvider | None = None,
         config: BlogPostGenerationConfig | None = None,
     ):
         self._blueprints = blueprints
@@ -436,6 +442,7 @@ class BlogPostGenerationService:
         # reasoning context is merged into each blueprint before the
         # LLM call -- additive enrichment, not replacement.
         self._reasoning_context = reasoning_context
+        self._image_provider = image_provider
         self._config = config or BlogPostGenerationConfig()
 
     def with_reasoning_context(
@@ -452,6 +459,7 @@ class BlogPostGenerationService:
             llm=self._llm,
             skills=self._skills,
             reasoning_context=provider,
+            image_provider=self._image_provider,
             config=self._config,
         )
 
@@ -624,7 +632,8 @@ class BlogPostGenerationService:
                 consumed_reasoning_contexts.extend(
                     consumed_campaign_reasoning_contexts(blueprint)
                 )
-            drafts.append(self._build_draft(parsed, blueprint=blueprint))
+            draft = self._build_draft(parsed, blueprint=blueprint)
+            drafts.append(await self._with_optional_image(draft, blueprint=blueprint))
 
         saved_ids: tuple[str, ...] = ()
         if drafts:
@@ -874,6 +883,33 @@ class BlogPostGenerationService:
             metadata=metadata,
         )
 
+    async def _with_optional_image(
+        self,
+        draft: BlogPostDraft,
+        *,
+        blueprint: Mapping[str, Any],
+    ) -> BlogPostDraft:
+        if self._image_provider is None or draft.metadata.get("cover_image"):
+            return draft
+        try:
+            asset = await self._image_provider.select_image(
+                ContentImageRequest(
+                    asset_type="blog_post",
+                    slot="cover",
+                    title=draft.title,
+                    query_terms=(
+                        str(blueprint.get("topic") or ""),
+                        str(blueprint.get("suggested_title") or ""),
+                        str(blueprint.get("topic_type") or ""),
+                    ),
+                )
+            )
+        except Exception:
+            return draft
+        if asset is None:
+            return draft
+        return _blog_post_with_image_asset(draft, asset)
+
 
 def _quality_context(
     parsed: Mapping[str, Any],
@@ -897,6 +933,27 @@ def _quality_context(
         "secondary_keywords": parsed.get("secondary_keywords"),
         "faq": parsed.get("faq"),
     }
+
+
+def _blog_post_with_image_asset(
+    draft: BlogPostDraft,
+    asset: ContentImageAsset,
+) -> BlogPostDraft:
+    metadata = dict(draft.metadata or {})
+    metadata["cover_image"] = asset.as_dict()
+    return BlogPostDraft(
+        slug=draft.slug,
+        title=draft.title,
+        description=draft.description,
+        tags=tuple(draft.tags),
+        topic_type=draft.topic_type,
+        content=draft.content,
+        charts=tuple(draft.charts),
+        data_context=dict(draft.data_context or {}),
+        metadata=metadata,
+        id=draft.id,
+        status=draft.status,
+    )
 
 
 def _quality_policy_for_context(

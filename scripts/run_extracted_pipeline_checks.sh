@@ -67,6 +67,7 @@ pytest \
   tests/test_smoke_content_ops_review_source_postgres.py \
   tests/test_smoke_content_ops_cfpb_source_postgres.py \
   tests/test_extracted_content_ingestion_diagnostics.py \
+  tests/test_extracted_content_image_provider.py \
   tests/test_extracted_blog_generation.py \
   tests/test_extracted_blog_blueprint_ingest.py \
   tests/test_extracted_blog_blueprint_postgres.py \

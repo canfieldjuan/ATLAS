@@ -21,6 +21,7 @@ from extracted_content_pipeline.campaign_ports import (
     LLMResponse,
     TenantScope,
 )
+from extracted_content_pipeline.content_image_provider import ContentImageAsset
 from extracted_quality_gate.types import QualityPolicy
 
 
@@ -272,6 +273,19 @@ class _ReasoningProvider:
         return self.context
 
 
+class _ImageProvider:
+    def __init__(self, asset=None, error: Exception | None = None):
+        self.asset = asset
+        self.error = error
+        self.calls = []
+
+    async def select_image(self, request):
+        self.calls.append(request)
+        if self.error is not None:
+            raise self.error
+        return self.asset
+
+
 def _service(
     *,
     rows=None,
@@ -279,6 +293,7 @@ def _service(
     prompts=None,
     config=None,
     reasoning_context=None,
+    image_provider=None,
 ):
     blueprints = _Blueprints(rows or [_blueprint()])
     blog_posts = _BlogPosts()
@@ -292,6 +307,7 @@ def _service(
         llm=llm,
         skills=skills,
         reasoning_context=reasoning_context,
+        image_provider=image_provider,
         config=config or BlogPostGenerationConfig(
             quality_policy=QualityPolicy(
                 name="blog_post",
@@ -721,6 +737,54 @@ async def test_generate_persists_blog_drafts_via_ports() -> None:
     assert draft.slug == "hubspot-pricing-pressure"
     assert draft.metadata["target_keyword"] == "hubspot pricing pressure"
     assert draft.metadata["generation_model"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_generate_attaches_optional_blog_cover_image_before_save() -> None:
+    image_provider = _ImageProvider(
+        ContentImageAsset(
+            url="https://images.example.com/blog.jpg",
+            provider="unsplash",
+            alt_text="Pricing dashboard",
+            attribution_name="Ada Lens",
+            attribution_url="https://unsplash.example.com/@ada",
+            source_id="photo-1",
+        )
+    )
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        image_provider=image_provider
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["cover_image"]["url"] == "https://images.example.com/blog.jpg"
+    assert draft.metadata["cover_image"]["provider"] == "unsplash"
+    assert image_provider.calls[0].asset_type == "blog_post"
+    assert image_provider.calls[0].slot == "cover"
+    assert "HubSpot" in image_provider.calls[0].title
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_blog_post_when_image_provider_fails() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        image_provider=_ImageProvider(error=RuntimeError("image service unavailable"))
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert "cover_image" not in draft.metadata
 
 
 @pytest.mark.asyncio

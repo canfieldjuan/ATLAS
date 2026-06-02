@@ -57,6 +57,11 @@ from extracted_content_pipeline.campaign_postgres import (
     PostgresCampaignRepository,
     PostgresIntelligenceRepository,
 )
+from extracted_content_pipeline.content_image_provider import (
+    ContentImageProvider,
+    UnsplashContentImageProvider,
+    UnsplashContentImageProviderConfig,
+)
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
 )
@@ -106,6 +111,7 @@ def _build_landing_page_service(
     llm: LLMClient | None,
     skills: SkillStore,
     pool: Any,
+    image_provider: ContentImageProvider | None = None,
 ) -> LandingPageGenerationService | None:
     """Build a wired `LandingPageGenerationService`, or `None` if
     no host LLM is currently active.
@@ -127,6 +133,7 @@ def _build_landing_page_service(
         landing_pages=PostgresLandingPageRepository(pool=pool),
         llm=llm,
         skills=skills,
+        image_provider=image_provider,
     )
 
 
@@ -193,6 +200,7 @@ def _build_blog_post_service(
     llm: LLMClient | None,
     skills: SkillStore,
     pool: Any,
+    image_provider: ContentImageProvider | None = None,
 ) -> BlogPostGenerationService | None:
     """E4: blog-post drafts.
 
@@ -212,6 +220,23 @@ def _build_blog_post_service(
         blog_posts=PostgresBlogPostRepository(pool=pool),
         llm=llm,
         skills=skills,
+        image_provider=image_provider,
+    )
+
+
+def _build_content_image_provider() -> ContentImageProvider | None:
+    from atlas_brain.config import settings
+
+    cfg = settings.b2b_campaign
+    if not bool(cfg.content_ops_image_provider_enabled):
+        return None
+    return UnsplashContentImageProvider(
+        UnsplashContentImageProviderConfig(
+            enabled=True,
+            access_key=cfg.content_ops_image_unsplash_access_key,
+            base_url=cfg.content_ops_image_unsplash_base_url,
+            timeout_seconds=cfg.content_ops_image_timeout_seconds,
+        )
     )
 
 
@@ -293,10 +318,12 @@ def build_content_ops_execution_services(
         intelligence: IntelligenceRepository | None = (
             PostgresIntelligenceRepository(pool=pool) if pool is not None else None
         )
+        image_provider = _build_content_image_provider()
         landing_page = _build_landing_page_service(
             llm=llm,
             skills=skills,
             pool=pool,
+            image_provider=image_provider,
         )
         campaign = _build_campaign_service(
             intelligence=intelligence,
@@ -320,6 +347,7 @@ def build_content_ops_execution_services(
             llm=llm,
             skills=skills,
             pool=pool,
+            image_provider=image_provider,
         )
         faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
