@@ -7,14 +7,20 @@ routes through the hosted API surface.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import importlib
 import inspect
 import sys
+from typing import Any
 
 import pytest
 
 from atlas_brain.auth.dependencies import AuthUser
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.landing_page_ports import (
+    LandingPageDraft,
+    LandingPageSection,
+)
 
 pytest.importorskip("asyncpg")
 
@@ -32,6 +38,143 @@ def _route(api_pkg, path: str):
     route = next((route for route in api_pkg.router.routes if route.path == path), None)
     assert route is not None, f"Route {path!r} not mounted"
     return route
+
+
+def _router_route(router, path: str, method: str):
+    route = next(
+        (
+            route
+            for route in router.routes
+            if route.path == path and method.upper() in getattr(route, "methods", ())
+        ),
+        None,
+    )
+    assert route is not None, f"Route {method.upper()} {path!r} not mounted"
+    return route
+
+
+def _public_ready_landing_page(landing_page_id: str) -> LandingPageDraft:
+    return LandingPageDraft(
+        id=landing_page_id,
+        status="draft",
+        campaign_name="support-faq-report",
+        persona="10-50 person SaaS team",
+        value_prop="Turn repeat support tickets into customer-ready FAQs",
+        title="Support FAQ Report for Small SaaS Teams",
+        slug="support-faq-report",
+        hero={
+            "headline": "Turn repeat tickets into answers",
+            "subheadline": (
+                "10-50 person SaaS teams turn repeat support tickets into "
+                "customer-ready FAQs before customers wait again."
+            ),
+            "cta_label": "Upload Ticket CSV -- Free Analysis",
+            "cta_url": "/systems/ai-content-ops/intake",
+        },
+        sections=(
+            LandingPageSection(
+                id="repeat_support_problem",
+                title="Repeat support questions become customer frustration",
+                body_markdown=(
+                    "10-50 person SaaS teams lose time when customers ask "
+                    "the same support questions again and again. Repeat "
+                    "questions create friction because the answer is not "
+                    "where customers are looking."
+                ),
+                metadata={
+                    "kind": "problem",
+                    "primary_question": "Why do repeat support questions matter?",
+                    "answer_summary": (
+                        "10-50 person SaaS teams lose time when customers ask "
+                        "the same support questions again and again."
+                    ),
+                },
+            ),
+            LandingPageSection(
+                id="faq_report_solution",
+                title="A FAQ Report turns tickets into findable answers",
+                body_markdown=(
+                    "10-50 person SaaS teams use the FAQ Report workflow to "
+                    "turn old support tickets into clear answers customers "
+                    "can find before they email support."
+                ),
+                metadata={
+                    "kind": "solution",
+                    "primary_question": "How does the FAQ Report help?",
+                    "answer_summary": (
+                        "10-50 person SaaS teams use the FAQ Report workflow "
+                        "to turn old support tickets into clear answers."
+                    ),
+                },
+            ),
+            LandingPageSection(
+                id="before_upload_questions",
+                title="Questions before uploading tickets",
+                body_markdown=(
+                    "10-50 person SaaS teams can review privacy, publishing, "
+                    "and setup questions before uploading tickets. That keeps "
+                    "the process clear without giving up help-center control."
+                ),
+                metadata={
+                    "kind": "objection",
+                    "primary_question": "What should teams know before upload?",
+                    "answer_summary": (
+                        "10-50 person SaaS teams can review privacy, "
+                        "publishing, and setup questions before uploading tickets."
+                    ),
+                },
+            ),
+        ),
+        cta={
+            "label": "Upload Ticket CSV -- Free Analysis",
+            "url": "/systems/ai-content-ops/intake",
+            "variant": "primary",
+        },
+        meta={
+            "title_tag": "Support FAQ Report for Small SaaS Teams",
+            "description": (
+                "Turn repeat support tickets into customer-ready FAQ answers "
+                "small SaaS teams can publish before customers wait again."
+            ),
+        },
+        reference_ids=("support-ticket-sample",),
+    )
+
+
+class _MemoryLandingPageRepository:
+    drafts: dict[tuple[str | None, str], LandingPageDraft] = {}
+    status_calls: list[dict[str, Any]] = []
+
+    def __init__(self, pool: Any) -> None:
+        self.pool = pool
+
+    async def update_status(
+        self,
+        draft_id: str,
+        status: str,
+        *,
+        scope: TenantScope,
+    ) -> bool:
+        self.status_calls.append({
+            "account_id": scope.account_id,
+            "draft_id": draft_id,
+            "status": status,
+        })
+        key = (scope.account_id, draft_id)
+        draft = self.drafts.get(key)
+        if draft is None:
+            return False
+        self.drafts[key] = replace(draft, status=status)
+        return True
+
+    async def get_public_approved_draft(
+        self,
+        landing_page_id: str,
+    ) -> LandingPageDraft | None:
+        for draft in self.drafts.values():
+            if draft.id == landing_page_id and draft.status == "approved":
+                return draft
+        return None
 
 
 def test_api_aggregator_mounts_generated_asset_routes() -> None:
@@ -272,3 +415,110 @@ def test_public_landing_page_route_uses_pool_without_content_ops_auth_dependency
 
     assert closure["pool_provider"].__name__ == "get_db_pool"
     assert "_capture_content_ops_auth_user" not in dependency_names
+
+
+@pytest.mark.asyncio
+async def test_landing_page_review_approval_controls_public_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline.api import generated_assets
+
+    landing_page_id = "11111111-1111-4111-8111-111111111111"
+    pool = object()
+    _MemoryLandingPageRepository.drafts = {
+        ("acct-public-assets", landing_page_id): _public_ready_landing_page(
+            landing_page_id
+        )
+    }
+    _MemoryLandingPageRepository.status_calls = []
+    monkeypatch.setattr(
+        generated_assets,
+        "PostgresLandingPageRepository",
+        _MemoryLandingPageRepository,
+    )
+
+    public_router = generated_assets.create_public_landing_page_router(
+        pool_provider=lambda: pool
+    )
+    review_router = generated_assets.create_generated_asset_router(
+        pool_provider=lambda: pool,
+        scope_provider=lambda: TenantScope(account_id="acct-public-assets"),
+    )
+    foreign_review_router = generated_assets.create_generated_asset_router(
+        pool_provider=lambda: pool,
+        scope_provider=lambda: TenantScope(account_id="acct-other"),
+    )
+    public_route = _router_route(
+        public_router,
+        "/content-assets/landing_page/public/{landing_page_id}",
+        "GET",
+    )
+    review_route = _router_route(
+        review_router,
+        "/content-assets/{asset}/drafts/review",
+        "POST",
+    )
+    foreign_review_route = _router_route(
+        foreign_review_router,
+        "/content-assets/{asset}/drafts/review",
+        "POST",
+    )
+
+    with pytest.raises(generated_assets.HTTPException) as hidden_before_review:
+        await public_route.endpoint(landing_page_id)
+    assert hidden_before_review.value.status_code == 404
+
+    foreign_response = await foreign_review_route.endpoint(
+        "landing_page",
+        {"id": landing_page_id, "status": "approved"},
+    )
+
+    assert foreign_response["updated"] is False
+    with pytest.raises(generated_assets.HTTPException) as hidden_after_foreign_review:
+        await public_route.endpoint(landing_page_id)
+    assert hidden_after_foreign_review.value.status_code == 404
+
+    approved_response = await review_route.endpoint(
+        "landing_page",
+        {"id": landing_page_id, "status": "approved"},
+    )
+    public_response = await public_route.endpoint(landing_page_id)
+
+    assert approved_response == {
+        "account_id": "acct-public-assets",
+        "asset": "landing_page",
+        "id": landing_page_id,
+        "status": "approved",
+        "updated": True,
+    }
+    assert public_response["id"] == landing_page_id
+    assert public_response["slug"] == "support-faq-report"
+    assert public_response["robots"] == "index,follow"
+
+    rejected_response = await review_route.endpoint(
+        "landing_page",
+        {"asset_id": landing_page_id, "status": "rejected"},
+    )
+
+    assert rejected_response["updated"] is True
+    assert rejected_response["status"] == "rejected"
+    with pytest.raises(generated_assets.HTTPException) as hidden_after_reject:
+        await public_route.endpoint(landing_page_id)
+    assert hidden_after_reject.value.status_code == 404
+    assert _MemoryLandingPageRepository.status_calls == [
+        {
+            "account_id": "acct-other",
+            "draft_id": landing_page_id,
+            "status": "approved",
+        },
+        {
+            "account_id": "acct-public-assets",
+            "draft_id": landing_page_id,
+            "status": "approved",
+        },
+        {
+            "account_id": "acct-public-assets",
+            "draft_id": landing_page_id,
+            "status": "rejected",
+        },
+    ]

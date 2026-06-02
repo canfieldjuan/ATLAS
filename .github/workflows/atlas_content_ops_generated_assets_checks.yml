@@ -1,0 +1,42 @@
+name: Atlas Content Ops Generated Assets Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "extracted_content_pipeline/api/generated_assets.py"
+      - "tests/test_atlas_content_ops_generated_assets_api.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "extracted_content_pipeline/api/generated_assets.py"
+      - "tests/test_atlas_content_ops_generated_assets_api.py"
+
+jobs:
+  atlas-content-ops-generated-assets-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops generated assets tests
+        run: |
+          python -m pytest \
+            tests/test_atlas_content_ops_generated_assets_api.py \
+            -q
