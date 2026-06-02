@@ -44,6 +44,11 @@ LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS: tuple[str, ...] = (
     "measured_outcome_examples",
 )
 
+LANDING_PAGE_REVIEW_SOURCE_INPUT_KEYS: tuple[str, ...] = (
+    "review_source_material",
+    "review_source_count",
+)
+
 LANDING_PAGE_EXISTING_CONTEXT_KEYS: tuple[str, ...] = (
     "industry",
     "pain_points",
@@ -58,6 +63,7 @@ LANDING_PAGE_CONTEXT_INPUT_KEYS: frozenset[str] = frozenset((
     *LANDING_PAGE_EXISTING_CONTEXT_KEYS,
     *LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS,
     *LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS,
+    *LANDING_PAGE_REVIEW_SOURCE_INPUT_KEYS,
 ))
 
 

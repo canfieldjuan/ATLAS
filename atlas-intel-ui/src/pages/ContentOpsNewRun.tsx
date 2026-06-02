@@ -81,6 +81,15 @@ import type {
 } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
+import {
+  parseInputsJsonObject,
+  sourceModeDraftValue,
+  updateSourceModeInputJson,
+  SOURCE_FAQ_IDS_INPUT,
+  type ContentOpsSourceMode,
+  type ParsedInputsJsonObject,
+  type UpdatedInputsJson,
+} from './contentOpsSourceMode'
 
 type SubmitState =
   | { kind: 'idle' }
@@ -144,7 +153,6 @@ const LANDING_PAGE_QUALITY_REPAIR_INPUT =
 const LANDING_PAGE_INPUT_ASSET = 'landing_page'
 const LANDING_PAGE_SEO_GEO_AEO_INPUT_GROUP = 'seo_geo_aeo'
 const BLOG_POST_OUTPUT = 'blog_post'
-const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
 const SOURCE_IMPORT_TARGET_IDS_INPUT = 'source_import_target_ids'
 const GENERATED_ASSET_OUTPUTS: readonly GeneratedAssetType[] = [
   'blog_post',
@@ -304,10 +312,12 @@ export default function ContentOpsNewRun() {
   const reasoningCapabilityHint = reasoningConfigured
     ? reasoningStatusHint(catalog.reasoning)
     : ''
+  const sourceMode = sourceModeDraftValue(parsedInputsForControls)
   const landingPageOutputSelected = request.outputs.includes('landing_page')
   const blogPostOutputSelected = request.outputs.includes(BLOG_POST_OUTPUT)
   const faqSourceSelectionVisible =
-    landingPageOutputSelected || blogPostOutputSelected
+    (landingPageOutputSelected || blogPostOutputSelected) &&
+    sourceMode !== 'reviews'
   const faqConfigurationOutputSelected = faqConfigurationInputsSelected(
     request.outputs,
   )
@@ -439,6 +449,13 @@ export default function ContentOpsNewRun() {
       ? [...selectedFaqSourceIds, draftId]
       : selectedFaqSourceIds.filter((id) => id !== draftId)
     const updated = updateSourceFaqIdsInputJson(inputsJson, nextIds)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleSourceModeChange = (mode: ContentOpsSourceMode) => {
+    const updated = updateSourceModeInputJson(inputsJson, mode)
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -1060,6 +1077,30 @@ export default function ContentOpsNewRun() {
           <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-slate-400">
             Inputs (JSON)
           </h2>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {[
+              ['support_ticket', 'Support tickets'],
+              ['reviews', 'Reviews'],
+            ].map(([mode, label]) => {
+              const selected = sourceMode === mode
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => handleSourceModeChange(mode as ContentOpsSourceMode)}
+                  disabled={!parsedInputsForControls.ok}
+                  className={clsx(
+                    'rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-60',
+                    selected
+                      ? 'border-cyan-500 bg-cyan-500/10 text-cyan-100'
+                      : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500',
+                  )}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
           <p className="mb-2 text-xs text-slate-500">
             Required keys depend on the selected outputs (see chip list
             above). Type a JSON object or use the per-output fields below.
@@ -2675,30 +2716,6 @@ type ParsedIngestionRows =
 type ParsedIngestionDefaultFields =
   | { ok: true; fields: Record<string, unknown> }
   | { ok: false; message: string }
-
-type ParsedInputsJsonObject =
-  | { ok: true; value: Record<string, unknown> }
-  | { ok: false; message: string }
-
-type UpdatedInputsJson =
-  | { ok: true; value: string }
-  | { ok: false; message: string }
-
-function parseInputsJsonObject(value: string): ParsedInputsJsonObject {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value.trim() || '{}')
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : String(err),
-    }
-  }
-  if (!isRecord(parsed)) {
-    return { ok: false, message: 'Inputs JSON must be an object.' }
-  }
-  return { ok: true, value: { ...parsed } }
-}
 
 function landingPageSeoGeoAeoInputContracts(
   catalog: ContentOpsCatalog,

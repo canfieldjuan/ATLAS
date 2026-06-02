@@ -8,6 +8,10 @@ from uuid import UUID
 
 from extracted_content_pipeline.campaign_postgres import PostgresIntelligenceRepository
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_source_adapters import (
+    source_material_to_source_rows,
+    source_rows_to_campaign_opportunities,
+)
 from extracted_content_pipeline.content_ops_input_provider import (
     ContentOpsInputPackage,
     RequestPayload,
@@ -76,6 +80,26 @@ _SOURCE_IMPORT_TARGET_ID_KEYS = (
     "source_target_ids",
     "import_target_ids",
 )
+_SOURCE_TYPE_KEYS = ("source_type", "source_material_type")
+_SUPPORT_TICKET_SOURCE_TYPE_ALIASES = frozenset({
+    "support",
+    "support_ticket",
+    "support_tickets",
+    "ticket",
+    "tickets",
+})
+_REVIEW_SOURCE_TYPE_ALIASES = frozenset({
+    "review",
+    "reviews",
+    "complaint",
+    "complaints",
+})
+_REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post")
+_REVIEW_CAMPAIGN_NAME = "Review-Signal Campaign"
+_REVIEW_TOPIC = "Customer review themes worth turning into content"
+_REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
+_REVIEW_OFFER = "Turn customer review themes into buyer-facing landing pages and blog posts"
+_REVIEW_TARGET_KEYWORD = "customer review content marketing"
 
 
 @dataclass(frozen=True)
@@ -96,8 +120,41 @@ class _AtlasSupportTicketInputProvider:
         request: RequestPayload | None = None,
     ) -> ContentOpsInputPackage | Awaitable[ContentOpsInputPackage]:
         source_material = _request_source_material(request)
+        source_type = _request_source_type(request)
         source_faq_ids = _request_source_faq_ids(request)
         source_target_ids = _request_source_target_ids(request)
+        if source_type in _REVIEW_SOURCE_TYPE_ALIASES:
+            if source_faq_ids:
+                return _noop_package(
+                    "atlas_review_request",
+                    metadata={"requested_source_type": source_type},
+                    warnings=({
+                        "code": "review_source_faq_ids_unsupported",
+                        "message": "Saved FAQ source selection is only supported for support-ticket runs.",
+                    },),
+                )
+            if source_target_ids:
+                return self._build_reviews_from_selected_sources(
+                    source_target_ids,
+                    source_material=source_material,
+                    scope=scope,
+                    request=request,
+                )
+            return _build_review_input_package(
+                source_material,
+                metadata={"requested_source_type": source_type},
+                default_source_type=source_type,
+            )
+        if source_type and source_type not in _SUPPORT_TICKET_SOURCE_TYPE_ALIASES:
+            return _noop_package(
+                self.provider_name,
+                metadata={"requested_source_type": source_type},
+                warnings=({
+                    "code": "content_ops_source_type_unsupported",
+                    "message": "Unsupported Content Ops source type.",
+                    "source_type": source_type,
+                },),
+            )
         if source_faq_ids or source_target_ids:
             return self._build_from_selected_sources(
                 source_faq_ids,
@@ -198,6 +255,48 @@ class _AtlasSupportTicketInputProvider:
             warnings=tuple(package.warnings) + tuple(warnings),
         )
 
+    async def _build_reviews_from_selected_sources(
+        self,
+        source_target_ids: Sequence[str],
+        *,
+        source_material: Any,
+        scope: TenantScope,
+        request: RequestPayload | None,
+    ) -> ContentOpsInputPackage:
+        (
+            loaded_targets,
+            missing_targets,
+            ambiguous_targets,
+            target_skip_reason,
+        ) = await self._load_selected_import_targets(
+            source_target_ids,
+            scope=scope,
+            request=request,
+        )
+        combined_source_material = _combine_source_material(
+            source_material,
+            loaded_targets,
+        )
+        requested_source_type = _request_source_type(request) or "reviews"
+        metadata = {
+            "requested_source_type": requested_source_type,
+            "source_target_id_count": len(source_target_ids),
+            "source_target_loaded_count": len(loaded_targets),
+            "source_target_missing_id_count": len(missing_targets),
+            "source_target_ambiguous_id_count": len(ambiguous_targets),
+        }
+        warnings = _selected_source_target_warnings(
+            missing=missing_targets,
+            ambiguous=ambiguous_targets,
+            skip_reason=target_skip_reason,
+        )
+        return _build_review_input_package(
+            combined_source_material,
+            metadata=metadata,
+            warnings=warnings,
+            default_source_type=requested_source_type,
+        )
+
     async def _load_selected_faq_drafts(
         self,
         source_faq_ids: Sequence[str],
@@ -281,6 +380,19 @@ def _request_source_material(request: RequestPayload | None) -> Any:
     if not isinstance(inputs, Mapping):
         return None
     return inputs.get("source_material")
+
+
+def _request_source_type(request: RequestPayload | None) -> str:
+    if not isinstance(request, Mapping):
+        return ""
+    inputs = request.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return ""
+    for key in _SOURCE_TYPE_KEYS:
+        value = _key(inputs.get(key))
+        if value:
+            return value
+    return ""
 
 
 def _request_source_faq_ids(request: RequestPayload | None) -> tuple[str, ...]:
@@ -427,6 +539,121 @@ def _key(value: Any) -> str:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _build_review_input_package(
+    source_material: Any,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    warnings: Sequence[Mapping[str, Any]] = (),
+    default_source_type: str = "reviews",
+) -> ContentOpsInputPackage:
+    source_rows = source_material_to_source_rows(source_material)
+    load_result = source_rows_to_campaign_opportunities(
+        source_rows,
+        default_fields={"source_type": default_source_type},
+    )
+    review_opportunities = [
+        dict(row)
+        for row in load_result.opportunities
+        if _key(row.get("source_type")) in _REVIEW_SOURCE_TYPE_ALIASES
+    ]
+    adapter_warnings = [
+        {
+            "code": warning.code,
+            "message": warning.message,
+            **({"row_index": warning.row_index} if warning.row_index is not None else {}),
+            **({"field": warning.field} if warning.field else {}),
+        }
+        for warning in load_result.warnings
+    ]
+    package_metadata = {
+        "source": "review_input_package",
+        "source_row_count": len(source_rows),
+        "opportunity_count": len(load_result.opportunities),
+        "included_row_count": len(review_opportunities),
+        "skipped_row_count": max(0, len(source_rows) - len(review_opportunities)),
+        **dict(metadata or {}),
+    }
+    package_warnings = [dict(warning) for warning in warnings]
+    package_warnings.extend(adapter_warnings)
+    if not review_opportunities:
+        warning_code = (
+            "review_source_rows_unrecognized"
+            if source_rows
+            else "review_source_material_empty"
+        )
+        warning_message = (
+            "Review source rows were provided, but none were recognized as review or complaint rows."
+            if source_rows
+            else "No review or complaint source rows were provided."
+        )
+        package_warnings.append({
+            "code": warning_code,
+            "message": warning_message,
+        })
+        return _noop_package(
+            "atlas_review_request",
+            metadata=package_metadata,
+            warnings=package_warnings,
+        )
+    primary_entity = _review_primary_entity(review_opportunities)
+    inputs = {
+        "source_material": review_opportunities,
+        "review_source_material": review_opportunities,
+        "source_type": "reviews",
+        "campaign_name": _REVIEW_CAMPAIGN_NAME,
+        "target_account": primary_entity,
+        "topic": _REVIEW_TOPIC,
+        "offer": _REVIEW_OFFER,
+        "audience": _REVIEW_AUDIENCE,
+        "target_keyword": _REVIEW_TARGET_KEYWORD,
+        "search_intent": (
+            "Marketing teams looking for review-grounded themes for landing "
+            "pages and blog posts."
+        ),
+        "primary_entity": primary_entity,
+        "audience_entity": _REVIEW_AUDIENCE,
+        "competitors": _review_competitors(review_opportunities),
+        "objections": [
+            "Will this sound generic?",
+            "Can we trace the claims back to customer language?",
+        ],
+        "source_period": "Recent customer reviews",
+        "review_source_count": len(review_opportunities),
+        "internal_links": ["/systems/ai-content-ops/intake"],
+        "cta_label": "Turn Reviews Into Content",
+        "cta_url": "/systems/ai-content-ops/intake",
+    }
+    return ContentOpsInputPackage(
+        provider="atlas_review_request",
+        inputs=inputs,
+        outputs=_REVIEW_CAMPAIGN_OUTPUTS,
+        target_mode="vendor_retention",
+        ingestion_profile="existing_evidence",
+        metadata=package_metadata,
+        warnings=tuple(package_warnings),
+    )
+
+
+def _review_primary_entity(rows: Sequence[Mapping[str, Any]]) -> str:
+    for row in rows:
+        for key in ("vendor_name", "product_name", "company_name"):
+            value = _clean(row.get(key))
+            if value:
+                return value
+    return _REVIEW_CAMPAIGN_NAME
+
+
+def _review_competitors(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for row in rows:
+        value = _clean(row.get("vendor_name") or row.get("product_name"))
+        if value and value not in values:
+            values.append(value)
+        if len(values) == 3:
+            break
+    return values or ["generic AI copy", "manual review mining"]
 
 
 def _selected_faq_warnings(

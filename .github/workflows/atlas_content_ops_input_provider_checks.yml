@@ -6,6 +6,7 @@ on:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
       - "atlas_brain/_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_input_provider.py"
+      - "tests/test_atlas_content_ops_review_input_provider.py"
   push:
     branches:
       - main
@@ -13,6 +14,7 @@ on:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
       - "atlas_brain/_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_input_provider.py"
+      - "tests/test_atlas_content_ops_review_input_provider.py"
 
 jobs:
   atlas-content-ops-input-provider-checks:
@@ -37,4 +39,5 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_input_provider.py \
+            tests/test_atlas_content_ops_review_input_provider.py \
             -q

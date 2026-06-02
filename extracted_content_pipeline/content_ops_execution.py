@@ -581,7 +581,10 @@ async def _dispatch_blog_post(
         "quality_repair_attempts": _step_config_int(step.config, "quality_repair_attempts"),
         "topic": _step_config_text(step.config, "topic"),
     }
-    data_context = _support_ticket_blog_data_context_from_inputs(request.inputs)
+    data_context = (
+        _review_blog_data_context_from_inputs(request.inputs)
+        or _support_ticket_blog_data_context_from_inputs(request.inputs)
+    )
     if data_context:
         kwargs["data_context"] = data_context
     return await service.generate(
@@ -883,6 +886,38 @@ def _support_ticket_blog_data_context_from_inputs(
     }
 
 
+def _review_blog_data_context_from_inputs(
+    inputs: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    source_type = _source_type_input(inputs)
+    review_rows = _mapping_list_input(inputs.get("review_source_material"))
+    if not review_rows and source_type in {"review", "reviews"}:
+        review_rows = _mapping_list_input(inputs.get("source_material"))
+    if not review_rows:
+        return None
+    context: dict[str, Any] = {
+        "source": "review_input_provider",
+        "source_type": "reviews",
+        "source_period": _clean(inputs.get("source_period"))
+        or "Recent customer reviews",
+        "review_period": _clean(inputs.get("source_period"))
+        or "Recent customer reviews",
+        "source_row_count": _positive_int_context(inputs.get("review_source_count"))
+        or len(review_rows),
+        "review_source_count": _positive_int_context(inputs.get("review_source_count"))
+        or len(review_rows),
+        "source_material": review_rows,
+        "review_source_material": review_rows,
+        "customer_wording_examples": review_rows[:5],
+        "topic": _clean(inputs.get("topic")),
+    }
+    return {
+        key: value
+        for key, value in context.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _inputs_use_support_ticket_source(inputs: Mapping[str, Any]) -> bool:
     filters = _filters_from_inputs(inputs) or {}
     if is_support_ticket_topic_type(filters.get("topic_type")):
@@ -890,6 +925,15 @@ def _inputs_use_support_ticket_source(inputs: Mapping[str, Any]) -> bool:
     if is_support_ticket_context(inputs):
         return True
     return _value_contains_support_ticket_source(inputs.get("source_material"))
+
+
+def _source_type_input(inputs: Mapping[str, Any]) -> str:
+    return (
+        str(inputs.get("source_type") or inputs.get("source_material_type") or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )
 
 
 def _value_contains_support_ticket_source(value: Any) -> bool:
