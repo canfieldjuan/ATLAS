@@ -495,6 +495,76 @@ def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None
     assert "tell users exactly what to try next" not in markdown
 
 
+def test_deflection_report_cli_ignores_legacy_max_items_cap(tmp_path: Path) -> None:
+    source = tmp_path / "uncapped-support-tickets.json"
+    result_output = tmp_path / "deflection-report-result.json"
+    rows = [
+        {
+            "ticket_id": "ticket-sso-1",
+            "source_type": "support_ticket",
+            "subject": "SSO setup",
+            "message": "Can we sync users before enforcing SSO?",
+            "pain_category": "single sign-on rollout",
+            "resolution_text": "Enable SSO, verify emails, then enable SCIM.",
+        },
+        {
+            "ticket_id": "ticket-dashboard-1",
+            "source_type": "support_ticket",
+            "subject": "Dashboard refresh",
+            "message": "Why is the executive dashboard not refreshing?",
+            "pain_category": "warehouse refresh status",
+            "resolution_text": "Rerun the failed warehouse job, then refresh the model.",
+        },
+        {
+            "ticket_id": "ticket-billing-1",
+            "source_type": "support_ticket",
+            "subject": "Renewal invoice",
+            "message": "How do I confirm my renewal invoice before payment?",
+            "pain_category": "renewal billing review",
+            "resolution_text": "Open Billing > Invoices, then download the PDF.",
+        },
+        {
+            "ticket_id": "ticket-token-1",
+            "source_type": "support_ticket",
+            "subject": "API token rotation",
+            "message": "How do we rotate API tokens without downtime?",
+            "pain_category": "api token rotation",
+            "resolution_text": "Deploy the replacement token, then revoke the old token.",
+        },
+    ]
+    source.write_text(json.dumps(rows), encoding="utf-8")
+
+    exit_code = MODULE.main([
+        str(source),
+        "--source-format",
+        "json",
+        "--max-items",
+        "2",
+        "--result-output",
+        str(result_output),
+        "--json",
+    ])
+
+    assert exit_code == 0
+    result = json.loads(result_output.read_text(encoding="utf-8"))
+    assert result["generated"] == 4
+    assert result["summary"]["generated"] == 4
+    assert result["config"]["max_items"] == 0
+    assert result["config"]["requested_max_items"] == 2
+    assert result["diagnostics"]["item_count"] == 4
+    assert "other support issues" not in {
+        item["topic"] for item in result["diagnostics"]["items"]
+    }
+    assert {
+        item["first_source_id"] for item in result["diagnostics"]["items"]
+    } == {
+        "ticket-sso-1",
+        "ticket-dashboard-1",
+        "ticket-billing-1",
+        "ticket-token-1",
+    }
+
+
 def test_deflection_report_cli_splits_backed_and_unproven_answers(tmp_path: Path) -> None:
     source = tmp_path / "mixed-support-tickets.json"
     output = tmp_path / "deflection-report.md"
