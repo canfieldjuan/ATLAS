@@ -94,12 +94,75 @@ _REVIEW_SOURCE_TYPE_ALIASES = frozenset({
     "complaint",
     "complaints",
 })
+_COMPETITIVE_SOURCE_TYPE_ALIASES = frozenset({
+    "competitive",
+    "competition",
+    "competitor",
+    "competitors",
+    "competitive_displacement",
+    "competitive_signal",
+    "competitive_signals",
+    "displacement",
+    "displacement_edge",
+    "displacement_edges",
+})
+_COMPETITIVE_BUNDLE_KEYS = frozenset({
+    "competitive_inputs",
+    "competitive_rows",
+    "competitive_signal",
+    "competitive_signals",
+    "displacement_edge",
+    "displacement_edges",
+    "displacements",
+    "switching_evidence",
+})
+_COMPETITIVE_MARKER_KEYS = frozenset({
+    "alternative",
+    "alternative_name",
+    "alternative_product",
+    "alternative_vendor",
+    "alternatives",
+    "competitive_alternative",
+    "competitive_alternatives",
+    "competitive_displacement",
+    "competitor",
+    "competitor_name",
+    "competitor_overlap",
+    "competitor_vendor",
+    "competitor_vendor_name",
+    "competitors",
+    "competitors_mentioned",
+    "displacement_confidence",
+    "displacement_direction",
+    "displacement_map",
+    "displacement_mention_count",
+    "from_vendor",
+    "losing_vendor",
+    "new_vendor",
+    "switched_from",
+    "switched_to",
+    "switching_from",
+    "switching_to",
+    "to_vendor",
+    "top_displacement_targets",
+    "winning_vendor",
+})
 _REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post")
 _REVIEW_CAMPAIGN_NAME = "Review-Signal Campaign"
 _REVIEW_TOPIC = "Customer review themes worth turning into content"
 _REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
 _REVIEW_OFFER = "Turn customer review themes into buyer-facing landing pages and blog posts"
 _REVIEW_TARGET_KEYWORD = "customer review content marketing"
+_COMPETITIVE_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post")
+_COMPETITIVE_CAMPAIGN_NAME = "Competitive Displacement Campaign"
+_COMPETITIVE_TOPIC = "Competitive displacement themes worth turning into content"
+_COMPETITIVE_AUDIENCE = (
+    "Marketing teams turning competitive evidence into grounded content"
+)
+_COMPETITIVE_OFFER = (
+    "Turn competitor and switching evidence into buyer-facing landing pages and blog posts"
+)
+_COMPETITIVE_TARGET_KEYWORD = "competitive displacement content marketing"
 
 
 @dataclass(frozen=True)
@@ -141,6 +204,28 @@ class _AtlasSupportTicketInputProvider:
                     request=request,
                 )
             return _build_review_input_package(
+                source_material,
+                metadata={"requested_source_type": source_type},
+                default_source_type=source_type,
+            )
+        if source_type in _COMPETITIVE_SOURCE_TYPE_ALIASES:
+            if source_faq_ids:
+                return _noop_package(
+                    "atlas_competitive_request",
+                    metadata={"requested_source_type": source_type},
+                    warnings=({
+                        "code": "competitive_source_faq_ids_unsupported",
+                        "message": "Saved FAQ source selection is only supported for support-ticket runs.",
+                    },),
+                )
+            if source_target_ids:
+                return self._build_competitive_from_selected_sources(
+                    source_target_ids,
+                    source_material=source_material,
+                    scope=scope,
+                    request=request,
+                )
+            return _build_competitive_input_package(
                 source_material,
                 metadata={"requested_source_type": source_type},
                 default_source_type=source_type,
@@ -291,6 +376,48 @@ class _AtlasSupportTicketInputProvider:
             skip_reason=target_skip_reason,
         )
         return _build_review_input_package(
+            combined_source_material,
+            metadata=metadata,
+            warnings=warnings,
+            default_source_type=requested_source_type,
+        )
+
+    async def _build_competitive_from_selected_sources(
+        self,
+        source_target_ids: Sequence[str],
+        *,
+        source_material: Any,
+        scope: TenantScope,
+        request: RequestPayload | None,
+    ) -> ContentOpsInputPackage:
+        (
+            loaded_targets,
+            missing_targets,
+            ambiguous_targets,
+            target_skip_reason,
+        ) = await self._load_selected_import_targets(
+            source_target_ids,
+            scope=scope,
+            request=request,
+        )
+        combined_source_material = _combine_source_material(
+            source_material,
+            loaded_targets,
+        )
+        requested_source_type = _request_source_type(request) or "competitive"
+        metadata = {
+            "requested_source_type": requested_source_type,
+            "source_target_id_count": len(source_target_ids),
+            "source_target_loaded_count": len(loaded_targets),
+            "source_target_missing_id_count": len(missing_targets),
+            "source_target_ambiguous_id_count": len(ambiguous_targets),
+        }
+        warnings = _selected_source_target_warnings(
+            missing=missing_targets,
+            ambiguous=ambiguous_targets,
+            skip_reason=target_skip_reason,
+        )
+        return _build_competitive_input_package(
             combined_source_material,
             metadata=metadata,
             warnings=warnings,
@@ -534,7 +661,7 @@ def _has_any_text(value: Mapping[str, Any], keys: frozenset[str]) -> bool:
 
 
 def _key(value: Any) -> str:
-    return str(value or "").strip().lower().replace(" ", "_")
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _clean(value: Any) -> str:
@@ -654,6 +781,203 @@ def _review_competitors(rows: Sequence[Mapping[str, Any]]) -> list[str]:
         if len(values) == 3:
             break
     return values or ["generic AI copy", "manual review mining"]
+
+
+def _build_competitive_input_package(
+    source_material: Any,
+    *,
+    metadata: Mapping[str, Any] | None = None,
+    warnings: Sequence[Mapping[str, Any]] = (),
+    default_source_type: str = "competitive",
+) -> ContentOpsInputPackage:
+    source_rows = source_material_to_source_rows(
+        _competitive_source_material_rows(source_material)
+    )
+    load_result = source_rows_to_campaign_opportunities(
+        source_rows,
+        default_fields={"source_type": default_source_type},
+    )
+    competitive_opportunities = [
+        dict(row)
+        for row in load_result.opportunities
+        if _is_competitive_opportunity(row)
+    ]
+    adapter_warnings = [
+        {
+            "code": warning.code,
+            "message": warning.message,
+            **({"row_index": warning.row_index} if warning.row_index is not None else {}),
+            **({"field": warning.field} if warning.field else {}),
+        }
+        for warning in load_result.warnings
+    ]
+    package_metadata = {
+        "source": "competitive_input_package",
+        "source_row_count": len(source_rows),
+        "opportunity_count": len(load_result.opportunities),
+        "included_row_count": len(competitive_opportunities),
+        "skipped_row_count": max(0, len(source_rows) - len(competitive_opportunities)),
+        **dict(metadata or {}),
+    }
+    package_warnings = [dict(warning) for warning in warnings]
+    package_warnings.extend(adapter_warnings)
+    if not competitive_opportunities:
+        warning_code = (
+            "competitive_source_rows_unrecognized"
+            if source_rows
+            else "competitive_source_material_empty"
+        )
+        warning_message = (
+            "Competitive source rows were provided, but none carried competitor or displacement markers."
+            if source_rows
+            else "No competitive or displacement source rows were provided."
+        )
+        package_warnings.append({
+            "code": warning_code,
+            "message": warning_message,
+        })
+        return _noop_package(
+            "atlas_competitive_request",
+            metadata=package_metadata,
+            warnings=package_warnings,
+        )
+    primary_entity = _competitive_primary_entity(competitive_opportunities)
+    competitors = _competitive_competitors(competitive_opportunities)
+    inputs = {
+        "source_material": competitive_opportunities,
+        "competitive_source_material": competitive_opportunities,
+        "source_type": "competitive",
+        "campaign_name": _COMPETITIVE_CAMPAIGN_NAME,
+        "target_account": primary_entity,
+        "topic": _COMPETITIVE_TOPIC,
+        "offer": _COMPETITIVE_OFFER,
+        "audience": _COMPETITIVE_AUDIENCE,
+        "target_keyword": _COMPETITIVE_TARGET_KEYWORD,
+        "search_intent": (
+            "Marketing teams looking for competitor and switching evidence "
+            "they can turn into grounded buyer-facing content."
+        ),
+        "primary_entity": primary_entity,
+        "audience_entity": _COMPETITIVE_AUDIENCE,
+        "competitors": competitors,
+        "competitive_alternatives": competitors,
+        "objections": [
+            "Will this make unsupported competitive claims?",
+            "Can we trace switching claims back to source evidence?",
+        ],
+        "source_period": "Recent competitive and displacement evidence",
+        "competitive_source_count": len(competitive_opportunities),
+        "displacement_source_count": len(competitive_opportunities),
+        "internal_links": ["/systems/ai-content-ops/intake"],
+        "cta_label": "Turn Competitive Evidence Into Content",
+        "cta_url": "/systems/ai-content-ops/intake",
+    }
+    return ContentOpsInputPackage(
+        provider="atlas_competitive_request",
+        inputs=inputs,
+        outputs=_COMPETITIVE_CAMPAIGN_OUTPUTS,
+        target_mode="vendor_retention",
+        ingestion_profile="existing_evidence",
+        metadata=package_metadata,
+        warnings=tuple(package_warnings),
+    )
+
+
+def _is_competitive_opportunity(row: Mapping[str, Any]) -> bool:
+    if _key(row.get("source_type")) in _COMPETITIVE_SOURCE_TYPE_ALIASES:
+        return _has_competitive_marker(row)
+    return _has_competitive_marker(row)
+
+
+def _has_competitive_marker(row: Mapping[str, Any]) -> bool:
+    return any(
+        _key(key) in _COMPETITIVE_MARKER_KEYS and value not in (None, "", [], {})
+        for key, value in row.items()
+    )
+
+
+def _competitive_primary_entity(rows: Sequence[Mapping[str, Any]]) -> str:
+    for row in rows:
+        for key in (
+            "from_vendor",
+            "vendor_name",
+            "current_vendor",
+            "incumbent_vendor",
+            "product_name",
+            "company_name",
+        ):
+            value = _clean(row.get(key))
+            if value:
+                return value
+    return _COMPETITIVE_CAMPAIGN_NAME
+
+
+def _competitive_competitors(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    values: list[str] = []
+    for row in rows:
+        for key in (
+            "to_vendor",
+            "competitor",
+            "competitor_name",
+            "competitor_vendor",
+            "alternative_name",
+            "alternative_vendor",
+            "winning_vendor",
+            "new_vendor",
+            "competitive_alternatives",
+            "alternatives",
+            "competitors",
+            "competitors_mentioned",
+            "top_displacement_targets",
+            "competitor_overlap",
+        ):
+            _append_competitive_names(values, row.get(key))
+            if len(values) >= 5:
+                return values[:5]
+    return values[:5] or ["manual competitive research", "generic AI copy"]
+
+
+def _competitive_source_material_rows(source_material: Any) -> Any:
+    if not isinstance(source_material, Mapping):
+        return source_material
+    rows: list[Any] = []
+    for key, value in source_material.items():
+        if _key(key) not in _COMPETITIVE_BUNDLE_KEYS:
+            continue
+        if _is_empty_source_material(value):
+            continue
+        if isinstance(value, (list, tuple)):
+            rows.extend(value)
+        else:
+            rows.append(value)
+    return rows if rows else source_material
+
+
+def _append_competitive_names(values: list[str], raw: Any) -> None:
+    if raw in (None, "", [], {}):
+        return
+    if isinstance(raw, str):
+        items: Sequence[Any] = raw.split(",")
+    elif isinstance(raw, Mapping):
+        items = (
+            raw.get("name")
+            or raw.get("competitor")
+            or raw.get("vendor")
+            or raw.get("to_vendor")
+            or raw.get("alternative")
+            or raw.get("alternative_name"),
+        )
+    elif isinstance(raw, Sequence) and not isinstance(raw, (bytes, bytearray)):
+        items = raw
+    else:
+        items = (raw,)
+    for item in items:
+        if isinstance(item, Mapping):
+            _append_competitive_names(values, item)
+            continue
+        value = _clean(item)
+        if value and value not in values:
+            values.append(value)
 
 
 def _selected_faq_warnings(

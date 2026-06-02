@@ -49,6 +49,12 @@ LANDING_PAGE_REVIEW_SOURCE_INPUT_KEYS: tuple[str, ...] = (
     "review_source_count",
 )
 
+LANDING_PAGE_COMPETITIVE_SOURCE_INPUT_KEYS: tuple[str, ...] = (
+    "competitive_source_material",
+    "competitive_source_count",
+    "displacement_source_count",
+)
+
 LANDING_PAGE_EXISTING_CONTEXT_KEYS: tuple[str, ...] = (
     "industry",
     "pain_points",
@@ -64,6 +70,7 @@ LANDING_PAGE_CONTEXT_INPUT_KEYS: frozenset[str] = frozenset((
     *LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS,
     *LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS,
     *LANDING_PAGE_REVIEW_SOURCE_INPUT_KEYS,
+    *LANDING_PAGE_COMPETITIVE_SOURCE_INPUT_KEYS,
 ))
 
 
@@ -158,8 +165,10 @@ def landing_page_seo_geo_aeo_input_contracts() -> dict[str, dict[str, Any]]:
 
 __all__ = [
     "LANDING_PAGE_CONTEXT_INPUT_KEYS",
+    "LANDING_PAGE_COMPETITIVE_SOURCE_INPUT_KEYS",
     "LANDING_PAGE_EXISTING_CONTEXT_KEYS",
     "LANDING_PAGE_INPUT_ASSET",
+    "LANDING_PAGE_REVIEW_SOURCE_INPUT_KEYS",
     "LANDING_PAGE_SEO_GEO_AEO_INPUT_KEYS",
     "LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS",
     "landing_page_seo_geo_aeo_input_contracts",

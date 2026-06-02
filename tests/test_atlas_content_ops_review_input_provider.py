@@ -87,6 +87,20 @@ def _generic_review_row(target_id: str = "review-1") -> dict[str, Any]:
     }
 
 
+def _competitive_row(target_id: str = "competitive-1") -> dict[str, Any]:
+    return {
+        "target_id": target_id,
+        "source_id": target_id,
+        "source_type": "competitive_displacement",
+        "from_vendor": "Slack",
+        "to_vendor": "Teams",
+        "competitor": "Teams",
+        "content": "Admins are switching to Teams because calendar handoff is simpler.",
+        "displacement_mention_count": 4,
+        "primary_driver": "workflow friction",
+    }
+
+
 def _support_ticket_row() -> dict[str, Any]:
     return {
         "ticket_id": "ticket-1",
@@ -137,6 +151,72 @@ def test_review_mode_defaults_generic_rows_to_requested_review_type() -> None:
     assert package.inputs["source_material"][0]["source_type"] == "reviews"
     assert package.inputs["source_material"][0]["target_id"] == "review-1"
     assert package.metadata["source_row_count"] == 1
+    assert package.metadata["included_row_count"] == 1
+
+
+def test_competitive_source_material_builds_landing_and_blog_inputs() -> None:
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "source_material": [_competitive_row()],
+            }
+        },
+    )
+    payload = merge_content_ops_input_package({"inputs": {}}, package)
+    request = request_from_mapping(payload)
+    preview = preview_control_surface(request)
+
+    assert package.provider == "atlas_competitive_request"
+    assert request.outputs == ("landing_page", "blog_post")
+    assert request.ingestion_profile == "existing_evidence"
+    assert request.inputs["source_type"] == "competitive"
+    assert request.inputs["competitive_source_material"][0]["target_id"] == "competitive-1"
+    assert request.inputs["target_account"] == "Slack"
+    assert request.inputs["competitive_alternatives"] == ["Teams"]
+    assert package.metadata["included_row_count"] == 1
+    assert preview.can_run is True
+
+
+def test_competitive_source_material_accepts_competitive_bundle_alias() -> None:
+    row = _competitive_row()
+    row.pop("source_type")
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_material_type": "competitive",
+                "source_material": {"competitive_signals": [row]},
+            }
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.outputs == ("landing_page", "blog_post")
+    assert package.inputs["source_material"][0]["source_type"] == "competitive"
+    assert package.inputs["source_material"][0]["target_id"] == "competitive-1"
+    assert package.metadata["source_row_count"] == 1
+    assert package.metadata["included_row_count"] == 1
+
+
+def test_hyphenated_competitive_source_type_routes_to_competitive_provider() -> None:
+    row = _competitive_row()
+    row.pop("source_type")
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive-signal",
+                "source_material": [row],
+            }
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.inputs["source_type"] == "competitive"
+    assert package.inputs["source_material"][0]["source_type"] == "competitive_signal"
+    assert package.metadata["requested_source_type"] == "competitive_signal"
     assert package.metadata["included_row_count"] == 1
 
 
@@ -216,6 +296,24 @@ def test_review_mode_rejects_non_review_rows() -> None:
     assert package.warnings[-1]["code"] == "review_source_rows_unrecognized"
 
 
+def test_competitive_mode_rejects_non_competitive_rows() -> None:
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "source_material": [_generic_review_row()],
+            }
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["included_row_count"] == 0
+    assert package.warnings[-1]["code"] == "competitive_source_rows_unrecognized"
+
+
 def test_review_mode_rejects_saved_faq_selection() -> None:
     package = build_content_ops_input_provider().build_content_ops_input_package(
         scope=TenantScope(account_id="acct-1"),
@@ -233,6 +331,27 @@ def test_review_mode_rejects_saved_faq_selection() -> None:
     assert package.metadata["mode"] == "noop"
     assert package.warnings == ({
         "code": "review_source_faq_ids_unsupported",
+        "message": "Saved FAQ source selection is only supported for support-ticket runs.",
+    },)
+
+
+def test_competitive_mode_rejects_saved_faq_selection() -> None:
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "source_faq_ids": ["11111111-1111-1111-1111-111111111111"],
+                "source_material": [_competitive_row()],
+            }
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.warnings == ({
+        "code": "competitive_source_faq_ids_unsupported",
         "message": "Saved FAQ source selection is only supported for support-ticket runs.",
     },)
 
@@ -298,6 +417,48 @@ async def test_review_mode_fetches_persisted_targets_by_tenant_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_competitive_mode_fetches_persisted_targets_by_tenant_scope() -> None:
+    pool = {
+        "opportunities": {
+            "competitive-1": [_competitive_row("competitive-1")],
+            "competitive-2": [{
+                **_competitive_row("competitive-2"),
+                "from_vendor": "Notion",
+                "to_vendor": "Confluence",
+                "competitor": "Confluence",
+            }],
+        },
+        "opportunity_calls": [],
+    }
+    provider = build_content_ops_input_provider(
+        pool_provider=lambda: pool,
+        opportunity_repository_factory=_OpportunityRepo,
+    )
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "target_mode": "vendor_retention",
+            "inputs": {
+                "source_type": "competitive",
+                "source_import_target_ids": ["competitive-1", "competitive-2"],
+            },
+        },
+    )
+
+    assert [call["target_id"] for call in pool["opportunity_calls"]] == [
+        "competitive-1",
+        "competitive-2",
+    ]
+    assert {call["account_id"] for call in pool["opportunity_calls"]} == {"acct-1"}
+    assert package.provider == "atlas_competitive_request"
+    assert package.outputs == ("landing_page", "blog_post")
+    assert package.metadata["source_target_loaded_count"] == 2
+    assert package.metadata["included_row_count"] == 2
+    assert package.inputs["competitive_alternatives"] == ["Teams", "Confluence"]
+
+
+@pytest.mark.asyncio
 async def test_review_input_evidence_reaches_landing_and_blog_generators() -> None:
     package = build_content_ops_input_provider().build_content_ops_input_package(
         scope=TenantScope(account_id="acct-1"),
@@ -328,6 +489,39 @@ async def test_review_input_evidence_reaches_landing_and_blog_generators() -> No
     blog_context = blog_step.result["kwargs"]["data_context"]
     assert blog_context["source"] == "review_input_provider"
     assert blog_context["review_source_material"][0]["target_id"] == "review-1"
+
+
+@pytest.mark.asyncio
+async def test_competitive_input_evidence_reaches_landing_and_blog_generators() -> None:
+    package = build_content_ops_input_provider().build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "source_material": [_competitive_row()],
+            }
+        },
+    )
+    payload = merge_content_ops_input_package({"inputs": {}}, package)
+    request = request_from_mapping(payload)
+
+    result = await execute_content_ops_request(
+        request,
+        services=ContentOpsExecutionServices(
+            blog_post=_RunnableService(),
+            landing_page=_RunnableService(),
+        ),
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    landing_step = next(step for step in result.steps if step.output == "landing_page")
+    landing_campaign = landing_step.result["kwargs"]["campaign"]
+    assert landing_campaign.context["competitive_source_material"][0]["target_id"] == "competitive-1"
+
+    blog_step = next(step for step in result.steps if step.output == "blog_post")
+    blog_context = blog_step.result["kwargs"]["data_context"]
+    assert blog_context["source"] == "competitive_input_provider"
+    assert blog_context["competitive_source_material"][0]["target_id"] == "competitive-1"
 
 
 @pytest.mark.skipif(

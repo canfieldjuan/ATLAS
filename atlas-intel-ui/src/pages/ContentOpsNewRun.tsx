@@ -317,7 +317,7 @@ export default function ContentOpsNewRun() {
   const blogPostOutputSelected = request.outputs.includes(BLOG_POST_OUTPUT)
   const faqSourceSelectionVisible =
     (landingPageOutputSelected || blogPostOutputSelected) &&
-    sourceMode !== 'reviews'
+    sourceMode === 'support_ticket'
   const faqConfigurationOutputSelected = faqConfigurationInputsSelected(
     request.outputs,
   )
@@ -1081,6 +1081,7 @@ export default function ContentOpsNewRun() {
             {[
               ['support_ticket', 'Support tickets'],
               ['reviews', 'Reviews'],
+              ['competitive', 'Competitive'],
             ].map(([mode, label]) => {
               const selected = sourceMode === mode
               return (

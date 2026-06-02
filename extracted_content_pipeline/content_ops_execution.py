@@ -45,6 +45,18 @@ _REASONING_OUTPUT_TO_ATTR: Mapping[str, str] = MappingProxyType({
     "sales_brief": "sales_brief",
 })
 _REASONING_AWARE_OUTPUTS = tuple(_REASONING_OUTPUT_TO_ATTR)
+_COMPETITIVE_SOURCE_TYPES = frozenset({
+    "competitive",
+    "competition",
+    "competitor",
+    "competitors",
+    "competitive_displacement",
+    "competitive_signal",
+    "competitive_signals",
+    "displacement",
+    "displacement_edge",
+    "displacement_edges",
+})
 
 
 @dataclass(frozen=True)
@@ -582,7 +594,8 @@ async def _dispatch_blog_post(
         "topic": _step_config_text(step.config, "topic"),
     }
     data_context = (
-        _review_blog_data_context_from_inputs(request.inputs)
+        _competitive_blog_data_context_from_inputs(request.inputs)
+        or _review_blog_data_context_from_inputs(request.inputs)
         or _support_ticket_blog_data_context_from_inputs(request.inputs)
     )
     if data_context:
@@ -909,6 +922,52 @@ def _review_blog_data_context_from_inputs(
         "source_material": review_rows,
         "review_source_material": review_rows,
         "customer_wording_examples": review_rows[:5],
+        "topic": _clean(inputs.get("topic")),
+    }
+    return {
+        key: value
+        for key, value in context.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _competitive_blog_data_context_from_inputs(
+    inputs: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    source_type = _source_type_input(inputs)
+    rows = _mapping_list_input(inputs.get("competitive_source_material"))
+    if not rows and source_type in _COMPETITIVE_SOURCE_TYPES:
+        rows = _mapping_list_input(inputs.get("source_material"))
+    if not rows:
+        return None
+    competitors = (
+        _text_list_input(inputs.get("competitive_alternatives"))
+        or _text_list_input(inputs.get("competitors"))
+    )
+    context: dict[str, Any] = {
+        "source": "competitive_input_provider",
+        "source_type": "competitive",
+        "source_period": _clean(inputs.get("source_period"))
+        or "Recent competitive and displacement evidence",
+        "review_period": _clean(inputs.get("source_period"))
+        or "Recent competitive and displacement evidence",
+        "source_row_count": _positive_int_context(
+            inputs.get("competitive_source_count")
+        )
+        or len(rows),
+        "competitive_source_count": _positive_int_context(
+            inputs.get("competitive_source_count")
+        )
+        or len(rows),
+        "displacement_source_count": _positive_int_context(
+            inputs.get("displacement_source_count")
+        )
+        or len(rows),
+        "source_material": rows,
+        "competitive_source_material": rows,
+        "competitive_alternatives": competitors,
+        "competitors": competitors,
+        "customer_wording_examples": rows[:5],
         "topic": _clean(inputs.get("topic")),
     }
     return {
