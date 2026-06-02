@@ -27,6 +27,19 @@ class DeflectionReportAccessRecord:
     delivery_email: str | None = None
 
 
+@dataclass(frozen=True)
+class DeflectionReportListRecord:
+    """Unpaid-safe report listing row for one tenant/request pair."""
+
+    account_id: str
+    request_id: str
+    snapshot: dict[str, Any]
+    paid: bool
+    delivery_email: str | None = None
+    created_at: Any = None
+    updated_at: Any = None
+
+
 class DeflectionReportArtifactStore(Protocol):
     """Host-owned persistence for snapshots, full artifacts, and paid flags."""
 
@@ -48,6 +61,15 @@ class DeflectionReportArtifactStore(Protocol):
         request_id: str,
     ) -> dict[str, Any] | None:
         """Return the free snapshot for a tenant/request pair."""
+
+    async def list_reports(
+        self,
+        *,
+        account_id: str,
+        limit: int | None = 25,
+        paid: bool | None = None,
+    ) -> tuple[DeflectionReportListRecord, ...]:
+        """List free report snapshots for one tenant, newest first."""
 
     async def get_artifact_record(
         self,
@@ -104,6 +126,33 @@ class InMemoryDeflectionReportArtifactStore:
     ) -> dict[str, Any] | None:
         row = self._rows.get((account_id, request_id))
         return dict(row.snapshot) if row else None
+
+    async def list_reports(
+        self,
+        *,
+        account_id: str,
+        limit: int | None = 25,
+        paid: bool | None = None,
+    ) -> tuple[DeflectionReportListRecord, ...]:
+        resolved_account = _required_text(account_id, "account_id")
+        rows = [
+            row
+            for (row_account, _request_id), row in self._rows.items()
+            if row_account == resolved_account and (paid is None or row.paid is paid)
+        ]
+        selected_rows = rows if limit is None else rows[-_bounded_limit(limit):]
+        out: list[DeflectionReportListRecord] = []
+        for row in reversed(selected_rows):
+            out.append(
+                DeflectionReportListRecord(
+                    account_id=row.account_id,
+                    request_id=row.request_id,
+                    snapshot=dict(row.snapshot),
+                    paid=row.paid,
+                    delivery_email=row.delivery_email,
+                )
+            )
+        return tuple(out)
 
     async def get_artifact_record(
         self,
@@ -206,6 +255,36 @@ class PostgresDeflectionReportArtifactStore:
         snapshot = decode_jsonb_field(row_to_dict(row).get("snapshot"), default={})
         return dict(snapshot) if isinstance(snapshot, Mapping) else {}
 
+    async def list_reports(
+        self,
+        *,
+        account_id: str,
+        limit: int | None = 25,
+        paid: bool | None = None,
+    ) -> tuple[DeflectionReportListRecord, ...]:
+        resolved_account = _required_text(account_id, "account_id")
+        paid_clause = "" if paid is None else "AND paid = $2"
+        args: list[Any] = [resolved_account]
+        if paid is not None:
+            args.append(bool(paid))
+        limit_clause = ""
+        if limit is not None:
+            args.append(_bounded_limit(limit))
+            limit_arg = len(args)
+            limit_clause = f"LIMIT ${limit_arg}"
+        rows = await self.pool.fetch(
+            f"""
+            SELECT account_id, request_id, snapshot, paid, delivery_email, created_at, updated_at
+            FROM content_ops_deflection_reports
+            WHERE account_id = $1
+              {paid_clause}
+            ORDER BY created_at DESC
+            {limit_clause}
+            """,
+            *args,
+        )
+        return tuple(_list_record_from_row(row_to_dict(row)) for row in rows)
+
     async def get_artifact_record(
         self,
         *,
@@ -262,6 +341,27 @@ def _record_from_row(row: Mapping[str, Any]) -> DeflectionReportAccessRecord:
     )
 
 
+def _list_record_from_row(row: Mapping[str, Any]) -> DeflectionReportListRecord:
+    snapshot = decode_jsonb_field(row.get("snapshot"), default={})
+    return DeflectionReportListRecord(
+        account_id=str(row.get("account_id") or ""),
+        request_id=str(row.get("request_id") or ""),
+        snapshot=dict(snapshot) if isinstance(snapshot, Mapping) else {},
+        paid=bool(row.get("paid")),
+        delivery_email=_clean(row.get("delivery_email")) or None,
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+def _bounded_limit(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 25
+    return max(1, min(parsed, 100))
+
+
 def _required_text(value: Any, field: str) -> str:
     text = _clean(value)
     if not text:
@@ -275,6 +375,7 @@ def _clean(value: Any) -> str:
 
 __all__ = [
     "DeflectionReportAccessRecord",
+    "DeflectionReportListRecord",
     "DeflectionReportArtifactStore",
     "InMemoryDeflectionReportArtifactStore",
     "PostgresDeflectionReportArtifactStore",

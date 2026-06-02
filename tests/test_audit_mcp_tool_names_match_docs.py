@@ -45,6 +45,20 @@ def test_known_server_header_lands_in_claims(auditor):
     assert "list_folders" in claims["Email"]
 
 
+def test_content_ops_deflection_readonly_header_is_known(auditor):
+    text = textwrap.dedent("""\
+        ### Content Ops Deflection Readonly MCP Server (2 tools)
+
+        Tools: `search`, `fetch`
+    """)
+
+    claims, unknown = auditor.doc_claims(text)
+
+    assert "Content Ops Deflection Readonly" in claims
+    assert claims["Content Ops Deflection Readonly"] == {"search", "fetch"}
+    assert unknown == []
+
+
 def test_unknown_server_header_surfaces_in_unknown_list(auditor):
     claims, unknown = auditor.doc_claims(UNKNOWN_SECTION)
 

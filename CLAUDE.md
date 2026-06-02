@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What Atlas Is (Today)
 
 Atlas is a **multi-product intelligence platform** built on a single FastAPI
-backend (`atlas_brain/`), a 9-server MCP surface, six standalone Python
+backend (`atlas_brain/`), an 11-server MCP surface, six standalone Python
 packages (`extracted_*/`), and six React+Vite frontends. The headline
 products in priority order:
 
@@ -230,7 +230,7 @@ atlas_brain/
 └── voice/                       # Local voice-to-voice (wake word, VAD, capture, playback)
 ```
 
-### `atlas_brain/mcp/` MCP servers (10)
+### `atlas_brain/mcp/` MCP servers (11)
 
 | Server                  | Port | Tools | Module                                |
 |-------------------------|------|-------|---------------------------------------|
@@ -240,6 +240,7 @@ atlas_brain/
 | Calendar                | 8059 | 8     | `atlas_brain.mcp.calendar_server`     |
 | Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
 | Invoicing Readonly      | 8065 | 8     | `atlas_brain.mcp.invoicing_readonly_server` |
+| Content Ops Deflection Readonly | 8067 | 2 | `atlas_brain.mcp.content_ops_deflection_readonly_server` |
 | Intelligence            | 8061 | 33    | `atlas_brain.mcp.intelligence_server` |
 | B2B Churn Intelligence  | 8062 | 83    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
 | Universal Scraper       | 8063 | 5     | `atlas_brain.mcp.scraper_server`      |
@@ -348,6 +349,9 @@ ATLAS_MCP_TWILIO_ENABLED=true
 ATLAS_MCP_CALENDAR_ENABLED=true
 ATLAS_MCP_INVOICING_ENABLED=true
 ATLAS_MCP_INVOICING_READONLY_ENABLED=true
+ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_ENABLED=false
+ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_ACCOUNT_ID=
+ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_REPORT_BASE_URL=https://atlas.local/content-ops/deflection-reports
 ATLAS_MCP_INTELLIGENCE_ENABLED=true
 ATLAS_MCP_B2B_CHURN_ENABLED=true
 ATLAS_MCP_CRM_PORT=8056
@@ -356,6 +360,7 @@ ATLAS_MCP_TWILIO_PORT=8058
 ATLAS_MCP_CALENDAR_PORT=8059
 ATLAS_MCP_INVOICING_PORT=8060
 ATLAS_MCP_INVOICING_READONLY_PORT=8065
+ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_PORT=8067
 ATLAS_MCP_INTELLIGENCE_PORT=8061
 ATLAS_MCP_B2B_CHURN_PORT=8062
 
@@ -392,7 +397,7 @@ service required.
 
 ## MCP Servers
 
-Ten MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
+Eleven MCP servers expose Atlas capabilities to any MCP client (Claude Desktop, Cursor, custom agents).
 All share `ATLAS_MCP_TRANSPORT` (stdio/sse) and `ATLAS_MCP_HOST`; HTTP deployments should set `ATLAS_MCP_AUTH_TOKEN`, and the read-only invoicing HTTP server refuses to start without a non-placeholder token of at least 24 characters because it exposes customer financial data.
 Each server has an independent enable/disable toggle (`ATLAS_MCP_<NAME>_ENABLED`).
 
@@ -599,6 +604,23 @@ startup instead of shell-sourcing `.env` manually. The launcher loads `.env` and
 `.env.local`, forces OAuth mode, validates required public URLs and approval
 token length, starts the read-only server in the foreground, and prints the
 discovery/e2e smoke commands. It masks bearer and approval tokens in output.
+
+### Content Ops Deflection Readonly MCP Server (2 tools)
+```bash
+# stdio mode
+python -m atlas_brain.mcp.content_ops_deflection_readonly_server
+
+# SSE HTTP mode (port 8067, requires ATLAS_MCP_AUTH_TOKEN)
+ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.content_ops_deflection_readonly_server --sse
+```
+
+Tools: `search`, `fetch`
+
+This local read-only surface returns unpaid-safe FAQ deflection report snapshots
+for one configured tenant binding. It deliberately omits generation, publishing,
+checkout, paid unlock mutation, full report markdown, answers, and evidence.
+OAuth connector binding and public route smokes are deferred to the rollout
+slice.
 
 ### Intelligence MCP Server (33 tools)
 ```bash

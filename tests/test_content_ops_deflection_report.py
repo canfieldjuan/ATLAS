@@ -9,8 +9,10 @@ import pytest
 from extracted_content_pipeline.faq_deflection_report import (
     build_deflection_snapshot,
     build_deflection_report_artifact,
+    deflection_snapshot_content_opportunities,
 )
 from extracted_content_pipeline.deflection_report_access import (
+    InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
 )
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownResult
@@ -27,6 +29,27 @@ assert SPEC is not None
 assert SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+
+
+def _report_access_snapshot(question: str, *, generated: int = 1) -> dict[str, object]:
+    return {
+        "summary": {
+            "generated": generated,
+            "drafted_answer_count": 0,
+            "no_proven_answer_count": generated,
+        },
+        "top_questions": [
+            {
+                "rank": 1,
+                "question": question,
+                "weighted_frequency": 7,
+                "customer_wording": question,
+                "answer": "Open Analytics and export the report.",
+                "source_ids": ["ticket-1"],
+                "evidence_quotes": ["ticket-1 says export is blocked"],
+            }
+        ],
+    }
 
 
 def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
@@ -316,6 +339,124 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
         account_id="acct-1",
         request_id="missing",
     ) is False
+
+
+@pytest.mark.asyncio
+async def test_in_memory_list_reports_filters_tenant_paid_state_and_orders_newest() -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-1",
+        request_id="request-old",
+        snapshot=_report_access_snapshot("Old question"),
+        artifact={},
+    )
+    await store.save_report(
+        account_id="acct-1",
+        request_id="request-new",
+        snapshot=_report_access_snapshot("New question"),
+        artifact={},
+    )
+    await store.save_report(
+        account_id="acct-2",
+        request_id="request-other",
+        snapshot=_report_access_snapshot("Other question"),
+        artifact={},
+    )
+    await store.mark_paid(account_id="acct-1", request_id="request-old")
+
+    all_rows = await store.list_reports(account_id="acct-1", limit=10)
+    paid_rows = await store.list_reports(account_id="acct-1", limit=10, paid=True)
+    unpaid_rows = await store.list_reports(account_id="acct-1", limit=10, paid=False)
+    unbounded_rows = await store.list_reports(account_id="acct-1", limit=None)
+
+    assert [row.request_id for row in all_rows] == ["request-new", "request-old"]
+    assert [row.request_id for row in paid_rows] == ["request-old"]
+    assert [row.request_id for row in unpaid_rows] == ["request-new"]
+    assert [row.request_id for row in unbounded_rows] == ["request-new", "request-old"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_list_reports_uses_account_scope_optional_paid_filter_and_unbounded_limit() -> None:
+    class _Pool:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        async def fetch(self, query: str, *args: object) -> list[dict[str, object]]:
+            self.calls.append((query, args))
+            return [
+                {
+                    "account_id": "acct-1",
+                    "request_id": "request-1",
+                    "snapshot": json.dumps(
+                        _report_access_snapshot("How do I export reports?")
+                    ),
+                    "paid": False,
+                    "delivery_email": None,
+                    "created_at": "2026-01-02T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                }
+            ]
+
+    pool = _Pool()
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+
+    rows = await store.list_reports(account_id=" acct-1 ", limit=7)
+    paid_rows = await store.list_reports(account_id="acct-1", limit=7, paid=True)
+    unbounded_rows = await store.list_reports(account_id="acct-1", limit=None)
+
+    assert rows[0].request_id == "request-1"
+    assert rows[0].snapshot["top_questions"][0]["question"] == "How do I export reports?"
+    assert pool.calls[0][1] == ("acct-1", 7)
+    assert "WHERE account_id = $1" in pool.calls[0][0]
+    assert "LIMIT $2" in pool.calls[0][0]
+    assert paid_rows[0].request_id == "request-1"
+    assert pool.calls[1][1] == ("acct-1", True, 7)
+    assert "AND paid = $2" in pool.calls[1][0]
+    assert "LIMIT $3" in pool.calls[1][0]
+    assert unbounded_rows[0].request_id == "request-1"
+    assert pool.calls[2][1] == ("acct-1",)
+    assert "ORDER BY created_at DESC" in pool.calls[2][0]
+    assert "LIMIT $" not in pool.calls[2][0]
+
+
+def test_deflection_snapshot_content_opportunities_are_unpaid_safe() -> None:
+    opportunities = deflection_snapshot_content_opportunities(
+        {
+            "top_questions": [
+                {
+                    "rank": 1,
+                    "question": "How do I export reports?",
+                    "weighted_frequency": 5,
+                    "customer_wording": "export reports",
+                    "answer": "Open Analytics.",
+                    "source_ids": ["ticket-1"],
+                    "evidence_quotes": ["ticket quote"],
+                    "markdown": "# Full report",
+                },
+                "not a mapping",
+                {"question": ""},
+            ]
+        }
+    )
+    encoded = json.dumps(opportunities, sort_keys=True)
+
+    assert opportunities == (
+        {
+            "rank": 1,
+            "question": "How do I export reports?",
+            "weighted_frequency": 5,
+            "customer_wording": "export reports",
+            "opportunity_score": 5,
+            "coverage_status": "locked_snapshot",
+            "recommended_content_action": (
+                "Create or improve an FAQ entry for this repeated customer question."
+            ),
+            "unlock_hint": "Unlock the full report for detailed source-backed guidance.",
+        },
+    )
+    assert "Open Analytics" not in encoded
+    assert "ticket-1" not in encoded
+    assert "markdown" not in encoded
 
 
 def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None:

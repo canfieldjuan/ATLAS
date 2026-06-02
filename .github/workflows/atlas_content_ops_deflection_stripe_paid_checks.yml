@@ -9,11 +9,14 @@ on:
       - "atlas_brain/api/billing.py"
       - "atlas_brain/config.py"
       - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
+      - "atlas_brain/config_defaults.py"
+      - "atlas_brain/mcp/content_ops_deflection_readonly_server.py"
       - "extracted_content_pipeline/deflection_report_access.py"
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
       - "tests/test_b2b_vendor_briefing.py"
+      - "tests/test_mcp_content_ops_deflection_readonly.py"
   push:
     branches:
       - main
@@ -24,11 +27,14 @@ on:
       - "atlas_brain/api/billing.py"
       - "atlas_brain/config.py"
       - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
+      - "atlas_brain/config_defaults.py"
+      - "atlas_brain/mcp/content_ops_deflection_readonly_server.py"
       - "extracted_content_pipeline/deflection_report_access.py"
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
       - "tests/test_b2b_vendor_briefing.py"
+      - "tests/test_mcp_content_ops_deflection_readonly.py"
 
 jobs:
   atlas-content-ops-deflection-stripe-paid-checks:
@@ -56,4 +62,5 @@ jobs:
             tests/test_b2b_vendor_briefing.py \
             tests/test_atlas_billing_content_ops_deflection_stripe_paid.py \
             tests/test_atlas_billing_content_ops_deflection_paid_flow.py \
+            tests/test_mcp_content_ops_deflection_readonly.py \
             -q
