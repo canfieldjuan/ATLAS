@@ -192,6 +192,14 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+    assert "lead@acme.example" not in str(gated_result["snapshot"])
+
+    record = await store.get_artifact_record(
+        account_id="acct-portfolio-submit",
+        request_id=payload["request_id"],
+    )
+    assert record is not None
+    assert record.delivery_email == "lead@acme.example"
 
     artifact = _route(router, "/ops/deflection-reports/{request_id}/artifact", "GET")
     with pytest.raises(api_module.HTTPException) as locked:

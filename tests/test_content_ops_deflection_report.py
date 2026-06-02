@@ -210,7 +210,7 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
 
         async def execute(self, query: str, *args: object) -> str:
             if "INSERT INTO content_ops_deflection_reports" in query:
-                account_id, request_id, snapshot, artifact = args
+                account_id, request_id, snapshot, artifact, delivery_email = args
                 key = (str(account_id), str(request_id))
                 existing = self.rows.get(key, {})
                 self.rows[key] = {
@@ -220,6 +220,7 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
                     "artifact": artifact,
                     "paid": bool(existing.get("paid")),
                     "payment_reference": existing.get("payment_reference"),
+                    "delivery_email": delivery_email or existing.get("delivery_email"),
                 }
                 return "INSERT 0 1"
             if "UPDATE content_ops_deflection_reports" in query:
@@ -268,12 +269,14 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
         request_id="request-1",
         snapshot=snapshot,
         artifact=artifact,
+        delivery_email=" buyer@example.com ",
     )
 
     assert await store.get_snapshot(
         account_id="acct-1",
         request_id="request-1",
     ) == snapshot
+    assert "buyer@example.com" not in str(snapshot)
     locked = await store.get_artifact_record(
         account_id="acct-1",
         request_id="request-1",
@@ -281,6 +284,7 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert locked is not None
     assert locked.paid is False
     assert locked.artifact == artifact
+    assert locked.delivery_email == "buyer@example.com"
     assert await store.mark_paid(
         account_id="acct-1",
         request_id="request-1",
@@ -293,6 +297,21 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert unlocked is not None
     assert unlocked.paid is True
     assert unlocked.payment_reference == "checkout-session:test"
+    assert unlocked.delivery_email == "buyer@example.com"
+    await store.save_report(
+        account_id="acct-1",
+        request_id="request-1",
+        snapshot=snapshot,
+        artifact=artifact,
+    )
+    preserved = await store.get_artifact_record(
+        account_id="acct-1",
+        request_id="request-1",
+    )
+    assert preserved is not None
+    assert preserved.delivery_email == "buyer@example.com"
+    assert preserved.paid is True
+    assert preserved.payment_reference == "checkout-session:test"
     assert await store.mark_paid(
         account_id="acct-1",
         request_id="missing",
