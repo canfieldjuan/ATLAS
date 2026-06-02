@@ -44,6 +44,16 @@ class _OpportunityRepo:
         return tuple(self.pool["opportunities"].get(target_id, ()))[:limit]
 
 
+class _B2BDisplacementPool:
+    def __init__(self, rows):
+        self.rows = tuple(rows)
+        self.calls = []
+
+    async def fetch(self, query, *args):
+        self.calls.append({"query": query, "args": args})
+        return list(self.rows)
+
+
 class _RunnableService:
     async def generate(self, **kwargs):  # pragma: no cover - plan route only.
         return {"kwargs": kwargs}
@@ -98,6 +108,34 @@ def _competitive_row(target_id: str = "competitive-1") -> dict[str, Any]:
         "content": "Admins are switching to Teams because calendar handoff is simpler.",
         "displacement_mention_count": 4,
         "primary_driver": "workflow friction",
+    }
+
+
+def _b2b_displacement_row(
+    *,
+    from_vendor: str = "Slack",
+    to_vendor: str = "Teams",
+) -> dict[str, Any]:
+    return {
+        "from_vendor": from_vendor,
+        "to_vendor": to_vendor,
+        "as_of_date": "2026-06-01",
+        "analysis_window_days": 90,
+        "schema_version": "v1",
+        "dynamics": {
+            "battle_summary": {
+                "conclusion": "Admins choose Teams when calendar handoff matters.",
+            },
+            "migration_proof": {
+                "proof_points": [
+                    "Switching evidence clusters around bundled collaboration.",
+                ],
+            },
+            "edge_metrics": {
+                "mention_count": 7,
+                "primary_driver": "workflow friction",
+            },
+        },
     }
 
 
@@ -456,6 +494,114 @@ async def test_competitive_mode_fetches_persisted_targets_by_tenant_scope() -> N
     assert package.metadata["source_target_loaded_count"] == 2
     assert package.metadata["included_row_count"] == 2
     assert package.inputs["competitive_alternatives"] == ["Teams", "Confluence"]
+
+
+@pytest.mark.asyncio
+async def test_competitive_mode_fetches_b2b_displacement_dynamics_by_tracked_vendor_scope() -> None:
+    pool = _B2BDisplacementPool([_b2b_displacement_row()])
+    provider = build_content_ops_input_provider(pool_provider=lambda: pool)
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "b2b_displacement_vendors": ["Slack", "Google Cloud"],
+            },
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.outputs == ("landing_page", "blog_post")
+    assert package.metadata["b2b_displacement_vendor_count"] == 2
+    assert package.metadata["b2b_displacement_loaded_count"] == 1
+    assert package.metadata["b2b_displacement_missing_vendor_count"] == 1
+    assert package.metadata["included_row_count"] == 1
+    row = package.inputs["competitive_source_material"][0]
+    assert row["source_type"] == "competitive_displacement"
+    assert row["source_id"] == "b2b_displacement:Slack->Teams:2026-06-01"
+    assert row["target_id"] == "b2b_displacement:Slack->Teams:2026-06-01"
+    assert row["from_vendor"] == "Slack"
+    assert row["to_vendor"] == "Teams"
+    assert row["competitor"] == "Teams"
+    assert row["displacement_mention_count"] == 7
+    assert row["primary_driver"] == "workflow friction"
+    assert "Admins choose Teams" in row["text"]
+    assert package.inputs["competitive_alternatives"] == ["Teams"]
+    assert len(pool.calls) == 1
+    query = pool.calls[0]["query"]
+    assert "FROM b2b_displacement_dynamics" in query
+    assert "FROM tracked_vendors tv" in query
+    assert "tv.account_id = $1" in query
+    assert pool.calls[0]["args"] == ("acct-1", ["slack", "google cloud"], 10)
+    assert package.warnings[0]["code"] == "b2b_displacement_vendors_not_found"
+
+
+@pytest.mark.asyncio
+async def test_competitive_b2b_displacement_selection_requires_account_scope() -> None:
+    pool = _B2BDisplacementPool([_b2b_displacement_row()])
+    provider = build_content_ops_input_provider(pool_provider=lambda: pool)
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id=None),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "b2b_displacement_vendors": ["Slack"],
+            },
+        },
+    )
+
+    assert package.provider == "atlas_competitive_request"
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["b2b_displacement_loaded_count"] == 0
+    assert package.warnings[0]["code"] == "b2b_displacement_missing_account_scope"
+    assert package.warnings[-1]["code"] == "competitive_source_material_empty"
+    assert pool.calls == []
+
+
+@pytest.mark.asyncio
+async def test_competitive_b2b_displacement_selection_requires_configured_pool() -> None:
+    provider = build_content_ops_input_provider()
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "b2b_displacement_vendors": ["Slack"],
+            },
+        },
+    )
+
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["b2b_displacement_loaded_count"] == 0
+    assert package.warnings[0]["code"] == "b2b_displacement_repository_unconfigured"
+    assert package.warnings[-1]["code"] == "competitive_source_material_empty"
+
+
+@pytest.mark.asyncio
+async def test_competitive_b2b_displacement_selection_reports_missing_vendor() -> None:
+    pool = _B2BDisplacementPool([])
+    provider = build_content_ops_input_provider(pool_provider=lambda: pool)
+
+    package = await provider.build_content_ops_input_package(
+        scope=TenantScope(account_id="acct-1"),
+        request={
+            "inputs": {
+                "source_type": "competitive",
+                "b2b_displacement_vendors": ["Slack"],
+            },
+        },
+    )
+
+    assert package.inputs == {}
+    assert package.metadata["mode"] == "noop"
+    assert package.metadata["b2b_displacement_missing_vendor_count"] == 1
+    assert package.warnings[0]["code"] == "b2b_displacement_vendors_not_found"
+    assert package.warnings[-1]["code"] == "competitive_source_material_empty"
 
 
 @pytest.mark.asyncio
