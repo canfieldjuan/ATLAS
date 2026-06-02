@@ -256,6 +256,7 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
     assert services.faq_markdown is None
     assert services.faq_deflection_report is not None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_deflection_report",
     )
@@ -304,6 +305,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
         "report",
         "landing_page",
         "sales_brief",
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -325,6 +327,7 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
 
     assert services.landing_page is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -350,6 +353,7 @@ def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
     )
     assert services.landing_page is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -373,6 +377,7 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
 
     assert services.landing_page is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -421,6 +426,19 @@ def test_sales_brief_wired_when_llm_active_and_db_enabled() -> None:
     assert services.for_output("sales_brief") is services.sales_brief
 
 
+def test_social_post_is_always_wired() -> None:
+    """Deterministic social posts run without LLM or DB services."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=False,
+    )
+    assert services.social_post is not None
+    assert services.for_output("social_post") is services.social_post
+
+
 def test_e3_services_skip_together_when_no_active_llm() -> None:
     """E3 fallback: campaign / report / sales_brief slots all
     stay `None` when no LLM is active. Same short-circuit shape
@@ -437,6 +455,7 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
     assert services.report is None
     assert services.sales_brief is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -462,6 +481,7 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
     assert services.sales_brief is None
     assert services.blog_post is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -498,6 +518,7 @@ def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
     )
     assert services.blog_post is None
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -522,6 +543,7 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         "report",
         "landing_page",
         "sales_brief",
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -539,6 +561,7 @@ def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
         enable_db_services=True,
     )
     assert services.configured_outputs() == (
+        "social_post",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",

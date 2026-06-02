@@ -303,6 +303,9 @@
       "target": "extracted_content_pipeline/signal_extraction.py"
     },
     {
+      "target": "extracted_content_pipeline/social_post_generation.py"
+    },
+    {
       "target": "extracted_content_pipeline/blog_ports.py"
     },
     {

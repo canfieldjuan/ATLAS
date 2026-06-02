@@ -187,6 +187,17 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         required_inputs=("target_account",),
         reasoning_requirement="optional_host_context",
     ),
+    "social_post": OutputDefinition(
+        id="social_post",
+        label="Social Posts",
+        description="Short social post drafts from source evidence.",
+        implemented=True,
+        estimated_unit_cost_usd=0.0,
+        required_inputs=("source_material",),
+        default_max_items=3,
+        reasoning_requirement="absent",
+        default_parse_retry_attempts=0,
+    ),
     "signal_extraction": OutputDefinition(
         id="signal_extraction",
         label="Signal Extraction",

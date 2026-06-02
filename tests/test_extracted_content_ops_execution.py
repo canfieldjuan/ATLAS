@@ -20,6 +20,7 @@ from extracted_content_pipeline.content_ops_execution import (
 )
 from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
+from extracted_content_pipeline.social_post_generation import SocialPostGenerationService
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
 
@@ -574,6 +575,45 @@ async def test_execute_runs_signal_extraction_service_from_source_material() -> 
     assert opportunity["target_id"] == "review-1"
     assert opportunity["evidence"][0]["text"] == "Pricing"
     assert step["result"]["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_social_post_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 1,
+            "inputs": {
+                "source_max_text_chars": 20,
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem after renewal.",
+                        "pain_category": "pricing pressure",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            social_post=SocialPostGenerationService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "social_post"
+    assert step["runner"] == "SocialPostGenerationService.generate"
+    assert step["result"]["generated"] == 1
+    post = step["result"]["posts"][0]
+    assert post["source_id"] == "review-1"
+    assert post["vendor_name"] == "HubSpot"
+    assert "Pricing is a problem" in post["text"]
+    assert result["plan"]["steps"][0]["config"] == {
+        "limit": 1,
+        "max_text_chars": 20,
+    }
 
 
 @pytest.mark.asyncio
