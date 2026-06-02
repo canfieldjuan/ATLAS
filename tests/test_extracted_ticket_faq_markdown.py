@@ -206,11 +206,44 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
         "Open Analytics, choose the attribution dashboard, and select Export CSV"
     )
     assert item["steps"][1] == (
-        "Confirm the answer matches the customer's account, plan, policy, or "
-        "support record before publishing it."
+        "If it still does not work, contact support at support@example.com and "
+        "include the cited ticket details."
+    )
+    assert "Customers mention:" not in item["answer"]
+    assert item["answer"] == (
+        "Verified resolution evidence from 1 ticket source supports the draft "
+        "answer for: How do I export the attribution dashboard before renewal?"
     )
     assert "Draft the customer-facing steps" not in result.markdown
     assert "support@example.com" in result.markdown
+
+
+def test_build_ticket_faq_markdown_truncates_resolution_steps_at_word_boundary() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "SSO setup",
+            "evidence": [{
+                "text": "How do I enable SSO after my domain is verified?",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Settings > Security > Single sign-on, confirm the "
+                    "verified domain badge is green, paste the IdP metadata URL, "
+                    "map email to NameID, click Test SSO, then Save and enforce "
+                    "for selected users before rollout."
+                ),
+            }],
+        }]
+    )
+
+    step = result.items[0]["steps"][0]
+    assert step == (
+        "Open Settings > Security > Single sign-on, confirm the verified domain "
+        "badge is green, paste the IdP metadata URL, map email to NameID, click "
+        "Test SSO, then Save and enforce for..."
+    )
+    assert "se..." not in step
 
 
 def test_build_ticket_faq_markdown_ignores_disposition_resolution_aliases() -> None:
@@ -1370,7 +1403,10 @@ def test_build_ticket_faq_markdown_keeps_total_volume_when_display_is_capped() -
     assert item["displayed_evidence_count"] == 2
     assert item["source_ids"] == ("ticket-1", "ticket-2", "ticket-3", "ticket-4")
     assert len(item["source_labels"]) == 2
-    assert "Evidence comes from 4 ticket source(s)." in item["answer"]
+    assert item["answer"] == (
+        "No verified resolution evidence was found in 4 ticket sources; keep "
+        "this FAQ in review before answering: What should I do about data freshness?"
+    )
     assert "ticket-3" not in result.markdown
 
 

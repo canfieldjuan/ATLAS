@@ -144,6 +144,8 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
         assert item["steps"]
         assert item["source_ids"]
     assert "Use the uploaded resolution evidence" not in encoded
+    assert "Customers mention:" not in encoded
+    assert "Confirm the answer matches" not in encoded
 
 
 def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
@@ -166,6 +168,8 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert "## Drafted Answers With Proven Solutions" in payload["markdown"]
     assert "## No Proven Answer Yet" in payload["markdown"]
     assert "Use the uploaded resolution evidence" not in encoded
+    assert "Customers mention:" not in encoded
+    assert "Confirm the answer matches" not in encoded
 
 
 def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() -> None:
