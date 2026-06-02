@@ -61,6 +61,7 @@ _GENERIC_QUESTION_PHRASES = (
     "our complaint is about",
     "this complaint is about",
 )
+_MIXED_EVIDENCE_REVIEW_QUESTION = "Which remaining support questions need manual review?"
 _REDACTION_TOKEN_RE = re.compile(r"\bX{2,}\b", re.IGNORECASE)
 _REDACTED_DATE_RE = re.compile(r"\bX{2}/X{2}/(?:X{2,4}|\d{2,4})\b", re.IGNORECASE)
 _REDACTED_MONEY_RE = re.compile(r"\{\$|\$\s*X{2,}", re.IGNORECASE)
@@ -415,7 +416,7 @@ def build_ticket_faq_markdown(
     date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
     resolved_documentation_terms = _documentation_terms(opportunities, documentation_terms)
     resolved_vocabulary_gap_rules = _vocabulary_gap_rules(vocabulary_gap_rules)
-    groups: dict[str, list[dict[str, str]]] = defaultdict(list)
+    groups: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
     source_keys: set[str] = set()
 
@@ -447,21 +448,29 @@ def build_ticket_faq_markdown(
                 continue
             seen.add(key)
             source_keys.add(source_key)
-            groups[_topic(opportunity, evidence, intent_rules=intent_rules)].append({
+            topic = _topic(opportunity, evidence, intent_rules=intent_rules)
+            resolution_text = _resolution_text(evidence, opportunity)
+            evidence_group_key = _evidence_group_key(resolution_text)
+            group_key = (topic, evidence_group_key or f"topic:{_compact_key(topic)}")
+            groups[group_key].append({
                 "text": text,
                 "source_id": source_id or "unknown",
                 "source_key": source_key,
                 "source_type": source_type,
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                "evidence_group_key": evidence_group_key,
                 "results_count": _first_present(evidence, opportunity, key="results_count"),
                 "result_count": _first_present(evidence, opportunity, key="result_count"),
                 "zero_results": _first_present(evidence, opportunity, key="zero_results"),
                 "zero_result": _first_present(evidence, opportunity, key="zero_result"),
                 "source_weight": _source_weight(evidence, opportunity),
-                "resolution_text": _resolution_text(evidence, opportunity),
+                "resolution_text": resolution_text,
             })
 
-    sorted_groups = sorted(groups.items(), key=_group_sort_key)
+    sorted_groups = sorted(
+        ((topic, rows) for (topic, _scope), rows in groups.items()),
+        key=_group_sort_key,
+    )
     if len(sorted_groups) > max_items:
         visible_groups = tuple(sorted_groups[: max(1, max_items - 1)])
         overflow_rows: list[dict[str, str]] = []
@@ -529,6 +538,21 @@ def _topic(
             if text:
                 return text.lower()
     return (_compact(evidence.get("source_title") or opportunity.get("source_title")) or "customer support issues").lower()
+
+
+def _evidence_group_key(resolution_text: Any) -> str:
+    text = _compact(resolution_text)
+    return f"resolution:{_compact_key(text)}" if text else ""
+
+
+def _has_mixed_evidence_scopes(rows: Sequence[Mapping[str, Any]]) -> bool:
+    scopes = {
+        _clean(row.get("evidence_group_key"))
+        for row in rows
+        if _clean(row.get("evidence_group_key"))
+    }
+    has_unscoped_rows = any(not _clean(row.get("evidence_group_key")) for row in rows)
+    return len(scopes) > 1 or (bool(scopes) and has_unscoped_rows)
 
 
 def _group_sort_key(item: tuple[str, Sequence[Mapping[str, str]]]) -> tuple[int, int, int, str]:
@@ -606,7 +630,15 @@ def _item(
         snippets,
         " / ".join(_clean(row.get("source_title")) for row in display_rows if _clean(row.get("source_title"))),
     ))
-    question, question_source, question_row = _question(topic, display_rows)
+    has_mixed_evidence_scopes = _has_mixed_evidence_scopes(rows)
+    if has_mixed_evidence_scopes:
+        question, question_source, question_row = (
+            _MIXED_EVIDENCE_REVIEW_QUESTION,
+            "source_policy",
+            None,
+        )
+    else:
+        question, question_source, question_row = _question(topic, display_rows)
     summary_rows = _rows_with_question_source_first(display_rows, question_row)
     summary = _summary(
         topic=topic,
@@ -614,7 +646,12 @@ def _item(
         source_count=len(source_ids),
         question_source=question_source,
     )
-    resolution_texts = _resolution_texts(rows)
+    resolution_rows = (
+        ()
+        if has_mixed_evidence_scopes
+        else _resolution_rows_for_question(rows, question_row)
+    )
+    resolution_texts = _resolution_texts(resolution_rows)
     answer_evidence_status = (
         "resolution_evidence" if resolution_texts else "draft_needs_review"
     )
@@ -642,7 +679,7 @@ def _item(
         "summary": summary,
         "steps": steps,
         "answer_evidence_status": answer_evidence_status,
-        "resolution_source_count": _resolution_source_count(rows),
+        "resolution_source_count": _resolution_source_count(resolution_rows),
         "when_to_contact_support": escalation,
         "evidence_quotes": evidence_quotes,
         "term_mappings": term_mappings,
@@ -758,6 +795,21 @@ def _resolution_texts(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
         if _compact(row.get("resolution_text"))
     )
     return tuple(dict.fromkeys(values))
+
+
+def _resolution_rows_for_question(
+    rows: Sequence[Mapping[str, Any]],
+    question_row: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], ...]:
+    evidence_group_key = _clean(
+        question_row.get("evidence_group_key") if question_row is not None else ""
+    )
+    if not evidence_group_key:
+        return tuple(rows)
+    scoped_rows = tuple(
+        row for row in rows if _clean(row.get("evidence_group_key")) == evidence_group_key
+    )
+    return scoped_rows or tuple(rows)
 
 
 def _resolution_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
