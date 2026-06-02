@@ -73,6 +73,7 @@ class _OpportunityService:
         quality_gates_enabled: bool | None = None,
         topic: str | None = None,
         opportunity_defaults: Mapping[str, Any] | None = None,
+        source_material: Any | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -93,6 +94,7 @@ class _OpportunityService:
             "quality_gates_enabled": quality_gates_enabled,
             "topic": topic,
             "opportunity_defaults": dict(opportunity_defaults or {}),
+            "source_material": source_material,
             "extras": dict(extras),
         })
         return _Result()
@@ -992,6 +994,39 @@ async def test_execute_threads_user_selected_brief_type_into_sales_brief_service
     assert result["status"] == "completed"
     assert sales_brief.calls[0]["default_brief_type"] == "renewal"
     assert sales_brief.calls[0]["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_source_material_into_sales_brief_service() -> None:
+    source_material = [{
+        "target_id": "competitive-1",
+        "source_id": "competitive-1",
+        "source_type": "competitive",
+        "vendor_name": "Slack",
+        "competitor": "Teams",
+        "text": "Slack buyers cite Teams as the replacement alternative.",
+    }]
+    sales_brief = _OpportunityService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "inputs": {
+                "target_account": "Slack",
+                "offer": "Competitive displacement audit",
+                "opportunity_id": "competitive-1",
+                "brief_type": "displacement",
+                "source_material": source_material,
+            },
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    assert result["status"] == "completed"
+    call = sales_brief.calls[0]
+    assert call["default_brief_type"] == "displacement"
+    assert call["source_material"] == source_material
+    assert call["extras"] == {}
 
 
 @pytest.mark.asyncio

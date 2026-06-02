@@ -528,20 +528,23 @@ async def _dispatch_sales_brief(
     scope: TenantScope,
     filters: Mapping[str, Any] | None,
 ) -> Any:
-    return await service.generate(
-        scope=scope,
-        target_mode=request.target_mode,
-        limit=request.limit,
-        filters=filters,
-        default_brief_type=_step_config_text(step.config, "default_brief_type"),
-        temperature=_step_config_float(step.config, "temperature"),
-        max_tokens=_step_config_int(step.config, "max_tokens"),
-        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
-        parse_retry_response_excerpt_chars=_step_config_int(
+    kwargs: dict[str, Any] = {
+        "scope": scope,
+        "target_mode": request.target_mode,
+        "limit": request.limit,
+        "filters": filters,
+        "default_brief_type": _step_config_text(step.config, "default_brief_type"),
+        "temperature": _step_config_float(step.config, "temperature"),
+        "max_tokens": _step_config_int(step.config, "max_tokens"),
+        "parse_retry_attempts": _step_config_int(step.config, "parse_retry_attempts"),
+        "parse_retry_response_excerpt_chars": _step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
-        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
-    )
+        "quality_gates_enabled": _step_config_bool(step.config, "quality_gates_enabled"),
+    }
+    if "source_material" in request.inputs:
+        kwargs["source_material"] = request.inputs.get("source_material")
+    return await service.generate(**kwargs)
 
 
 async def _dispatch_landing_page(

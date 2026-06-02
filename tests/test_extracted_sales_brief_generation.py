@@ -288,6 +288,52 @@ async def test_generate_persists_one_brief_per_opportunity_via_save_drafts() -> 
 
 
 @pytest.mark.asyncio
+async def test_generate_uses_source_material_before_repository_fallback() -> None:
+    response = json.dumps({
+        "title": "Competitive displacement brief",
+        "headline": "Slack risk: Teams is showing up in replacement evidence",
+        "sections": [
+            {
+                "id": "competitive_context",
+                "title": "Competitive Context",
+                "body_markdown": "Lead with the Teams replacement signal.",
+                "evidence_ids": ["competitive-1"],
+            }
+        ],
+        "reference_ids": ["competitive-1"],
+    })
+    service, intelligence, sales_briefs, llm, _skills, _rp = _service(
+        opportunities=[_opportunity()],
+        responses=[response],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material=[{
+            "target_id": "competitive-1",
+            "source_id": "competitive-1",
+            "source_type": "competitive_displacement",
+            "vendor_name": "Slack",
+            "competitor": "Teams",
+            "text": "Slack buyers cite Teams as the replacement alternative.",
+        }],
+        default_brief_type="displacement",
+    )
+
+    assert intelligence.calls == []
+    assert result.requested == 1
+    assert result.generated == 1
+    system_msg = llm.calls[0]["messages"][0].content
+    assert '"target_id":"competitive-1"' in system_msg
+    assert "Teams" in system_msg
+    draft = sales_briefs.saved[0]["drafts"][0]
+    assert draft.target_id == "competitive-1"
+    assert draft.target_mode == "vendor_retention"
+    assert draft.brief_type == "displacement"
+
+
+@pytest.mark.asyncio
 async def test_generate_substitutes_opportunity_json_into_system_prompt_only() -> None:
     """Opportunity payload appears in system content and NOT in user content."""
     service, _intel, _sb, llm, _skills, _rp = _service(
