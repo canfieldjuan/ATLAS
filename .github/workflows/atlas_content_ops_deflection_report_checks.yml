@@ -1,0 +1,47 @@
+name: Atlas Content Ops Deflection Report Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
+      - "extracted_content_pipeline/faq_deflection_report.py"
+      - "extracted_content_pipeline/ticket_faq_markdown.py"
+      - "tests/test_extracted_content_ops_live_execute_harness.py"
+      - "tests/test_extracted_ticket_faq_markdown.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
+      - "extracted_content_pipeline/faq_deflection_report.py"
+      - "extracted_content_pipeline/ticket_faq_markdown.py"
+      - "tests/test_extracted_content_ops_live_execute_harness.py"
+      - "tests/test_extracted_ticket_faq_markdown.py"
+
+jobs:
+  atlas-content-ops-deflection-report-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops deflection report tests
+        run: |
+          python -m pytest \
+            tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits \
+            tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_treats_zero_max_items_as_unlimited \
+            tests/test_extracted_ticket_faq_markdown.py::test_build_ticket_faq_markdown_condenses_overflow_sources_instead_of_truncating \
+            tests/test_extracted_content_ops_live_execute_harness.py::test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n \
+            -q

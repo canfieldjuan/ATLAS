@@ -249,7 +249,7 @@ class TicketFAQMarkdownConfig:
     """Config for service-shaped FAQ Markdown generation."""
 
     title: str = DEFAULT_TITLE
-    max_items: int = 8
+    max_items: int | None = 8
     max_evidence_per_item: int = 3
     source_types: tuple[str, ...] = DEFAULT_TICKET_SOURCE_TYPES
     max_text_chars: int = 1200
@@ -293,7 +293,9 @@ class TicketFAQMarkdownService:
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
-        resolved_max_items = int(max_items) if max_items is not None else self.config.max_items
+        resolved_max_items = _normalize_max_items(
+            max_items if max_items is not None else self.config.max_items
+        )
         resolved_max_evidence = (
             int(max_evidence_per_item)
             if max_evidence_per_item is not None
@@ -395,7 +397,7 @@ def build_ticket_faq_markdown(
     opportunities: Sequence[Mapping[str, Any]],
     *,
     title: str = DEFAULT_TITLE,
-    max_items: int = 8,
+    max_items: int | None = 8,
     max_evidence_per_item: int = 3,
     source_types: Sequence[str] = DEFAULT_TICKET_SOURCE_TYPES,
     window_days: int | None = None,
@@ -407,8 +409,7 @@ def build_ticket_faq_markdown(
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
-    if max_items < 1:
-        raise ValueError("max_items must be positive")
+    resolved_max_items = _normalize_max_items(max_items)
     if max_evidence_per_item < 1:
         raise ValueError("max_evidence_per_item must be positive")
 
@@ -471,12 +472,12 @@ def build_ticket_faq_markdown(
         ((topic, rows) for (topic, _scope), rows in groups.items()),
         key=_group_sort_key,
     )
-    if len(sorted_groups) > max_items:
-        visible_groups = tuple(sorted_groups[: max(1, max_items - 1)])
+    if resolved_max_items is not None and len(sorted_groups) > resolved_max_items:
+        visible_groups = tuple(sorted_groups[: max(1, resolved_max_items - 1)])
         overflow_rows: list[dict[str, str]] = []
         for _topic_name, rows in sorted_groups[len(visible_groups):]:
             overflow_rows.extend(rows)
-        if len(visible_groups) == max_items:
+        if len(visible_groups) == resolved_max_items:
             topic, rows = visible_groups[0]
             selected_groups = ((topic, [*rows, *overflow_rows]),)
         else:
@@ -506,6 +507,17 @@ def build_ticket_faq_markdown(
             rendered_ticket_source_count=_rendered_ticket_source_count(items),
         ),
     )
+
+
+def _normalize_max_items(max_items: int | None) -> int | None:
+    if max_items is None:
+        return None
+    value = int(max_items)
+    if value < 0:
+        raise ValueError("max_items must be positive or 0 for unlimited")
+    if value == 0:
+        return None
+    return value
 
 
 def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:

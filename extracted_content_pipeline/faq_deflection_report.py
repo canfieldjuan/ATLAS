@@ -13,6 +13,7 @@ from .ticket_faq_markdown import TicketFAQMarkdownResult, TicketFAQMarkdownServi
 _RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
 _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
+_UNCAPPED_REPORT_MAX_ITEMS = 0
 
 
 @dataclass(frozen=True)
@@ -74,13 +75,13 @@ class FAQDeflectionReportService:
         vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
         **kwargs: Any,
     ) -> DeflectionReportArtifact:
-        del kwargs
+        del kwargs, max_items
         faq_result = await self._faq_markdown.generate(
             scope=scope,
             target_mode=target_mode,
             source_material=source_material,
             title=faq_title,
-            max_items=max_items,
+            max_items=_UNCAPPED_REPORT_MAX_ITEMS,
             max_evidence_per_item=max_evidence_per_item,
             source_types=source_types,
             max_text_chars=max_text_chars,
