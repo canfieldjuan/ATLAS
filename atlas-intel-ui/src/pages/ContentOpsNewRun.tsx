@@ -27,6 +27,7 @@ import {
   revokeContentOpsZendeskCredential,
   saveContentOpsZendeskCredential,
 } from '../api/contentOps'
+import { fetchTrackedVendors, type TrackedVendor } from '../api/b2bClient'
 import {
   contentOpsIngestionFilePreflightError,
   contentOpsInlineRowsPreflightError,
@@ -82,9 +83,12 @@ import type {
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
 import {
+  b2bDisplacementVendorsDraftValue,
   parseInputsJsonObject,
   sourceModeDraftValue,
+  updateB2BDisplacementVendorsInputJson,
   updateSourceModeInputJson,
+  SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT,
   SOURCE_FAQ_IDS_INPUT,
   type ContentOpsSourceMode,
   type ParsedInputsJsonObject,
@@ -235,6 +239,13 @@ export default function ContentOpsNewRun() {
     () => fetchGeneratedAssetDrafts('faq_markdown', { status: 'draft', limit: 10 }),
     [],
   )
+  const {
+    data: trackedVendors,
+    loading: trackedVendorsLoading,
+    error: trackedVendorsError,
+    refresh: refreshTrackedVendors,
+    refreshing: trackedVendorsRefreshing,
+  } = useApiData(() => fetchTrackedVendors(), [])
 
   const catalog = useMemo<ContentOpsCatalog | null>(
     () => (wireCatalog ? fromWireCatalog(wireCatalog) : null),
@@ -318,6 +329,7 @@ export default function ContentOpsNewRun() {
   const faqSourceSelectionVisible =
     (landingPageOutputSelected || blogPostOutputSelected) &&
     sourceMode === 'support_ticket'
+  const b2bDisplacementVendorSelectionVisible = sourceMode === 'competitive'
   const faqConfigurationOutputSelected = faqConfigurationInputsSelected(
     request.outputs,
   )
@@ -373,6 +385,10 @@ export default function ContentOpsNewRun() {
   const faqInputsDisabled = !parsedInputsForControls.ok
   const selectedFaqSourceIds = sourceFaqIdsDraftValue(parsedInputsForControls)
   const faqSourceSelectionDisabled = !parsedInputsForControls.ok
+  const selectedB2BDisplacementVendors = b2bDisplacementVendorsDraftValue(
+    parsedInputsForControls,
+  )
+  const b2bDisplacementVendorSelectionDisabled = !parsedInputsForControls.ok
   const landingPageRepairAttemptDisabled =
     !parsedInputsForControls.ok || !landingPageRepairAttemptContract
 
@@ -449,6 +465,22 @@ export default function ContentOpsNewRun() {
       ? [...selectedFaqSourceIds, draftId]
       : selectedFaqSourceIds.filter((id) => id !== draftId)
     const updated = updateSourceFaqIdsInputJson(inputsJson, nextIds)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleB2BDisplacementVendorChange = (
+    vendorName: string,
+    checked: boolean,
+  ) => {
+    const nextVendorNames = checked
+      ? [...selectedB2BDisplacementVendors, vendorName]
+      : selectedB2BDisplacementVendors.filter((name) => name !== vendorName)
+    const updated = updateB2BDisplacementVendorsInputJson(
+      inputsJson,
+      nextVendorNames,
+    )
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -1185,6 +1217,18 @@ export default function ContentOpsNewRun() {
               disabled={faqSourceSelectionDisabled}
               onRefresh={refreshFaqDrafts}
               onToggle={handleFaqSourceSelectionChange}
+            />
+          )}
+          {b2bDisplacementVendorSelectionVisible && (
+            <B2BDisplacementVendorSelector
+              vendors={trackedVendors?.vendors ?? []}
+              selectedVendorNames={selectedB2BDisplacementVendors}
+              loading={trackedVendorsLoading}
+              refreshing={trackedVendorsRefreshing}
+              error={trackedVendorsError}
+              disabled={b2bDisplacementVendorSelectionDisabled}
+              onRefresh={refreshTrackedVendors}
+              onToggle={handleB2BDisplacementVendorChange}
             />
           )}
           {landingPageOutputSelected && (
@@ -2026,6 +2070,172 @@ function ZendeskCredentialCard({
       </p>
     </section>
   )
+}
+
+function B2BDisplacementVendorSelector({
+  vendors,
+  selectedVendorNames,
+  loading,
+  refreshing,
+  error,
+  disabled,
+  onRefresh,
+  onToggle,
+}: {
+  vendors: TrackedVendor[]
+  selectedVendorNames: string[]
+  loading: boolean
+  refreshing: boolean
+  error: Error | null
+  disabled: boolean
+  onRefresh: () => void
+  onToggle: (vendorName: string, checked: boolean) => void
+}) {
+  const visibleVendors = uniqueTrackedVendorRows(vendors)
+  const visibleVendorNames = new Set(
+    visibleVendors.map((vendor) => trackedVendorName(vendor)),
+  )
+  const missingSelectedVendorNames = selectedVendorNames.filter(
+    (vendorName) => !visibleVendorNames.has(vendorName),
+  )
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-slate-200">
+            B2B displacement vendors
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Writes to{' '}
+            <span className="font-mono">{SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT}</span>.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || refreshing}
+          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {disabled && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Fix inputs JSON before selecting B2B displacement vendors.
+        </div>
+      )}
+
+      {!disabled && loading && (
+        <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading tracked vendors...
+        </div>
+      )}
+
+      {!disabled && error && !loading && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          B2B tracked vendors unavailable: {error.message}
+        </div>
+      )}
+
+      {!disabled && !loading && missingSelectedVendorNames.length > 0 && (
+        <div className="mb-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {missingSelectedVendorNames.map((vendorName) => (
+            <label
+              key={vendorName}
+              className="flex cursor-pointer items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 transition hover:border-amber-400/70"
+            >
+              <input
+                type="checkbox"
+                checked
+                onChange={(event) => onToggle(vendorName, event.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-amber-500"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-amber-100">
+                  Selected vendor not in tracked list
+                </span>
+                <span className="mt-0.5 block break-all font-mono text-xs text-amber-200/80">
+                  {vendorName}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {!disabled &&
+        !loading &&
+        !error &&
+        visibleVendors.length === 0 &&
+        missingSelectedVendorNames.length === 0 && (
+          <div className="rounded-md border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
+            No tracked vendors found yet.
+          </div>
+        )}
+
+      {!disabled && !loading && !error && visibleVendors.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {visibleVendors.map((vendor) => {
+            const vendorName = trackedVendorName(vendor)
+            const checked = selectedVendorNames.includes(vendorName)
+            return (
+              <label
+                key={vendorName}
+                className={clsx(
+                  'flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition',
+                  checked
+                    ? 'border-cyan-500 bg-cyan-500/10'
+                    : 'border-slate-800 bg-slate-950/50 hover:border-slate-600',
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) => onToggle(vendorName, event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-slate-200">
+                    {vendorName}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-slate-500">
+                    {trackedVendorSubtitle(vendor)}
+                  </span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function uniqueTrackedVendorRows(vendors: TrackedVendor[]): TrackedVendor[] {
+  const seen = new Set<string>()
+  const rows: TrackedVendor[] = []
+  for (const vendor of vendors) {
+    const name = trackedVendorName(vendor)
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    rows.push(vendor)
+  }
+  return rows
+}
+
+function trackedVendorName(vendor: TrackedVendor): string {
+  return String(vendor.vendor_name ?? '').trim()
+}
+
+function trackedVendorSubtitle(vendor: TrackedVendor): string {
+  const facts = [vendor.track_mode, vendor.label].filter(
+    (fact): fact is string => Boolean(fact),
+  )
+  return facts.join(' · ') || 'Tracked vendor'
 }
 
 function FaqSourceSelector({

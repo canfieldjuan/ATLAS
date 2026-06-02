@@ -1,6 +1,7 @@
 const SOURCE_TYPE_INPUT = 'source_type'
 const SOURCE_MATERIAL_TYPE_INPUT = 'source_material_type'
 const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'
+const SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT = 'b2b_displacement_vendors'
 
 export type ContentOpsSourceMode = 'support_ticket' | 'reviews' | 'competitive'
 
@@ -69,16 +70,60 @@ export function updateSourceModeInputJson(
   if (mode === 'reviews') {
     next[SOURCE_TYPE_INPUT] = 'reviews'
     delete next[SOURCE_FAQ_IDS_INPUT]
+    delete next[SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT]
   } else if (mode === 'competitive') {
     next[SOURCE_TYPE_INPUT] = 'competitive'
     delete next[SOURCE_FAQ_IDS_INPUT]
   } else {
     delete next[SOURCE_TYPE_INPUT]
+    delete next[SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT]
   }
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
 }
 
+export function b2bDisplacementVendorsDraftValue(
+  parsed: ParsedInputsJsonObject,
+): string[] {
+  if (!parsed.ok) return []
+  const value = parsed.value[SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT]
+  if (Array.isArray(value)) return uniqueNonBlankStrings(value)
+  if (typeof value === 'string') return uniqueNonBlankStrings([value])
+  return []
+}
+
+export function updateB2BDisplacementVendorsInputJson(
+  current: string,
+  vendorNames: string[],
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const values = uniqueNonBlankStrings(vendorNames)
+  if (values.length === 0) {
+    delete next[SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT]
+  } else {
+    next[SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT] = values
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function uniqueNonBlankStrings(values: unknown[]): string[] {
+  const seen = new Set<string>()
+  const items: string[] = []
+  for (const item of values) {
+    if (typeof item === 'undefined' || item === null) continue
+    const trimmed = String(item).trim()
+    if (trimmed === '' || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    items.push(trimmed)
+  }
+  return items
+}
+
 export {
+  SOURCE_B2B_DISPLACEMENT_VENDORS_INPUT,
   SOURCE_FAQ_IDS_INPUT,
   SOURCE_MATERIAL_TYPE_INPUT,
   SOURCE_TYPE_INPUT,
