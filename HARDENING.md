@@ -40,6 +40,10 @@ register under `docs/technical-debt/`.
 - Category: tech-debt
 - Owner/session: Codex FAQ deflection answer copy polish slice
 - Found during: PR-Deflection-Answer-Copy-Polish
+- Root cause (verified 2026-06-01, independent review): `_load_dotenv_files()` (called from `_build_parser`) runs `load_dotenv(ROOT / ".env")` then `load_dotenv(ROOT / ".env.local", override=True)`, repopulating the exact vars the test popped from the subprocess env. This workspace's `.env` carries 3 of them (`ATLAS_API_BASE_URL` / token / account), so preflight finds all required inputs present and exits 0 instead of 2. Reproduced locally as `assert 0 == 2`; passes in CI's clean checkout. `cwd=tmp_path` does not help because the script loads `ROOT/.env` by absolute path.
+- Proposed fix: gate `_load_dotenv_files()` on an opt-out (`ATLAS_DISABLE_DOTENV=1`, or a `--no-dotenv` flag parsed before the load) and set it in `test_script_preflight_uses_atlas_db_settings_fallback`, so the popped vars cannot be reloaded from the on-disk dotenv. Real runs still load `.env` / `.env.local` unchanged.
+- Acceptance criteria: (1) the test passes both in CI (clean env) and locally with a populated `ROOT/.env`; (2) with the opt-out set and required inputs absent, the script still exits 2 and emits the missing-input preflight errors (do not relax the assertion to accept 0, which would defeat the test); (3) without the opt-out, dotenv loading is byte-for-byte unchanged for real runs.
+- Not-a-bug note: the 10 co-reported mirror skips are unrelated Postgres integration tests that skip on `EXTRACTED_DATABASE_URL or DATABASE_URL is required`; verified they pass when `EXTRACTED_DATABASE_URL=postgresql://atlas@localhost:5433/atlas` is set (those 6 files: 197 passed). No code change needed for the skips.
 
 ## 2026-05-29
 
