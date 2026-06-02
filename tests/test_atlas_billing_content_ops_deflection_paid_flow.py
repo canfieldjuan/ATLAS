@@ -96,10 +96,31 @@ class _BillingPool:
         self.store = store
         self.fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.delivery_rows: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append((query, args))
         return None
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        if "FROM content_ops_deflection_reports" not in query:
+            raise AssertionError(query)
+        account_id, request_id = args
+        record = await self.store.get_artifact_record(
+            account_id=str(account_id),
+            request_id=str(request_id),
+        )
+        if record is None:
+            return None
+        return {
+            "account_id": record.account_id,
+            "request_id": record.request_id,
+            "snapshot": record.snapshot,
+            "artifact": record.artifact,
+            "paid": record.paid,
+            "payment_reference": record.payment_reference,
+            "delivery_email": record.delivery_email,
+        }
 
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
@@ -111,6 +132,13 @@ class _BillingPool:
                 payment_reference=str(payment_reference or ""),
             )
             return "UPDATE 1" if marked else "UPDATE 0"
+        if "INSERT INTO content_ops_deflection_report_deliveries" in query:
+            account_id, request_id, payment_reference = args
+            self.delivery_rows[(str(account_id), str(request_id))] = {
+                "payment_reference": payment_reference,
+                "delivery_status": "pending",
+            }
+            return "INSERT 0 1"
         if "INSERT INTO billing_events" in query:
             return "INSERT 0 1"
         raise AssertionError(query)
@@ -150,6 +178,7 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
                     ("export", "Download report"),
                     ("SSO", "Single sign-on setup"),
                 ),
+                "contact_email": "buyer@example.com",
             },
         }
     )
@@ -173,6 +202,7 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert "markdown" not in encoded_gated_result
     assert "faq_result" not in encoded_gated_result
     assert "ticket-export-1" not in encoded_gated_result
+    assert "buyer@example.com" not in encoded_gated_result
 
     snapshot_route = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await snapshot_route.endpoint(request_id=request_id) == gated_result["snapshot"]
@@ -214,7 +244,12 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert await billing.stripe_webhook(request) == {"status": "ok"}
     assert billing_pool.fetchval_calls[0][1] == ("evt_deflection_paid_flow",)
     assert "UPDATE content_ops_deflection_reports" in billing_pool.execute_calls[0][0]
-    assert "INSERT INTO billing_events" in billing_pool.execute_calls[1][0]
+    assert "INSERT INTO content_ops_deflection_report_deliveries" in billing_pool.execute_calls[1][0]
+    assert billing_pool.delivery_rows[(account_id, request_id)] == {
+        "payment_reference": "cs_test_paid_flow",
+        "delivery_status": "pending",
+    }
+    assert "INSERT INTO billing_events" in billing_pool.execute_calls[2][0]
 
     unlocked = await artifact_route.endpoint(request_id=request_id)
     assert unlocked["summary"]["drafted_answer_count"] == 1

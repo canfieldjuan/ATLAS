@@ -18,6 +18,8 @@ class _Pool:
         self.update_result = "UPDATE 1"
         self.fail_billing_event_insert = False
         self.processed_event_ids: set[str] = set()
+        self.report_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.delivery_rows: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def fetchval(self, query: str, *args: Any) -> Any:
         self.fetchval_calls.append((query, args))
@@ -29,15 +31,52 @@ class _Pool:
             return "billing-event-id"
         return None
 
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        account_id, request_id = args
+        if "FROM content_ops_deflection_reports" in query:
+            return self.report_rows.get((str(account_id), str(request_id)))
+        raise AssertionError(query)
+
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         if "UPDATE content_ops_deflection_reports" in query:
+            account_id, request_id, payment_reference = args
+            row = self.report_rows.get((str(account_id), str(request_id)))
+            if row is not None:
+                row["paid"] = True
+                row["payment_reference"] = payment_reference
             return self.update_result
+        if "INSERT INTO content_ops_deflection_report_deliveries" in query:
+            account_id, request_id, payment_reference = args
+            self.delivery_rows[(str(account_id), str(request_id))] = {
+                "account_id": account_id,
+                "request_id": request_id,
+                "payment_reference": payment_reference,
+                "delivery_status": "pending",
+            }
+            return "INSERT 0 1"
         if self.fail_billing_event_insert and "INSERT INTO billing_events" in query:
             raise RuntimeError("billing event insert failed")
         if "INSERT INTO billing_events" in query:
             self.processed_event_ids.add(str(args[1]))
         return "INSERT 0 1"
+
+    def add_report(
+        self,
+        *,
+        account_id: str,
+        request_id: str = "req-123",
+        delivery_email: str | None = "buyer@example.com",
+    ) -> None:
+        self.report_rows[(account_id, request_id)] = {
+            "account_id": account_id,
+            "request_id": request_id,
+            "snapshot": {},
+            "artifact": {},
+            "paid": False,
+            "payment_reference": None,
+            "delivery_email": delivery_email,
+        }
 
 
 def _session(
@@ -78,6 +117,31 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
     account_id = str(uuid.uuid4())
     session = _session(account_id=account_id)
     pool = _Pool()
+    pool.add_report(account_id=account_id)
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+    )
+
+    assert returned is None
+    assert len(pool.execute_calls) == 2
+    query, args = pool.execute_calls[0]
+    assert "UPDATE content_ops_deflection_reports" in query
+    assert args == (account_id, "req-123", "cs_test_deflection")
+    delivery_query, delivery_args = pool.execute_calls[1]
+    assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
+    assert delivery_args == (account_id, "req-123", "cs_test_deflection")
+    assert "buyer@example.com" not in str(pool.delivery_rows)
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_skips_delivery_queue_without_email() -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    pool = _Pool()
+    pool.add_report(account_id=account_id, delivery_email=None)
 
     returned = await billing._handle_content_ops_deflection_report_checkout_completed(
         pool,
@@ -90,6 +154,7 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
     assert args == (account_id, "req-123", "cs_test_deflection")
+    assert pool.delivery_rows == {}
 
 
 @pytest.mark.asyncio
@@ -193,6 +258,7 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
 
     fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
     pool = _Pool()
+    pool.add_report(account_id=account_id)
     request = SimpleNamespace(
         headers={"stripe-signature": "valid"},
         body=lambda: _body(),
@@ -217,9 +283,12 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
     assert fake_stripe.api_version == billing.STRIPE_API_VERSION
     assert pool.fetchval_calls[0][1] == ("evt_deflection_paid",)
     update_query, update_args = pool.execute_calls[0]
-    insert_query, insert_args = pool.execute_calls[1]
+    delivery_query, delivery_args = pool.execute_calls[1]
+    insert_query, insert_args = pool.execute_calls[2]
     assert "UPDATE content_ops_deflection_reports" in update_query
     assert update_args == (account_id, "req-123", "cs_test_deflection")
+    assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
+    assert delivery_args == (account_id, "req-123", "cs_test_deflection")
     assert "INSERT INTO billing_events" in insert_query
     assert insert_args[0] is None
     assert insert_args[1] == "evt_deflection_paid"
@@ -291,6 +360,7 @@ async def test_stripe_webhook_keeps_paid_unlock_when_audit_insert_fails(
 
     fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
     pool = _Pool()
+    pool.add_report(account_id=account_id)
     pool.fail_billing_event_insert = True
     request = SimpleNamespace(
         headers={"stripe-signature": "valid"},
@@ -313,9 +383,12 @@ async def test_stripe_webhook_keeps_paid_unlock_when_audit_insert_fails(
 
     assert response == {"status": "ok"}
     update_query, update_args = pool.execute_calls[0]
-    insert_query, insert_args = pool.execute_calls[1]
+    delivery_query, delivery_args = pool.execute_calls[1]
+    insert_query, insert_args = pool.execute_calls[2]
     assert "UPDATE content_ops_deflection_reports" in update_query
     assert update_args == (account_id, "req-123", "cs_test_deflection")
+    assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
+    assert delivery_args == (account_id, "req-123", "cs_test_deflection")
     assert "INSERT INTO billing_events" in insert_query
     assert insert_args[1] == "evt_deflection_paid_audit_failure"
     assert "billing_events audit insert failed" in caplog.text
@@ -342,6 +415,7 @@ async def test_stripe_webhook_retry_after_audit_failure_restores_idempotency(
 
     fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
     pool = _Pool()
+    pool.add_report(account_id=account_id)
     pool.fail_billing_event_insert = True
     request = SimpleNamespace(
         headers={"stripe-signature": "valid"},
@@ -383,6 +457,12 @@ async def test_stripe_webhook_retry_after_audit_failure_restores_idempotency(
         call[1] == (account_id, "req-123", "cs_test_deflection")
         for call in update_calls
     )
+    delivery_calls = [
+        call
+        for call in pool.execute_calls
+        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
+    ]
+    assert len(delivery_calls) == 2
     assert len(insert_calls) == 2
 
 
