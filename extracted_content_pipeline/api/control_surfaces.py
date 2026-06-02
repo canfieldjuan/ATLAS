@@ -1111,6 +1111,7 @@ def create_content_ops_control_surface_router(
                 scope=scope,
                 request_id=request_id,
                 top_n=resolved_config.deflection_snapshot_top_n,
+                delivery_email=_delivery_email_from_payload(payload_mapping),
             )
             result = _with_input_provider_diagnostics(result, payload_mapping)
             result["request_id"] = request_id
@@ -2436,6 +2437,7 @@ async def _gate_deflection_report_artifacts(
     scope: TenantScope | None,
     request_id: str,
     top_n: int,
+    delivery_email: str | None = None,
 ) -> dict[str, Any]:
     gated = dict(result)
     steps = list(gated.get("steps", ()) or ())
@@ -2462,6 +2464,7 @@ async def _gate_deflection_report_artifacts(
                 request_id=request_id,
                 snapshot=snapshot,
                 artifact=dict(artifact),
+                delivery_email=delivery_email,
             )
         except ValueError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -2486,6 +2489,13 @@ async def _gate_deflection_report_artifacts(
         gated_steps.append(step_dict)
     gated["steps"] = gated_steps
     return gated
+
+
+def _delivery_email_from_payload(payload: Mapping[str, Any]) -> str | None:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return None
+    return _clean(inputs.get("contact_email")) or None
 
 
 def _is_completed_deflection_report_step(step: Any) -> bool:
