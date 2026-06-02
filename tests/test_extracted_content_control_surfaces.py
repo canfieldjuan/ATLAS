@@ -1,6 +1,7 @@
 import pytest
 
 from extracted_content_pipeline.control_surfaces import (
+    PRESETS,
     evaluate_usage_budget,
     normalize_outputs,
     preview_from_mapping,
@@ -108,6 +109,27 @@ def test_preview_warns_when_outputs_override_preset():
         "Preset ignored because explicit outputs were provided: full_campaign"
         in preview["warnings"]
     )
+
+
+def test_marketer_evidence_bundle_preset_selects_review_competitive_outputs():
+    preset = PRESETS["marketer_evidence_bundle"]
+    preview = preview_from_mapping(
+        {
+            "preset": preset.id,
+            "inputs": {
+                "audience": "SaaS operators",
+                "offer": "Review-backed churn audit",
+                "target_account": "Acme",
+                "topic": "Competitor switching signals",
+            },
+        }
+    )
+
+    assert preset.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+    assert preview["estimated_cost_usd"] == 4.2
+    assert preview["missing_inputs"] == []
 
 
 def test_missing_required_inputs_treats_empty_tuple_as_missing():

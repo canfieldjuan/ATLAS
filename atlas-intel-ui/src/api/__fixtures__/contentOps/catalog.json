@@ -132,6 +132,16 @@
       ]
     },
     {
+      "id": "marketer_evidence_bundle",
+      "label": "Marketer Evidence Bundle",
+      "description": "Landing page, blog post, and sales brief from review or competitive evidence.",
+      "outputs": [
+        "landing_page",
+        "blog_post",
+        "sales_brief"
+      ]
+    },
+    {
       "id": "lead_gen_campaign",
       "label": "Lead Gen Campaign",
       "description": "Outreach plus landing page.",

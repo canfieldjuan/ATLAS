@@ -399,6 +399,16 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert payload["reasoning"] == {"configured": False}
     assert "email_only" in preset_ids
     assert "lead_gen_campaign" in preset_ids
+    presets = {item["id"]: item for item in payload["presets"]}
+    assert presets["marketer_evidence_bundle"] == {
+        "id": "marketer_evidence_bundle",
+        "label": "Marketer Evidence Bundle",
+        "outputs": ["landing_page", "blog_post", "sales_brief"],
+        "description": (
+            "Landing page, blog post, and sales brief from review or "
+            "competitive evidence."
+        ),
+    }
     assert payload["ingestion_profiles"] == [
         "domain_specific",
         "manual",

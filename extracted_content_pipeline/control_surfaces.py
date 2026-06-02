@@ -240,6 +240,15 @@ PRESETS: Mapping[str, ControlSurfacePreset] = MappingProxyType({
         outputs=("blog_post", "report"),
         description="Blog plus report using the same evidence base.",
     ),
+    "marketer_evidence_bundle": ControlSurfacePreset(
+        id="marketer_evidence_bundle",
+        label="Marketer Evidence Bundle",
+        outputs=("landing_page", "blog_post", "sales_brief"),
+        description=(
+            "Landing page, blog post, and sales brief from review or "
+            "competitive evidence."
+        ),
+    ),
     "lead_gen_campaign": ControlSurfacePreset(
         id="lead_gen_campaign",
         label="Lead Gen Campaign",
