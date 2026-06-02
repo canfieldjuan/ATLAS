@@ -76,6 +76,9 @@ jobs:
       - name: Test Content Ops blog review public link
         run: npm run test:content-ops-blog-review-public-link
 
+      - name: Test Content Ops review source selection
+        run: npm run test:content-ops-review-source-selection
+
       - name: Build
         run: npm run build
 

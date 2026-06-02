@@ -94,6 +94,7 @@ pytest \
   tests/test_atlas_content_ops_generated_assets_api.py \
   tests/test_atlas_content_ops_import_admission.py \
   tests/test_atlas_content_ops_input_provider.py \
+  tests/test_atlas_content_ops_review_input_provider.py \
   tests/test_atlas_content_ops_macro_writeback.py \
   tests/test_content_ops_faq_macro_writeback_flow.py \
   tests/test_content_ops_zendesk_credentials.py \
