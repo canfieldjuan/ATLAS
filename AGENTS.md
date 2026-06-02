@@ -354,6 +354,19 @@ Locked-in regression tests for deferred follow-ups should name the
 future slice in their docstring (e.g. *"after PR-Foo-V2 lands this
 test is removed"*) so the test's lifetime is explicit.
 
+**CI enrollment is part of test authoring — same PR.** A test only
+protects the codebase if CI runs it. The Atlas Intel UI workflow
+(`.github/workflows/atlas_intel_ui_checks.yml`) runs an **explicit
+per-test list**, not a glob, so adding a `test:<name>` script to
+`atlas-intel-ui/package.json` does **not** make CI run it. Any PR that
+adds or renames a `test:*` script must add the matching
+`run: npm run test:<name>` step to that workflow **in the same PR**.
+The `extracted-checks` suite has an automated enrollment check that
+fails on un-enrolled tests; the intel-ui workflow does not, so this one
+is manual and has been dropped repeatedly. Reviewer/self check: grep the
+workflow's run list for the new test name — `package.json` presence is
+not CI execution.
+
 ### 3f. Working with the manifest
 
 Files listed in `<package>/manifest.json` under `owned` are
