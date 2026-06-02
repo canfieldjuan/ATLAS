@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import importlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
+from typing import Mapping, Sequence
 
 import pytest
 
@@ -14,6 +16,8 @@ from extracted_content_pipeline.api.control_surfaces import (
     ContentOpsControlSurfaceApiConfig,
     create_content_ops_control_surface_router,
 )
+from extracted_content_pipeline.blog_generation import BlogPostGenerationService
+from extracted_content_pipeline.campaign_ports import LLMMessage, LLMResponse
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_execution import ContentOpsExecutionServices
 from extracted_content_pipeline.content_ops_input_provider import (
@@ -26,8 +30,12 @@ from extracted_content_pipeline.control_surfaces import (
 from extracted_content_pipeline.support_ticket_input_provider import (
     SupportTicketInputProvider,
 )
+from extracted_content_pipeline.landing_page_generation import (
+    LandingPageGenerationService,
+)
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 from extracted_content_pipeline.ticket_faq_ports import TicketFAQDraft
+from tests.content_ops_live_execute_harness import MemoryDraftRepository, MemorySkillStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -134,6 +142,97 @@ class _OpportunityRepo:
         })
         rows = self.pool["opportunities"].get(target_id, ())
         return tuple(rows)[:limit]
+
+
+class _BlueprintRepo:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows = [dict(row) for row in rows]
+        self.calls: list[dict[str, object]] = []
+
+    async def read_blog_blueprints(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int,
+        filters=None,
+    ):
+        self.calls.append({
+            "account_id": scope.account_id,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+        })
+        return self.rows[:limit]
+
+
+class _ContentLLM:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int,
+        temperature: float,
+        metadata: Mapping[str, object] | None = None,
+    ) -> LLMResponse:
+        del max_tokens, temperature
+        meta = dict(metadata or {})
+        self.calls.append({
+            "messages": tuple(messages),
+            "metadata": meta,
+        })
+        return LLMResponse(
+            content=json.dumps(_content_response_for_metadata(meta), separators=(",", ":")),
+            model="persisted-source-target-test",
+            usage={"input_tokens": 3, "output_tokens": 7},
+        )
+
+
+def _content_response_for_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    asset_type = str(metadata.get("asset_type") or "")
+    if asset_type == "landing_page":
+        return {
+            "title": "FAQ Report From Imported Tickets",
+            "slug": "faq-report-from-imported-tickets",
+            "hero": {
+                "headline": "Turn imported support tickets into FAQ answers",
+                "subheadline": "Use real support-ticket questions to build pages.",
+            },
+            "sections": [{
+                "id": "proof",
+                "title": "Imported Tickets Show Repeat Questions",
+                "body_markdown": "Imported support tickets show billing and login questions.",
+            }],
+            "cta": {"label": "Upload Ticket CSV", "url": "/systems/ai-content-ops/intake"},
+            "meta": {
+                "title_tag": "FAQ Report From Imported Tickets",
+                "description": "Build public answers from imported support-ticket rows.",
+            },
+            "reference_ids": ["ticket-1", "ticket-2"],
+        }
+    if asset_type == "blog_post":
+        return {
+            "slug": "imported-support-ticket-faq-report",
+            "title": "Imported Support Ticket FAQ Report",
+            "content": (
+                "## What do imported support tickets show?\n\n"
+                "Imported support tickets show repeat billing and account questions."
+            ),
+            "topic_type": "content_ops_support_ticket_faq",
+            "description": "How imported tickets become FAQ content.",
+            "seo_title": "Imported Support Ticket FAQ Report",
+            "seo_description": "Use imported support tickets to find repeat questions.",
+            "target_keyword": "support ticket FAQ report",
+            "secondary_keywords": ["customer support FAQ"],
+            "faq": [{
+                "question": "What do imported support tickets show?",
+                "answer": "They show repeat questions customers already asked.",
+            }],
+        }
+    raise AssertionError(f"unexpected LLM metadata: {metadata!r}")
 
 
 def _persisted_ticket_row(target_id: str, *, subject: str | None = None) -> dict[str, object]:
@@ -801,6 +900,112 @@ async def test_execute_route_generates_faq_from_persisted_source_targets() -> No
     assert step["status"] == "completed"
     assert step["result"]["source_count"] == 2
     assert step["result"]["ticket_source_count"] == 2
+
+
+@pytest.mark.skipif(
+    api_module.APIRouter is None,
+    reason="fastapi is not installed in this test environment",
+)
+@pytest.mark.asyncio
+async def test_execute_route_generates_landing_and_blog_from_persisted_source_targets() -> None:
+    pool = {
+        "opportunities": {
+            "ticket-1": [_persisted_ticket_row("ticket-1")],
+            "ticket-2": [_persisted_ticket_row("ticket-2", subject="Login email change")],
+        },
+        "opportunity_calls": [],
+    }
+    llm = _ContentLLM()
+    landing_pages = MemoryDraftRepository("landing")
+    blog_posts = MemoryDraftRepository("blog")
+    blueprints = _BlueprintRepo([{
+        "id": "bp-imported-support-tickets",
+        "slug": "imported-support-ticket-faq-report",
+        "topic": "Imported support-ticket questions customers keep asking",
+        "topic_type": "content_ops_support_ticket_faq",
+    }])
+    scope = TenantScope(
+        account_id="acct-imported-source-public",
+        user_id="user-imported-source-public",
+    )
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/content-ops"),
+        input_provider=build_content_ops_input_provider(
+            pool_provider=lambda: pool,
+            opportunity_repository_factory=_OpportunityRepo,
+        ),
+        execution_services_provider=lambda: ContentOpsExecutionServices(
+            landing_page=LandingPageGenerationService(
+                landing_pages=landing_pages,
+                llm=llm,
+                skills=MemorySkillStore(),
+            ),
+            blog_post=BlogPostGenerationService(
+                blueprints=blueprints,
+                blog_posts=blog_posts,
+                llm=llm,
+                skills=MemorySkillStore(),
+            ),
+        ),
+        scope_provider=lambda: scope,
+    )
+    route = _router_route(router, "/content-ops/execute", "POST")
+
+    payload = await route.endpoint({
+        "target_mode": "vendor_retention",
+        "outputs": ["landing_page", "blog_post"],
+        "limit": 1,
+        "require_quality_gates": False,
+        "inputs": {
+            "source_import_target_ids": ["ticket-1", "ticket-2"],
+        },
+    })
+
+    assert [call["target_id"] for call in pool["opportunity_calls"]] == [
+        "ticket-1",
+        "ticket-2",
+    ]
+    assert {call["account_id"] for call in pool["opportunity_calls"]} == {
+        "acct-imported-source-public"
+    }
+    assert payload["status"] == "completed"
+    assert payload["input_provider"]["metadata"]["source_row_count"] == 2
+    assert payload["input_provider"]["metadata"]["included_row_count"] == 2
+    assert payload["input_provider"]["warnings"] == []
+
+    steps = {step["output"]: step for step in payload["steps"]}
+    assert set(steps) == {"landing_page", "blog_post"}
+    assert steps["landing_page"]["status"] == "completed"
+    assert steps["landing_page"]["result"]["saved_ids"] == ["landing-1"]
+    assert steps["blog_post"]["status"] == "completed"
+    assert steps["blog_post"]["result"]["saved_ids"] == ["blog-1"]
+
+    assert len(landing_pages.saved) == 1
+    landing_scope, landing_draft = landing_pages.saved[0]
+    assert landing_scope == scope
+    assert landing_draft.slug == "faq-report-from-imported-tickets"
+    assert landing_draft.reference_ids == ("ticket-1", "ticket-2")
+
+    assert blueprints.calls == [{
+        "account_id": "acct-imported-source-public",
+        "target_mode": "vendor_retention",
+        "limit": 1,
+        "filters": {"topic_type": "content_ops_support_ticket_faq"},
+    }]
+    assert len(blog_posts.saved) == 1
+    blog_scope, blog_draft = blog_posts.saved[0]
+    assert blog_scope == scope
+    assert blog_draft.slug == "imported-support-ticket-faq-report"
+    assert blog_draft.data_context["source"] == "support_ticket_provider"
+    assert blog_draft.data_context["included_ticket_row_count"] == 2
+    assert blog_draft.data_context["faq_questions"] == [
+        "How do I confirm my renewal invoice before payment?"
+    ]
+
+    assert [call["metadata"]["asset_type"] for call in llm.calls] == [
+        "landing_page",
+        "blog_post",
+    ]
 
 
 @pytest.mark.skipif(
