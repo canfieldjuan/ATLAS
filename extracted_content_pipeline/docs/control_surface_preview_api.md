@@ -94,6 +94,7 @@ Current preset ids:
 | `email_only` | `email_campaign` | Lowest-cost outreach draft run. |
 | `intelligence_report` | `report` | Reference-backed report generation. |
 | `content_marketing` | `blog_post`, `report` | Blog plus report from the same evidence base. |
+| `marketer_evidence_bundle` | `landing_page`, `blog_post`, `sales_brief` | Landing page, blog post, and sales brief from review or competitive evidence. |
 | `lead_gen_campaign` | `email_campaign`, `landing_page` | Outreach plus landing page. |
 | `full_campaign` | `email_campaign`, `blog_post`, `report`, `landing_page`, `sales_brief` | Full generated-content bundle. |
 
