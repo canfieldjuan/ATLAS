@@ -189,6 +189,9 @@
       "target": "extracted_content_pipeline/content_ops_cache_policy.py"
     },
     {
+      "target": "extracted_content_pipeline/content_image_provider.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_ports.py"
     },
     {

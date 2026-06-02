@@ -4799,6 +4799,27 @@ class B2BCampaignConfig(BaseSettings):
         validation_alias=AliasChoices("ATLAS_CONTENT_OPS_FAQ_MACRO_WRITEBACK_SCHEDULED_INTERVAL_SECONDS"),
         description="Interval for autonomous Content Ops FAQ-to-Zendesk macro publishing.",
     )
+    content_ops_image_provider_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_IMAGE_PROVIDER_ENABLED"),
+        description="Enable server-side image enrichment for generated Content Ops landing/blog drafts.",
+    )
+    content_ops_image_unsplash_access_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_IMAGE_UNSPLASH_ACCESS_KEY"),
+        description="Unsplash access key for Content Ops image enrichment.",
+    )
+    content_ops_image_unsplash_base_url: str = Field(
+        default="https://api.unsplash.com",
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_IMAGE_UNSPLASH_BASE_URL"),
+        description="Unsplash API base URL for Content Ops image enrichment.",
+    )
+    content_ops_image_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_IMAGE_TIMEOUT_SECONDS"),
+        description="HTTP timeout for Content Ops image provider requests.",
+    )
     personas: list[str] = Field(
         default=["executive", "technical", "operations", "evaluator", "champion"],
         description="Persona types to generate campaigns for (buying committee coverage)",

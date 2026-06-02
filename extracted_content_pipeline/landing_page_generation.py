@@ -35,6 +35,11 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .content_image_provider import (
+    ContentImageAsset,
+    ContentImageProvider,
+    ContentImageRequest,
+)
 from .landing_page_ports import (
     LandingPageDraft,
     LandingPageRepository,
@@ -242,12 +247,14 @@ class LandingPageGenerationService:
         llm: LLMClient,
         skills: SkillStore,
         reasoning_context: CampaignReasoningContextProvider | None = None,
+        image_provider: ContentImageProvider | None = None,
         config: LandingPageGenerationConfig | None = None,
     ):
         self._landing_pages = landing_pages
         self._llm = llm
         self._skills = skills
         self._reasoning_context = reasoning_context
+        self._image_provider = image_provider
         self._config = config or LandingPageGenerationConfig()
 
     def with_reasoning_context(
@@ -260,6 +267,7 @@ class LandingPageGenerationService:
             llm=self._llm,
             skills=self._skills,
             reasoning_context=provider,
+            image_provider=self._image_provider,
             config=self._config,
         )
 
@@ -436,6 +444,7 @@ class LandingPageGenerationService:
             campaign=campaign,
             campaign_payload=campaign_payload,
         )
+        draft = await self._with_optional_image(draft, campaign=campaign)
         saved_ids = tuple(
             str(item) for item in await self._landing_pages.save_drafts([draft], scope=scope)
         )
@@ -890,6 +899,35 @@ class LandingPageGenerationService:
             metadata=metadata,
         )
 
+    async def _with_optional_image(
+        self,
+        draft: LandingPageDraft,
+        *,
+        campaign: MarketingCampaign,
+    ) -> LandingPageDraft:
+        if self._image_provider is None or str(draft.hero.get("image_url") or "").strip():
+            return draft
+        try:
+            asset = await self._image_provider.select_image(
+                ContentImageRequest(
+                    asset_type="landing_page",
+                    slot="hero",
+                    title=draft.title,
+                    query_terms=(
+                        campaign.name,
+                        campaign.persona,
+                        campaign.value_prop,
+                        *campaign.categories,
+                        *campaign.tags,
+                    ),
+                )
+            )
+        except Exception:
+            return draft
+        if asset is None:
+            return draft
+        return _landing_page_with_image_asset(draft, asset)
+
 
 def _landing_page_source_context(context: Mapping[str, Any]) -> dict[str, Any]:
     return {
@@ -897,6 +935,38 @@ def _landing_page_source_context(context: Mapping[str, Any]) -> dict[str, Any]:
         for key in LANDING_PAGE_SUPPORT_TICKET_SOURCE_INPUT_KEYS
         if key in context and context[key] not in (None, "", [], {})
     }
+
+
+def _landing_page_with_image_asset(
+    draft: LandingPageDraft,
+    asset: ContentImageAsset,
+) -> LandingPageDraft:
+    hero = dict(draft.hero or {})
+    meta = dict(draft.meta or {})
+    metadata = dict(draft.metadata or {})
+    if not str(hero.get("image_url") or "").strip():
+        hero["image_url"] = asset.url
+    if asset.alt_text:
+        if not str(hero.get("image_alt") or "").strip():
+            hero["image_alt"] = asset.alt_text
+    if not str(meta.get("og_image_url") or "").strip():
+        meta["og_image_url"] = asset.url
+    metadata["content_image"] = asset.as_dict()
+    return LandingPageDraft(
+        campaign_name=draft.campaign_name,
+        persona=draft.persona,
+        value_prop=draft.value_prop,
+        title=draft.title,
+        slug=draft.slug,
+        hero=hero,
+        sections=tuple(draft.sections),
+        cta=dict(draft.cta or {}),
+        meta=meta,
+        reference_ids=tuple(draft.reference_ids),
+        metadata=metadata,
+        id=draft.id,
+        status=draft.status,
+    )
 
 
 def _quality_repair_history_row(
