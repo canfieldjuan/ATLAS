@@ -20,6 +20,7 @@
         "opportunity_score": 2,
         "question": "How do I export attribution reports?",
         "question_source": "customer_wording",
+        "resolution_evidence_scope": "scoped",
         "resolution_source_count": 2,
         "source_ids": [
           "ticket-export-1",
@@ -87,6 +88,7 @@
         "opportunity_score": 2,
         "question": "Can I turn on SSO for all users?",
         "question_source": "customer_wording",
+        "resolution_evidence_scope": "not_applicable",
         "resolution_source_count": 0,
         "source_ids": [
           "ticket-sso-2",
@@ -130,6 +132,7 @@
     "output_checks": {
       "condensed": true,
       "has_action_items": true,
+      "resolution_evidence_scoped": true,
       "uses_user_vocabulary": true
     },
     "saved_ids": [],
@@ -145,6 +148,7 @@
     "output_checks": {
       "condensed": true,
       "has_action_items": true,
+      "resolution_evidence_scoped": true,
       "uses_user_vocabulary": true
     },
     "source_count": 4,

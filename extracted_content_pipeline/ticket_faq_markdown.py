@@ -655,6 +655,12 @@ def _item(
     answer_evidence_status = (
         "resolution_evidence" if resolution_texts else "draft_needs_review"
     )
+    resolution_evidence_scope = _resolution_evidence_scope_status(
+        has_mixed_evidence_scopes=has_mixed_evidence_scopes,
+        question_row=question_row,
+        resolution_rows=resolution_rows,
+        resolution_texts=resolution_texts,
+    )
     steps = _article_steps(
         topic,
         action_context,
@@ -683,6 +689,7 @@ def _item(
         "summary": summary,
         "steps": steps,
         "answer_evidence_status": answer_evidence_status,
+        "resolution_evidence_scope": resolution_evidence_scope,
         "resolution_source_count": _resolution_source_count(resolution_rows),
         "when_to_contact_support": escalation,
         "evidence_quotes": evidence_quotes,
@@ -820,6 +827,34 @@ def _resolution_source_count(rows: Sequence[Mapping[str, Any]]) -> int:
     return len(_distinct_source_keys([
         row for row in rows if _compact(row.get("resolution_text"))
     ]))
+
+
+def _resolution_evidence_scope_status(
+    *,
+    has_mixed_evidence_scopes: bool,
+    question_row: Mapping[str, Any] | None,
+    resolution_rows: Sequence[Mapping[str, Any]],
+    resolution_texts: Sequence[str],
+) -> str:
+    if not resolution_texts:
+        return "not_applicable"
+    if has_mixed_evidence_scopes:
+        return "mixed_evidence_scope"
+    resolution_scopes = {
+        _clean(row.get("evidence_group_key"))
+        for row in resolution_rows
+        if _compact(row.get("resolution_text")) and _clean(row.get("evidence_group_key"))
+    }
+    if len(resolution_scopes) != 1:
+        return "missing_resolution_scope"
+    question_scope = _clean(
+        question_row.get("evidence_group_key") if question_row is not None else ""
+    )
+    if not question_scope:
+        return "missing_question_scope"
+    if question_scope and resolution_scopes != {question_scope}:
+        return "scope_mismatch"
+    return "scoped"
 
 
 def _resolution_excerpt(value: Any, *, limit: int = 180) -> str:
@@ -1726,7 +1761,15 @@ def _output_checks(
         and covers_all_sources
         and (ticket_source_count <= 1 or len(items) < ticket_source_count),
         "has_action_items": has_items and all(bool(item.get("action_items")) for item in items),
+        "resolution_evidence_scoped": has_items
+        and all(_resolution_evidence_is_scoped(item) for item in items),
     }
+
+
+def _resolution_evidence_is_scoped(item: Mapping[str, Any]) -> bool:
+    if item.get("answer_evidence_status") != "resolution_evidence":
+        return True
+    return item.get("resolution_evidence_scope") == "scoped"
 
 
 def _rendered_ticket_source_count(items: Sequence[Mapping[str, Any]]) -> int:

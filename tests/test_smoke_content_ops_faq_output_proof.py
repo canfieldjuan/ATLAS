@@ -69,6 +69,7 @@ def test_faq_output_proof_writes_artifacts_and_passes(tmp_path: Path) -> None:
     assert result["output_checks"] == {
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
         "uses_user_vocabulary": True,
     }
     assert "ticket-export-1" in markdown
@@ -117,6 +118,7 @@ def test_faq_output_proof_reports_failed_predicates() -> None:
                 "uses_user_vocabulary": True,
                 "condensed": False,
                 "has_action_items": False,
+                "resolution_evidence_scoped": False,
             },
             "topics": ["reporting friction"],
             "min_source_id_count": 0,
@@ -146,6 +148,7 @@ def test_faq_output_proof_reports_failed_predicates() -> None:
         "output_checks_pass",
         "output_check_condensed",
         "output_check_has_action_items",
+        "output_check_resolution_evidence_scoped",
         "topic_present",
         "generated_items",
         "source_id_coverage",

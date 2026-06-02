@@ -560,6 +560,8 @@ def _output_check_hint(name: str, result: Any, rendered_ticket_source_count: int
         return "One or more FAQ questions did not come from customer wording or source policy."
     if name == "has_action_items":
         return "One or more FAQ items did not include actionable next steps."
+    if name == "resolution_evidence_scoped":
+        return "One or more proven answers used resolution evidence outside its selected question scope."
     return "Output check failed."
 
 

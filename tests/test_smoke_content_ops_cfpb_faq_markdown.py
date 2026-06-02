@@ -100,6 +100,7 @@ def test_cfpb_faq_smoke_builds_grounded_markdown(monkeypatch, tmp_path: Path) ->
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert calls[0]["require_narrative"] is True
     assert payload["source_profile"]["raw_row_count"] == 4
@@ -154,6 +155,7 @@ def test_cfpb_faq_smoke_accepts_source_policy_questions_for_weak_rows(
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert payload["faq"]["items"][0]["question_source"] == "source_policy"
     assert payload["errors"] == []

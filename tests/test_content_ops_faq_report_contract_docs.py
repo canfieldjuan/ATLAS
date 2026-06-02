@@ -116,6 +116,7 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
     assert payload["output_checks"] == {
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
         "uses_user_vocabulary": True,
     }
 
@@ -126,6 +127,7 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
         "opportunity_score",
         "question",
         "question_source",
+        "resolution_evidence_scope",
         "source_ids",
         "steps",
         "summary",
@@ -162,6 +164,7 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert payload["summary"]["output_checks"] == {
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
         "uses_user_vocabulary": True,
     }
     assert all(payload["faq_result"]["output_checks"].values())

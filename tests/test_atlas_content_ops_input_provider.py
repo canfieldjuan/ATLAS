@@ -838,6 +838,7 @@ async def test_execute_route_generates_support_ticket_faq_at_inline_cap() -> Non
     assert result["output_checks"] == {
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
         "uses_user_vocabulary": True,
     }
     assert result["saved_ids"] == []
@@ -1189,6 +1190,7 @@ async def test_execute_route_generates_faq_from_support_ticket_input_provider() 
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert "FAQ Report" in result["markdown"]
     assert result["items"][0]["source_ids"] == (

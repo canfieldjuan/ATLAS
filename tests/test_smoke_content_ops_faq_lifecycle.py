@@ -143,6 +143,7 @@ async def test_faq_lifecycle_smoke_generates_exports_reviews_and_reexports(monke
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert payload["normalization_warnings"] == {
         "warning_count": 0,
@@ -233,6 +234,7 @@ async def test_faq_lifecycle_smoke_persists_1000_row_json_bundle(monkeypatch, tm
             "uses_user_vocabulary": True,
             "condensed": True,
             "has_action_items": True,
+            "resolution_evidence_scoped": True,
         },
         "saved_faq_count": 1,
         "draft_export_count": 1,

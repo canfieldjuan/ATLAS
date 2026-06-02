@@ -17,6 +17,7 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
+    _output_checks,
     build_ticket_faq_markdown,
     normalize_intent_rules,
     weighted_source_volume_by_group,
@@ -168,6 +169,7 @@ def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
 
 
@@ -201,6 +203,7 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
 
     item = result.items[0]
     assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
     assert item["resolution_source_count"] == 1
     assert item["steps"][0] == (
         "Open Analytics, choose the attribution dashboard, and select Export CSV"
@@ -216,6 +219,32 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     )
     assert "Draft the customer-facing steps" not in result.markdown
     assert "support@example.com" in result.markdown
+
+
+def test_build_ticket_faq_markdown_fails_closed_when_resolution_has_no_question_scope() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "evidence": [{
+                "text": "The export button disappears for analysts.",
+                "source_id": "ticket-1",
+                "source_type": "support_ticket",
+                "resolution_text": "Enable Report Downloads for the analyst role.",
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["question_source"] == "source_policy"
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "missing_question_scope"
+    assert result.output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+        "resolution_evidence_scoped": False,
+    }
 
 
 def test_build_ticket_faq_markdown_truncates_resolution_steps_at_word_boundary() -> None:
@@ -264,12 +293,13 @@ def test_build_ticket_faq_markdown_ignores_disposition_resolution_aliases() -> N
 
     item = result.items[0]
     assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
     assert item["resolution_source_count"] == 0
     assert item["steps"][0].startswith("Review the cited ticket evidence")
     assert "Use the uploaded resolution evidence: Closed" not in result.markdown
 
 
-def test_build_ticket_faq_markdown_uses_resolution_evidence_beyond_display_rows() -> None:
+def test_build_ticket_faq_markdown_fails_closed_for_unscoped_resolution_beyond_display_rows() -> None:
     result = build_ticket_faq_markdown(
         [
             {
@@ -296,11 +326,14 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_beyond_display_rows(
     )
 
     item = result.items[0]
+    assert item["question_source"] == "source_policy"
     assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "missing_question_scope"
     assert item["resolution_source_count"] == 1
     assert item["steps"][0] == (
         "Enable Report Downloads for the analyst role"
     )
+    assert result.output_checks["resolution_evidence_scoped"] is False
 
 
 def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() -> None:
@@ -331,6 +364,7 @@ def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() 
 
     item = result.items[0]
     assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
     assert item["resolution_source_count"] == 2
     assert item["steps"][0] == "Send the reset email from Account Settings"
     assert all(not step.startswith("Use the uploaded") for step in item["steps"])
@@ -376,6 +410,8 @@ def test_build_ticket_faq_markdown_keeps_distinct_questions_from_sharing_resolut
 
     assert scim["answer_evidence_status"] == "resolution_evidence"
     assert warehouse["answer_evidence_status"] == "resolution_evidence"
+    assert scim["resolution_evidence_scope"] == "scoped"
+    assert warehouse["resolution_evidence_scope"] == "scoped"
     assert scim["source_ids"] == ("ticket-scim-1",)
     assert warehouse["source_ids"] == ("ticket-warehouse-1",)
     assert "SCIM in Preview mode" in " ".join(scim["steps"])
@@ -423,6 +459,7 @@ def test_build_ticket_faq_markdown_scopes_overflow_resolution_to_item_question()
     assert item["question"] == "Which remaining support questions need manual review?"
     assert item["source_ids"] == ("ticket-scim-1", "ticket-warehouse-1")
     assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
     assert item["resolution_source_count"] == 0
     assert "SCIM in Preview mode" not in " ".join(item["steps"])
     assert "Analytics > Model refresh" not in " ".join(item["steps"])
@@ -459,6 +496,7 @@ def test_build_ticket_faq_markdown_fails_closed_for_resolved_and_unresolved_over
     item = result.items[0]
     assert item["source_ids"] == ("ticket-export-1", "ticket-sso-1")
     assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
     assert item["resolution_source_count"] == 0
     assert "Open Reports" not in " ".join(item["steps"])
 
@@ -496,6 +534,27 @@ def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     assert "I need to update the email on my account." in result.markdown
     assert result.output_checks["uses_user_vocabulary"] is True
     assert result.output_checks["condensed"] is True
+
+
+def test_ticket_faq_output_check_fails_unscoped_resolution_evidence() -> None:
+    output_checks = _output_checks(
+        items=({
+            "question_source": "customer_wording",
+            "action_items": ("Open Reports.",),
+            "answer_evidence_status": "resolution_evidence",
+            "resolution_evidence_scope": "scope_mismatch",
+            "source_ids": ("ticket-1",),
+        },),
+        ticket_source_count=1,
+        rendered_ticket_source_count=1,
+    )
+
+    assert output_checks == {
+        "uses_user_vocabulary": True,
+        "condensed": True,
+        "has_action_items": True,
+        "resolution_evidence_scoped": False,
+    }
 
 
 def test_build_ticket_faq_markdown_ranks_by_frequency_times_failure_risk() -> None:
@@ -1058,6 +1117,7 @@ def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert "Review the cited ticket evidence and confirm the policy-approved answer" in result.markdown
     assert result.items[0]["answer_evidence_status"] == "draft_needs_review"
@@ -1455,6 +1515,7 @@ def test_build_ticket_faq_markdown_condenses_tail_groups_when_item_cap_is_lower_
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
 
 
@@ -1492,6 +1553,7 @@ def test_build_ticket_faq_markdown_preserves_top_group_when_single_item_cap_over
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
 
 
@@ -1605,6 +1667,7 @@ def test_build_ticket_faq_markdown_handles_1000_cfpb_style_rows_without_archive(
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert all(item["question_source"] != "topic_fallback" for item in result.items)
     assert all("XX/XX/2019" not in question for question in questions)
@@ -1722,6 +1785,7 @@ def test_ticket_faq_markdown_renders_action_and_source_lists_from_packaged_rows(
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
 
 
@@ -2141,6 +2205,7 @@ def test_build_ticket_faq_markdown_skips_non_ticket_sources_and_validates_limits
         "uses_user_vocabulary": False,
         "condensed": False,
         "has_action_items": False,
+        "resolution_evidence_scoped": False,
     }
     with pytest.raises(ValueError, match="max_items must be positive"):
         build_ticket_faq_markdown([], max_items=0)
@@ -2341,6 +2406,7 @@ def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_credit_report_r
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "Open the reporting or analytics area" not in result.markdown
@@ -2397,6 +2463,7 @@ def test_build_ticket_faq_markdown_uses_cfpb_product_context_for_mortgage_rows(t
         "uses_user_vocabulary": True,
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
     }
     assert "Draft the customer-facing steps from a verified help article" in result.markdown
     assert "Open the bill, statement, payment history, or dispute record" not in result.markdown
@@ -2731,9 +2798,9 @@ def test_ticket_faq_cli_writes_markdown_file(tmp_path: Path) -> None:
         "source_channel_counts": {"support_tickets": 4},
         "zero_result_search_source_count": 0,
         "output_checks": {
-            "passed": 3,
+            "passed": 4,
             "failed": 0,
-            "total": 3,
+            "total": 4,
             "failed_checks": [],
         },
         "vocabulary_gaps": {
@@ -3998,13 +4065,14 @@ def test_ticket_faq_cli_fails_required_output_checks_for_weak_rows(tmp_path: Pat
             ),
         },
         {"check": "has_action_items", "passed": True},
+        {"check": "resolution_evidence_scoped", "passed": True},
         {"check": "uses_user_vocabulary", "passed": True},
     ]
     assert result["diagnostics"]["run_summary"]["status"] == "failed_output_checks"
     assert result["diagnostics"]["run_summary"]["output_checks"] == {
-        "passed": 2,
+        "passed": 3,
         "failed": 1,
-        "total": 3,
+        "total": 4,
         "failed_checks": ["condensed"],
     }
     assert result["diagnostics"]["run_summary"]["generated"] == 2

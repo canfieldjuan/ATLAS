@@ -54,7 +54,7 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "source_type": "support_ticket",
         "source_id": "ticket-export-2",
         "source_title": "Reporting dashboard missing export",
-        "text": "The reporting dashboard export is missing for my analyst role.",
+        "text": "How do I export the reporting dashboard for my analyst role?",
         "resolution_text": "Enable Report Downloads for the analyst role before exporting.",
         "pain_category": "reporting friction",
     },
@@ -337,7 +337,12 @@ def _proof_failures(
             "detail": failed_output_checks,
         })
     output_checks = _mapping(proof.get("output_checks"))
-    for name in ("uses_user_vocabulary", "condensed", "has_action_items"):
+    for name in (
+        "uses_user_vocabulary",
+        "condensed",
+        "has_action_items",
+        "resolution_evidence_scoped",
+    ):
         if output_checks.get(name) is not True:
             failures.append({"check": f"output_check_{name}", "detail": output_checks.get(name)})
     topics = set(str(topic) for topic in _sequence(proof.get("topics")))
