@@ -160,7 +160,7 @@ _COMPETITIVE_MARKER_KEYS = frozenset({
     "top_displacement_targets",
     "winning_vendor",
 })
-_REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post")
+_REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
 _REVIEW_CAMPAIGN_NAME = "Review-Signal Campaign"
 _REVIEW_TOPIC = "Customer review themes worth turning into content"
 _REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
@@ -880,6 +880,7 @@ def _build_review_input_package(
         "offer": _REVIEW_OFFER,
         "audience": _REVIEW_AUDIENCE,
         "target_keyword": _REVIEW_TARGET_KEYWORD,
+        "brief_type": "discovery",
         "search_intent": (
             "Marketing teams looking for review-grounded themes for landing "
             "pages and blog posts."

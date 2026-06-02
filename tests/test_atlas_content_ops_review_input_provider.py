@@ -147,7 +147,7 @@ def _support_ticket_row() -> dict[str, Any]:
     }
 
 
-def test_review_source_material_builds_landing_and_blog_inputs() -> None:
+def test_review_source_material_builds_landing_blog_and_sales_brief_inputs() -> None:
     package = build_content_ops_input_provider().build_content_ops_input_package(
         scope=TenantScope(account_id="acct-1"),
         request={
@@ -162,9 +162,10 @@ def test_review_source_material_builds_landing_and_blog_inputs() -> None:
     preview = preview_control_surface(request)
 
     assert package.provider == "atlas_review_request"
-    assert request.outputs == ("landing_page", "blog_post")
+    assert request.outputs == ("landing_page", "blog_post", "sales_brief")
     assert request.ingestion_profile == "existing_evidence"
     assert request.inputs["source_type"] == "reviews"
+    assert request.inputs["brief_type"] == "discovery"
     assert request.inputs["source_material"][0]["source_type"] == "review"
     assert request.inputs["review_source_material"][0]["source_type"] == "review"
     assert request.inputs["source_material"][0]["target_id"] == "review-1"
@@ -271,7 +272,7 @@ def test_review_source_material_accepts_review_bundle_alias() -> None:
     )
 
     assert package.provider == "atlas_review_request"
-    assert package.outputs == ("landing_page", "blog_post")
+    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
     assert package.inputs["source_material"][0]["source_type"] == "review"
     assert package.metadata["included_row_count"] == 1
 
@@ -447,7 +448,7 @@ async def test_review_mode_fetches_persisted_targets_by_tenant_scope() -> None:
     ]
     assert {call["account_id"] for call in pool["opportunity_calls"]} == {"acct-1"}
     assert package.provider == "atlas_review_request"
-    assert package.outputs == ("landing_page", "blog_post")
+    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
     assert package.metadata["source_target_loaded_count"] == 2
     assert package.metadata["included_row_count"] == 2
     assert {row["source_type"] for row in package.inputs["source_material"]} == {
@@ -606,7 +607,7 @@ async def test_competitive_b2b_displacement_selection_reports_missing_vendor() -
 
 
 @pytest.mark.asyncio
-async def test_review_input_evidence_reaches_landing_and_blog_generators() -> None:
+async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_generators() -> None:
     package = build_content_ops_input_provider().build_content_ops_input_package(
         scope=TenantScope(account_id="acct-1"),
         request={
@@ -624,6 +625,7 @@ async def test_review_input_evidence_reaches_landing_and_blog_generators() -> No
         services=ContentOpsExecutionServices(
             blog_post=_RunnableService(),
             landing_page=_RunnableService(),
+            sales_brief=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -636,6 +638,11 @@ async def test_review_input_evidence_reaches_landing_and_blog_generators() -> No
     blog_context = blog_step.result["kwargs"]["data_context"]
     assert blog_context["source"] == "review_input_provider"
     assert blog_context["review_source_material"][0]["target_id"] == "review-1"
+
+    sales_brief_step = next(step for step in result.steps if step.output == "sales_brief")
+    sales_brief_kwargs = sales_brief_step.result["kwargs"]
+    assert sales_brief_kwargs["default_brief_type"] == "discovery"
+    assert sales_brief_kwargs["source_material"][0]["target_id"] == "review-1"
 
 
 @pytest.mark.asyncio
@@ -705,5 +712,6 @@ async def test_plan_route_applies_review_input_provider() -> None:
     assert [step["output"] for step in payload["steps"]] == [
         "landing_page",
         "blog_post",
+        "sales_brief",
     ]
-    assert payload["preview"]["outputs"] == ["landing_page", "blog_post"]
+    assert payload["preview"]["outputs"] == ["landing_page", "blog_post", "sales_brief"]
