@@ -303,6 +303,133 @@ def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() 
     assert len([step for step in item["steps"] if step.startswith("Use the uploaded")]) == 1
 
 
+def test_build_ticket_faq_markdown_keeps_distinct_questions_from_sharing_resolutions() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "SCIM setup",
+                "evidence": [{
+                    "text": "Can we sync users before enforcing SSO?",
+                    "source_id": "ticket-scim-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": (
+                        "Enable SSO first, confirm every existing user email matches "
+                        "the identity provider email, then enable SCIM in Preview mode."
+                    ),
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Warehouse sync",
+                "evidence": [{
+                    "text": "Why is my dashboard data not refreshing after the warehouse sync?",
+                    "source_id": "ticket-warehouse-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": (
+                        "Check Data > Sync history for the warehouse job, then open "
+                        "Analytics > Model refresh."
+                    ),
+                }],
+            },
+        ]
+    )
+
+    by_question = {item["question"]: item for item in result.items}
+    scim = by_question["Can we sync users before enforcing SSO?"]
+    warehouse = by_question[
+        "Why is my dashboard data not refreshing after the warehouse sync?"
+    ]
+
+    assert scim["answer_evidence_status"] == "resolution_evidence"
+    assert warehouse["answer_evidence_status"] == "resolution_evidence"
+    assert scim["source_ids"] == ("ticket-scim-1",)
+    assert warehouse["source_ids"] == ("ticket-warehouse-1",)
+    assert "SCIM in Preview mode" in " ".join(scim["steps"])
+    assert "Analytics > Model refresh" not in " ".join(scim["steps"])
+    assert "Analytics > Model refresh" in " ".join(warehouse["steps"])
+    assert "SCIM in Preview mode" not in " ".join(warehouse["steps"])
+
+
+def test_build_ticket_faq_markdown_scopes_overflow_resolution_to_item_question() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "SCIM setup",
+                "evidence": [{
+                    "text": "Can we sync users before enforcing SSO?",
+                    "source_id": "ticket-scim-1",
+                    "source_type": "support_ticket",
+                    "source_weight": 10,
+                    "resolution_text": (
+                        "Enable SSO first, confirm existing user emails, then enable "
+                        "SCIM in Preview mode."
+                    ),
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Warehouse sync",
+                "evidence": [{
+                    "text": "Why is my dashboard data not refreshing after the warehouse sync?",
+                    "source_id": "ticket-warehouse-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": (
+                        "Check Data > Sync history for the warehouse job, then open "
+                        "Analytics > Model refresh."
+                    ),
+                }],
+            },
+        ],
+        max_items=1,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item["question"] == "Which remaining support questions need manual review?"
+    assert item["source_ids"] == ("ticket-scim-1", "ticket-warehouse-1")
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_source_count"] == 0
+    assert "SCIM in Preview mode" not in " ".join(item["steps"])
+    assert "Analytics > Model refresh" not in " ".join(item["steps"])
+
+
+def test_build_ticket_faq_markdown_fails_closed_for_resolved_and_unresolved_overflow() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "CSV export",
+                "evidence": [{
+                    "text": "How do I export reports?",
+                    "source_id": "ticket-export-1",
+                    "source_type": "support_ticket",
+                    "source_weight": 10,
+                    "resolution_text": "Open Reports, choose Export, then select CSV.",
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "SSO setup",
+                "evidence": [{
+                    "text": "Can I turn on SSO for all users?",
+                    "source_id": "ticket-sso-1",
+                    "source_type": "support_ticket",
+                }],
+            },
+        ],
+        max_items=1,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item["source_ids"] == ("ticket-export-1", "ticket-sso-1")
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_source_count"] == 0
+    assert "Open Reports" not in " ".join(item["steps"])
+
+
 def test_build_ticket_faq_markdown_clusters_repeated_user_intent() -> None:
     result = build_ticket_faq_markdown(
         [
