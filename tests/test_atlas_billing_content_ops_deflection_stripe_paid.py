@@ -132,6 +132,7 @@ async def test_deflection_checkout_completion_marks_report_paid() -> None:
     assert args == (account_id, "req-123", "cs_test_deflection")
     delivery_query, delivery_args = pool.execute_calls[1]
     assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
+    assert "delivery_status IN ('delivered', 'sending')" in delivery_query
     assert delivery_args == (account_id, "req-123", "cs_test_deflection")
     assert "buyer@example.com" not in str(pool.delivery_rows)
 

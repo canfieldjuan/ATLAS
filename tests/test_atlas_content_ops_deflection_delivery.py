@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from atlas_brain.content_ops_deflection_delivery import (
+    DELIVERY_CLAIM_STALE_AFTER,
     DeflectionReportDeliveryConfig,
     deflection_report_result_url,
     send_pending_deflection_report_deliveries,
@@ -77,6 +78,10 @@ async def test_delivery_worker_sends_pending_paid_report_link() -> None:
     assert summary.scanned == 1
     assert summary.sent == 1
     assert summary.failed == 0
+    claim_query, claim_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" in claim_query
+    assert "SET delivery_status = 'sending'" in claim_query
+    assert claim_args == (20,)
     assert len(sender.requests) == 1
     request = sender.requests[0]
     assert request.to_email == "buyer@example.com"
@@ -94,6 +99,7 @@ async def test_delivery_worker_sends_pending_paid_report_link() -> None:
 
     update_query, update_args = pool.execute_calls[0]
     assert "delivery_status = 'delivered'" in update_query
+    assert "delivery_status = 'sending'" in update_query
     assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
     assert "buyer@example.com" not in str(update_args)
 
@@ -112,8 +118,29 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
     assert summary.scanned == 1
     assert summary.sent == 0
     assert summary.dry_run == 1
+    pending_query, pending_args = pool.fetch_calls[0]
+    assert "FOR UPDATE SKIP LOCKED" not in pending_query
+    assert "WHERE d.delivery_status = 'pending'" in pending_query
+    assert pending_args == (20,)
     assert sender.requests == []
     assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
+    pool = _Pool([_row()])
+    sender = _Sender()
+
+    await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    claim_query, _claim_args = pool.fetch_calls[0]
+    assert "d.delivery_status = 'pending'" in claim_query
+    assert "d.delivery_status = 'sending'" in claim_query
+    assert f"INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'" in claim_query
 
 
 @pytest.mark.asyncio
@@ -131,6 +158,7 @@ async def test_delivery_worker_marks_missing_email_failed() -> None:
     assert sender.requests == []
     query, args = pool.execute_calls[0]
     assert "delivery_status = 'failed'" in query
+    assert "delivery_status = 'sending'" in query
     assert args == ("acct-123", "content-ops-abc123", "missing_delivery_email")
 
 
@@ -149,6 +177,7 @@ async def test_delivery_worker_marks_unpaid_report_failed() -> None:
     assert sender.requests == []
     query, args = pool.execute_calls[0]
     assert "delivery_status = 'failed'" in query
+    assert "delivery_status = 'sending'" in query
     assert args == ("acct-123", "content-ops-abc123", "report_not_paid")
 
 
@@ -166,6 +195,7 @@ async def test_delivery_worker_marks_provider_failure_failed_with_bounded_error(
     assert summary.failed == 1
     query, args = pool.execute_calls[0]
     assert "delivery_status = 'failed'" in query
+    assert "delivery_status = 'sending'" in query
     assert args[0:2] == ("acct-123", "content-ops-abc123")
     assert args[2].startswith("RuntimeError: provider down")
     assert len(args[2]) == 500
