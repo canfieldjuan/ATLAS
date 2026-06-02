@@ -62,6 +62,8 @@ class HttpJsonResponse:
 
 
 def _load_dotenv_files() -> None:
+    if os.getenv("ATLAS_DISABLE_DOTENV") == "1":
+        return
     if load_dotenv is not None:
         load_dotenv(ROOT / ".env")
         load_dotenv(ROOT / ".env.local", override=True)

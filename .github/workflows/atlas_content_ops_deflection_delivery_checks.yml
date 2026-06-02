@@ -1,0 +1,38 @@
+name: Atlas Content Ops Deflection Delivery Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "atlas_brain/content_ops_deflection_delivery.py"
+      - "tests/test_atlas_content_ops_deflection_delivery.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "atlas_brain/content_ops_deflection_delivery.py"
+      - "tests/test_atlas_content_ops_deflection_delivery.py"
+
+jobs:
+  atlas-content-ops-deflection-delivery-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops deflection delivery tests
+        run: |
+          python -m pytest tests/test_atlas_content_ops_deflection_delivery.py -q

@@ -7,6 +7,8 @@ import sys
 from typing import Any
 import urllib.error
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/smoke_content_ops_deflection_submit_handoff.py"
@@ -32,6 +34,24 @@ SNAPSHOT = {
         }
     ],
 }
+
+
+@pytest.fixture(autouse=True)
+def _isolate_deflection_submit_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "ATLAS_API_BASE_URL",
+        "ATLAS_B2B_JWT",
+        "ATLAS_TOKEN",
+        "ATLAS_ACCOUNT_ID",
+        "ATLAS_FAQ_SEARCH_ACCOUNT_ID",
+        "ATLAS_DEFLECTION_SUBMIT_CSV_FILE",
+        "ATLAS_DEFLECTION_SUBMIT_BLOB_URL",
+        "ATLAS_DEFLECTION_SUPPORT_PLATFORM",
+        "ATLAS_DEFLECTION_COMPANY_NAME",
+        "ATLAS_DEFLECTION_CONTACT_EMAIL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
 
 
 def _base_args(tmp_path: Path) -> list[str]:
@@ -84,6 +104,16 @@ def _write_csv(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return csv_file
+
+
+def test_load_dotenv_files_honors_disable_flag(monkeypatch) -> None:
+    calls: list[Path] = []
+    monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
+    monkeypatch.setattr(smoke, "load_dotenv", lambda path, **_kwargs: calls.append(path))
+
+    smoke._load_dotenv_files()
+
+    assert calls == []
 
 
 def _submit_payload(

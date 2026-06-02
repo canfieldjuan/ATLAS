@@ -7,6 +7,8 @@ import sys
 import urllib.error
 from typing import Any
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/smoke_content_ops_deflection_portfolio_result_page.py"
@@ -37,6 +39,21 @@ SNAPSHOT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_deflection_result_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL",
+        "ATLAS_API_BASE_URL",
+        "ATLAS_B2B_JWT",
+        "ATLAS_TOKEN",
+        "ATLAS_ACCOUNT_ID",
+        "ATLAS_FAQ_SEARCH_ACCOUNT_ID",
+        "ATLAS_DEFLECTION_REQUEST_ID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
+
+
 def _base_args(tmp_path: Path) -> list[str]:
     return [
         "--result-url",
@@ -63,6 +80,16 @@ def _page_html() -> str:
          data-checkout-request_id="content-ops-123">Unlock full report</a>
     </main>
     """
+
+
+def test_load_dotenv_files_honors_disable_flag(monkeypatch) -> None:
+    calls: list[Path] = []
+    monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
+    monkeypatch.setattr(smoke, "load_dotenv", lambda path, **_kwargs: calls.append(path))
+
+    smoke._load_dotenv_files()
+
+    assert calls == []
 
 
 class FakeResponse:
