@@ -178,6 +178,30 @@ def test_default_database_url_prefers_url_env(monkeypatch) -> None:
     assert smoke._default_database_url() == "postgresql://env/atlas"
 
 
+def test_load_dotenv_files_can_be_disabled(monkeypatch) -> None:
+    calls = []
+
+    def fake_load_dotenv(path, *, override=False):
+        calls.append((path, override))
+
+    monkeypatch.setattr(smoke, "load_dotenv", fake_load_dotenv)
+    monkeypatch.delenv("ATLAS_DISABLE_DOTENV", raising=False)
+
+    smoke._load_dotenv_files()
+
+    assert calls == [
+        (ROOT / ".env", False),
+        (ROOT / ".env.local", True),
+    ]
+
+    calls.clear()
+    monkeypatch.setenv("ATLAS_DISABLE_DOTENV", "1")
+
+    smoke._load_dotenv_files()
+
+    assert calls == []
+
+
 def test_default_database_url_falls_back_to_atlas_db_settings(monkeypatch) -> None:
     monkeypatch.delenv("EXTRACTED_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -246,6 +270,7 @@ def test_script_preflight_uses_atlas_db_settings_fallback(tmp_path) -> None:
             "ATLAS_DB_DATABASE": "atlas_settings",
             "ATLAS_DB_USER": "atlas_settings_user",
             "ATLAS_DB_PASSWORD": "atlas_settings_password",
+            "ATLAS_DISABLE_DOTENV": "1",
         }
     )
 
