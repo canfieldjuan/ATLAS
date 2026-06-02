@@ -36,6 +36,7 @@ pytest \
   tests/test_smoke_content_ops_deflection_portfolio_result_page.py \
   tests/test_smoke_content_ops_deflection_stripe_paid_unlock.py \
   tests/test_atlas_content_ops_deflection_delivery.py \
+  tests/test_send_content_ops_deflection_report_deliveries.py \
   tests/test_extracted_ticket_faq_markdown.py \
   tests/test_extracted_ticket_faq_macro_writeback.py \
   tests/test_extracted_ticket_faq_macro_writeback_postgres.py \
