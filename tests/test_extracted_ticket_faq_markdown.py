@@ -203,8 +203,7 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     assert item["answer_evidence_status"] == "resolution_evidence"
     assert item["resolution_source_count"] == 1
     assert item["steps"][0] == (
-        "Use the uploaded resolution evidence: Open Analytics, choose the "
-        "attribution dashboard, and select Export CSV"
+        "Open Analytics, choose the attribution dashboard, and select Export CSV"
     )
     assert item["steps"][1] == (
         "Confirm the answer matches the customer's account, plan, policy, or "
@@ -267,7 +266,7 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_beyond_display_rows(
     assert item["answer_evidence_status"] == "resolution_evidence"
     assert item["resolution_source_count"] == 1
     assert item["steps"][0] == (
-        "Use the uploaded resolution evidence: Enable Report Downloads for the analyst role"
+        "Enable Report Downloads for the analyst role"
     )
 
 
@@ -300,7 +299,8 @@ def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() 
     item = result.items[0]
     assert item["answer_evidence_status"] == "resolution_evidence"
     assert item["resolution_source_count"] == 2
-    assert len([step for step in item["steps"] if step.startswith("Use the uploaded")]) == 1
+    assert item["steps"][0] == "Send the reset email from Account Settings"
+    assert all(not step.startswith("Use the uploaded") for step in item["steps"])
 
 
 def test_build_ticket_faq_markdown_keeps_distinct_questions_from_sharing_resolutions() -> None:

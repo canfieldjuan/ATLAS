@@ -190,9 +190,8 @@ def test_macro_writeback_preview_uses_real_faq_generator_resolution_steps() -> N
     macro = preview.macros[0]
     assert "Customers mention:" in generated.items[0]["answer"]
     assert "Customers mention:" not in macro.body
-    assert macro.body.startswith(
-        "1. Use the uploaded resolution evidence: Open Billing, review the invoice history"
-    )
+    assert macro.body.startswith("1. Open Billing, review the invoice history")
+    assert "Use the uploaded resolution evidence" not in macro.body
     assert "pending authorizations with settled charges" in macro.body
 
 

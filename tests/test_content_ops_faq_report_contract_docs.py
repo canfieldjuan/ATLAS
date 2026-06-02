@@ -107,6 +107,7 @@ def _producer_deflection_report_payload() -> dict[str, object]:
 def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
     payload = json.loads(EXAMPLE_PATH.read_text(encoding="utf-8"))
     producer_payload_keys, producer_item_keys = _producer_report_shape()
+    encoded = json.dumps(payload, sort_keys=True)
 
     assert set(payload) == producer_payload_keys
     assert payload["generated"] == len(payload["items"])
@@ -142,11 +143,13 @@ def test_content_ops_faq_report_example_matches_documented_core_shape() -> None:
         }
         assert item["steps"]
         assert item["source_ids"]
+    assert "Use the uploaded resolution evidence" not in encoded
 
 
 def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     payload = json.loads(DEFLECTION_EXAMPLE_PATH.read_text(encoding="utf-8"))
     producer_payload = _producer_deflection_report_payload()
+    encoded = json.dumps(payload, sort_keys=True)
 
     assert set(payload) == set(producer_payload)
     assert set(payload["summary"]) == set(producer_payload["summary"])
@@ -162,6 +165,7 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert all(payload["faq_result"]["output_checks"].values())
     assert "## Drafted Answers With Proven Solutions" in payload["markdown"]
     assert "## No Proven Answer Yet" in payload["markdown"]
+    assert "Use the uploaded resolution evidence" not in encoded
 
 
 def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() -> None:

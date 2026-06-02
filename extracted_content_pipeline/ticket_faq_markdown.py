@@ -1445,10 +1445,7 @@ def _resolution_article_steps(
             if (excerpt := _resolution_excerpt(text))
         )
     )
-    steps = tuple(
-        f"Use the uploaded resolution evidence: {excerpt}"
-        for excerpt in excerpts[:2]
-    )
+    steps = tuple(excerpts[:2])
     if len(steps) >= 2:
         return (*steps, _support_step(support_contact))
     if len(steps) == 1:
