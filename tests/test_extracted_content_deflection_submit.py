@@ -170,6 +170,7 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     }
     assert "markdown" not in str(gated_result)
     assert "ticket-export-1" not in str(gated_result)
+    assert "lead@acme.example" not in str(payload)
     assert payload["input_provider"]["metadata"] == {
         "blob_bytes": len(csv_data),
         "included_row_count": 2,
@@ -191,7 +192,9 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     }]
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
-    assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+    snapshot_payload = await snapshot.endpoint(request_id=payload["request_id"])
+    assert snapshot_payload == gated_result["snapshot"]
+    assert "lead@acme.example" not in str(snapshot_payload)
     assert "lead@acme.example" not in str(gated_result["snapshot"])
 
     record = await store.get_artifact_record(
@@ -205,6 +208,16 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     with pytest.raises(api_module.HTTPException) as locked:
         await artifact.endpoint(request_id=payload["request_id"])
     assert locked.value.status_code == 403
+
+    paid = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
+    assert await paid.endpoint(
+        payload=api_module.DeflectionReportPaidModel(
+            payment_reference="checkout-session:test"
+        ),
+        request_id=payload["request_id"],
+    ) == {"request_id": payload["request_id"], "paid": True}
+    artifact_payload = await artifact.endpoint(request_id=payload["request_id"])
+    assert "lead@acme.example" not in str(artifact_payload)
 
 
 @pytest.mark.asyncio
