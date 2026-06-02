@@ -3,6 +3,7 @@
 from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+import json
 from typing import Any
 from uuid import UUID
 
@@ -80,6 +81,18 @@ _SOURCE_IMPORT_TARGET_ID_KEYS = (
     "source_target_ids",
     "import_target_ids",
 )
+_B2B_DISPLACEMENT_VENDOR_KEYS = (
+    "b2b_displacement_vendors",
+    "b2b_displacement_vendor_names",
+    "competitive_vendor_names",
+    "source_b2b_displacement_vendors",
+)
+_B2B_DISPLACEMENT_LIMIT_KEYS = (
+    "b2b_displacement_limit",
+    "competitive_displacement_limit",
+)
+_B2B_DISPLACEMENT_DEFAULT_LIMIT = 10
+_B2B_DISPLACEMENT_MAX_LIMIT = 25
 _SOURCE_TYPE_KEYS = ("source_type", "source_material_type")
 _SUPPORT_TICKET_SOURCE_TYPE_ALIASES = frozenset({
     "support",
@@ -186,6 +199,7 @@ class _AtlasSupportTicketInputProvider:
         source_type = _request_source_type(request)
         source_faq_ids = _request_source_faq_ids(request)
         source_target_ids = _request_source_target_ids(request)
+        b2b_displacement_vendors = _request_b2b_displacement_vendors(request)
         if source_type in _REVIEW_SOURCE_TYPE_ALIASES:
             if source_faq_ids:
                 return _noop_package(
@@ -218,9 +232,10 @@ class _AtlasSupportTicketInputProvider:
                         "message": "Saved FAQ source selection is only supported for support-ticket runs.",
                     },),
                 )
-            if source_target_ids:
+            if source_target_ids or b2b_displacement_vendors:
                 return self._build_competitive_from_selected_sources(
                     source_target_ids,
+                    b2b_displacement_vendors=b2b_displacement_vendors,
                     source_material=source_material,
                     scope=scope,
                     request=request,
@@ -386,6 +401,7 @@ class _AtlasSupportTicketInputProvider:
         self,
         source_target_ids: Sequence[str],
         *,
+        b2b_displacement_vendors: Sequence[str] = (),
         source_material: Any,
         scope: TenantScope,
         request: RequestPayload | None,
@@ -400,9 +416,18 @@ class _AtlasSupportTicketInputProvider:
             scope=scope,
             request=request,
         )
+        (
+            loaded_b2b_displacement,
+            missing_b2b_displacement,
+            b2b_displacement_skip_reason,
+        ) = await self._load_b2b_displacement_dynamics(
+            b2b_displacement_vendors,
+            scope=scope,
+            limit=_request_b2b_displacement_limit(request),
+        )
         combined_source_material = _combine_source_material(
             source_material,
-            loaded_targets,
+            [*loaded_targets, *loaded_b2b_displacement],
         )
         requested_source_type = _request_source_type(request) or "competitive"
         metadata = {
@@ -411,11 +436,20 @@ class _AtlasSupportTicketInputProvider:
             "source_target_loaded_count": len(loaded_targets),
             "source_target_missing_id_count": len(missing_targets),
             "source_target_ambiguous_id_count": len(ambiguous_targets),
+            "b2b_displacement_vendor_count": len(b2b_displacement_vendors),
+            "b2b_displacement_loaded_count": len(loaded_b2b_displacement),
+            "b2b_displacement_missing_vendor_count": len(missing_b2b_displacement),
         }
-        warnings = _selected_source_target_warnings(
-            missing=missing_targets,
-            ambiguous=ambiguous_targets,
-            skip_reason=target_skip_reason,
+        warnings = (
+            *_selected_source_target_warnings(
+                missing=missing_targets,
+                ambiguous=ambiguous_targets,
+                skip_reason=target_skip_reason,
+            ),
+            *_selected_b2b_displacement_warnings(
+                missing=missing_b2b_displacement,
+                skip_reason=b2b_displacement_skip_reason,
+            ),
         )
         return _build_competitive_input_package(
             combined_source_material,
@@ -482,6 +516,69 @@ class _AtlasSupportTicketInputProvider:
                 missing.append(target_id)
         return loaded, missing, ambiguous, None
 
+    async def _load_b2b_displacement_dynamics(
+        self,
+        vendors: Sequence[str],
+        *,
+        scope: TenantScope,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], list[str], str | None]:
+        vendor_names = tuple(_string_values(vendors))
+        if not vendor_names:
+            return [], [], None
+        account_id = _clean(getattr(scope, "account_id", None))
+        if not account_id:
+            return [], list(vendor_names), "missing_account_scope"
+        if self.pool_provider is None:
+            return [], list(vendor_names), "repository_unconfigured"
+        pool = self.pool_provider()
+        if hasattr(pool, "__await__"):
+            pool = await pool
+        normalized_vendors = [_lookup_text(vendor) for vendor in vendor_names]
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT DISTINCT ON (d.from_vendor, d.to_vendor)
+                       d.from_vendor,
+                       d.to_vendor,
+                       d.as_of_date,
+                       d.analysis_window_days,
+                       d.schema_version,
+                       d.dynamics,
+                       d.created_at
+                FROM b2b_displacement_dynamics d
+                WHERE lower(BTRIM(d.from_vendor)) = ANY($2::text[])
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tracked_vendors tv
+                      WHERE tv.account_id = $1
+                        AND lower(BTRIM(tv.vendor_name)) = lower(BTRIM(d.from_vendor))
+                  )
+                ORDER BY d.from_vendor, d.to_vendor, d.as_of_date DESC, d.created_at DESC
+                LIMIT $3
+                """,
+                account_id,
+                normalized_vendors,
+                max(1, min(limit, _B2B_DISPLACEMENT_MAX_LIMIT)),
+            )
+        except Exception:
+            return [], list(vendor_names), "query_failed"
+
+        source_rows: list[dict[str, Any]] = []
+        loaded_vendors: set[str] = set()
+        for raw in rows:
+            row = _b2b_displacement_dynamics_source_row(dict(raw))
+            if not row:
+                continue
+            source_rows.append(row)
+            loaded_vendors.add(_lookup_text(row.get("from_vendor")))
+        missing = [
+            vendor
+            for vendor in vendor_names
+            if _lookup_text(vendor) not in loaded_vendors
+        ]
+        return source_rows, missing, None
+
 
 def build_content_ops_input_provider(
     *,
@@ -546,6 +643,37 @@ def _request_source_target_ids(request: RequestPayload | None) -> tuple[str, ...
         if values:
             return tuple(values)
     return ()
+
+
+def _request_b2b_displacement_vendors(request: RequestPayload | None) -> tuple[str, ...]:
+    if not isinstance(request, Mapping):
+        return ()
+    inputs = request.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return ()
+    for key in _B2B_DISPLACEMENT_VENDOR_KEYS:
+        values = _string_values(inputs.get(key))
+        if values:
+            return tuple(values)
+    return ()
+
+
+def _request_b2b_displacement_limit(request: RequestPayload | None) -> int:
+    if not isinstance(request, Mapping):
+        return _B2B_DISPLACEMENT_DEFAULT_LIMIT
+    inputs = request.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return _B2B_DISPLACEMENT_DEFAULT_LIMIT
+    for key in _B2B_DISPLACEMENT_LIMIT_KEYS:
+        raw = inputs.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return _B2B_DISPLACEMENT_DEFAULT_LIMIT
+        return max(1, min(value, _B2B_DISPLACEMENT_MAX_LIMIT))
+    return _B2B_DISPLACEMENT_DEFAULT_LIMIT
 
 
 def _request_target_mode(request: RequestPayload | None) -> str:
@@ -666,6 +794,23 @@ def _key(value: Any) -> str:
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _lookup_text(value: Any) -> str:
+    return _clean(value).lower()
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        if isinstance(parsed, Mapping):
+            return dict(parsed)
+    return {}
 
 
 def _build_review_input_package(
@@ -980,6 +1125,143 @@ def _append_competitive_names(values: list[str], raw: Any) -> None:
             values.append(value)
 
 
+def _b2b_displacement_dynamics_source_row(
+    row: Mapping[str, Any],
+) -> dict[str, Any]:
+    from_vendor = _clean(row.get("from_vendor"))
+    to_vendor = _clean(row.get("to_vendor"))
+    if not from_vendor or not to_vendor:
+        return {}
+    dynamics = _json_mapping(row.get("dynamics"))
+    edge_metrics = _json_mapping(dynamics.get("edge_metrics"))
+    mention_count = _safe_positive_int(
+        edge_metrics.get("mention_count")
+        or dynamics.get("mention_count")
+        or dynamics.get("displacement_mention_count")
+    )
+    primary_driver = _clean(
+        edge_metrics.get("primary_driver")
+        or dynamics.get("primary_driver")
+        or dynamics.get("driver")
+        or dynamics.get("displacement_driver")
+    )
+    as_of_date = _clean(row.get("as_of_date"))
+    source_id = _b2b_displacement_source_id(from_vendor, to_vendor, as_of_date)
+    text = _b2b_displacement_summary_text(
+        dynamics,
+        from_vendor=from_vendor,
+        to_vendor=to_vendor,
+        mention_count=mention_count,
+        primary_driver=primary_driver,
+    )
+    out: dict[str, Any] = {
+        "source_type": "competitive_displacement",
+        "source_id": source_id,
+        "target_id": source_id,
+        "from_vendor": from_vendor,
+        "to_vendor": to_vendor,
+        "vendor_name": from_vendor,
+        "competitor": to_vendor,
+        "competitive_alternatives": [to_vendor],
+        "displacement_direction": "from_vendor_to_to_vendor",
+        "text": text,
+        "content": text,
+    }
+    if mention_count is not None:
+        out["displacement_mention_count"] = mention_count
+    if primary_driver:
+        out["primary_driver"] = primary_driver
+    if as_of_date:
+        out["source_date"] = as_of_date
+    if _clean(row.get("analysis_window_days")):
+        out["analysis_window_days"] = row.get("analysis_window_days")
+    if _clean(row.get("schema_version")):
+        out["schema_version"] = row.get("schema_version")
+    return out
+
+
+def _b2b_displacement_source_id(
+    from_vendor: str,
+    to_vendor: str,
+    as_of_date: str,
+) -> str:
+    date_part = as_of_date or "latest"
+    return f"b2b_displacement:{from_vendor}->{to_vendor}:{date_part}"
+
+
+def _b2b_displacement_summary_text(
+    dynamics: Mapping[str, Any],
+    *,
+    from_vendor: str,
+    to_vendor: str,
+    mention_count: int | None,
+    primary_driver: str,
+) -> str:
+    parts: list[str] = []
+    for value in (
+        dynamics.get("battle_summary"),
+        dynamics.get("migration_proof"),
+        dynamics.get("competitive_reframes"),
+        dynamics.get("market_context"),
+    ):
+        _append_dynamics_text(parts, value)
+    if primary_driver:
+        _append_unique_text(parts, f"Primary driver: {primary_driver}.")
+    if mention_count is not None:
+        _append_unique_text(parts, f"Mentions observed: {mention_count}.")
+    if not parts:
+        parts.append(
+            f"Canonical B2B displacement dynamics track {from_vendor} to {to_vendor}."
+        )
+    return " ".join(parts[:4])
+
+
+def _append_dynamics_text(parts: list[str], value: Any) -> None:
+    if value in (None, "", [], {}):
+        return
+    if isinstance(value, str):
+        _append_unique_text(parts, value)
+        return
+    if isinstance(value, Mapping):
+        for key in (
+            "conclusion",
+            "summary",
+            "evidence_summary",
+            "why_this_matters",
+            "migration_pattern",
+            "primary_driver",
+            "quote",
+            "text",
+        ):
+            _append_dynamics_text(parts, value.get(key))
+            if len(parts) >= 4:
+                return
+        for key in ("proof_points", "evidence", "signals"):
+            _append_dynamics_text(parts, value.get(key))
+            if len(parts) >= 4:
+                return
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        for item in value:
+            _append_dynamics_text(parts, item)
+            if len(parts) >= 4:
+                return
+
+
+def _append_unique_text(parts: list[str], raw: Any) -> None:
+    value = _clean(raw)
+    if value and value not in parts:
+        parts.append(value)
+
+
+def _safe_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _selected_faq_warnings(
     *,
     invalid: Sequence[str],
@@ -1042,6 +1324,48 @@ def _selected_source_target_warnings(
             "code": "source_import_targets_ambiguous",
             "message": "One or more persisted import target IDs matched multiple rows.",
             "ambiguous_count": len(ambiguous),
+        })
+    return tuple(warnings)
+
+
+def _selected_b2b_displacement_warnings(
+    *,
+    missing: Sequence[str],
+    skip_reason: str | None,
+) -> tuple[dict[str, Any], ...]:
+    warnings: list[dict[str, Any]] = []
+    if skip_reason == "missing_account_scope":
+        warnings.append({
+            "code": "b2b_displacement_missing_account_scope",
+            "message": (
+                "B2B displacement source selection requires an account-scoped "
+                "Content Ops request."
+            ),
+            "missing_count": len(missing),
+        })
+        return tuple(warnings)
+    if skip_reason == "repository_unconfigured":
+        warnings.append({
+            "code": "b2b_displacement_repository_unconfigured",
+            "message": "B2B displacement source selection is not configured for this route.",
+            "missing_count": len(missing),
+        })
+        return tuple(warnings)
+    if skip_reason == "query_failed":
+        warnings.append({
+            "code": "b2b_displacement_query_failed",
+            "message": "B2B displacement source selection failed closed.",
+            "missing_count": len(missing),
+        })
+        return tuple(warnings)
+    if missing:
+        warnings.append({
+            "code": "b2b_displacement_vendors_not_found",
+            "message": (
+                "One or more selected B2B displacement vendors had no scoped "
+                "canonical displacement dynamics."
+            ),
+            "missing_count": len(missing),
         })
     return tuple(warnings)
 
