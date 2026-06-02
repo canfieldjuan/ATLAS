@@ -156,6 +156,46 @@ def build_deflection_snapshot(
     )
 
 
+def deflection_snapshot_content_opportunities(
+    snapshot: Mapping[str, Any],
+    *,
+    limit: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
+) -> tuple[dict[str, Any], ...]:
+    """Return structured, unpaid-safe opportunities from a free snapshot."""
+
+    top_questions = snapshot.get("top_questions")
+    if not isinstance(top_questions, Sequence) or isinstance(
+        top_questions,
+        (str, bytes, bytearray),
+    ):
+        return ()
+
+    out: list[dict[str, Any]] = []
+    for index, raw in enumerate(top_questions, start=1):
+        if len(out) >= _positive_limit(limit):
+            break
+        if not isinstance(raw, Mapping):
+            continue
+        question = _text(raw.get("question"))
+        if not question:
+            continue
+        frequency = _int(raw.get("weighted_frequency") or raw.get("frequency"))
+        rank = _int(raw.get("rank")) or index
+        out.append(
+            {
+                "rank": rank,
+                "question": question,
+                "weighted_frequency": frequency,
+                "customer_wording": _text(raw.get("customer_wording")),
+                "opportunity_score": _int(raw.get("opportunity_score")) or frequency,
+                "coverage_status": _text(raw.get("coverage_status")) or "locked_snapshot",
+                "recommended_content_action": "Create or improve an FAQ entry for this repeated customer question.",
+                "unlock_hint": "Unlock the full report for detailed source-backed guidance.",
+            }
+        )
+    return tuple(out)
+
+
 def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, Any]:
     """Return compact counts used by the report and CLI summary JSON."""
 
@@ -423,6 +463,14 @@ def _int(value: Any) -> int:
         return 0
 
 
+def _positive_limit(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N
+    return max(1, min(parsed, 25))
+
+
 def _cell(value: Any) -> str:
     text = _md(value).replace("\n", " ")
     return text.replace("|", "\\|")
@@ -440,5 +488,6 @@ __all__ = [
     "build_deflection_snapshot",
     "build_deflection_report_artifact",
     "deflection_report_summary",
+    "deflection_snapshot_content_opportunities",
     "render_deflection_report",
 ]

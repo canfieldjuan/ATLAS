@@ -10,7 +10,10 @@ from typing import Any, Optional
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .config_defaults import DEFAULT_INVOICING_READONLY_PORT
+from .config_defaults import (
+    DEFAULT_CONTENT_OPS_DEFLECTION_READONLY_PORT,
+    DEFAULT_INVOICING_READONLY_PORT,
+)
 
 ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
@@ -5153,6 +5156,31 @@ class MCPConfig(BaseSettings):
             "Port for authenticated read-only Invoicing MCP server for "
             "ChatGPT connector review; paired with ATLAS_MCP_INVOICING_READONLY_ENABLED"
         ),
+    )
+    content_ops_deflection_readonly_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable read-only Content Ops deflection MCP server. Defaults off "
+            "until an account binding is configured."
+        ),
+    )
+    content_ops_deflection_readonly_port: int = Field(
+        default=DEFAULT_CONTENT_OPS_DEFLECTION_READONLY_PORT,
+        description=(
+            "Port for authenticated read-only Content Ops deflection MCP server "
+            "for direct boundary tests before OAuth rollout."
+        ),
+    )
+    content_ops_deflection_readonly_account_id: str = Field(
+        default="",
+        description=(
+            "Direct/test account binding for read-only Content Ops deflection MCP. "
+            "OAuth mode must replace this with token-bound account resolution."
+        ),
+    )
+    content_ops_deflection_readonly_report_base_url: str = Field(
+        default="https://atlas.local/content-ops/deflection-reports",
+        description="Base URL for read-only Content Ops deflection MCP result links.",
     )
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
