@@ -47,6 +47,10 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .campaign_source_adapters import (
+    source_material_to_source_rows,
+    source_rows_to_campaign_opportunities,
+)
 from .sales_brief_ports import (
     SalesBriefDraft,
     SalesBriefRepository,
@@ -107,6 +111,22 @@ class SalesBriefGenerationResult:
                 dict(item) for item in self.consumed_reasoning_contexts
             ]
         return data
+
+
+def _opportunities_from_source_material(
+    source_material: Any,
+    *,
+    target_mode: str,
+    limit: int,
+) -> list[dict[str, Any]] | None:
+    rows = source_material_to_source_rows(source_material)
+    if not rows:
+        return None
+    loaded = source_rows_to_campaign_opportunities(rows, target_mode=target_mode)
+    return [
+        normalize_campaign_opportunity(row, target_mode=target_mode)
+        for row in loaded.opportunities[: max(0, int(limit))]
+    ]
 
 
 def parse_sales_brief_response(text: str) -> dict[str, Any] | None:
@@ -233,6 +253,7 @@ class SalesBriefGenerationService:
         parse_retry_attempts: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
+        source_material: Any = None,
     ) -> SalesBriefGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -265,15 +286,23 @@ class SalesBriefGenerationService:
         )
 
         requested = int(limit or self._config.limit)
-        opportunities = [
-            normalize_campaign_opportunity(row, target_mode=target_mode)
-            for row in await self._intelligence.read_campaign_opportunities(
-                scope=scope,
-                target_mode=target_mode,
-                limit=requested,
-                filters=filters,
-            )
-        ]
+        source_opportunities = _opportunities_from_source_material(
+            source_material,
+            target_mode=target_mode,
+            limit=requested,
+        )
+        if source_opportunities is None:
+            opportunities = [
+                normalize_campaign_opportunity(row, target_mode=target_mode)
+                for row in await self._intelligence.read_campaign_opportunities(
+                    scope=scope,
+                    target_mode=target_mode,
+                    limit=requested,
+                    filters=filters,
+                )
+            ]
+        else:
+            opportunities = source_opportunities
 
         drafts: list[SalesBriefDraft] = []
         errors: list[dict[str, Any]] = []

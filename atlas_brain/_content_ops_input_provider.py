@@ -166,7 +166,7 @@ _REVIEW_TOPIC = "Customer review themes worth turning into content"
 _REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
 _REVIEW_OFFER = "Turn customer review themes into buyer-facing landing pages and blog posts"
 _REVIEW_TARGET_KEYWORD = "customer review content marketing"
-_COMPETITIVE_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post")
+_COMPETITIVE_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
 _COMPETITIVE_CAMPAIGN_NAME = "Competitive Displacement Campaign"
 _COMPETITIVE_TOPIC = "Competitive displacement themes worth turning into content"
 _COMPETITIVE_AUDIENCE = (
@@ -998,6 +998,7 @@ def _build_competitive_input_package(
         "offer": _COMPETITIVE_OFFER,
         "audience": _COMPETITIVE_AUDIENCE,
         "target_keyword": _COMPETITIVE_TARGET_KEYWORD,
+        "brief_type": "displacement",
         "search_intent": (
             "Marketing teams looking for competitor and switching evidence "
             "they can turn into grounded buyer-facing content."

@@ -207,10 +207,11 @@ def test_competitive_source_material_builds_landing_and_blog_inputs() -> None:
     preview = preview_control_surface(request)
 
     assert package.provider == "atlas_competitive_request"
-    assert request.outputs == ("landing_page", "blog_post")
+    assert request.outputs == ("landing_page", "blog_post", "sales_brief")
     assert request.ingestion_profile == "existing_evidence"
     assert request.inputs["source_type"] == "competitive"
     assert request.inputs["competitive_source_material"][0]["target_id"] == "competitive-1"
+    assert request.inputs["brief_type"] == "displacement"
     assert request.inputs["target_account"] == "Slack"
     assert request.inputs["competitive_alternatives"] == ["Teams"]
     assert package.metadata["included_row_count"] == 1
@@ -231,7 +232,7 @@ def test_competitive_source_material_accepts_competitive_bundle_alias() -> None:
     )
 
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post")
+    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
     assert package.inputs["source_material"][0]["source_type"] == "competitive"
     assert package.inputs["source_material"][0]["target_id"] == "competitive-1"
     assert package.metadata["source_row_count"] == 1
@@ -490,7 +491,7 @@ async def test_competitive_mode_fetches_persisted_targets_by_tenant_scope() -> N
     ]
     assert {call["account_id"] for call in pool["opportunity_calls"]} == {"acct-1"}
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post")
+    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
     assert package.metadata["source_target_loaded_count"] == 2
     assert package.metadata["included_row_count"] == 2
     assert package.inputs["competitive_alternatives"] == ["Teams", "Confluence"]
@@ -512,7 +513,7 @@ async def test_competitive_mode_fetches_b2b_displacement_dynamics_by_tracked_ven
     )
 
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post")
+    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
     assert package.metadata["b2b_displacement_vendor_count"] == 2
     assert package.metadata["b2b_displacement_loaded_count"] == 1
     assert package.metadata["b2b_displacement_missing_vendor_count"] == 1
@@ -656,6 +657,7 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
         services=ContentOpsExecutionServices(
             blog_post=_RunnableService(),
             landing_page=_RunnableService(),
+            sales_brief=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -668,6 +670,11 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
     blog_context = blog_step.result["kwargs"]["data_context"]
     assert blog_context["source"] == "competitive_input_provider"
     assert blog_context["competitive_source_material"][0]["target_id"] == "competitive-1"
+
+    sales_brief_step = next(step for step in result.steps if step.output == "sales_brief")
+    sales_brief_kwargs = sales_brief_step.result["kwargs"]
+    assert sales_brief_kwargs["default_brief_type"] == "displacement"
+    assert sales_brief_kwargs["source_material"][0]["target_id"] == "competitive-1"
 
 
 @pytest.mark.skipif(
