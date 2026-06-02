@@ -11,8 +11,10 @@ from .ticket_faq_markdown import TicketFAQMarkdownResult, TicketFAQMarkdownServi
 
 
 _RESOLUTION_EVIDENCE_STATUS = "resolution_evidence"
+_RESOLUTION_EVIDENCE_SCOPE_SCOPED = "scoped"
 _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
+DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 
 
@@ -22,11 +24,24 @@ class DeflectionSnapshot:
 
     summary: dict[str, int]
     top_questions: tuple[dict[str, Any], ...]
+    teaser: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "summary": dict(self.summary),
             "top_questions": [dict(question) for question in self.top_questions],
+            "teaser": {
+                "full_answer": (
+                    dict(self.teaser["full_answer"])
+                    if isinstance(self.teaser.get("full_answer"), Mapping)
+                    else None
+                ),
+                "previews": [
+                    dict(preview)
+                    for preview in self.teaser.get("previews", ())
+                    if isinstance(preview, Mapping)
+                ],
+            },
         }
 
 
@@ -124,6 +139,7 @@ def build_deflection_snapshot(
     artifact: DeflectionReportArtifact | Mapping[str, Any],
     *,
     top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
+    teaser_preview_count: int = DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT,
 ) -> DeflectionSnapshot:
     """Project a report into the free snapshot shape.
 
@@ -133,6 +149,8 @@ def build_deflection_snapshot(
 
     if top_n <= 0:
         raise ValueError("top_n must be positive")
+    if teaser_preview_count < 0:
+        raise ValueError("teaser_preview_count must be non-negative")
     summary = _artifact_summary(artifact)
     items = _artifact_items(artifact)
     snapshot_summary = {
@@ -154,6 +172,7 @@ def build_deflection_snapshot(
     return DeflectionSnapshot(
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
+        teaser=_snapshot_teaser(items, preview_count=teaser_preview_count),
     )
 
 
@@ -436,6 +455,78 @@ def _snapshot_customer_wording(item: Mapping[str, Any], question: str) -> str:
     return ""
 
 
+def _snapshot_teaser(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    preview_count: int,
+) -> dict[str, Any]:
+    eligible = tuple(
+        (rank, item)
+        for rank, item in enumerate(items, start=1)
+        if _is_teaser_eligible(item)
+    )
+    if not eligible:
+        return {"full_answer": None, "previews": []}
+    full_rank, full_item = _select_full_teaser_item(eligible)
+    previews = [
+        _teaser_preview(rank, item)
+        for rank, item in eligible
+        if rank != full_rank
+    ][:preview_count]
+    return {
+        "full_answer": _teaser_full_answer(full_rank, full_item),
+        "previews": previews,
+    }
+
+
+def _is_teaser_eligible(item: Mapping[str, Any]) -> bool:
+    return (
+        _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS
+        and _text(item.get("resolution_evidence_scope")) == _RESOLUTION_EVIDENCE_SCOPE_SCOPED
+        and bool(_text(item.get("answer")))
+    )
+
+
+def _select_full_teaser_item(
+    eligible: Sequence[tuple[int, Mapping[str, Any]]],
+) -> tuple[int, Mapping[str, Any]]:
+    for rank, item in eligible:
+        if rank >= 4:
+            return rank, item
+    return eligible[-1]
+
+
+def _teaser_full_answer(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "rank": rank,
+        "question": _text(item.get("question")),
+        "answer": _text(item.get("answer")),
+        "steps": _texts(item.get("steps")),
+        "answer_evidence_status": _RESOLUTION_EVIDENCE_STATUS,
+        "resolution_evidence_scope": _RESOLUTION_EVIDENCE_SCOPE_SCOPED,
+        "weighted_frequency": _int(item.get("weighted_frequency") or item.get("frequency")),
+        "source_count": _source_count(item),
+    }
+
+
+def _teaser_preview(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "rank": rank,
+        "question": _text(item.get("question")),
+        "answer_evidence_status": _RESOLUTION_EVIDENCE_STATUS,
+        "resolution_evidence_scope": _RESOLUTION_EVIDENCE_SCOPE_SCOPED,
+        "weighted_frequency": _int(item.get("weighted_frequency") or item.get("frequency")),
+        "step_count": len(_texts(item.get("steps"))),
+        "source_count": _source_count(item),
+        "body_withheld": True,
+    }
+
+
+def _source_count(item: Mapping[str, Any]) -> int:
+    source_count = len(_texts(item.get("source_ids")))
+    return source_count or _int(item.get("ticket_count"))
+
+
 def _texts(value: Any) -> list[str]:
     if value in (None, "", [], {}):
         return []
@@ -483,6 +574,7 @@ def _md(value: Any) -> str:
 
 __all__ = [
     "DEFAULT_DEFLECTION_SNAPSHOT_TOP_N",
+    "DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT",
     "DeflectionSnapshot",
     "DeflectionReportArtifact",
     "FAQDeflectionReportService",

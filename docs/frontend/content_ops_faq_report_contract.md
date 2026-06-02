@@ -86,6 +86,7 @@ type DeflectionSnapshot = {
     no_proven_answer_count: number;
   };
   top_questions: DeflectionSnapshotQuestion[];
+  teaser: DeflectionSnapshotTeaser;
 };
 
 type DeflectionSnapshotQuestion = {
@@ -94,16 +95,46 @@ type DeflectionSnapshotQuestion = {
   weighted_frequency: number;
   customer_wording: string;
 };
+
+type DeflectionSnapshotTeaser = {
+  full_answer: DeflectionSnapshotFullAnswer | null;
+  previews: DeflectionSnapshotAnswerPreview[];
+};
+
+type DeflectionSnapshotFullAnswer = {
+  rank: number;
+  question: string;
+  answer: string;
+  steps: string[];
+  answer_evidence_status: "resolution_evidence";
+  resolution_evidence_scope: "scoped";
+  weighted_frequency: number;
+  source_count: number;
+};
+
+type DeflectionSnapshotAnswerPreview = {
+  rank: number;
+  question: string;
+  answer_evidence_status: "resolution_evidence";
+  resolution_evidence_scope: "scoped";
+  weighted_frequency: number;
+  step_count: number;
+  source_count: number;
+  body_withheld: true;
+};
 ```
 
 This shape intentionally excludes paid deliverable fields:
 
 - no `markdown`
 - no `faq_result`
-- no answer text or `steps`
+- no answer text or `steps` outside `teaser.full_answer`
 - no `evidence_quotes`
 - no `source_ids`
 - no vocabulary term mappings
+
+The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
+eligible. Preview entries never include answer body text.
 
 ## FAQ Item
 

@@ -69,6 +69,7 @@ from ..control_surfaces import (
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..faq_deflection_report import (
     DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
+    DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT,
     build_deflection_snapshot,
 )
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
@@ -339,6 +340,9 @@ class ContentOpsControlSurfaceApiConfig:
     execute_max_concurrency: int = 8
     faq_execute_max_source_material_rows: int = _MAX_INGESTION_ROWS
     deflection_snapshot_top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N
+    deflection_snapshot_teaser_preview_count: int = (
+        DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT
+    )
     ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
@@ -388,6 +392,10 @@ class ContentOpsControlSurfaceApiConfig:
             )
         if self.deflection_snapshot_top_n <= 0:
             raise ValueError("deflection_snapshot_top_n must be positive")
+        if self.deflection_snapshot_teaser_preview_count < 0:
+            raise ValueError(
+                "deflection_snapshot_teaser_preview_count must be non-negative"
+            )
         if self.ingestion_import_max_concurrency <= 0:
             raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
@@ -1111,6 +1119,9 @@ def create_content_ops_control_surface_router(
                 scope=scope,
                 request_id=request_id,
                 top_n=resolved_config.deflection_snapshot_top_n,
+                teaser_preview_count=(
+                    resolved_config.deflection_snapshot_teaser_preview_count
+                ),
                 delivery_email=_delivery_email_from_payload(payload_mapping),
             )
             result = _with_input_provider_diagnostics(result, payload_mapping)
@@ -2437,6 +2448,7 @@ async def _gate_deflection_report_artifacts(
     scope: TenantScope | None,
     request_id: str,
     top_n: int,
+    teaser_preview_count: int,
     delivery_email: str | None = None,
 ) -> dict[str, Any]:
     gated = dict(result)
@@ -2458,7 +2470,11 @@ async def _gate_deflection_report_artifacts(
                 detail="Deflection report artifact is malformed.",
             )
         try:
-            snapshot = build_deflection_snapshot(artifact, top_n=top_n).as_dict()
+            snapshot = build_deflection_snapshot(
+                artifact,
+                top_n=top_n,
+                teaser_preview_count=teaser_preview_count,
+            ).as_dict()
             await store.save_report(
                 account_id=account_id,
                 request_id=request_id,

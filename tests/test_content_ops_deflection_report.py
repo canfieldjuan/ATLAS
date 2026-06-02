@@ -206,10 +206,104 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
                 "customer_wording": "How do I export attribution reports?",
             }
         ],
+        "teaser": {"full_answer": None, "previews": []},
     }
     assert "Open Analytics" not in encoded
     assert "ticket-export-1" not in encoded
     assert "evidence" not in encoded
+
+
+def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=6,
+        ticket_source_count=6,
+        output_checks={"condensed": True},
+        items=(
+            _scoped_answer_item(1, "How do I export reports?", "Locked top answer one"),
+            _scoped_answer_item(2, "How do I update billing?", "Locked top answer two"),
+            _scoped_answer_item(3, "How do I enable SSO?", "Locked top answer three"),
+            _scoped_answer_item(
+                4,
+                "How do we rotate API tokens?",
+                "Create the replacement token, deploy it, then revoke the old token.",
+                step="Create the replacement token before revoking the old one.",
+            ),
+            {
+                **_scoped_answer_item(
+                    5,
+                    "Why is the dashboard stale?",
+                    "Mismatched answer must stay locked.",
+                ),
+                "resolution_evidence_scope": "scope_mismatch",
+            },
+            _scoped_answer_item(6, "How do I add a teammate?", "Tail answer locked"),
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(
+        build_deflection_report_artifact(result),
+        top_n=3,
+        teaser_preview_count=2,
+    ).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot["summary"]["generated"] == 6
+    assert len(snapshot["top_questions"]) == 3
+    assert snapshot["teaser"]["full_answer"] == {
+        "rank": 4,
+        "question": "How do we rotate API tokens?",
+        "answer": "Create the replacement token, deploy it, then revoke the old token.",
+        "steps": ["Create the replacement token before revoking the old one."],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "weighted_frequency": 4,
+        "source_count": 1,
+    }
+    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [1, 2]
+    for preview in snapshot["teaser"]["previews"]:
+        assert preview["body_withheld"] is True
+        assert preview["answer_evidence_status"] == "resolution_evidence"
+        assert preview["resolution_evidence_scope"] == "scoped"
+        assert "answer" not in preview
+        assert "steps" not in preview
+
+    assert "Locked top answer" not in encoded
+    assert "Mismatched answer must stay locked" not in encoded
+    assert "Tail answer locked" not in encoded
+    assert "ticket-" not in encoded
+    assert "evidence_quotes" not in encoded
+    assert "source_ids" not in encoded
+
+
+def test_deflection_snapshot_teaser_empty_when_no_scoped_resolution_evidence() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                **_scoped_answer_item(1, "How do I export reports?", "Locked answer"),
+                "resolution_evidence_scope": "scope_mismatch",
+            },
+            {
+                "question": "Scoped status without answer body stays hidden",
+                "weighted_frequency": 1,
+                "answer": "",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "source_ids": ("ticket-2",),
+            },
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(build_deflection_report_artifact(result)).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot["teaser"] == {"full_answer": None, "previews": []}
+    assert "Locked answer" not in encoded
+    assert "ticket-1" not in encoded
 
 
 def test_deflection_snapshot_rejects_non_positive_top_n() -> None:
@@ -223,6 +317,41 @@ def test_deflection_snapshot_rejects_non_positive_top_n() -> None:
 
     with pytest.raises(ValueError, match="top_n must be positive"):
         build_deflection_snapshot(build_deflection_report_artifact(result), top_n=0)
+
+
+def test_deflection_snapshot_rejects_negative_teaser_preview_count() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=0,
+        ticket_source_count=0,
+        output_checks={},
+        items=(),
+    )
+
+    with pytest.raises(ValueError, match="teaser_preview_count must be non-negative"):
+        build_deflection_snapshot(
+            build_deflection_report_artifact(result),
+            teaser_preview_count=-1,
+        )
+
+
+def _scoped_answer_item(
+    rank: int,
+    question: str,
+    answer: str,
+    *,
+    step: str | None = None,
+) -> dict[str, object]:
+    return {
+        "question": question,
+        "weighted_frequency": rank,
+        "answer": answer,
+        "steps": [step or f"Step for {question}"],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "source_ids": (f"ticket-{rank}",),
+        "evidence_quotes": (f"`ticket-{rank}` - {question}",),
+    }
 
 
 @pytest.mark.asyncio
