@@ -10,6 +10,7 @@ from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
 
 
 DEFAULT_DEFLECTION_DELIVERY_SUBJECT = "Your FAQ deflection report is ready"
+DELIVERY_CLAIM_STALE_AFTER = "15 minutes"
 MAX_DELIVERY_ERROR_CHARS = 500
 
 
@@ -46,7 +47,10 @@ async def send_pending_deflection_report_deliveries(
     """Send pending paid-report delivery emails and update queue status."""
 
     _validate_config(config)
-    rows = await pool.fetch(_PENDING_SQL, int(config.limit))
+    rows = await pool.fetch(
+        _PENDING_SQL if config.dry_run else _CLAIM_PENDING_SQL,
+        int(config.limit),
+    )
     sent = failed = dry_run = 0
     for row in rows:
         data = _row_to_dict(row)
@@ -179,7 +183,7 @@ async def _mark_delivered(
             updated_at = NOW()
         WHERE account_id = $1
           AND request_id = $2
-          AND delivery_status = 'pending'
+          AND delivery_status = 'sending'
         """,
         account_id,
         request_id,
@@ -196,7 +200,7 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
             updated_at = NOW()
         WHERE account_id = $1
           AND request_id = $2
-          AND delivery_status = 'pending'
+          AND delivery_status = 'sending'
         """,
         account_id,
         request_id,
@@ -266,4 +270,37 @@ JOIN content_ops_deflection_reports r
 WHERE d.delivery_status = 'pending'
 ORDER BY d.created_at
 LIMIT $1
+"""
+
+_CLAIM_PENDING_SQL = f"""
+WITH claimed AS (
+    SELECT
+        d.account_id,
+        d.request_id,
+        d.created_at
+    FROM content_ops_deflection_report_deliveries d
+    WHERE d.delivery_status = 'pending'
+       OR (
+            d.delivery_status = 'sending'
+            AND d.updated_at < NOW() - INTERVAL '{DELIVERY_CLAIM_STALE_AFTER}'
+       )
+    ORDER BY d.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT $1
+)
+UPDATE content_ops_deflection_report_deliveries d
+SET delivery_status = 'sending',
+    delivery_error = NULL,
+    updated_at = NOW()
+FROM claimed c
+JOIN content_ops_deflection_reports r
+  ON r.account_id = c.account_id
+ AND r.request_id = c.request_id
+WHERE d.account_id = c.account_id
+  AND d.request_id = c.request_id
+RETURNING
+    d.account_id,
+    d.request_id,
+    r.delivery_email,
+    r.paid
 """

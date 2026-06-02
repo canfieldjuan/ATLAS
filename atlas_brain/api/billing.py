@@ -678,7 +678,7 @@ async def _queue_content_ops_deflection_report_delivery(
         ON CONFLICT (account_id, request_id) DO UPDATE
         SET payment_reference = COALESCE(EXCLUDED.payment_reference, content_ops_deflection_report_deliveries.payment_reference),
             delivery_status = CASE
-                WHEN content_ops_deflection_report_deliveries.delivery_status = 'delivered'
+                WHEN content_ops_deflection_report_deliveries.delivery_status IN ('delivered', 'sending')
                     THEN content_ops_deflection_report_deliveries.delivery_status
                 ELSE 'pending'
             END,
