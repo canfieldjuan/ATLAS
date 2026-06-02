@@ -47,7 +47,7 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
                 "opportunity_score": 14,
                 "answer_evidence_status": "resolution_evidence",
                 "steps": [
-                    "Use the uploaded resolution evidence: Open Analytics, choose Attribution, then select Download report.",
+                    "Open Analytics, choose Attribution, then select Download report.",
                     "Confirm the answer matches the customer's support record before publishing it.",
                 ],
                 "source_ids": ("ticket-1", "ticket-2"),
@@ -87,7 +87,8 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
     assert "## Ranked Question Opportunities" in artifact.markdown
     assert "## Drafted Answers With Proven Solutions" in artifact.markdown
     assert "How do I export attribution reports?" in artifact.markdown
-    assert "Use the uploaded resolution evidence: Open Analytics" in artifact.markdown
+    assert "Open Analytics, choose Attribution" in artifact.markdown
+    assert "Use the uploaded resolution evidence" not in artifact.markdown
     assert "## No Proven Answer Yet" in artifact.markdown
     assert "Why is the dashboard stale?" in artifact.markdown
     assert "Customers repeatedly asked this question" in artifact.markdown

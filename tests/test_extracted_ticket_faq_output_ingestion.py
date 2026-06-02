@@ -123,9 +123,8 @@ def test_source_material_to_source_rows_accepts_ticket_faq_result_dict() -> None
     assert len(rows) == 1
     assert rows[0]["source_type"] == FAQ_OUTPUT_SOURCE_TYPE
     assert rows[0]["faq_answer_evidence_status"] == "resolution_evidence"
-    assert rows[0]["resolution_text"].startswith(
-        "Use the uploaded resolution evidence: Open Billing"
-    )
+    assert rows[0]["resolution_text"].startswith("Open Billing")
+    assert "Use the uploaded resolution evidence" not in rows[0]["resolution_text"]
     assert "Why was I charged twice this month?" in rows[0]["text"]
     warning_codes = [warning.code for warning in loaded.warnings]
     assert "missing_source_text" not in warning_codes
