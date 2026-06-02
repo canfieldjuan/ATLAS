@@ -253,6 +253,7 @@ def test_content_ops_execution_smoke_cli_runs_faq_markdown_json() -> None:
     assert result["output_checks"] == {
         "condensed": True,
         "has_action_items": True,
+        "resolution_evidence_scoped": True,
         "uses_user_vocabulary": True,
     }
     assert "What to do next" in result["markdown"]

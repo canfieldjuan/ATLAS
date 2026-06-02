@@ -426,7 +426,7 @@ def test_faq_scale_smoke_main_uses_cli_defaults(tmp_path: Path, capsys) -> None:
     assert "faq=available" in captured.out
     assert "generated=2" in captured.out
     assert "weighted_volume=4" in captured.out
-    assert "checks_failed=0/3" in captured.out
+    assert "checks_failed=0/4" in captured.out
     assert "score_max=4" in captured.out
     assert "summary=" in captured.out
     assert captured.err == ""
@@ -451,7 +451,7 @@ def test_faq_scale_smoke_main_prints_profile_on_failure(tmp_path: Path, capsys) 
     assert "source_rows=2/3" in captured.err
     assert "faq=available" in captured.err
     assert "generated=2" in captured.err
-    assert "checks_failed=1/3" in captured.err
+    assert "checks_failed=1/4" in captured.err
     assert "skipped_rows=1" in captured.err
     assert "missing_source_text=1" in captured.err
     assert "failure=output_checks" in captured.err

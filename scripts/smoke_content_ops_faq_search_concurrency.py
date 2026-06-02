@@ -290,6 +290,7 @@ def _items_for_case(case: SearchCase, *, documents_per_corpus: int) -> list[dict
                 "Contact support if the CSV is missing.",
             ],
             "answer_evidence_status": "draft_needs_review",
+            "resolution_evidence_scope": "not_applicable",
             "resolution_source_count": 0,
             "when_to_contact_support": "Contact support if the exported CSV is missing.",
             "evidence_quotes": [

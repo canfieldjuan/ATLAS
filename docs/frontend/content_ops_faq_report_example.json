@@ -23,6 +23,7 @@
       "opportunity_score": 42,
       "question": "Which remaining support questions need manual review?",
       "question_source": "source_policy",
+      "resolution_evidence_scope": "not_applicable",
       "resolution_source_count": 0,
       "source_ids": [
         "search-export-1",
@@ -71,6 +72,7 @@
   "output_checks": {
     "condensed": true,
     "has_action_items": true,
+    "resolution_evidence_scoped": true,
     "uses_user_vocabulary": true
   },
   "saved_ids": [],

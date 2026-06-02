@@ -105,6 +105,7 @@ def _valid_detail_payload(faq_id="11111111-1111-1111-1111-111111111111"):
             "steps": ["Review the statement.", "Contact support with records."],
             "action_items": ["Review the statement.", "Contact support with records."],
             "answer_evidence_status": "draft_needs_review",
+            "resolution_evidence_scope": "not_applicable",
             "resolution_source_count": 0,
             "when_to_contact_support": "Contact support if the payment still looks wrong.",
             "evidence_quotes": ["`CFPB-1`: payment dispute"],
