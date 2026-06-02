@@ -263,10 +263,13 @@ def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
         ]
     for index, item in enumerate(items, start=1):
         steps = _texts(item.get("steps"))
+        answer = _text(item.get("answer")) or (
+            "This draft answer is backed by uploaded resolution evidence."
+        )
         lines.extend([
             f"### {index}. {_md(item.get('question'))}",
             "",
-            "Uploaded resolution evidence supports this draft answer.",
+            _md(answer),
             "",
             "**Draft answer steps:**",
             "",

@@ -684,6 +684,7 @@ def _item(
             question=question,
             source_count=len(source_ids),
             answer_evidence_status=answer_evidence_status,
+            resolution_texts=resolution_texts,
         ),
         "action_items": steps,
         "summary": summary,
@@ -873,17 +874,30 @@ def _answer_summary(
     question: str,
     source_count: int,
     answer_evidence_status: str,
+    resolution_texts: Sequence[str] = (),
 ) -> str:
     source_label = _source_count_label(source_count)
     if answer_evidence_status == "resolution_evidence":
-        return (
-            f"Verified resolution evidence from {source_label} supports the "
-            f"draft answer for: {question}"
-        )
+        return _resolution_answer_summary(resolution_texts, source_label=source_label)
     return (
         f"No verified resolution evidence was found in {source_label}; keep "
         f"this FAQ in review before answering: {question}"
     )
+
+
+def _resolution_answer_summary(
+    resolution_texts: Sequence[str],
+    *,
+    source_label: str,
+) -> str:
+    steps = _resolution_help_center_steps(resolution_texts)
+    if not steps:
+        return f"This draft answer is backed by uploaded resolution evidence from {source_label}."
+    first = _clause_text(steps[0])
+    if len(steps) == 1:
+        return f"To resolve this, {first}."
+    second = _clause_text(steps[1])
+    return f"To resolve this, {first}. Then {second}."
 
 
 def _source_count_label(source_count: int) -> str:
@@ -1504,14 +1518,7 @@ def _resolution_article_steps(
     *,
     support_contact: str | None,
 ) -> tuple[str, ...]:
-    excerpts = tuple(
-        dict.fromkeys(
-            excerpt
-            for text in resolution_texts
-            if (excerpt := _resolution_excerpt(text))
-        )
-    )
-    steps = tuple(excerpts[:2])
+    steps = _resolution_help_center_steps(resolution_texts)
     if len(steps) >= 2:
         return (*steps, _support_step(support_contact))
     if len(steps) == 1:
@@ -1520,6 +1527,49 @@ def _resolution_article_steps(
             _support_step(support_contact),
         )
     return _draft_review_steps(support_contact)
+
+
+def _resolution_help_center_steps(resolution_texts: Sequence[str]) -> tuple[str, ...]:
+    excerpts = tuple(
+        dict.fromkeys(
+            _complete_sentence(excerpt)
+            for text in resolution_texts
+            for excerpt in _resolution_sentence_excerpts(text)
+        )
+    )
+    return tuple(excerpts[:2])
+
+
+def _resolution_sentence_excerpts(value: Any, *, limit: int = 180) -> tuple[str, ...]:
+    text = _compact(value)
+    if not text:
+        return ()
+    parts = tuple(
+        part.strip()
+        for part in re.split(r"[.!?;\n]+", text)
+        if part.strip()
+    )
+    if not parts:
+        return ()
+    return tuple(_resolution_excerpt(part, limit=limit) for part in parts if part)
+
+
+def _complete_sentence(value: Any) -> str:
+    text = _compact(value).rstrip(" ,;:")
+    if not text:
+        return ""
+    if text[-1] in ".!?":
+        return text
+    return f"{text}."
+
+
+def _clause_text(value: Any) -> str:
+    text = _compact(value).rstrip(".!?")
+    if not text:
+        return "follow the verified resolution steps"
+    if len(text) > 1 and text[0].isupper() and text[1].islower():
+        return f"{text[0].lower()}{text[1:]}"
+    return text
 
 
 def _draft_review_steps(support_contact: str | None) -> tuple[str, ...]:

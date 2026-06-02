@@ -45,6 +45,10 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
                 "summary": "Customers ask how to export attribution reports.",
                 "weighted_frequency": 8,
                 "opportunity_score": 14,
+                "answer": (
+                    "To resolve this, open Analytics, choose Attribution, then "
+                    "select Download report."
+                ),
                 "answer_evidence_status": "resolution_evidence",
                 "steps": [
                     "Open Analytics, choose Attribution, then select Download report.",
@@ -87,6 +91,8 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
     assert "## Ranked Question Opportunities" in artifact.markdown
     assert "## Drafted Answers With Proven Solutions" in artifact.markdown
     assert "How do I export attribution reports?" in artifact.markdown
+    assert "To resolve this, open Analytics" in artifact.markdown
+    assert "Uploaded resolution evidence supports this draft answer" not in artifact.markdown
     assert "Open Analytics, choose Attribution" in artifact.markdown
     assert "Use the uploaded resolution evidence" not in artifact.markdown
     assert "## No Proven Answer Yet" in artifact.markdown
