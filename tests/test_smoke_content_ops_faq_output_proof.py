@@ -42,7 +42,7 @@ def test_faq_output_proof_writes_artifacts_and_passes(tmp_path: Path) -> None:
         "billing and payments",
     }
     assert summary["proof"]["min_source_id_count"] >= 1
-    assert summary["proof"]["min_step_count"] >= 3
+    assert summary["proof"]["min_step_count"] >= 2
     assert summary["proof"]["ingestion_bridge"]["adapted_source_row_count"] >= (
         summary["proof"]["generated"]
     )

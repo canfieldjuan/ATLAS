@@ -30,6 +30,17 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-02
+
+### SaaS demo preflight subprocess reloads live repo dotenv
+- File/location: `tests/test_smoke_content_ops_faq_saas_demo_route_e2e.py::test_script_preflight_uses_atlas_db_settings_fallback` / `scripts/smoke_content_ops_faq_saas_demo_route_e2e.py`
+- Description: The test removes required env vars before spawning the smoke script, but the subprocess reloads the repo-root `.env`, so local checkouts with live `ATLAS_API_BASE_URL` / token / account envs can return success instead of missing-inputs.
+- Why it matters: It makes `scripts/run_extracted_pipeline_checks.sh` fail locally in provisioned workspaces even when CI's clean environment should pass.
+- Effort: S
+- Category: tech-debt
+- Owner/session: Codex FAQ deflection answer copy polish slice
+- Found during: PR-Deflection-Answer-Copy-Polish
+
 ## 2026-05-29
 
 ### atlas-intel-ui npm audit vulnerabilities

@@ -348,7 +348,7 @@ def _proof_failures(
         failures.append({"check": "generated_items", "detail": proof.get("generated")})
     if _integer(proof.get("min_source_id_count")) < 1:
         failures.append({"check": "source_id_coverage", "detail": proof.get("min_source_id_count")})
-    if _integer(proof.get("min_step_count")) < 3:
+    if _integer(proof.get("min_step_count")) < 2:
         failures.append({"check": "action_step_coverage", "detail": proof.get("min_step_count")})
     bridge = _mapping(proof.get("ingestion_bridge"))
     if _integer(bridge.get("adapted_source_row_count")) < _integer(proof.get("generated")):

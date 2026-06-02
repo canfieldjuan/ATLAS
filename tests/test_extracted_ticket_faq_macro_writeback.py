@@ -188,7 +188,11 @@ def test_macro_writeback_preview_uses_real_faq_generator_resolution_steps() -> N
     ])
 
     macro = preview.macros[0]
-    assert "Customers mention:" in generated.items[0]["answer"]
+    assert "Customers mention:" not in generated.items[0]["answer"]
+    assert generated.items[0]["answer"] == (
+        "Verified resolution evidence from 1 ticket source supports the draft "
+        "answer for: Why was I charged twice this month?"
+    )
     assert "Customers mention:" not in macro.body
     assert macro.body.startswith("1. Open Billing, review the invoice history")
     assert "Use the uploaded resolution evidence" not in macro.body

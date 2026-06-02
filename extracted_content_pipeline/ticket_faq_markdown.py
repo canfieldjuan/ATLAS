@@ -674,7 +674,11 @@ def _item(
         "failure_risk_score": opportunity["failure_risk_score"],
         "failure_risk_signals": opportunity["failure_risk_signals"],
         "opportunity_score": opportunity["opportunity_score"],
-        "answer": f"Customers mention: {snippets} Evidence comes from {len(source_ids)} ticket source(s).",
+        "answer": _answer_summary(
+            question=question,
+            source_count=len(source_ids),
+            answer_evidence_status=answer_evidence_status,
+        ),
         "action_items": steps,
         "summary": summary,
         "steps": steps,
@@ -823,7 +827,34 @@ def _resolution_excerpt(value: Any, *, limit: int = 180) -> str:
     text = sentence or _compact(value)
     if len(text) <= limit:
         return text
-    return f"{text[:limit].rstrip()}..."
+    excerpt = text[:limit].rstrip()
+    if " " in excerpt:
+        excerpt = excerpt.rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return f"{excerpt or text[:limit].rstrip()}..."
+
+
+def _answer_summary(
+    *,
+    question: str,
+    source_count: int,
+    answer_evidence_status: str,
+) -> str:
+    source_label = _source_count_label(source_count)
+    if answer_evidence_status == "resolution_evidence":
+        return (
+            f"Verified resolution evidence from {source_label} supports the "
+            f"draft answer for: {question}"
+        )
+    return (
+        f"No verified resolution evidence was found in {source_label}; keep "
+        f"this FAQ in review before answering: {question}"
+    )
+
+
+def _source_count_label(source_count: int) -> str:
+    if source_count == 1:
+        return "1 ticket source"
+    return f"{source_count} ticket sources"
 
 
 def _term_mappings(
@@ -1451,7 +1482,6 @@ def _resolution_article_steps(
     if len(steps) == 1:
         return (
             steps[0],
-            "Confirm the answer matches the customer's account, plan, policy, or support record before publishing it.",
             _support_step(support_contact),
         )
     return _draft_review_steps(support_contact)

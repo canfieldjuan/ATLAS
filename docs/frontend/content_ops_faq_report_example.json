@@ -1,52 +1,29 @@
 {
   "generated": 1,
-  "markdown": "# Support Ticket FAQ Report\n\n_Source rows analyzed: 2. Ticket sources used: 2._\n\n## 1. Which remaining support questions need manual review?\n\nCustomers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"export\"; documentation says \"Download report\". Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); 1 zero-result search source(s); mapping score 42.)\n\n**What to do next:**\n\n1. Review the cited ticket evidence and confirm the policy-approved answer before publishing.\n2. Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.\n\n**Sources:**\n\n- `search-export-1`: \"How do I export attribution report?\"\n- `ticket-email-1` - Email update: \"How do I change my email?\"\n",
   "items": [
     {
-      "topic": "reporting friction",
-      "question": "Which remaining support questions need manual review?",
-      "question_source": "source_policy",
-      "frequency": 21,
-      "weighted_frequency": 21,
-      "failure_risk_score": 1,
-      "failure_risk_signals": [
-        "zero_result_search"
-      ],
-      "opportunity_score": 42,
-      "answer": "Customers mention: \"How do I export attribution report?\" / \"How do I change my email?\" Evidence comes from 2 ticket source(s).",
       "action_items": [
         "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
         "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
         "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
       ],
-      "summary": "Customers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.",
-      "steps": [
-        "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
-        "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
-        "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
-      ],
+      "answer": "No verified resolution evidence was found in 2 ticket sources; keep this FAQ in review before answering: Which remaining support questions need manual review?",
       "answer_evidence_status": "draft_needs_review",
-      "resolution_source_count": 0,
-      "when_to_contact_support": "Contact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.",
+      "displayed_evidence_count": 2,
+      "evidence_count": 2,
       "evidence_quotes": [
         "`search-export-1`: \"How do I export attribution report?\"",
         "`ticket-email-1` - Email update: \"How do I change my email?\""
       ],
-      "term_mappings": [
-        {
-          "customer_term": "export",
-          "documentation_term": "Download report",
-          "suggestion": "Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text.",
-          "source_id_count": 2,
-          "zero_result_source_count": 1,
-          "failure_risk_score": 1,
-          "failure_risk_signals": [
-            "zero_result_search"
-          ],
-          "opportunity_score": 42,
-          "first_source_id": "search-export-1"
-        }
+      "failure_risk_score": 1,
+      "failure_risk_signals": [
+        "zero_result_search"
       ],
+      "frequency": 21,
+      "opportunity_score": 42,
+      "question": "Which remaining support questions need manual review?",
+      "question_source": "source_policy",
+      "resolution_source_count": 0,
       "source_ids": [
         "search-export-1",
         "ticket-email-1"
@@ -59,22 +36,45 @@
         "search_log": 1,
         "support_ticket": 1
       },
+      "steps": [
+        "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
+        "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
+        "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+      ],
+      "summary": "Customers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.",
+      "term_mappings": [
+        {
+          "customer_term": "export",
+          "documentation_term": "Download report",
+          "failure_risk_score": 1,
+          "failure_risk_signals": [
+            "zero_result_search"
+          ],
+          "first_source_id": "search-export-1",
+          "opportunity_score": 42,
+          "source_id_count": 2,
+          "suggestion": "Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text.",
+          "zero_result_source_count": 1
+        }
+      ],
+      "ticket_count": 2,
+      "topic": "reporting friction",
+      "weighted_frequency": 21,
       "weighted_source_volume_by_type": {
         "search_log": 20,
         "support_ticket": 1
       },
-      "evidence_count": 2,
-      "displayed_evidence_count": 2,
-      "ticket_count": 2
+      "when_to_contact_support": "Contact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions."
     }
   ],
+  "markdown": "# Support Ticket FAQ Report\n\n_Source rows analyzed: 2. Ticket sources used: 2._\n\n## 1. Which remaining support questions need manual review?\n\nCustomers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"export\"; documentation says \"Download report\". Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); 1 zero-result search source(s); mapping score 42.)\n\n**What to do next:**\n\n1. Review the cited ticket evidence and confirm the policy-approved answer before publishing.\n2. Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.\n\n**Sources:**\n\n- `search-export-1`: \"How do I export attribution report?\"\n- `ticket-email-1` - Email update: \"How do I change my email?\"\n",
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "uses_user_vocabulary": true
+  },
+  "saved_ids": [],
   "source_count": 2,
   "ticket_source_count": 2,
-  "output_checks": {
-    "uses_user_vocabulary": true,
-    "condensed": true,
-    "has_action_items": true
-  },
-  "warnings": [],
-  "saved_ids": []
+  "warnings": []
 }

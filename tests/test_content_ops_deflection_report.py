@@ -48,7 +48,7 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
                 "answer_evidence_status": "resolution_evidence",
                 "steps": [
                     "Open Analytics, choose Attribution, then select Download report.",
-                    "Confirm the answer matches the customer's support record before publishing it.",
+                    "If it still does not work, contact support and include the cited ticket details.",
                 ],
                 "source_ids": ("ticket-1", "ticket-2"),
                 "evidence_quotes": (
