@@ -206,17 +206,22 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     assert item["resolution_evidence_scope"] == "scoped"
     assert item["resolution_source_count"] == 1
     assert item["steps"][0] == (
-        "Open Analytics, choose the attribution dashboard, and select Export CSV"
+        "Open Analytics, choose the attribution dashboard, and select Export CSV."
     )
     assert item["steps"][1] == (
+        "Ask an admin to enable Report Downloads if the button is hidden."
+    )
+    assert item["steps"][2] == (
         "If it still does not work, contact support at support@example.com and "
         "include the cited ticket details."
     )
     assert "Customers mention:" not in item["answer"]
     assert item["answer"] == (
-        "Verified resolution evidence from 1 ticket source supports the draft "
-        "answer for: How do I export the attribution dashboard before renewal?"
+        "To resolve this, open Analytics, choose the attribution dashboard, and "
+        "select Export CSV. Then ask an admin to enable Report Downloads if the "
+        "button is hidden."
     )
+    assert "Verified resolution evidence" not in item["answer"]
     assert "Draft the customer-facing steps" not in result.markdown
     assert "support@example.com" in result.markdown
 
@@ -330,9 +335,7 @@ def test_build_ticket_faq_markdown_fails_closed_for_unscoped_resolution_beyond_d
     assert item["answer_evidence_status"] == "resolution_evidence"
     assert item["resolution_evidence_scope"] == "missing_question_scope"
     assert item["resolution_source_count"] == 1
-    assert item["steps"][0] == (
-        "Enable Report Downloads for the analyst role"
-    )
+    assert item["steps"][0] == "Enable Report Downloads for the analyst role."
     assert result.output_checks["resolution_evidence_scoped"] is False
 
 
@@ -366,7 +369,10 @@ def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() 
     assert item["answer_evidence_status"] == "resolution_evidence"
     assert item["resolution_evidence_scope"] == "scoped"
     assert item["resolution_source_count"] == 2
-    assert item["steps"][0] == "Send the reset email from Account Settings"
+    assert item["steps"][0] == "Send the reset email from Account Settings."
+    assert item["answer"] == (
+        "To resolve this, send the reset email from Account Settings."
+    )
     assert all(not step.startswith("Use the uploaded") for step in item["steps"])
 
 
