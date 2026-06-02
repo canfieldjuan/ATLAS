@@ -637,7 +637,58 @@ async def _handle_content_ops_deflection_report_checkout_completed(
             session_id,
         )
         raise HTTPException(status_code=409, detail="Deflection report not found")
+    await _queue_content_ops_deflection_report_delivery(
+        pool,
+        account_id=account_id_text,
+        request_id=request_id,
+        payment_reference=session_id or None,
+    )
     return
+
+
+async def _queue_content_ops_deflection_report_delivery(
+    pool: Any,
+    *,
+    account_id: str,
+    request_id: str,
+    payment_reference: str | None = None,
+) -> str:
+    """Queue post-purchase delivery after the verified Stripe paid gate."""
+
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    record = await store.get_artifact_record(
+        account_id=account_id,
+        request_id=request_id,
+    )
+    if record is None:
+        return "missing_report"
+    if not record.delivery_email:
+        logger.info(
+            "Deflection report delivery queue skipped: no delivery email account=%s request=%s",
+            account_id,
+            request_id,
+        )
+        return "missing_delivery_email"
+    await pool.execute(
+        """
+        INSERT INTO content_ops_deflection_report_deliveries (
+            account_id, request_id, payment_reference, delivery_status, updated_at
+        )
+        VALUES ($1, $2, $3, 'pending', NOW())
+        ON CONFLICT (account_id, request_id) DO UPDATE
+        SET payment_reference = COALESCE(EXCLUDED.payment_reference, content_ops_deflection_report_deliveries.payment_reference),
+            delivery_status = CASE
+                WHEN content_ops_deflection_report_deliveries.delivery_status = 'delivered'
+                    THEN content_ops_deflection_report_deliveries.delivery_status
+                ELSE 'pending'
+            END,
+            updated_at = NOW()
+        """,
+        account_id,
+        request_id,
+        payment_reference,
+    )
+    return "queued"
 
 
 def _deflection_checkout_amount_is_valid(session: Any) -> bool:
