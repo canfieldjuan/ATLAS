@@ -182,18 +182,21 @@ def build_deflection_snapshot(
             ),
             "customer_wording": _snapshot_customer_wording(item, question),
         })
+    teaser = _snapshot_teaser(items, preview_count=teaser_preview_count)
+    teaser_full_rank = _teaser_full_answer_rank(teaser)
     locked_questions = tuple(
         {
             "rank": rank,
             "ticket_count": _ticket_count(item),
         }
         for rank, item in enumerate(items[top_n:], start=top_n + 1)
+        if rank != teaser_full_rank
     )
     return DeflectionSnapshot(
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
         locked_questions=locked_questions,
-        teaser=_snapshot_teaser(items, preview_count=teaser_preview_count),
+        teaser=teaser,
     )
 
 
@@ -596,6 +599,14 @@ def _snapshot_teaser(
         "full_answer": _teaser_full_answer(full_rank, full_item),
         "previews": previews,
     }
+
+
+def _teaser_full_answer_rank(teaser: Mapping[str, Any]) -> int | None:
+    full_answer = teaser.get("full_answer")
+    if not isinstance(full_answer, Mapping):
+        return None
+    rank = _int(full_answer.get("rank"))
+    return rank if rank > 0 else None
 
 
 def _is_teaser_eligible(item: Mapping[str, Any]) -> bool:
