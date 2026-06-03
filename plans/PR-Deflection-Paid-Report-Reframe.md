@@ -47,6 +47,7 @@ Slice phase: Product polish
 - `tests/test_content_ops_faq_report_contract_docs.py`
 - `tests/test_extracted_content_ops_execution.py`
 - `tests/test_atlas_billing_content_ops_deflection_paid_flow.py`
+- `tests/test_mcp_content_ops_deflection_readonly.py`
 
 ## Mechanism
 
@@ -97,6 +98,8 @@ auditability.
 
 - `python -m py_compile extracted_content_pipeline/faq_deflection_report.py tests/test_content_ops_deflection_report.py tests/test_content_ops_faq_report_contract_docs.py tests/test_extracted_content_ops_execution.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py` - passed.
 - `pytest tests/test_content_ops_deflection_report.py tests/test_content_ops_faq_report_contract_docs.py tests/test_extracted_content_ops_execution.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py -q` - passed, 100 passed, 1 warning.
+- `pytest tests/test_mcp_content_ops_deflection_readonly.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_content_ops_deflection_report.py -q` - passed, 48 passed, 1 warning.
+- `pytest tests/test_atlas_billing_stripe_hardening.py tests/test_b2b_vendor_briefing.py tests/test_atlas_billing_content_ops_deflection_stripe_paid.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_mcp_content_ops_deflection_readonly.py -q` - passed, 80 passed, 1 warning.
 - `bash scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - passed.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - passed.
@@ -112,5 +115,5 @@ auditability.
 | Plan doc | ~110 |
 | Paid report renderer helpers | ~230 |
 | Contract docs/example | ~10 |
-| Focused renderer/contract/caller tests | ~155 |
-| **Total** | **~505** |
+| Focused renderer/contract/caller tests | ~160 |
+| **Total** | **~510** |
