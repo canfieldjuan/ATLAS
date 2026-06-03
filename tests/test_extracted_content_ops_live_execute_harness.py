@@ -1015,8 +1015,14 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "generated": 4,
         "drafted_answer_count": 4,
         "no_proven_answer_count": 0,
+        "repeat_ticket_count": 4,
     }
     assert len(snapshot["top_questions"]) == 2
+    assert [question["ticket_count"] for question in snapshot["top_questions"]] == [1, 1]
+    assert snapshot["locked_questions"] == [
+        {"rank": 3, "ticket_count": 1},
+        {"rank": 4, "ticket_count": 1},
+    ]
     assert snapshot["teaser"]["full_answer"]["answer_evidence_status"] == (
         "resolution_evidence"
     )

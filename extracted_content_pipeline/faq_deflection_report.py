@@ -24,12 +24,16 @@ class DeflectionSnapshot:
 
     summary: dict[str, int]
     top_questions: tuple[dict[str, Any], ...]
+    locked_questions: tuple[dict[str, int], ...]
     teaser: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "summary": dict(self.summary),
             "top_questions": [dict(question) for question in self.top_questions],
+            "locked_questions": [
+                dict(question) for question in self.locked_questions
+            ],
             "teaser": {
                 "full_answer": (
                     dict(self.teaser["full_answer"])
@@ -157,6 +161,7 @@ def build_deflection_snapshot(
         "generated": _int(summary.get("generated")),
         "drafted_answer_count": _int(summary.get("drafted_answer_count")),
         "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
+        "repeat_ticket_count": sum(_ticket_count(item) for item in items),
     }
     top_questions: list[dict[str, Any]] = []
     for rank, item in enumerate(items[:top_n], start=1):
@@ -164,14 +169,23 @@ def build_deflection_snapshot(
         top_questions.append({
             "rank": rank,
             "question": question,
+            "ticket_count": _ticket_count(item),
             "weighted_frequency": _int(
                 item.get("weighted_frequency") or item.get("frequency")
             ),
             "customer_wording": _snapshot_customer_wording(item, question),
         })
+    locked_questions = tuple(
+        {
+            "rank": rank,
+            "ticket_count": _ticket_count(item),
+        }
+        for rank, item in enumerate(items[top_n:], start=top_n + 1)
+    )
     return DeflectionSnapshot(
         summary=snapshot_summary,
         top_questions=tuple(top_questions),
+        locked_questions=locked_questions,
         teaser=_snapshot_teaser(items, preview_count=teaser_preview_count),
     )
 
@@ -205,6 +219,7 @@ def deflection_snapshot_content_opportunities(
             {
                 "rank": rank,
                 "question": question,
+                "ticket_count": _int(raw.get("ticket_count")),
                 "weighted_frequency": frequency,
                 "customer_wording": _text(raw.get("customer_wording")),
                 "opportunity_score": _int(raw.get("opportunity_score")) or frequency,
@@ -525,6 +540,14 @@ def _teaser_preview(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
 def _source_count(item: Mapping[str, Any]) -> int:
     source_count = len(_texts(item.get("source_ids")))
     return source_count or _int(item.get("ticket_count"))
+
+
+def _ticket_count(item: Mapping[str, Any]) -> int:
+    ticket_count = _int(item.get("ticket_count"))
+    if ticket_count > 0:
+        return ticket_count
+    source_count = len(_texts(item.get("source_ids")))
+    return source_count if source_count > 0 else 0
 
 
 def _texts(value: Any) -> list[str]:

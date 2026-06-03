@@ -40,6 +40,14 @@ body-withheld (`body_withheld: true`) and exist only to show answer structure.
 Do not derive other answer text, evidence, source IDs, or Markdown from this
 object.
 
+For Support Tax or FOMO copy, use only raw measured count fields:
+`snapshot.summary.repeat_ticket_count`, visible
+`snapshot.top_questions[].ticket_count`, and locked
+`snapshot.locked_questions[].ticket_count`. `weighted_frequency` is a ranking
+score, not a customer-specific ticket count; do not use it for spend
+calculations or projections. `locked_questions` intentionally exposes only
+rank and ticket count, with question text withheld until paid unlock.
+
 ## Portfolio Submit Endpoint
 
 The production PII-safe submit path is an authenticated server-to-server
