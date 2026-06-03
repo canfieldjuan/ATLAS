@@ -312,6 +312,9 @@
       "target": "extracted_content_pipeline/ad_copy_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/quote_card_generation.py"
+    },
+    {
       "target": "extracted_content_pipeline/social_post_export.py"
     },
     {

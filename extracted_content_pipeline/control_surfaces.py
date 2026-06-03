@@ -209,6 +209,17 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         reasoning_requirement="absent",
         default_parse_retry_attempts=0,
     ),
+    "quote_card": OutputDefinition(
+        id="quote_card",
+        label="Quote Cards",
+        description="Short quote-card drafts from source evidence.",
+        implemented=True,
+        estimated_unit_cost_usd=0.0,
+        required_inputs=("source_material",),
+        default_max_items=3,
+        reasoning_requirement="absent",
+        default_parse_retry_attempts=0,
+    ),
     "signal_extraction": OutputDefinition(
         id="signal_extraction",
         label="Signal Extraction",

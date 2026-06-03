@@ -13,6 +13,8 @@ Currently wired:
   with no external dependencies.
 - `ad_copy`: deterministic source-evidence ad-copy drafts
   with no external dependencies; persists when DB services are enabled.
+- `quote_card`: deterministic source-evidence quote-card drafts
+  with no external dependencies.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -84,6 +86,9 @@ from extracted_content_pipeline.landing_page_generation import (
 from extracted_content_pipeline.landing_page_postgres import (
     PostgresLandingPageRepository,
 )
+from extracted_content_pipeline.quote_card_generation import (
+    QuoteCardGenerationService,
+)
 from extracted_content_pipeline.report_generation import (
     ReportGenerationService,
 )
@@ -118,6 +123,7 @@ from extracted_content_pipeline.ticket_faq_postgres import (
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
 _SOCIAL_POST_SERVICE: SocialPostGenerationService = SocialPostGenerationService()
 _AD_COPY_SERVICE: AdCopyGenerationService = AdCopyGenerationService()
+_QUOTE_CARD_SERVICE: QuoteCardGenerationService = QuoteCardGenerationService()
 _FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
 _FAQ_DEFLECTION_REPORT_SERVICE: FAQDeflectionReportService = FAQDeflectionReportService(
     faq_markdown=_FAQ_MARKDOWN_SERVICE
@@ -345,6 +351,7 @@ def build_content_ops_execution_services(
     blog_post = None
     social_post = _SOCIAL_POST_SERVICE
     ad_copy = _AD_COPY_SERVICE
+    quote_card = _QUOTE_CARD_SERVICE
     faq_markdown_service = _FAQ_MARKDOWN_SERVICE
     faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
     faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
@@ -401,6 +408,7 @@ def build_content_ops_execution_services(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
         social_post=social_post,
         ad_copy=ad_copy,
+        quote_card=quote_card,
         landing_page=landing_page,
         campaign=campaign,
         report=report,

@@ -25,6 +25,7 @@ from .landing_page_generation import LandingPageGenerationConfig
 from .landing_page_repair_contract import (
     landing_page_quality_repair_attempts_from_inputs,
 )
+from .quote_card_generation import QuoteCardGenerationConfig
 from .reasoning_policy import (
     NOOP_REASONING_PRESETS,
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
@@ -228,6 +229,17 @@ def _ad_copy_config_for_request(request: ContentOpsRequest) -> AdCopyGenerationC
     if max_text_chars is None:
         return config
     return AdCopyGenerationConfig(
+        limit=config.limit,
+        max_text_chars=max_text_chars,
+    )
+
+
+def _quote_card_config_for_request(request: ContentOpsRequest) -> QuoteCardGenerationConfig:
+    config = QuoteCardGenerationConfig(limit=request.limit)
+    max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
+    if max_text_chars is None:
+        return config
+    return QuoteCardGenerationConfig(
         limit=config.limit,
         max_text_chars=max_text_chars,
     )
@@ -450,6 +462,17 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         return GenerationPlanStep(
             output=output,
             runner="AdCopyGenerationService.generate",
+            status="runnable",
+            config={
+                "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
+            },
+        )
+    if output == "quote_card":
+        config = _quote_card_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="QuoteCardGenerationService.generate",
             status="runnable",
             config={
                 "limit": config.limit,

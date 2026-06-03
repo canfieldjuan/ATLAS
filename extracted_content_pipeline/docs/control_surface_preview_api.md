@@ -72,6 +72,7 @@ Current output ids:
 | `sales_brief` | Implemented | `optional_host_context` | Sales brief generation service path. |
 | `social_post` | Implemented | `absent` | Deterministic source-evidence social post drafts; no LLM call. |
 | `ad_copy` | Implemented | `absent` | Deterministic source-evidence ad-copy drafts; no LLM call. |
+| `quote_card` | Implemented | `absent` | Deterministic source-evidence quote-card drafts; no LLM call. |
 | `signal_extraction` | Implemented | `absent` | Deterministic source-row normalization into campaign opportunities; no LLM call. |
 
 Future outputs should be added to the catalog first, then exposed through
@@ -378,6 +379,7 @@ Runnable outputs dispatch to:
 | `sales_brief` | `SalesBriefGenerationService.generate(...)` |
 | `social_post` | `SocialPostGenerationService.generate(...)` |
 | `ad_copy` | `AdCopyGenerationService.generate(...)` |
+| `quote_card` | `QuoteCardGenerationService.generate(...)` |
 | `signal_extraction` | `SignalExtractionService.generate(...)` |
 
 Non-executable plans return HTTP 400 with the blocked execution result. Missing

@@ -20,6 +20,7 @@ from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
 from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
+from extracted_content_pipeline.quote_card_generation import QuoteCardGenerationService
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
 from extracted_content_pipeline.social_post_generation import SocialPostGenerationService
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
@@ -661,6 +662,45 @@ async def test_execute_runs_ad_copy_service_from_source_material() -> None:
     assert ad["source_id"] == "review-1"
     assert ad["vendor_name"] == "HubSpot"
     assert "Pricing is a problem" in ad["primary_text"]
+    assert result["plan"]["steps"][0]["config"] == {
+        "limit": 1,
+        "max_text_chars": 20,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_quote_card_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["quote_card"],
+            "limit": 1,
+            "inputs": {
+                "source_max_text_chars": 20,
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem after renewal.",
+                        "pain_category": "pricing pressure",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            quote_card=QuoteCardGenerationService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "quote_card"
+    assert step["runner"] == "QuoteCardGenerationService.generate"
+    assert step["result"]["generated"] == 1
+    card = step["result"]["cards"][0]
+    assert card["source_id"] == "review-1"
+    assert card["vendor_name"] == "HubSpot"
+    assert "Pricing is a problem" in card["quote"]
     assert result["plan"]["steps"][0]["config"] == {
         "limit": 1,
         "max_text_chars": 20,
