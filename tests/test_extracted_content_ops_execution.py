@@ -810,7 +810,8 @@ async def test_execute_applies_hosted_faq_intent_rules_to_deflection_report_with
     assert item["topic"] == "data freshness"
     assert item["ticket_count"] == 2
     assert item["answer_evidence_status"] == "draft_needs_review"
-    assert "## Drafted Answers With Proven Solutions" in step["result"]["markdown"]
+    assert "## Support Tax Confirmation" in step["result"]["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" in step["result"]["markdown"]
     assert "## No Proven Answer Yet" in step["result"]["markdown"]
     assert "No verified support resolution was present" in step["result"]["markdown"]
 
@@ -857,8 +858,9 @@ async def test_execute_runs_faq_deflection_report_from_source_material() -> None
     assert step["runner"] == "FAQDeflectionReportService.generate"
     assert step["status"] == "completed"
     assert step["result"]["markdown"].startswith("# Acme Support Deflection Report")
+    assert "## Support Tax Confirmation" in step["result"]["markdown"]
     assert "## Ranked Question Opportunities" in step["result"]["markdown"]
-    assert "## Drafted Answers With Proven Solutions" in step["result"]["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" in step["result"]["markdown"]
     assert "Open Analytics, choose Attribution" in step["result"]["markdown"]
     assert "## No Proven Answer Yet" in step["result"]["markdown"]
     assert step["result"]["summary"]["source_count"] == 2

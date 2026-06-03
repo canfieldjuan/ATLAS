@@ -46,6 +46,7 @@ def _snapshot(question: str, *, generated: int = 1) -> dict[str, Any]:
             {
                 "rank": 1,
                 "question": question,
+                "ticket_count": 4,
                 "weighted_frequency": 7,
                 "customer_wording": question,
                 "answer": "Open Analytics and export the report.",
@@ -231,6 +232,7 @@ async def test_fetch_uses_bound_account_and_excludes_paid_artifact_fields(
         {
             "rank": 1,
             "question": "How do I export attribution reports?",
+            "ticket_count": 4,
             "weighted_frequency": 7,
             "customer_wording": "How do I export attribution reports?",
             "opportunity_score": 7,

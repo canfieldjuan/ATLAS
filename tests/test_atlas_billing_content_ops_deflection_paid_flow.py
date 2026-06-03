@@ -194,9 +194,10 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
         },
     }
     assert gated_result["snapshot"]["summary"] == {
-        "generated": 2,
+        "generated": 3,
         "drafted_answer_count": 1,
-        "no_proven_answer_count": 1,
+        "no_proven_answer_count": 2,
+        "repeat_ticket_count": 4,
     }
     encoded_gated_result = str(gated_result)
     assert "markdown" not in encoded_gated_result
@@ -253,7 +254,8 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
 
     unlocked = await artifact_route.endpoint(request_id=request_id)
     assert unlocked["summary"]["drafted_answer_count"] == 1
-    assert unlocked["summary"]["no_proven_answer_count"] == 1
-    assert "## Drafted Answers With Proven Solutions" in unlocked["markdown"]
+    assert unlocked["summary"]["no_proven_answer_count"] == 2
+    assert "## Support Tax Confirmation" in unlocked["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" in unlocked["markdown"]
     assert "## No Proven Answer Yet" in unlocked["markdown"]
     assert unlocked["faq_result"]["items"][0]["source_ids"]

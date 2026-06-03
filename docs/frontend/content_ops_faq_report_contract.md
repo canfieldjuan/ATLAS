@@ -64,9 +64,10 @@ type FAQDeflectionReportSummary = {
 
 The report Markdown always contains these customer-facing sections:
 
-- `Executive Summary`
+- `Support Tax Confirmation`
+- `Your Help-Desk SEO Targeting List`
 - `Ranked Question Opportunities`
-- `Drafted Answers With Proven Solutions`
+- `Publishable Help-Center Copy From Proven Resolutions`
 - `No Proven Answer Yet`
 - `Vocabulary Gaps`
 - `Evidence Appendix`

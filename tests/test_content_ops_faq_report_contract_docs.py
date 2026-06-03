@@ -162,6 +162,7 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
     assert set(payload) == set(producer_payload)
     assert set(payload["summary"]) == set(producer_payload["summary"])
     assert set(payload["faq_result"]) == set(producer_payload["faq_result"])
+    assert payload["markdown"] == producer_payload["markdown"]
     assert payload["summary"]["drafted_answer_count"] == 1
     assert payload["summary"]["no_proven_answer_count"] == 1
     assert payload["summary"]["generated"] == len(payload["faq_result"]["items"])
@@ -172,8 +173,11 @@ def test_content_ops_faq_deflection_example_matches_producer_shape() -> None:
         "uses_user_vocabulary": True,
     }
     assert all(payload["faq_result"]["output_checks"].values())
-    assert "## Drafted Answers With Proven Solutions" in payload["markdown"]
+    assert "## Support Tax Confirmation" in payload["markdown"]
+    assert "## Your Help-Desk SEO Targeting List" in payload["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" in payload["markdown"]
     assert "## No Proven Answer Yet" in payload["markdown"]
+    assert "**Sources:**" not in payload["markdown"]
     assert "Use the uploaded resolution evidence" not in encoded
     assert "Customers mention:" not in encoded
     assert "Confirm the answer matches" not in encoded
