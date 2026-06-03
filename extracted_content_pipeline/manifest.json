@@ -222,6 +222,9 @@
       "target": "extracted_content_pipeline/campaign_postgres_export.py"
     },
     {
+      "target": "extracted_content_pipeline/csv_export.py"
+    },
+    {
       "target": "extracted_content_pipeline/report_export.py"
     },
     {

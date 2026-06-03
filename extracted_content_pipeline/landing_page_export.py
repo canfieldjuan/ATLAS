@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .campaign_ports import TenantScope
+from .csv_export import csv_cell_value as _csv_value
 from .landing_page_ports import LandingPageDraft, LandingPageRepository
 from .landing_page_readiness import (
     landing_page_geo_readiness,
@@ -239,12 +240,6 @@ def _metadata_mapping(value: Any) -> JsonDict:
         if isinstance(parsed, Mapping):
             return {str(key): item for key, item in parsed.items()}
     return {}
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _normalize_limit(value: Any) -> int:

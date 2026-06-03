@@ -31,13 +31,13 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from io import StringIO
 from typing import Any
 
 from .campaign_ports import CampaignReasoningContext, JsonDict, TenantScope
+from .csv_export import csv_cell_value as _csv_value
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     normalize_campaign_reasoning_context,
@@ -139,12 +139,6 @@ def _json_ready(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _serializable_context_row(row: Mapping[str, Any]) -> JsonDict:
