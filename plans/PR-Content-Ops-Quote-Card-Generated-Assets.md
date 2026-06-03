@@ -130,12 +130,12 @@ None.
 - Passed: `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline`
 - Passed: `python scripts/audit_extracted_standalone.py --fail-on-debt`
 - Passed: `bash scripts/check_ascii_python.sh`
-- Passed: `bash scripts/run_extracted_pipeline_checks.sh` (3019 passed, 10 skipped, 1 warning)
+- Passed: `bash scripts/run_extracted_pipeline_checks.sh` (3026 passed, 10 skipped, 1 warning)
 - Passed: `bash scripts/local_pr_review.sh --current-pr-body-file /tmp/content-ops-quote-card-generated-assets-pr-body.md`
 
 ## Estimated diff size
 
-Actual: 20 files, +1343 / -5. This is above the 400 LOC soft cap for the
+Actual: 20 files, +1344 / -5. This is above the 400 LOC soft cap for the
 end-to-end handoff reasons named in **Why this slice exists**.
 
 | Area | Estimated LOC |
@@ -145,4 +145,4 @@ end-to-end handoff reasons named in **Why this slice exists**.
 | Backend review/export switchboard and tests | ~225 |
 | Frontend type/UI/test/workflow enrollment | ~230 |
 | Plan doc and CI test enrollment | ~338 |
-| **Total** | **~1343** |
+| **Total** | **~1344** |
