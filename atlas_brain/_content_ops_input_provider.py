@@ -160,20 +160,29 @@ _COMPETITIVE_MARKER_KEYS = frozenset({
     "top_displacement_targets",
     "winning_vendor",
 })
-_REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
+_REVIEW_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post", "sales_brief", "social_post")
 _REVIEW_CAMPAIGN_NAME = "Review-Signal Campaign"
 _REVIEW_TOPIC = "Customer review themes worth turning into content"
 _REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
-_REVIEW_OFFER = "Turn customer review themes into buyer-facing landing pages and blog posts"
+_REVIEW_OFFER = (
+    "Turn customer review themes into buyer-facing landing pages, blog posts, "
+    "sales briefs, and social posts"
+)
 _REVIEW_TARGET_KEYWORD = "customer review content marketing"
-_COMPETITIVE_CAMPAIGN_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
+_COMPETITIVE_CAMPAIGN_OUTPUTS = (
+    "landing_page",
+    "blog_post",
+    "sales_brief",
+    "social_post",
+)
 _COMPETITIVE_CAMPAIGN_NAME = "Competitive Displacement Campaign"
 _COMPETITIVE_TOPIC = "Competitive displacement themes worth turning into content"
 _COMPETITIVE_AUDIENCE = (
     "Marketing teams turning competitive evidence into grounded content"
 )
 _COMPETITIVE_OFFER = (
-    "Turn competitor and switching evidence into buyer-facing landing pages and blog posts"
+    "Turn competitor and switching evidence into buyer-facing landing pages, "
+    "blog posts, sales briefs, and social posts"
 )
 _COMPETITIVE_TARGET_KEYWORD = "competitive displacement content marketing"
 

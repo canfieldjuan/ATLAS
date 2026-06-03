@@ -59,6 +59,9 @@ class _RunnableService:
         return {"kwargs": kwargs}
 
 
+_MARKETER_OUTPUTS = ("landing_page", "blog_post", "sales_brief", "social_post")
+
+
 def _route(router, path: str, method: str):
     for route in router.routes:
         if getattr(route, "path", None) == path and method.upper() in getattr(
@@ -162,7 +165,7 @@ def test_review_source_material_builds_landing_blog_and_sales_brief_inputs() -> 
     preview = preview_control_surface(request)
 
     assert package.provider == "atlas_review_request"
-    assert request.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert request.outputs == _MARKETER_OUTPUTS
     assert request.ingestion_profile == "existing_evidence"
     assert request.inputs["source_type"] == "reviews"
     assert request.inputs["brief_type"] == "discovery"
@@ -208,7 +211,7 @@ def test_competitive_source_material_builds_landing_and_blog_inputs() -> None:
     preview = preview_control_surface(request)
 
     assert package.provider == "atlas_competitive_request"
-    assert request.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert request.outputs == _MARKETER_OUTPUTS
     assert request.ingestion_profile == "existing_evidence"
     assert request.inputs["source_type"] == "competitive"
     assert request.inputs["competitive_source_material"][0]["target_id"] == "competitive-1"
@@ -233,7 +236,7 @@ def test_competitive_source_material_accepts_competitive_bundle_alias() -> None:
     )
 
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert package.outputs == _MARKETER_OUTPUTS
     assert package.inputs["source_material"][0]["source_type"] == "competitive"
     assert package.inputs["source_material"][0]["target_id"] == "competitive-1"
     assert package.metadata["source_row_count"] == 1
@@ -272,7 +275,7 @@ def test_review_source_material_accepts_review_bundle_alias() -> None:
     )
 
     assert package.provider == "atlas_review_request"
-    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert package.outputs == _MARKETER_OUTPUTS
     assert package.inputs["source_material"][0]["source_type"] == "review"
     assert package.metadata["included_row_count"] == 1
 
@@ -448,7 +451,7 @@ async def test_review_mode_fetches_persisted_targets_by_tenant_scope() -> None:
     ]
     assert {call["account_id"] for call in pool["opportunity_calls"]} == {"acct-1"}
     assert package.provider == "atlas_review_request"
-    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert package.outputs == _MARKETER_OUTPUTS
     assert package.metadata["source_target_loaded_count"] == 2
     assert package.metadata["included_row_count"] == 2
     assert {row["source_type"] for row in package.inputs["source_material"]} == {
@@ -492,7 +495,7 @@ async def test_competitive_mode_fetches_persisted_targets_by_tenant_scope() -> N
     ]
     assert {call["account_id"] for call in pool["opportunity_calls"]} == {"acct-1"}
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert package.outputs == _MARKETER_OUTPUTS
     assert package.metadata["source_target_loaded_count"] == 2
     assert package.metadata["included_row_count"] == 2
     assert package.inputs["competitive_alternatives"] == ["Teams", "Confluence"]
@@ -514,7 +517,7 @@ async def test_competitive_mode_fetches_b2b_displacement_dynamics_by_tracked_ven
     )
 
     assert package.provider == "atlas_competitive_request"
-    assert package.outputs == ("landing_page", "blog_post", "sales_brief")
+    assert package.outputs == _MARKETER_OUTPUTS
     assert package.metadata["b2b_displacement_vendor_count"] == 2
     assert package.metadata["b2b_displacement_loaded_count"] == 1
     assert package.metadata["b2b_displacement_missing_vendor_count"] == 1
@@ -626,6 +629,7 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
             blog_post=_RunnableService(),
             landing_page=_RunnableService(),
             sales_brief=_RunnableService(),
+            social_post=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -643,6 +647,11 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
     sales_brief_kwargs = sales_brief_step.result["kwargs"]
     assert sales_brief_kwargs["default_brief_type"] == "discovery"
     assert sales_brief_kwargs["source_material"][0]["target_id"] == "review-1"
+
+    social_post_step = next(step for step in result.steps if step.output == "social_post")
+    social_post_kwargs = social_post_step.result["kwargs"]
+    assert social_post_kwargs["source_material"][0]["target_id"] == "review-1"
+    assert social_post_kwargs["target_mode"] == "vendor_retention"
 
 
 @pytest.mark.asyncio
@@ -665,6 +674,7 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
             blog_post=_RunnableService(),
             landing_page=_RunnableService(),
             sales_brief=_RunnableService(),
+            social_post=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -683,6 +693,11 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
     assert sales_brief_kwargs["default_brief_type"] == "displacement"
     assert sales_brief_kwargs["source_material"][0]["target_id"] == "competitive-1"
 
+    social_post_step = next(step for step in result.steps if step.output == "social_post")
+    social_post_kwargs = social_post_step.result["kwargs"]
+    assert social_post_kwargs["source_material"][0]["target_id"] == "competitive-1"
+    assert social_post_kwargs["target_mode"] == "vendor_retention"
+
 
 @pytest.mark.skipif(
     api_module.APIRouter is None,
@@ -696,6 +711,8 @@ async def test_plan_route_applies_review_input_provider() -> None:
         execution_services_provider=lambda: ContentOpsExecutionServices(
             blog_post=_RunnableService(),
             landing_page=_RunnableService(),
+            sales_brief=_RunnableService(),
+            social_post=_RunnableService(),
         ),
         scope_provider=lambda: TenantScope(account_id="acct-review-route"),
     )
@@ -709,9 +726,5 @@ async def test_plan_route_applies_review_input_provider() -> None:
     })
 
     assert payload["can_execute"] is True
-    assert [step["output"] for step in payload["steps"]] == [
-        "landing_page",
-        "blog_post",
-        "sales_brief",
-    ]
-    assert payload["preview"]["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+    assert [step["output"] for step in payload["steps"]] == list(_MARKETER_OUTPUTS)
+    assert payload["preview"]["outputs"] == list(_MARKETER_OUTPUTS)
