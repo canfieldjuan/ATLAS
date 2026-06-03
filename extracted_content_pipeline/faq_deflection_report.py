@@ -609,10 +609,7 @@ def _is_teaser_eligible(item: Mapping[str, Any]) -> bool:
 def _select_full_teaser_item(
     eligible: Sequence[tuple[int, Mapping[str, Any]]],
 ) -> tuple[int, Mapping[str, Any]]:
-    for rank, item in eligible:
-        if rank >= 4:
-            return rank, item
-    return eligible[-1]
+    return eligible[0]
 
 
 def _teaser_full_answer(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:

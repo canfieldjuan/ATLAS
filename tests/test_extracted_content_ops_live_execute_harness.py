@@ -1034,7 +1034,9 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "resolution_evidence"
     )
     assert snapshot["teaser"]["full_answer"]["resolution_evidence_scope"] == "scoped"
+    assert snapshot["teaser"]["full_answer"]["rank"] == 1
     assert len(snapshot["teaser"]["previews"]) == 1
+    assert snapshot["teaser"]["previews"][0]["rank"] == 2
     assert snapshot["teaser"]["previews"][0]["body_withheld"] is True
     assert "answer" not in snapshot["teaser"]["previews"][0]
     assert "steps" not in snapshot["teaser"]["previews"][0]
