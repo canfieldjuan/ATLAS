@@ -114,19 +114,157 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
 
     assert artifact.summary["drafted_answer_count"] == 1
     assert artifact.summary["no_proven_answer_count"] == 1
+    assert "## Support Tax Confirmation" in artifact.markdown
+    assert "Gartner $13.50 assisted-contact benchmark" in artifact.markdown
+    assert "## Your Help-Desk SEO Targeting List" in artifact.markdown
     assert "## Ranked Question Opportunities" in artifact.markdown
-    assert "## Drafted Answers With Proven Solutions" in artifact.markdown
+    assert "## Publishable Help-Center Copy From Proven Resolutions" in artifact.markdown
     assert "How do I export attribution reports?" in artifact.markdown
     assert "To resolve this, open Analytics" in artifact.markdown
     assert "Uploaded resolution evidence supports this draft answer" not in artifact.markdown
     assert "Open Analytics, choose Attribution" in artifact.markdown
     assert "Use the uploaded resolution evidence" not in artifact.markdown
+    assert "**Sources:**" not in artifact.markdown
     assert "## No Proven Answer Yet" in artifact.markdown
     assert "Why is the dashboard stale?" in artifact.markdown
     assert "Customers repeatedly asked this question" in artifact.markdown
     assert "No verified support resolution was present" in artifact.markdown
     assert "export" in artifact.markdown
     assert "Download report" in artifact.markdown
+
+
+def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=8,
+        ticket_source_count=8,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "customer_wording": "export attribution reports",
+                "weighted_frequency": 8,
+                "ticket_count": 5,
+                "opportunity_score": 21,
+                "answer": "To resolve this, open Analytics, choose Attribution, then Download report.",
+                "answer_evidence_status": "resolution_evidence",
+                "steps": ["Open Analytics and select Download report."],
+                "source_ids": (
+                    "ticket-export-1",
+                    "ticket-export-2",
+                    "ticket-export-3",
+                    "ticket-export-4",
+                    "ticket-export-5",
+                ),
+                "source_date_span": {
+                    "start": "2026-05-01",
+                    "end": "2026-05-05",
+                    "missing_source_count": 0,
+                },
+                "evidence_quotes": ("`ticket-export-1` - Export attribution",),
+                "term_mappings": (
+                    {
+                        "customer_term": "report download",
+                        "documentation_term": "Download report",
+                        "suggestion": "Use report download in the FAQ title.",
+                        "source_id_count": 5,
+                    },
+                ),
+            },
+            {
+                "question": "Can I turn on SSO for all users?",
+                "customer_wording": "turn on SSO for all users",
+                "weighted_frequency": 4,
+                "ticket_count": 3,
+                "opportunity_score": 13,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": (
+                    "ticket-sso-1",
+                    "ticket-sso-2",
+                    "ticket-sso-3",
+                ),
+                "source_date_span": {
+                    "start": "2026-05-10",
+                    "end": "2026-05-15",
+                    "missing_source_count": 0,
+                },
+                "evidence_quotes": ("`ticket-sso-1` - SSO setup",),
+            },
+        ),
+    )
+
+    markdown = build_deflection_report_artifact(result).markdown
+    drafted = markdown.split("## Publishable Help-Center Copy From Proven Resolutions", 1)[1].split(
+        "## No Proven Answer Yet",
+        1,
+    )[0]
+    no_proven = markdown.split("## No Proven Answer Yet", 1)[1].split(
+        "## Vocabulary Gaps",
+        1,
+    )[0]
+    appendix = markdown.split("## Evidence Appendix", 1)[1]
+
+    assert markdown.startswith("# Support Ticket Deflection Report\n\n## Support Tax Confirmation")
+    assert "8 repeat-ticket hits across 2 ranked questions" in markdown
+    assert "Gartner $13.50 assisted-contact benchmark" in markdown
+    assert "about $108 of assisted-contact handling" in markdown
+    assert "2026-05-01 to 2026-05-15 (15 days)" in markdown
+    assert "about $2,628 over 12 months" in markdown
+    assert "Estimate only. This is not a savings guarantee" in markdown
+    assert "## Your Help-Desk SEO Targeting List" in markdown
+    assert "export attribution reports" in markdown
+    assert "report download" in markdown
+    assert "turn on SSO for all users" in markdown
+    assert "does not claim keyword volume, search rank, or traffic" in markdown
+    assert (
+        "| Rank | Customer question | Tickets | Estimated support cost | Opportunity |"
+        in markdown
+    )
+    assert "| 1 | How do I export attribution reports? | 5 | $68 | 21 |" in markdown
+    assert "| 2 | Can I turn on SSO for all users? | 3 | $41 | 13 |" in markdown
+    assert (
+        "Backed by 5 resolved tickets (ticket-export-1, ticket-export-2, "
+        "ticket-export-3, +2 more)."
+    ) in drafted
+    assert "Seen in 3 repeated tickets (ticket-sso-1, ticket-sso-2, ticket-sso-3)." in no_proven
+    assert "**Sources:**" not in markdown
+    assert "ticket-export-4" not in drafted
+    assert "ticket-export-5" not in drafted
+    assert (
+        "**Source IDs (full list):** ticket-export-1, ticket-export-2, "
+        "ticket-export-3, ticket-export-4, ticket-export-5"
+    ) in appendix
+    assert "**Source IDs (full list):** ticket-sso-1, ticket-sso-2, ticket-sso-3" in appendix
+    assert "will rank" not in markdown
+    assert "search volume" not in markdown
+    assert "guaranteed traffic" not in markdown
+
+
+def test_deflection_report_uses_unknown_window_cost_fallback_without_inference() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export reports?",
+                "ticket_count": 2,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-1", "ticket-2"),
+            },
+        ),
+    )
+
+    markdown = build_deflection_report_artifact(result).markdown
+
+    assert "2 repeat-ticket hits across 1 ranked questions" in markdown
+    assert "about $27 of assisted-contact handling" in markdown
+    assert "did not receive a complete source-date window" in markdown
+    assert "does not infer a monthly or annual reporting period" in markdown
+    assert "If this uploaded batch is monthly pace" in markdown
+    assert "the 12-month run-rate would be about $324" in markdown
+    assert "same measured daily pace" not in markdown
 
 
 def test_deflection_report_does_not_put_review_needed_steps_in_drafted_section() -> None:
@@ -897,7 +1035,7 @@ def test_deflection_report_cli_splits_backed_and_unproven_answers(tmp_path: Path
     assert exit_code == 0
     markdown = output.read_text()
     summary = json.loads(summary_output.read_text())
-    drafted = markdown.split("## Drafted Answers With Proven Solutions", 1)[1].split(
+    drafted = markdown.split("## Publishable Help-Center Copy From Proven Resolutions", 1)[1].split(
         "## No Proven Answer Yet",
         1,
     )[0]

@@ -17,6 +17,9 @@ _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
 DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 _UNCAPPED_REPORT_MAX_ITEMS = 0
+_ASSISTED_CONTACT_COST = 13.50
+_ASSISTED_CONTACT_COST_LABEL = "$13.50"
+_SOURCE_EXAMPLE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -286,27 +289,11 @@ def render_deflection_report(
     lines: list[str] = [
         f"# {_md(title)}",
         "",
-        "## Executive Summary",
-        "",
-        (
-            f"This report analyzed {resolved_summary.get('source_count', 0)} source rows "
-            f"and produced {resolved_summary.get('generated', 0)} ranked FAQ "
-            "opportunities from the supplied support data."
-        ),
-        "",
-        (
-            f"- Drafted answers with proven solutions: "
-            f"{resolved_summary.get('drafted_answer_count', 0)}"
-        ),
-        (
-            f"- No proven answer yet: "
-            f"{resolved_summary.get('no_proven_answer_count', 0)}"
-        ),
-        f"- Ticket sources represented: {resolved_summary.get('ticket_source_count', 0)}",
-        "",
     ]
+    lines.extend(_support_tax_section(resolved_summary, items))
     if source_label:
         lines.extend(["**Source file:**", "", _md(source_label), ""])
+    lines.extend(_help_desk_seo_targeting_section(items))
     lines.extend(_ranked_opportunity_section(items))
     lines.extend(_drafted_answer_section(proven))
     lines.extend(_no_proven_answer_section(needs_review))
@@ -315,29 +302,124 @@ def render_deflection_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _support_tax_section(
+    summary: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    repeat_ticket_count = _repeat_ticket_count(items)
+    batch_cost = _support_cost(repeat_ticket_count)
+    source_window = _complete_source_date_window(summary, items)
+    lines = [
+        "## Support Tax Confirmation",
+        "",
+        (
+            f"ATLAS found {_count(repeat_ticket_count)} repeat-ticket hits across "
+            f"{_count(_int(summary.get('generated')))} ranked questions. At the "
+            f"Gartner {_ASSISTED_CONTACT_COST_LABEL} assisted-contact benchmark, "
+            f"that uploaded work sizes to about {_format_money(batch_cost)} of "
+            "assisted-contact handling."
+        ),
+    ]
+    if source_window:
+        annualized = _support_cost(
+            repeat_ticket_count * 365 / _int(source_window.get("source_window_days"))
+        )
+        lines.extend([
+            "",
+            (
+                "The source window is "
+                f"{_source_window_label(source_window)}. At the same measured daily "
+                f"pace, that is about {_format_money(annualized)} over 12 months."
+            ),
+        ])
+    else:
+        monthly_pace = _support_cost(repeat_ticket_count * 12)
+        lines.extend([
+            "",
+            (
+                "ATLAS did not receive a complete source-date window for every "
+                "contributing ticket, so this report does not infer a monthly or "
+                "annual reporting period. If this uploaded batch is monthly pace, "
+                f"the 12-month run-rate would be about {_format_money(monthly_pace)}."
+            ),
+        ])
+    lines.extend([
+        "",
+        (
+            "Estimate only. This is not a savings guarantee; adjust the "
+            f"{_ASSISTED_CONTACT_COST_LABEL} benchmark to your own loaded support "
+            "cost."
+        ),
+        "",
+        (
+            "The full unlocked report below gives you every ranked repeat question, "
+            "the estimated support cost by question, publishable help-center copy "
+            "where your uploaded resolutions prove the answer, the no-proven-answer "
+            "roadmap, and the complete evidence appendix."
+        ),
+        "",
+        f"- Publishable answers drafted from proven resolutions: {_count(_int(summary.get('drafted_answer_count')))}",
+        f"- Questions still needing an approved resolution: {_count(_int(summary.get('no_proven_answer_count')))}",
+        f"- Ticket sources represented: {_count(_int(summary.get('ticket_source_count')))}",
+        "",
+    ])
+    return lines
+
+
+def _help_desk_seo_targeting_section(
+    items: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    phrases = _customer_phrase_list(items)
+    lines = [
+        "## Your Help-Desk SEO Targeting List",
+        "",
+        (
+            "Use these source-backed phrases as help-center headings, "
+            "internal-search synonyms, and FAQ wording. ATLAS mined them from "
+            "the tickets you uploaded; it does not claim keyword volume, search "
+            "rank, or traffic."
+        ),
+        "",
+    ]
+    if not phrases:
+        return [*lines, "No customer phrase targets were generated for this run.", ""]
+    lines.extend(
+        f"{index}. {_md(phrase)}"
+        for index, phrase in enumerate(phrases, start=1)
+    )
+    lines.append("")
+    return lines
+
+
 def _ranked_opportunity_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
     lines = [
         "## Ranked Question Opportunities",
         "",
-        "| Rank | Customer question | Frequency | Opportunity | Answer status | Source IDs |",
-        "|---:|---|---:|---:|---|---|",
+        "| Rank | Customer question | Tickets | Estimated support cost | Opportunity | Answer status | Source proof |",
+        "|---:|---|---:|---:|---:|---|---|",
     ]
     if not items:
-        return [*lines, "| - | No ranked FAQ opportunities were generated. | 0 | 0 | - | - |", ""]
+        return [
+            *lines,
+            "| - | No ranked FAQ opportunities were generated. | 0 | $0 | 0 | - | - |",
+            "",
+        ]
     for index, item in enumerate(items, start=1):
+        ticket_count = _ticket_count(item)
         lines.append(
             "| "
             f"{index} | {_cell(item.get('question'))} | "
-            f"{_int(item.get('weighted_frequency') or item.get('frequency'))} | "
+            f"{ticket_count} | "
+            f"{_format_money(_support_cost(ticket_count))} | "
             f"{_int(item.get('opportunity_score'))} | "
             f"{_status_label(item)} | "
-            f"{_cell(', '.join(_texts(item.get('source_ids'))[:5]))} |"
+            f"{_cell(_source_count_label(item))} |"
         )
     return [*lines, ""]
 
 
 def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    lines = ["## Drafted Answers With Proven Solutions", ""]
+    lines = ["## Publishable Help-Center Copy From Proven Resolutions", ""]
     if not items:
         return [
             *lines,
@@ -361,7 +443,7 @@ def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
                 for step_index, step in enumerate(steps, start=1)
             ],
             "",
-            f"**Sources:** {_md(', '.join(_texts(item.get('source_ids'))))}",
+            f"**Evidence backing:** {_source_backing_summary(item, resolved=True)}",
             "",
         ])
     return lines
@@ -385,7 +467,7 @@ def _no_proven_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
                 "Support should add the approved answer before this FAQ is published."
             ),
             "",
-            f"**Sources:** {_md(', '.join(_texts(item.get('source_ids'))))}",
+            f"**Ticket backing:** {_source_backing_summary(item, resolved=False)}",
             "",
         ])
     return lines
@@ -421,6 +503,20 @@ def _evidence_appendix_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
     for index, item in enumerate(items, start=1):
         quotes = _texts(item.get("evidence_quotes"))
         lines.extend([f"### {index}. {_md(item.get('question'))}", ""])
+        source_ids = _texts(item.get("source_ids"))
+        if source_ids:
+            lines.extend([
+                f"**Source IDs (full list):** {_md(', '.join(source_ids))}",
+                "",
+            ])
+        elif _source_count(item) > 0:
+            lines.extend([
+                (
+                    "**Source IDs (full list):** Not available in this export; "
+                    f"source count is {_source_count(item)}."
+                ),
+                "",
+            ])
         if not quotes:
             lines.extend(["No source excerpts were rendered for this item.", ""])
             continue
@@ -550,6 +646,10 @@ def _source_count(item: Mapping[str, Any]) -> int:
     return source_count or _int(item.get("ticket_count"))
 
 
+def _repeat_ticket_count(items: Sequence[Mapping[str, Any]]) -> int:
+    return sum(_ticket_count(item) for item in items)
+
+
 def _ticket_count(item: Mapping[str, Any]) -> int:
     ticket_count = _int(item.get("ticket_count"))
     if ticket_count > 0:
@@ -617,6 +717,86 @@ def _items_source_date_window(items: Sequence[Mapping[str, Any]]) -> dict[str, A
         "source_date_end": end.isoformat(),
         "source_window_days": (end - start).days + 1,
     }
+
+
+def _customer_phrase_list(items: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    phrases: list[str] = []
+
+    def add(value: Any) -> None:
+        phrase = _text(value)
+        if not phrase:
+            return
+        key = phrase.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        phrases.append(phrase)
+
+    for item in items:
+        add(
+            item.get("customer_wording")
+            or item.get("question")
+        )
+        for mapping in item.get("term_mappings") or ():
+            if isinstance(mapping, Mapping):
+                add(mapping.get("customer_term"))
+    return tuple(phrases)
+
+
+def _source_count_label(item: Mapping[str, Any]) -> str:
+    count = _source_count(item)
+    if count <= 0:
+        return "No source tickets"
+    if count == 1:
+        return "1 source ticket"
+    return f"{_count(count)} source tickets"
+
+
+def _source_backing_summary(item: Mapping[str, Any], *, resolved: bool) -> str:
+    count = _source_count(item)
+    source_ids = _texts(item.get("source_ids"))
+    examples = source_ids[:_SOURCE_EXAMPLE_LIMIT]
+    if resolved:
+        prefix = (
+            f"Backed by {_count(count)} resolved ticket"
+            f"{'' if count == 1 else 's'}"
+        )
+    else:
+        prefix = (
+            f"Seen in {_count(count)} repeated ticket"
+            f"{'' if count == 1 else 's'}"
+        )
+    if not examples:
+        return f"{prefix}. Full source details are in the Evidence Appendix."
+    more_count = max(len(source_ids) - len(examples), 0)
+    if more_count > 0:
+        example_text = f"{', '.join(examples)}, +{_count(more_count)} more"
+    else:
+        example_text = ", ".join(examples)
+    return (
+        f"{prefix} ({_md(example_text)}). Full source IDs are in the Evidence Appendix."
+    )
+
+
+def _source_window_label(source_window: Mapping[str, Any]) -> str:
+    start = _text(source_window.get("source_date_start"))
+    end = _text(source_window.get("source_date_end"))
+    days = _int(source_window.get("source_window_days"))
+    return f"{start} to {end} ({_count(days)} days)"
+
+
+def _support_cost(ticket_count: float | int) -> float:
+    return max(0.0, float(ticket_count) * _ASSISTED_CONTACT_COST)
+
+
+def _format_money(value: float | int) -> str:
+    rounded = int(float(value) + 0.5)
+    return f"${rounded:,}"
+
+
+def _count(value: int) -> str:
+    return f"{value:,}"
 
 
 def _iso_date_text(value: Any) -> str:
