@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Any
 
@@ -13,6 +13,7 @@ from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_row_to_campaign_opportunity,
 )
+from .stat_card_ports import StatCardDraft, StatCardRepository
 
 
 _NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?%?")
@@ -38,6 +39,7 @@ class StatCardGenerationResult:
     stats: tuple[dict[str, Any], ...]
     warnings: tuple[CampaignOpportunityWarning, ...] = ()
     target_mode: str = "vendor_retention"
+    saved_ids: tuple[str, ...] = ()
 
     @property
     def generated(self) -> int:
@@ -49,6 +51,7 @@ class StatCardGenerationResult:
             "target_mode": self.target_mode,
             "stats": [dict(stat) for stat in self.stats],
             "warnings": [warning.as_dict() for warning in self.warnings],
+            "saved_ids": list(self.saved_ids),
         }
 
 
@@ -74,8 +77,14 @@ _METRICS: tuple[_MetricDefinition, ...] = (
 class StatCardGenerationService:
     """Build short, evidence-backed stat-card drafts from source material."""
 
-    def __init__(self, config: StatCardGenerationConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: StatCardGenerationConfig | None = None,
+        *,
+        stat_cards: StatCardRepository | None = None,
+    ) -> None:
         self.config = config or StatCardGenerationConfig()
+        self._stat_cards = stat_cards
 
     async def generate(
         self,
@@ -87,7 +96,7 @@ class StatCardGenerationService:
         max_text_chars: int | None = None,
         **kwargs: Any,
     ) -> StatCardGenerationResult:
-        del kwargs, scope
+        del kwargs
         resolved_limit = int(limit) if limit is not None else self.config.limit
         if resolved_limit < 1:
             raise ValueError("limit must be at least 1")
@@ -98,7 +107,7 @@ class StatCardGenerationService:
         )
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be at least 1")
-        return _generate_stat_cards(
+        result = _generate_stat_cards(
             source_material_to_source_rows(source_material),
             target_mode=target_mode,
             limit=resolved_limit,
@@ -108,6 +117,16 @@ class StatCardGenerationService:
             max_supporting_text_chars=self.config.max_supporting_text_chars,
             max_evidence_chars=self.config.max_evidence_chars,
         )
+        if self._stat_cards is None or not result.stats:
+            return result
+        saved_ids = tuple(
+            str(item)
+            for item in await self._stat_cards.save_drafts(
+                _drafts_from_stats(result.stats, target_mode=target_mode),
+                scope=scope,
+            )
+        )
+        return replace(result, saved_ids=saved_ids)
 
 
 def _generate_stat_cards(
@@ -325,6 +344,47 @@ def _first_evidence(opportunity: Mapping[str, Any]) -> str:
                 if text:
                     return text
     return _clean(raw)
+
+
+def _drafts_from_stats(
+    stats: Sequence[Mapping[str, Any]],
+    *,
+    target_mode: str,
+) -> tuple[StatCardDraft, ...]:
+    drafts: list[StatCardDraft] = []
+    for stat in stats:
+        source_id = _clean(stat.get("source_id") or stat.get("id"))
+        target_id = _clean(stat.get("target_id")) or source_id
+        drafts.append(
+            StatCardDraft(
+                target_id=target_id,
+                target_mode=target_mode,
+                theme=_clean(stat.get("theme")) or "customer_metric",
+                metric_label=_clean(stat.get("metric_label")),
+                metric_value=stat.get("metric_value"),
+                metric_display=_clean(stat.get("metric_display")),
+                claim=_clean(stat.get("claim")),
+                headline=_clean(stat.get("headline")),
+                supporting_text=_clean(stat.get("supporting_text")),
+                evidence=_clean(stat.get("evidence")),
+                source_id=source_id,
+                source_type=_clean(stat.get("source_type")),
+                company_name=_clean(stat.get("company_name")),
+                vendor_name=_clean(stat.get("vendor_name")),
+                pain_points=_pain_points_from_stat(stat.get("pain_points")),
+                metadata={"source_card": dict(stat)},
+            )
+        )
+    return tuple(drafts)
+
+
+def _pain_points_from_stat(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return ()
+    return tuple(_clean(item) for item in value if _clean(item))
 
 
 def _evidence_snippet_for_value(

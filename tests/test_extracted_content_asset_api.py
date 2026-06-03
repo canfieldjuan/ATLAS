@@ -485,6 +485,29 @@ def _quote_card_row():
     }
 
 
+def _stat_card_row():
+    return {
+        "id": "stat-card-uuid-1",
+        "status": "draft",
+        "target_id": "review-1",
+        "target_mode": "review",
+        "theme": "customer_metric",
+        "metric_label": "NPS score",
+        "metric_value": 42,
+        "metric_display": "42",
+        "claim": "NPS score: 42",
+        "headline": "Customer metric for Zendesk",
+        "supporting_text": "Use this stat to frame slow response.",
+        "evidence": "NPS score dropped to 42 after renewal.",
+        "source_id": "source-1",
+        "source_type": "review",
+        "company_name": "Acme",
+        "vendor_name": "Zendesk",
+        "pain_points": ["slow response", "renewal pressure"],
+        "metadata": {"source_url": "https://example.test/reviews/1"},
+    }
+
+
 def _ticket_faq_row():
     return {
         "id": "faq-uuid-1",
@@ -1626,6 +1649,52 @@ def test_generated_asset_router_exports_quote_card_csv() -> None:
     assert args == ("", "review", "customer_proof", 20)
 
 
+def test_generated_asset_router_lists_stat_card_drafts_with_filters() -> None:
+    pool = _Pool(rows=[_stat_card_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get(
+        "/content-assets/stat_card/drafts"
+        "?target_mode=review&theme=customer_metric&limit=5"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    row = body["rows"][0]
+    assert row["id"] == "stat-card-uuid-1"
+    assert row["theme"] == "customer_metric"
+    assert row["metric_label"] == "NPS score"
+    assert row["metric_display"] == "42"
+    assert row["claim"] == "NPS score: 42"
+    assert row["evidence"] == "NPS score dropped to 42 after renewal."
+    assert row["pain_point_count"] == 2
+    query, args = pool.fetch_calls[0]
+    assert "FROM stat_card_drafts" in query
+    assert args == ("acct_1", "draft", "review", "customer_metric", 5)
+
+
+def test_generated_asset_router_exports_stat_card_csv() -> None:
+    pool = _Pool(rows=[_stat_card_row()])
+
+    response = _client(pool).get(
+        "/content-assets/stat_card/drafts/export"
+        "?format=csv&status=&target_mode=review&theme=customer_metric"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "content_assets_stat_card.csv" in response.headers["content-disposition"]
+    assert "target_id,target_mode,theme" in response.text
+    assert "NPS score: 42" in response.text
+    query, args = pool.fetch_calls[0]
+    assert "FROM stat_card_drafts" in query
+    assert "status = " not in query
+    assert args == ("", "review", "customer_metric", 20)
+
+
 def test_generated_asset_router_reviews_report_with_host_defined_status() -> None:
     pool = _Pool()
 
@@ -1712,6 +1781,27 @@ def test_generated_asset_router_reviews_quote_card() -> None:
     query, args = pool.execute_calls[0]
     assert "UPDATE quote_card_drafts" in query
     assert args == ("quote-card-uuid-1", "approved", "acct_1")
+
+
+def test_generated_asset_router_reviews_stat_card() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/stat_card/drafts/review",
+        json={"id": "stat-card-uuid-1", "status": "approved"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "acct_1",
+        "asset": "stat_card",
+        "id": "stat-card-uuid-1",
+        "status": "approved",
+        "updated": True,
+    }
+    query, args = pool.execute_calls[0]
+    assert "UPDATE stat_card_drafts" in query
+    assert args == ("stat-card-uuid-1", "approved", "acct_1")
 
 
 def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() -> None:
@@ -2122,6 +2212,31 @@ def test_generated_asset_router_batch_reviews_quote_cards() -> None:
     assert response.json()["updated_ids"] == [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2]
     query, args = pool.fetch_calls[0]
     assert "UPDATE quote_card_drafts" in query
+    assert "RETURNING id" in query
+    assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "rejected", "acct_1")
+    assert pool.execute_calls == []
+
+
+def test_generated_asset_router_batch_reviews_stat_cards() -> None:
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}, {"id": BATCH_REPORT_ID_2}])
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/stat_card/drafts/review-batch",
+        json={
+            "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
+            "status": "rejected",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["asset"] == "stat_card"
+    assert response.json()["updated"] == 2
+    assert response.json()["updated_ids"] == [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2]
+    query, args = pool.fetch_calls[0]
+    assert "UPDATE stat_card_drafts" in query
     assert "RETURNING id" in query
     assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "rejected", "acct_1")
     assert pool.execute_calls == []

@@ -434,6 +434,7 @@ export type GeneratedAssetType =
   | 'social_post'
   | 'ad_copy'
   | 'quote_card'
+  | 'stat_card'
   | 'faq_markdown'
 
 export interface GeneratedAssetRepairHistoryEntry {

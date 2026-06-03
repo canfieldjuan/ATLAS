@@ -85,6 +85,7 @@ pytest \
   tests/test_extracted_quote_card_generation.py \
   tests/test_extracted_stat_card_generation.py \
   tests/test_extracted_quote_card_postgres.py \
+  tests/test_extracted_stat_card_postgres.py \
   tests/test_extracted_content_ops_cache_policy.py \
   tests/test_extracted_content_ops_input_provider.py \
   tests/test_support_ticket_context_contract.py \

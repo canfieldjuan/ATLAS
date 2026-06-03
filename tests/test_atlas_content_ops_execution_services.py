@@ -19,8 +19,8 @@ the host has wired. Currently:
   customer-executable output lists while keeping it as the internal
   deflection-report source.
 - `social_post`: deterministic; persists when DB services are enabled.
-- `quote_card`: deterministic; always wired (stateless).
-- `stat_card`: deterministic; always wired (stateless).
+- `quote_card`: deterministic; persists when DB services are enabled.
+- `stat_card`: deterministic; persists when DB services are enabled.
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
   `faq_markdown`).
 
@@ -52,12 +52,13 @@ Test inventory (25 tests):
 15. `social_post` persists when DB services are enabled.
 16. `ad_copy` persists when DB services are enabled.
 17. `quote_card` runs through the full executor.
-18. `faq_deflection_report` runs through the full executor.
-19. `social_post` is always wired.
-20. `ad_copy` is always wired.
-21. `quote_card` is always wired.
-22. `stat_card` is always wired.
-23. `configured_outputs()` with LLM + db enabled advertises
+18. `stat_card` persists when DB services are enabled.
+19. `faq_deflection_report` runs through the full executor.
+20. `social_post` is always wired.
+21. `ad_copy` is always wired.
+22. `quote_card` is always wired.
+23. `stat_card` is always wired.
+24. `configured_outputs()` with LLM + db enabled advertises
     every wired output: `(email_campaign, blog_post, report,
     landing_page, sales_brief, social_post, ad_copy,
     quote_card, stat_card, signal_extraction, faq_markdown,
@@ -65,10 +66,10 @@ Test inventory (25 tests):
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-24. `configured_outputs()` without an active LLM (even with
+25. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
-25. The hosted paywall mode can hide `faq_markdown` while
+26. The hosted paywall mode can hide `faq_markdown` while
     retaining a runnable `faq_deflection_report`.
 """
 
@@ -388,6 +389,56 @@ async def test_quote_card_persists_when_db_services_enabled() -> None:
         "Acme Logistics",
         "Customer proof for HubSpot",
         "Use this quote to frame pricing pressure.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_stat_card_persists_when_db_services_enabled() -> None:
+    pool = _FAQPoolStub(return_id="stat-card-uuid-1")
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["stat_card"],
+            "inputs": {
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "reviewer_company": "Acme Logistics",
+                    "review_text": "NPS score dropped to 42 after renewal.",
+                    "nps_score": 42,
+                    "pain_category": "pricing pressure",
+                }]
+            },
+        },
+        services=services,
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "stat_card"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["stat-card-uuid-1"]
+    call = pool.fetchval_calls[0]
+    assert "INSERT INTO stat_card_drafts" in call["query"]
+    assert call["args"][:11] == (
+        "acct-1",
+        "review-1",
+        "vendor_retention",
+        "customer_metric",
+        "NPS score",
+        "42",
+        "42",
+        "NPS score: 42",
+        "Customer metric for HubSpot",
+        "Use this stat to frame pricing pressure.",
+        "NPS score dropped to 42 after renewal.",
     )
 
 
