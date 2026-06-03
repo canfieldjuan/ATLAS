@@ -306,6 +306,15 @@
       "target": "extracted_content_pipeline/social_post_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/social_post_ports.py"
+    },
+    {
+      "target": "extracted_content_pipeline/social_post_postgres.py"
+    },
+    {
+      "target": "extracted_content_pipeline/storage/migrations/331_social_posts.sql"
+    },
+    {
       "target": "extracted_content_pipeline/blog_ports.py"
     },
     {

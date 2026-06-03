@@ -94,6 +94,9 @@ from extracted_content_pipeline.signal_extraction import (
 from extracted_content_pipeline.social_post_generation import (
     SocialPostGenerationService,
 )
+from extracted_content_pipeline.social_post_postgres import (
+    PostgresSocialPostRepository,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
 )
@@ -254,6 +257,16 @@ def _build_ticket_faq_service(*, pool: Any) -> TicketFAQMarkdownService | None:
     return TicketFAQMarkdownService(ticket_faqs=PostgresTicketFAQRepository(pool=pool))
 
 
+def _build_social_post_service(*, pool: Any) -> SocialPostGenerationService:
+    """Build social-post generation with optional draft persistence."""
+
+    if pool is None:
+        return _SOCIAL_POST_SERVICE
+    return SocialPostGenerationService(
+        social_posts=PostgresSocialPostRepository(pool=pool)
+    )
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -311,6 +324,7 @@ def build_content_ops_execution_services(
     report = None
     sales_brief = None
     blog_post = None
+    social_post = _SOCIAL_POST_SERVICE
     faq_markdown_service = _FAQ_MARKDOWN_SERVICE
     faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
     faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
@@ -355,6 +369,7 @@ def build_content_ops_execution_services(
             pool=pool,
             image_provider=image_provider,
         )
+        social_post = _build_social_post_service(pool=pool)
         faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
         faq_deflection_report = FAQDeflectionReportService(
@@ -363,7 +378,7 @@ def build_content_ops_execution_services(
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
-        social_post=_SOCIAL_POST_SERVICE,
+        social_post=social_post,
         landing_page=landing_page,
         campaign=campaign,
         report=report,
