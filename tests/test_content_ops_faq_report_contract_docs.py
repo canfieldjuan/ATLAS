@@ -184,19 +184,28 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
     encoded = json.dumps(payload, sort_keys=True)
 
     assert payload == producer_payload
-    assert set(payload) == {"summary", "top_questions", "teaser"}
+    assert set(payload) == {
+        "summary",
+        "top_questions",
+        "locked_questions",
+        "teaser",
+    }
     assert set(payload["summary"]) == {
         "generated",
         "drafted_answer_count",
         "no_proven_answer_count",
+        "repeat_ticket_count",
     }
     for question in payload["top_questions"]:
         assert set(question) == {
             "rank",
             "question",
+            "ticket_count",
             "weighted_frequency",
             "customer_wording",
         }
+    for question in payload["locked_questions"]:
+        assert set(question) == {"rank", "ticket_count"}
     assert set(payload["teaser"]) == {"full_answer", "previews"}
     if payload["teaser"]["full_answer"] is not None:
         assert set(payload["teaser"]["full_answer"]) == {
@@ -228,9 +237,9 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
         assert preview["body_withheld"] is True
     assert "markdown" not in encoded
     assert "faq_result" not in encoded
-    assert "steps" not in json.dumps(payload["top_questions"], sort_keys=True)
-    assert "evidence_quotes" not in encoded
     assert "source_ids" not in encoded
+    assert "evidence_quotes" not in encoded
+    assert "steps" not in json.dumps(payload["top_questions"], sort_keys=True)
 
 
 def test_content_ops_faq_report_contract_links_example() -> None:

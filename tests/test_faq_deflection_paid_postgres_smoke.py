@@ -30,7 +30,7 @@ class _Pool:
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
         if "INSERT INTO content_ops_deflection_reports" in query:
-            account_id, request_id, snapshot, artifact = args
+            account_id, request_id, snapshot, artifact, delivery_email = args
             key = (str(account_id), str(request_id))
             existing = self.rows.get(key, {})
             self.rows[key] = {
@@ -40,6 +40,7 @@ class _Pool:
                 "artifact": artifact,
                 "paid": bool(existing.get("paid")),
                 "payment_reference": existing.get("payment_reference"),
+                "delivery_email": delivery_email,
             }
             return "INSERT 0 1"
         if "UPDATE content_ops_deflection_reports" in query:
@@ -165,6 +166,7 @@ async def test_deflection_paid_postgres_smoke_seeds_locks_marks_paid_and_rereads
         "drafted_answer_count": 1,
         "generated": 1,
         "no_proven_answer_count": 0,
+        "repeat_ticket_count": 1,
     }
     assert payload["artifact_summary"] == payload["snapshot_summary"]
     assert len(pool.execute_calls) == 2

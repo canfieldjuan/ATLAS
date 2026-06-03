@@ -1,8 +1,10 @@
 {
+  "locked_questions": [],
   "summary": {
     "drafted_answer_count": 1,
     "generated": 2,
-    "no_proven_answer_count": 1
+    "no_proven_answer_count": 1,
+    "repeat_ticket_count": 4
   },
   "teaser": {
     "full_answer": {
@@ -25,12 +27,14 @@
       "customer_wording": "How do I export attribution reports?",
       "question": "How do I export attribution reports?",
       "rank": 1,
+      "ticket_count": 2,
       "weighted_frequency": 2
     },
     {
       "customer_wording": "Can I turn on SSO for all users?",
       "question": "Can I turn on SSO for all users?",
       "rank": 2,
+      "ticket_count": 2,
       "weighted_frequency": 2
     }
   ]

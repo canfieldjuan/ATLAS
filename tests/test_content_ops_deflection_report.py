@@ -170,6 +170,7 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
                 "question": "How do I export attribution reports?",
                 "question_source": "customer_wording",
                 "weighted_frequency": 8,
+                "ticket_count": 4,
                 "answer": "Customers mention export trouble.",
                 "steps": ["Open Analytics and download the report."],
                 "evidence_quotes": ("ticket-export-1 said export failed",),
@@ -197,13 +198,21 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
             "generated": 2,
             "drafted_answer_count": 1,
             "no_proven_answer_count": 1,
+            "repeat_ticket_count": 5,
         },
         "top_questions": [
             {
                 "rank": 1,
                 "question": "How do I export attribution reports?",
+                "ticket_count": 4,
                 "weighted_frequency": 8,
                 "customer_wording": "How do I export attribution reports?",
+            }
+        ],
+        "locked_questions": [
+            {
+                "rank": 2,
+                "ticket_count": 1,
             }
         ],
         "teaser": {"full_answer": None, "previews": []},
@@ -211,6 +220,59 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
     assert "Open Analytics" not in encoded
     assert "ticket-export-1" not in encoded
     assert "evidence" not in encoded
+
+
+def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=10,
+        ticket_source_count=10,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "weighted_frequency": 99,
+                "ticket_count": 7,
+                "source_ids": ("ticket-export-1",),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            {
+                "question": "Can I enable SSO?",
+                "weighted_frequency": 88,
+                "source_ids": ("ticket-sso-1", "ticket-sso-2"),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            {
+                "question": "Weighted score is not a ticket count",
+                "weighted_frequency": 77,
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(
+        build_deflection_report_artifact(result),
+        top_n=1,
+    ).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot["summary"]["repeat_ticket_count"] == 9
+    assert snapshot["top_questions"] == [
+        {
+            "rank": 1,
+            "question": "How do I export attribution reports?",
+            "ticket_count": 7,
+            "weighted_frequency": 99,
+            "customer_wording": "",
+        }
+    ]
+    assert snapshot["locked_questions"] == [
+        {"rank": 2, "ticket_count": 2},
+        {"rank": 3, "ticket_count": 0},
+    ]
+    assert "Can I enable SSO?" not in encoded
+    assert "Weighted score is not a ticket count" not in encoded
+    assert "ticket-sso-1" not in encoded
 
 
 def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:
@@ -555,6 +617,7 @@ def test_deflection_snapshot_content_opportunities_are_unpaid_safe() -> None:
                 {
                     "rank": 1,
                     "question": "How do I export reports?",
+                    "ticket_count": 3,
                     "weighted_frequency": 5,
                     "customer_wording": "export reports",
                     "answer": "Open Analytics.",
@@ -573,6 +636,7 @@ def test_deflection_snapshot_content_opportunities_are_unpaid_safe() -> None:
         {
             "rank": 1,
             "question": "How do I export reports?",
+            "ticket_count": 3,
             "weighted_frequency": 5,
             "customer_wording": "export reports",
             "opportunity_score": 5,

@@ -2568,7 +2568,10 @@ async def test_execute_generation_route_returns_snapshot_for_unpaid_deflection_r
     assert result["snapshot"]["summary"]["generated"] == 2
     assert result["snapshot"]["summary"]["drafted_answer_count"] == 1
     assert result["snapshot"]["summary"]["no_proven_answer_count"] == 1
+    assert result["snapshot"]["summary"]["repeat_ticket_count"] == 2
     assert result["snapshot"]["top_questions"][0]["rank"] == 1
+    assert result["snapshot"]["top_questions"][0]["ticket_count"] == 1
+    assert result["snapshot"]["locked_questions"] == []
     assert result["snapshot"]["teaser"]["full_answer"]["answer"] == (
         "To resolve this, open Analytics and download the report."
     )

@@ -24,15 +24,18 @@ SNAPSHOT = {
         "generated": 2,
         "drafted_answer_count": 1,
         "no_proven_answer_count": 1,
+        "repeat_ticket_count": 4,
     },
     "top_questions": [
         {
             "rank": 1,
             "question": "How do I export reports?",
+            "ticket_count": 3,
             "weighted_frequency": 3,
             "customer_wording": "How do I export reports?",
         }
     ],
+    "locked_questions": [{"rank": 2, "ticket_count": 1}],
 }
 
 

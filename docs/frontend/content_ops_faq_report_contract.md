@@ -84,16 +84,24 @@ type DeflectionSnapshot = {
     generated: number;
     drafted_answer_count: number;
     no_proven_answer_count: number;
+    repeat_ticket_count: number;
   };
   top_questions: DeflectionSnapshotQuestion[];
+  locked_questions: DeflectionSnapshotLockedQuestion[];
   teaser: DeflectionSnapshotTeaser;
 };
 
 type DeflectionSnapshotQuestion = {
   rank: number;
   question: string;
+  ticket_count: number;
   weighted_frequency: number;
   customer_wording: string;
+};
+
+type DeflectionSnapshotLockedQuestion = {
+  rank: number;
+  ticket_count: number;
 };
 
 type DeflectionSnapshotTeaser = {
@@ -132,9 +140,17 @@ This shape intentionally excludes paid deliverable fields:
 - no `evidence_quotes`
 - no `source_ids`
 - no vocabulary term mappings
+- no locked question text; `locked_questions` contains only rank and raw
+  ticket count
 
 The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
 eligible. Preview entries never include answer body text.
+
+`ticket_count` and `summary.repeat_ticket_count` are raw measured counts from
+the report items/source rows. `weighted_frequency` is ranking metadata only and
+must not feed spend or cost copy. If raw counts are unavailable, count-dependent
+frontend projections should stay hidden rather than fall back to the ranking
+score.
 
 ## FAQ Item
 
@@ -239,8 +255,9 @@ type TicketFAQSearchResponse = {
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
 - For `faq_deflection_report`, render top-level `markdown` as the deliverable.
   Use `summary` for proof badges and `faq_result` for drill-down cards.
-- For unpaid deflection results, render only `DeflectionSnapshot.summary` and
-  `DeflectionSnapshot.top_questions`. Do not infer answer text, evidence, or
+- For unpaid deflection results, render only `DeflectionSnapshot.summary`,
+  `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
+  and `DeflectionSnapshot.teaser`. Do not infer answer text, evidence, or
   source IDs from the snapshot.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the
