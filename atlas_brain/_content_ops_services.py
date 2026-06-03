@@ -9,6 +9,8 @@ route layer maps to a per-step error the UI can render.
 Currently wired:
 - `signal_extraction` (E1, PR #452): deterministic generator
   with no external dependencies.
+- `social_post`: deterministic source-evidence social post drafts
+  with no external dependencies.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -89,6 +91,9 @@ from extracted_content_pipeline.sales_brief_postgres import (
 from extracted_content_pipeline.signal_extraction import (
     SignalExtractionService,
 )
+from extracted_content_pipeline.social_post_generation import (
+    SocialPostGenerationService,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
 )
@@ -100,6 +105,7 @@ from extracted_content_pipeline.ticket_faq_postgres import (
 # Module-level singleton: SignalExtractionService is stateless, so
 # re-creating it per request would just churn allocations.
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
+_SOCIAL_POST_SERVICE: SocialPostGenerationService = SocialPostGenerationService()
 _FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
 _FAQ_DEFLECTION_REPORT_SERVICE: FAQDeflectionReportService = FAQDeflectionReportService(
     faq_markdown=_FAQ_MARKDOWN_SERVICE
@@ -357,6 +363,7 @@ def build_content_ops_execution_services(
 
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
+        social_post=_SOCIAL_POST_SERVICE,
         landing_page=landing_page,
         campaign=campaign,
         report=report,

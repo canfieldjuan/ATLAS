@@ -5,16 +5,20 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
       - "atlas_brain/_content_ops_input_provider.py"
+      - "atlas_brain/_content_ops_services.py"
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
+      - "tests/test_atlas_content_ops_execution_services.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
       - "atlas_brain/_content_ops_input_provider.py"
+      - "atlas_brain/_content_ops_services.py"
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
+      - "tests/test_atlas_content_ops_execution_services.py"
 
 jobs:
   atlas-content-ops-input-provider-checks:
@@ -40,4 +44,5 @@ jobs:
           python -m pytest \
             tests/test_atlas_content_ops_input_provider.py \
             tests/test_atlas_content_ops_review_input_provider.py \
+            tests/test_atlas_content_ops_execution_services.py \
             -q

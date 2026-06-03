@@ -472,6 +472,33 @@ def test_plan_maps_signal_extraction_to_signal_extraction_service():
     }
 
 
+def test_plan_maps_social_post_to_social_post_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing pressure came up at renewal.",
+                    }
+                ],
+                "source_max_text_chars": 300,
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "SocialPostGenerationService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "limit": 3,
+        "max_text_chars": 300,
+    }
+
+
 def test_plan_maps_faq_markdown_to_ticket_faq_service():
     plan = build_generation_plan_from_mapping(
         {

@@ -162,6 +162,24 @@ def test_preview_allows_signal_extraction_when_source_material_present():
     assert preview["estimated_cost_usd"] == 0.0
 
 
+def test_preview_allows_social_post_when_source_material_present():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["social_post"]
+    assert preview["missing_inputs"] == []
+    assert preview["blocked_outputs"] == []
+    assert preview["estimated_cost_usd"] == 0.0
+
+
 def test_preview_allows_faq_markdown_when_source_material_present():
     preview = preview_from_mapping(
         {
@@ -367,6 +385,19 @@ def test_preview_keeps_signal_extraction_blocked_without_source_material():
     assert preview["missing_inputs"] == ["source_material"]
 
 
+def test_preview_keeps_social_post_blocked_without_source_material():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "inputs": {},
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["outputs"] == ["social_post"]
+    assert preview["missing_inputs"] == ["source_material"]
+
+
 def test_output_catalog_states_reasoning_requirement():
     from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
 
@@ -375,6 +406,7 @@ def test_output_catalog_states_reasoning_requirement():
     assert OUTPUT_CATALOG["landing_page"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["sales_brief"].reasoning_requirement == "optional_host_context"
     assert OUTPUT_CATALOG["blog_post"].reasoning_requirement == "optional_host_context"
+    assert OUTPUT_CATALOG["social_post"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["signal_extraction"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["faq_markdown"].reasoning_requirement == "absent"
 

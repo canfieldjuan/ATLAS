@@ -33,6 +33,7 @@ from .reasoning_policy import (
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
+from .social_post_generation import SocialPostGenerationConfig
 from .ticket_faq_markdown import (
     DEFAULT_INTENT_RULES,
     TicketFAQMarkdownConfig,
@@ -204,6 +205,17 @@ def _signal_extraction_config_for_request(
     if max_text_chars is None:
         return config
     return SignalExtractionConfig(
+        limit=config.limit,
+        max_text_chars=max_text_chars,
+    )
+
+
+def _social_post_config_for_request(request: ContentOpsRequest) -> SocialPostGenerationConfig:
+    config = SocialPostGenerationConfig(limit=request.limit)
+    max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
+    if max_text_chars is None:
+        return config
+    return SocialPostGenerationConfig(
         limit=config.limit,
         max_text_chars=max_text_chars,
     )
@@ -404,6 +416,17 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         return GenerationPlanStep(
             output=output,
             runner="SignalExtractionService.generate",
+            status="runnable",
+            config={
+                "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
+            },
+        )
+    if output == "social_post":
+        config = _social_post_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="SocialPostGenerationService.generate",
             status="runnable",
             config={
                 "limit": config.limit,
