@@ -11,8 +11,8 @@ Currently wired:
   with no external dependencies.
 - `social_post`: deterministic source-evidence social post drafts
   with no external dependencies.
-- `ad_copy`: deterministic source-evidence ad-copy drafts with no
-  external dependencies.
+- `ad_copy`: deterministic source-evidence ad-copy drafts
+  with no external dependencies; persists when DB services are enabled.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -42,6 +42,9 @@ from typing import Any, Callable
 
 from extracted_content_pipeline.ad_copy_generation import (
     AdCopyGenerationService,
+)
+from extracted_content_pipeline.ad_copy_postgres import (
+    PostgresAdCopyRepository,
 )
 from extracted_content_pipeline.blog_blueprint_postgres import (
     PostgresBlogBlueprintRepository,
@@ -273,6 +276,16 @@ def _build_social_post_service(*, pool: Any) -> SocialPostGenerationService:
     )
 
 
+def _build_ad_copy_service(*, pool: Any) -> AdCopyGenerationService:
+    """Build ad-copy generation with optional draft persistence."""
+
+    if pool is None:
+        return _AD_COPY_SERVICE
+    return AdCopyGenerationService(
+        ad_copy_drafts=PostgresAdCopyRepository(pool=pool)
+    )
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -377,6 +390,7 @@ def build_content_ops_execution_services(
             image_provider=image_provider,
         )
         social_post = _build_social_post_service(pool=pool)
+        ad_copy = _build_ad_copy_service(pool=pool)
         faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
         faq_deflection_report = FAQDeflectionReportService(
