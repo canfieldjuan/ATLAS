@@ -173,6 +173,11 @@ const ASSETS: Array<{
     description: 'Pre-call and account-facing sales enablement assets.',
   },
   {
+    id: 'social_post',
+    label: 'Social Posts',
+    description: 'Short-form posts generated from review and source evidence.',
+  },
+  {
     id: 'faq_markdown',
     label: 'FAQ Markdown',
     description: 'Grounded FAQ documents generated from support-ticket evidence.',
@@ -522,7 +527,7 @@ export default function ContentOpsAssetsReview() {
         </div>
       </header>
 
-      <section className="grid gap-3 md:grid-cols-5">
+      <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         {ASSETS.map((item) => (
           <button
             key={item.id}
@@ -2084,6 +2089,15 @@ function publicAssetUrlPending(
 }
 
 function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string {
+  if (asset === 'social_post') {
+    return (
+      textValue(row.company_name) ||
+      textValue(row.vendor_name) ||
+      textValue(row.target_id) ||
+      excerpt(textValue(row.text), 72) ||
+      'social_post draft'
+    )
+  }
   return (
     textValue(row.title) ||
     textValue(row.headline) ||
@@ -2116,6 +2130,15 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
       .map(textValue)
       .filter(Boolean)
       .join(' | ')
+  }
+  if (asset === 'social_post') {
+    return [
+      row.channel,
+      row.company_name,
+      row.vendor_name,
+      row.source_type,
+      row.source_id,
+    ].map(textValue).filter(Boolean).join(' | ')
   }
   if (asset === 'faq_markdown') {
     return [
@@ -2172,6 +2195,14 @@ function addAssetSpecificFacts(
     addFact(facts, 'source rows', row.source_count)
     addFact(facts, 'checks passed', row.passed_output_checks)
     addFact(facts, 'vocab gaps', faqVocabularyGapCount(row.items))
+    return
+  }
+  if (asset === 'social_post') {
+    addFact(facts, 'channel', row.channel)
+    addFact(facts, 'company', row.company_name)
+    addFact(facts, 'vendor', row.vendor_name)
+    addFact(facts, 'source', [row.source_type, row.source_id].map(textValue).filter(Boolean).join(':'))
+    addFact(facts, 'pain points', socialPostPainPointCount(row))
     return
   }
   addFact(facts, 'brief', row.brief_type)
@@ -2241,6 +2272,17 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
         vocabularyGapCount ? `vocab gaps: ${vocabularyGapCount}` : '',
         ...checks.slice(0, 3).map((check) => `check: ${check}`),
       ].filter(Boolean),
+    })
+  }
+  if (asset === 'social_post') {
+    const painPoints = valueList(row.pain_points).slice(0, 3)
+    return previewOrNull({
+      heading: [
+        textValue(row.channel),
+        textValue(row.company_name) || textValue(row.vendor_name),
+      ].filter(Boolean).join(' | '),
+      body: excerpt(textValue(row.text), 280),
+      meta: painPoints.map((item) => `pain: ${item}`),
     })
   }
   const section = firstSection(row.sections)
@@ -2396,6 +2438,13 @@ function readinessMeta(row: GeneratedAssetDraft): string[] {
     readinessLabel(row.seo_aeo_readiness, 'SEO/AEO'),
     readinessLabel(row.geo_readiness, 'GEO'),
   ].filter(Boolean)
+}
+
+function socialPostPainPointCount(row: GeneratedAssetDraft): number | string {
+  if (typeof row.pain_point_count === 'number' && Number.isFinite(row.pain_point_count)) {
+    return row.pain_point_count
+  }
+  return valueList(row.pain_points).length || ''
 }
 
 function readinessLabel(value: unknown, prefix?: string): string {
