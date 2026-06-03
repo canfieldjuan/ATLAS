@@ -6,10 +6,10 @@ from collections.abc import Mapping
 import csv
 from dataclasses import dataclass
 from io import StringIO
-import json
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .csv_export import csv_cell_value as _csv_value
 from .social_post_ports import SocialPostDraft, SocialPostRepository
 
 
@@ -99,12 +99,6 @@ def _draft_row(draft: SocialPostDraft) -> JsonDict:
     row = draft.as_dict()
     row["pain_point_count"] = len(draft.pain_points)
     return row
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _normalize_limit(value: Any) -> int:

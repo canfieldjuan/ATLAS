@@ -16,6 +16,7 @@ from typing import Any
 
 from .campaign_ports import TenantScope
 from .campaign_postgres_generation import tenant_scope_from_mapping
+from .csv_export import csv_cell_value as _csv_value
 from .storage._jsonb_helpers import row_to_dict as _row_dict
 
 
@@ -198,12 +199,6 @@ def _json_ready(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _clean(value: Any) -> str:

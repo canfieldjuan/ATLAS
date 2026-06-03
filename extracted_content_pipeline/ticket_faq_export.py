@@ -6,10 +6,10 @@ from collections.abc import Mapping
 import csv
 from dataclasses import dataclass
 from io import StringIO
-import json
 from typing import Any
 
 from .campaign_ports import TenantScope
+from .csv_export import csv_cell_value as _csv_value
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -103,12 +103,6 @@ def _passed_output_checks(value: Any) -> int:
     if not isinstance(value, Mapping):
         return 0
     return sum(1 for item in value.values() if item is True)
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _normalize_limit(value: Any) -> int:

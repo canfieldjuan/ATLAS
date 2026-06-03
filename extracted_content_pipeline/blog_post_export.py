@@ -12,6 +12,7 @@ from typing import Any
 
 from .blog_ports import BlogPostDraft, BlogPostRepository
 from .campaign_ports import TenantScope
+from .csv_export import csv_cell_value as _csv_value
 
 
 JsonDict = dict[str, Any]
@@ -446,12 +447,6 @@ def _metadata_mapping(value: Any) -> JsonDict:
         if isinstance(parsed, Mapping):
             return {str(key): item for key, item in parsed.items()}
     return {}
-
-
-def _csv_value(value: Any) -> Any:
-    if isinstance(value, (Mapping, list, tuple)):
-        return json.dumps(value, default=str, separators=(",", ":"))
-    return "" if value is None else value
 
 
 def _normalize_limit(value: Any) -> int:
