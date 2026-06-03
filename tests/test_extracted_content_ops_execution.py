@@ -11,6 +11,7 @@ from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.campaign_llm_client import (
     current_content_ops_llm_trace_context,
 )
+from extracted_content_pipeline.ad_copy_generation import AdCopyGenerationService
 from extracted_content_pipeline.content_ops_cache_policy import (
     ContentOpsExactCachePolicy,
 )
@@ -167,6 +168,17 @@ def test_services_with_reasoning_context_can_target_specific_outputs() -> None:
     assert derived.report._reasoning_context is provider
     assert derived.reasoning_provider_active_for("report") is True
     assert derived.reasoning_provider_active_for("email_campaign") is False
+
+
+def test_services_with_reasoning_context_preserves_ad_copy_service() -> None:
+    ad_copy = AdCopyGenerationService()
+    derived = ContentOpsExecutionServices(ad_copy=ad_copy).with_reasoning_context(
+        object()
+    )
+
+    assert derived.ad_copy is ad_copy
+    assert derived.for_output("ad_copy") is ad_copy
+    assert "ad_copy" in derived.configured_outputs()
 
 
 def test_services_with_reasoning_context_accumulates_targeted_outputs() -> None:
@@ -610,6 +622,45 @@ async def test_execute_runs_social_post_service_from_source_material() -> None:
     assert post["source_id"] == "review-1"
     assert post["vendor_name"] == "HubSpot"
     assert "Pricing is a problem" in post["text"]
+    assert result["plan"]["steps"][0]["config"] == {
+        "limit": 1,
+        "max_text_chars": 20,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_ad_copy_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["ad_copy"],
+            "limit": 1,
+            "inputs": {
+                "source_max_text_chars": 20,
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem after renewal.",
+                        "pain_category": "pricing pressure",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            ad_copy=AdCopyGenerationService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "ad_copy"
+    assert step["runner"] == "AdCopyGenerationService.generate"
+    assert step["result"]["generated"] == 1
+    ad = step["result"]["ads"][0]
+    assert ad["source_id"] == "review-1"
+    assert ad["vendor_name"] == "HubSpot"
+    assert "Pricing is a problem" in ad["primary_text"]
     assert result["plan"]["steps"][0]["config"] == {
         "limit": 1,
         "max_text_chars": 20,

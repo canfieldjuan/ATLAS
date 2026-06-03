@@ -78,6 +78,7 @@ class ContentOpsExecutionServices:
     landing_page: Any | None = None
     sales_brief: Any | None = None
     social_post: Any | None = None
+    ad_copy: Any | None = None
     signal_extraction: Any | None = None
     faq_markdown: Any | None = None
     faq_deflection_report: Any | None = None
@@ -103,6 +104,8 @@ class ContentOpsExecutionServices:
             return self.sales_brief
         if output == "social_post":
             return self.social_post
+        if output == "ad_copy":
+            return self.ad_copy
         if output == "signal_extraction":
             return self.signal_extraction
         if output == "faq_markdown":
@@ -120,6 +123,7 @@ class ContentOpsExecutionServices:
             "landing_page",
             "sales_brief",
             "social_post",
+            "ad_copy",
             "signal_extraction",
             "faq_markdown",
             "faq_deflection_report",
@@ -190,6 +194,8 @@ class ContentOpsExecutionServices:
             landing_page=services["landing_page"],
             sales_brief=services["sales_brief"],
             social_post=self.social_post,
+            # ad_copy stays as-is; it does not consume reasoning.
+            ad_copy=self.ad_copy,
             # signal_extraction stays as-is; it does not consume reasoning.
             signal_extraction=self.signal_extraction,
             # faq_markdown stays as-is; it does not consume reasoning.
@@ -653,6 +659,24 @@ async def _dispatch_social_post(
     )
 
 
+async def _dispatch_ad_copy(
+    *,
+    step: GenerationPlanStep,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+) -> Any:
+    del filters
+    return await service.generate(
+        scope=scope,
+        target_mode=request.target_mode,
+        source_material=request.inputs.get("source_material"),
+        limit=request.limit,
+        max_text_chars=_step_config_int(step.config, "max_text_chars"),
+    )
+
+
 async def _dispatch_faq_markdown(
     *,
     step: GenerationPlanStep,
@@ -743,6 +767,7 @@ _DISPATCH: Mapping[str, Any] = {
     "landing_page": _dispatch_landing_page,
     "blog_post": _dispatch_blog_post,
     "social_post": _dispatch_social_post,
+    "ad_copy": _dispatch_ad_copy,
     "signal_extraction": _dispatch_signal_extraction,
     "faq_markdown": _dispatch_faq_markdown,
     "faq_deflection_report": _dispatch_faq_deflection_report,

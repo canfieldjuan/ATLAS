@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any, Mapping, Sequence
 
+from .ad_copy_generation import AdCopyGenerationConfig
 from .blog_generation import BlogPostGenerationConfig
 from .campaign_generation import CampaignGenerationConfig
 from .control_surfaces import (
@@ -216,6 +217,17 @@ def _social_post_config_for_request(request: ContentOpsRequest) -> SocialPostGen
     if max_text_chars is None:
         return config
     return SocialPostGenerationConfig(
+        limit=config.limit,
+        max_text_chars=max_text_chars,
+    )
+
+
+def _ad_copy_config_for_request(request: ContentOpsRequest) -> AdCopyGenerationConfig:
+    config = AdCopyGenerationConfig(limit=request.limit)
+    max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
+    if max_text_chars is None:
+        return config
+    return AdCopyGenerationConfig(
         limit=config.limit,
         max_text_chars=max_text_chars,
     )
@@ -427,6 +439,17 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         return GenerationPlanStep(
             output=output,
             runner="SocialPostGenerationService.generate",
+            status="runnable",
+            config={
+                "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
+            },
+        )
+    if output == "ad_copy":
+        config = _ad_copy_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="AdCopyGenerationService.generate",
             status="runnable",
             config={
                 "limit": config.limit,

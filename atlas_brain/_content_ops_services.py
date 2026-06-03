@@ -11,6 +11,8 @@ Currently wired:
   with no external dependencies.
 - `social_post`: deterministic source-evidence social post drafts
   with no external dependencies.
+- `ad_copy`: deterministic source-evidence ad-copy drafts with no
+  external dependencies.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -38,6 +40,9 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from extracted_content_pipeline.ad_copy_generation import (
+    AdCopyGenerationService,
+)
 from extracted_content_pipeline.blog_blueprint_postgres import (
     PostgresBlogBlueprintRepository,
 )
@@ -109,6 +114,7 @@ from extracted_content_pipeline.ticket_faq_postgres import (
 # re-creating it per request would just churn allocations.
 _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
 _SOCIAL_POST_SERVICE: SocialPostGenerationService = SocialPostGenerationService()
+_AD_COPY_SERVICE: AdCopyGenerationService = AdCopyGenerationService()
 _FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
 _FAQ_DEFLECTION_REPORT_SERVICE: FAQDeflectionReportService = FAQDeflectionReportService(
     faq_markdown=_FAQ_MARKDOWN_SERVICE
@@ -325,6 +331,7 @@ def build_content_ops_execution_services(
     sales_brief = None
     blog_post = None
     social_post = _SOCIAL_POST_SERVICE
+    ad_copy = _AD_COPY_SERVICE
     faq_markdown_service = _FAQ_MARKDOWN_SERVICE
     faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
     faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
@@ -379,6 +386,7 @@ def build_content_ops_execution_services(
     return ContentOpsExecutionServices(
         signal_extraction=_SIGNAL_EXTRACTION_SERVICE,
         social_post=social_post,
+        ad_copy=ad_copy,
         landing_page=landing_page,
         campaign=campaign,
         report=report,
