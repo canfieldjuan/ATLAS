@@ -166,13 +166,14 @@ _REVIEW_CAMPAIGN_OUTPUTS = (
     "sales_brief",
     "social_post",
     "ad_copy",
+    "quote_card",
 )
 _REVIEW_CAMPAIGN_NAME = "Review-Signal Campaign"
 _REVIEW_TOPIC = "Customer review themes worth turning into content"
 _REVIEW_AUDIENCE = "Marketing teams turning customer reviews into grounded content"
 _REVIEW_OFFER = (
     "Turn customer review themes into buyer-facing landing pages, blog posts, "
-    "sales briefs, social posts, and ad copy"
+    "sales briefs, social posts, ad copy, and quote cards"
 )
 _REVIEW_TARGET_KEYWORD = "customer review content marketing"
 _COMPETITIVE_CAMPAIGN_OUTPUTS = (
@@ -181,6 +182,7 @@ _COMPETITIVE_CAMPAIGN_OUTPUTS = (
     "sales_brief",
     "social_post",
     "ad_copy",
+    "quote_card",
 )
 _COMPETITIVE_CAMPAIGN_NAME = "Competitive Displacement Campaign"
 _COMPETITIVE_TOPIC = "Competitive displacement themes worth turning into content"
@@ -189,7 +191,7 @@ _COMPETITIVE_AUDIENCE = (
 )
 _COMPETITIVE_OFFER = (
     "Turn competitor and switching evidence into buyer-facing landing pages, "
-    "blog posts, sales briefs, social posts, and ad copy"
+    "blog posts, sales briefs, social posts, ad copy, and quote cards"
 )
 _COMPETITIVE_TARGET_KEYWORD = "competitive displacement content marketing"
 
