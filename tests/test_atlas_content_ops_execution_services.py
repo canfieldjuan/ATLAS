@@ -17,6 +17,7 @@ the host has wired. Currently:
 - `faq_markdown`: wired by default, but host callers can hide it from
   customer-executable output lists while keeping it as the internal
   deflection-report source.
+- `social_post`: deterministic; persists when DB services are enabled.
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
   `faq_markdown`).
 
@@ -26,7 +27,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (18 tests):
+Test inventory (20 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -45,18 +46,20 @@ Test inventory (18 tests):
 12. `blog_post` skips when no LLM (E4 fallback).
 13. `faq_markdown` runs through the full executor.
 14. `faq_markdown` persists when DB services are enabled.
-15. `faq_deflection_report` runs through the full executor.
-16. `configured_outputs()` with LLM + db enabled advertises
+15. `social_post` persists when DB services are enabled.
+16. `faq_deflection_report` runs through the full executor.
+17. `social_post` is always wired.
+18. `configured_outputs()` with LLM + db enabled advertises
     all 8 outputs: `(email_campaign, blog_post, report,
     landing_page, sales_brief, signal_extraction, faq_markdown,
     faq_deflection_report)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-17. `configured_outputs()` without an active LLM (even with
+19. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
-18. The hosted paywall mode can hide `faq_markdown` while
+20. The hosted paywall mode can hide `faq_markdown` while
     retaining a runnable `faq_deflection_report`.
 """
 
@@ -70,6 +73,7 @@ import pytest
 from atlas_brain._content_ops_services import (
     build_content_ops_execution_services,
 )
+from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
@@ -101,12 +105,13 @@ def _make_pool_stub() -> Any:
 
 
 class _FAQPoolStub:
-    def __init__(self) -> None:
+    def __init__(self, return_id: str = "faq-uuid-1") -> None:
         self.fetchval_calls: list[dict[str, Any]] = []
+        self.return_id = return_id
 
     async def fetchval(self, query: str, *args: Any) -> str:
         self.fetchval_calls.append({"query": query, "args": args})
-        return "faq-uuid-1"
+        return self.return_id
 
 
 def _no_llm() -> None:
@@ -207,6 +212,49 @@ async def test_faq_markdown_persists_when_db_services_enabled() -> None:
     assert step["status"] == "completed"
     assert step["result"]["saved_ids"] == ["faq-uuid-1"]
     assert "INSERT INTO ticket_faq_markdown" in pool.fetchval_calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_social_post_persists_when_db_services_enabled() -> None:
+    pool = _FAQPoolStub(return_id="social-post-uuid-1")
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "inputs": {
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "reviewer_company": "Acme Logistics",
+                    "review_text": "Pricing became hard to justify after renewal.",
+                    "pain_category": "pricing pressure",
+                }]
+            },
+        },
+        services=services,
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "social_post"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["social-post-uuid-1"]
+    call = pool.fetchval_calls[0]
+    assert "INSERT INTO social_posts" in call["query"]
+    assert call["args"][:5] == (
+        "acct-1",
+        "review-1",
+        "vendor_retention",
+        "linkedin",
+        step["result"]["posts"][0]["text"],
+    )
 
 
 @pytest.mark.asyncio

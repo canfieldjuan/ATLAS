@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .campaign_customer_data import CampaignOpportunityWarning
 from .campaign_ports import TenantScope
 from .campaign_source_adapters import source_row_to_campaign_opportunity
+from .social_post_ports import SocialPostDraft, SocialPostRepository
 
 _ROW_LIST_KEYS = ("sources", "opportunities", "reviews", "documents", "rows", "data")
 
@@ -29,6 +30,7 @@ class SocialPostGenerationResult:
     posts: tuple[dict[str, Any], ...]
     warnings: tuple[CampaignOpportunityWarning, ...] = ()
     target_mode: str = "vendor_retention"
+    saved_ids: tuple[str, ...] = ()
 
     @property
     def generated(self) -> int:
@@ -40,14 +42,21 @@ class SocialPostGenerationResult:
             "target_mode": self.target_mode,
             "posts": [dict(post) for post in self.posts],
             "warnings": [warning.as_dict() for warning in self.warnings],
+            "saved_ids": list(self.saved_ids),
         }
 
 
 class SocialPostGenerationService:
     """Build short, evidence-backed social posts from source material."""
 
-    def __init__(self, config: SocialPostGenerationConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: SocialPostGenerationConfig | None = None,
+        *,
+        social_posts: SocialPostRepository | None = None,
+    ) -> None:
         self.config = config or SocialPostGenerationConfig()
+        self._social_posts = social_posts
 
     async def generate(
         self,
@@ -59,7 +68,6 @@ class SocialPostGenerationService:
         max_text_chars: int | None = None,
         **kwargs: Any,
     ) -> SocialPostGenerationResult:
-        del scope
         del kwargs
         resolved_limit = int(limit) if limit is not None else self.config.limit
         if resolved_limit < 1:
@@ -71,13 +79,23 @@ class SocialPostGenerationService:
         )
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be at least 1")
-        return _generate_social_posts(
+        result = _generate_social_posts(
             _rows_from_source_material(source_material),
             target_mode=target_mode,
             limit=resolved_limit,
             max_text_chars=resolved_max_text_chars,
             max_post_chars=self.config.max_post_chars,
         )
+        if self._social_posts is None or not result.posts:
+            return result
+        saved_ids = tuple(
+            str(item)
+            for item in await self._social_posts.save_drafts(
+                _drafts_from_posts(result.posts, target_mode=target_mode),
+                scope=scope,
+            )
+        )
+        return replace(result, saved_ids=saved_ids)
 
 
 def _generate_social_posts(
@@ -163,6 +181,41 @@ def _post_from_opportunity(
     }
 
 
+def _drafts_from_posts(
+    posts: Sequence[Mapping[str, Any]],
+    *,
+    target_mode: str,
+) -> tuple[SocialPostDraft, ...]:
+    drafts: list[SocialPostDraft] = []
+    for post in posts:
+        source_id = _clean(post.get("source_id") or post.get("id"))
+        target_id = _clean(post.get("target_id")) or source_id
+        drafts.append(
+            SocialPostDraft(
+                target_id=target_id,
+                target_mode=target_mode,
+                channel=_clean(post.get("channel")) or "linkedin",
+                text=_clean(post.get("text")),
+                source_id=source_id,
+                source_type=_clean(post.get("source_type")),
+                company_name=_clean(post.get("company_name")),
+                vendor_name=_clean(post.get("vendor_name")),
+                pain_points=_pain_points_from_post(post.get("pain_points")),
+                metadata={"source_post": dict(post)},
+            )
+        )
+    return tuple(drafts)
+
+
+def _pain_points_from_post(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return ()
+    return tuple(_clean(item) for item in value if _clean(item))
+
+
 def _first_evidence(opportunity: Mapping[str, Any]) -> str:
     raw = opportunity.get("evidence")
     if isinstance(raw, Mapping):
@@ -221,4 +274,6 @@ __all__ = [
     "SocialPostGenerationConfig",
     "SocialPostGenerationResult",
     "SocialPostGenerationService",
+    "SocialPostDraft",
+    "SocialPostRepository",
 ]
