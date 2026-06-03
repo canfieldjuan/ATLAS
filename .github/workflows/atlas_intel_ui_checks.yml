@@ -82,6 +82,9 @@ jobs:
       - name: Test Content Ops ad copy review assets
         run: npm run test:content-ops-ad-copy-review-assets
 
+      - name: Test Content Ops quote card review assets
+        run: npm run test:content-ops-quote-card-review-assets
+
       - name: Test Content Ops review source selection
         run: npm run test:content-ops-review-source-selection
 

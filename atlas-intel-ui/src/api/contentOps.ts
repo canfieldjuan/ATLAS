@@ -433,6 +433,7 @@ export type GeneratedAssetType =
   | 'sales_brief'
   | 'social_post'
   | 'ad_copy'
+  | 'quote_card'
   | 'faq_markdown'
 
 export interface GeneratedAssetRepairHistoryEntry {
@@ -472,6 +473,10 @@ export interface GeneratedAssetDraft {
   brief_type?: string
   channel?: string
   format?: string
+  theme?: string
+  quote?: string
+  attribution?: string
+  supporting_text?: string
   text?: string
   primary_text?: string
   source_id?: string
@@ -538,6 +543,7 @@ export interface GeneratedAssetListParams {
   topic_type?: string
   brief_type?: string
   channel?: string
+  theme?: string
   id?: string | string[]
   format?: string
   limit?: number

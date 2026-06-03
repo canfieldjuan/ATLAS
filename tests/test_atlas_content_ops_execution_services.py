@@ -344,6 +344,52 @@ async def test_quote_card_runs_through_host_bundle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_quote_card_persists_when_db_services_enabled() -> None:
+    pool = _FAQPoolStub(return_id="quote-card-uuid-1")
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["quote_card"],
+            "inputs": {
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "reviewer_company": "Acme Logistics",
+                    "review_text": "Pricing became hard to justify after renewal.",
+                    "pain_category": "pricing pressure",
+                }]
+            },
+        },
+        services=services,
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "quote_card"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["quote-card-uuid-1"]
+    call = pool.fetchval_calls[0]
+    assert "INSERT INTO quote_card_drafts" in call["query"]
+    assert call["args"][:8] == (
+        "acct-1",
+        "review-1",
+        "vendor_retention",
+        "customer_proof",
+        step["result"]["cards"][0]["quote"],
+        "Acme Logistics",
+        "Customer proof for HubSpot",
+        "Use this quote to frame pricing pressure.",
+    )
+
+
+@pytest.mark.asyncio
 async def test_faq_deflection_report_runs_through_host_bundle() -> None:
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .campaign_customer_data import CampaignOpportunityWarning
@@ -12,6 +12,7 @@ from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_row_to_campaign_opportunity,
 )
+from .quote_card_ports import QuoteCardDraft, QuoteCardRepository
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class QuoteCardGenerationResult:
     cards: tuple[dict[str, Any], ...]
     warnings: tuple[CampaignOpportunityWarning, ...] = ()
     target_mode: str = "vendor_retention"
+    saved_ids: tuple[str, ...] = ()
 
     @property
     def generated(self) -> int:
@@ -43,14 +45,21 @@ class QuoteCardGenerationResult:
             "target_mode": self.target_mode,
             "cards": [dict(card) for card in self.cards],
             "warnings": [warning.as_dict() for warning in self.warnings],
+            "saved_ids": list(self.saved_ids),
         }
 
 
 class QuoteCardGenerationService:
     """Build short, evidence-backed quote-card drafts from source material."""
 
-    def __init__(self, config: QuoteCardGenerationConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: QuoteCardGenerationConfig | None = None,
+        *,
+        quote_cards: QuoteCardRepository | None = None,
+    ) -> None:
         self.config = config or QuoteCardGenerationConfig()
+        self._quote_cards = quote_cards
 
     async def generate(
         self,
@@ -62,7 +71,7 @@ class QuoteCardGenerationService:
         max_text_chars: int | None = None,
         **kwargs: Any,
     ) -> QuoteCardGenerationResult:
-        del scope, kwargs
+        del kwargs
         resolved_limit = int(limit) if limit is not None else self.config.limit
         if resolved_limit < 1:
             raise ValueError("limit must be at least 1")
@@ -73,7 +82,7 @@ class QuoteCardGenerationService:
         )
         if resolved_max_text_chars < 1:
             raise ValueError("max_text_chars must be at least 1")
-        return _generate_quote_cards(
+        result = _generate_quote_cards(
             _rows_from_source_material(source_material),
             target_mode=target_mode,
             limit=resolved_limit,
@@ -82,6 +91,16 @@ class QuoteCardGenerationService:
             max_headline_chars=self.config.max_headline_chars,
             max_supporting_text_chars=self.config.max_supporting_text_chars,
         )
+        if self._quote_cards is None or not result.cards:
+            return result
+        saved_ids = tuple(
+            str(item)
+            for item in await self._quote_cards.save_drafts(
+                _drafts_from_cards(result.cards, target_mode=target_mode),
+                scope=scope,
+            )
+        )
+        return replace(result, saved_ids=saved_ids)
 
 
 def _generate_quote_cards(
@@ -200,6 +219,44 @@ def _first_evidence(opportunity: Mapping[str, Any]) -> str:
     return _clean(raw)
 
 
+def _drafts_from_cards(
+    cards: Sequence[Mapping[str, Any]],
+    *,
+    target_mode: str,
+) -> tuple[QuoteCardDraft, ...]:
+    drafts: list[QuoteCardDraft] = []
+    for card in cards:
+        source_id = _clean(card.get("source_id") or card.get("id"))
+        target_id = _clean(card.get("target_id")) or source_id
+        drafts.append(
+            QuoteCardDraft(
+                target_id=target_id,
+                target_mode=target_mode,
+                theme=_clean(card.get("theme")) or "customer_proof",
+                quote=_clean(card.get("quote")),
+                attribution=_clean(card.get("attribution")),
+                headline=_clean(card.get("headline")),
+                supporting_text=_clean(card.get("supporting_text")),
+                source_id=source_id,
+                source_type=_clean(card.get("source_type")),
+                company_name=_clean(card.get("company_name")),
+                vendor_name=_clean(card.get("vendor_name")),
+                pain_points=_pain_points_from_card(card.get("pain_points")),
+                metadata={"source_card": dict(card)},
+            )
+        )
+    return tuple(drafts)
+
+
+def _pain_points_from_card(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return ()
+    return tuple(_clean(item) for item in value if _clean(item))
+
+
 def _first_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
@@ -233,4 +290,6 @@ __all__ = [
     "QuoteCardGenerationConfig",
     "QuoteCardGenerationResult",
     "QuoteCardGenerationService",
+    "QuoteCardDraft",
+    "QuoteCardRepository",
 ]

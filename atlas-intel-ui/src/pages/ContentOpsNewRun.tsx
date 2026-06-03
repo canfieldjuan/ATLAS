@@ -166,6 +166,7 @@ const GENERATED_ASSET_OUTPUTS: readonly GeneratedAssetType[] = [
   'faq_markdown',
   'social_post',
   'ad_copy',
+  'quote_card',
 ]
 const ID_FILTERED_REVIEW_OUTPUTS = new Set<string>([
   'blog_post',

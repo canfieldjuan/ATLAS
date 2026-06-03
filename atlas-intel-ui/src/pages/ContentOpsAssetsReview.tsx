@@ -183,6 +183,11 @@ const ASSETS: Array<{
     description: 'Paid-social ad drafts generated from review and source evidence.',
   },
   {
+    id: 'quote_card',
+    label: 'Quote Cards',
+    description: 'Customer-proof quote card drafts generated from source evidence.',
+  },
+  {
     id: 'faq_markdown',
     label: 'FAQ Markdown',
     description: 'Grounded FAQ documents generated from support-ticket evidence.',
@@ -2112,6 +2117,16 @@ function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string
       'ad_copy draft'
     )
   }
+  if (asset === 'quote_card') {
+    return (
+      textValue(row.headline) ||
+      textValue(row.attribution) ||
+      textValue(row.company_name) ||
+      textValue(row.vendor_name) ||
+      excerpt(textValue(row.quote), 72) ||
+      'quote_card draft'
+    )
+  }
   return (
     textValue(row.title) ||
     textValue(row.headline) ||
@@ -2158,6 +2173,16 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
     return [
       row.channel,
       row.format,
+      row.company_name,
+      row.vendor_name,
+      row.source_type,
+      row.source_id,
+    ].map(textValue).filter(Boolean).join(' | ')
+  }
+  if (asset === 'quote_card') {
+    return [
+      row.theme,
+      row.attribution,
       row.company_name,
       row.vendor_name,
       row.source_type,
@@ -2236,6 +2261,15 @@ function addAssetSpecificFacts(
     addFact(facts, 'vendor', row.vendor_name)
     addFact(facts, 'source', [row.source_type, row.source_id].map(textValue).filter(Boolean).join(':'))
     addFact(facts, 'pain points', adCopyPainPointCount(row))
+    return
+  }
+  if (asset === 'quote_card') {
+    addFact(facts, 'theme', row.theme)
+    addFact(facts, 'attribution', row.attribution)
+    addFact(facts, 'company', row.company_name)
+    addFact(facts, 'vendor', row.vendor_name)
+    addFact(facts, 'source', [row.source_type, row.source_id].map(textValue).filter(Boolean).join(':'))
+    addFact(facts, 'pain points', quoteCardPainPointCount(row))
     return
   }
   addFact(facts, 'brief', row.brief_type)
@@ -2328,6 +2362,19 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
         textValue(row.channel),
         textValue(row.format),
         cta ? `CTA: ${cta}` : '',
+        ...painPoints.map((item) => `pain: ${item}`),
+      ].filter(Boolean),
+    })
+  }
+  if (asset === 'quote_card') {
+    const painPoints = valueList(row.pain_points).slice(0, 3)
+    return previewOrNull({
+      heading: textValue(row.headline) || textValue(row.attribution),
+      body: excerpt(textValue(row.quote), 280),
+      meta: [
+        textValue(row.theme),
+        textValue(row.attribution),
+        textValue(row.supporting_text),
         ...painPoints.map((item) => `pain: ${item}`),
       ].filter(Boolean),
     })
@@ -2495,6 +2542,13 @@ function socialPostPainPointCount(row: GeneratedAssetDraft): number | string {
 }
 
 function adCopyPainPointCount(row: GeneratedAssetDraft): number | string {
+  if (typeof row.pain_point_count === 'number' && Number.isFinite(row.pain_point_count)) {
+    return row.pain_point_count
+  }
+  return valueList(row.pain_points).length || ''
+}
+
+function quoteCardPainPointCount(row: GeneratedAssetDraft): number | string {
   if (typeof row.pain_point_count === 'number' && Number.isFinite(row.pain_point_count)) {
     return row.pain_point_count
   }

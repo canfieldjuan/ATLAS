@@ -14,7 +14,7 @@ Currently wired:
 - `ad_copy`: deterministic source-evidence ad-copy drafts
   with no external dependencies; persists when DB services are enabled.
 - `quote_card`: deterministic source-evidence quote-card drafts
-  with no external dependencies.
+  with no external dependencies; persists when DB services are enabled.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -88,6 +88,9 @@ from extracted_content_pipeline.landing_page_postgres import (
 )
 from extracted_content_pipeline.quote_card_generation import (
     QuoteCardGenerationService,
+)
+from extracted_content_pipeline.quote_card_postgres import (
+    PostgresQuoteCardRepository,
 )
 from extracted_content_pipeline.report_generation import (
     ReportGenerationService,
@@ -292,6 +295,16 @@ def _build_ad_copy_service(*, pool: Any) -> AdCopyGenerationService:
     )
 
 
+def _build_quote_card_service(*, pool: Any) -> QuoteCardGenerationService:
+    """Build quote-card generation with optional draft persistence."""
+
+    if pool is None:
+        return _QUOTE_CARD_SERVICE
+    return QuoteCardGenerationService(
+        quote_cards=PostgresQuoteCardRepository(pool=pool)
+    )
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -398,6 +411,7 @@ def build_content_ops_execution_services(
         )
         social_post = _build_social_post_service(pool=pool)
         ad_copy = _build_ad_copy_service(pool=pool)
+        quote_card = _build_quote_card_service(pool=pool)
         faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
         faq_deflection_report = FAQDeflectionReportService(
