@@ -499,6 +499,33 @@ def test_plan_maps_social_post_to_social_post_service():
     }
 
 
+def test_plan_maps_ad_copy_to_ad_copy_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["ad_copy"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing pressure came up at renewal.",
+                    }
+                ],
+                "source_max_text_chars": 300,
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "AdCopyGenerationService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "limit": 3,
+        "max_text_chars": 300,
+    }
+
+
 def test_plan_maps_faq_markdown_to_ticket_faq_service():
     plan = build_generation_plan_from_mapping(
         {

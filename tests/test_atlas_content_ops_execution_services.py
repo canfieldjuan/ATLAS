@@ -5,6 +5,7 @@
 the host has wired. Currently:
 
 - `signal_extraction` (E1, PR #452): always wired (stateless).
+- `ad_copy`: deterministic; always wired.
 - `landing_page` (E2 + E2.5, PRs #454/#455): wired when an
   LLM + pool are active; slot stays `None` otherwise.
 - `campaign` / `report` / `sales_brief` (E3, PR #456):
@@ -51,8 +52,8 @@ Test inventory (20 tests):
 17. `social_post` is always wired.
 18. `configured_outputs()` with LLM + db enabled advertises
     all 8 outputs: `(email_campaign, blog_post, report,
-    landing_page, sales_brief, signal_extraction, faq_markdown,
-    faq_deflection_report)` -- order
+    landing_page, sales_brief, social_post, ad_copy,
+    signal_extraction, faq_markdown, faq_deflection_report)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
@@ -305,6 +306,7 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
     assert services.faq_deflection_report is not None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_deflection_report",
     )
@@ -354,6 +356,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
         "landing_page",
         "sales_brief",
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -376,6 +379,7 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
     assert services.landing_page is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -402,6 +406,7 @@ def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
     assert services.landing_page is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -426,6 +431,7 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
     assert services.landing_page is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -487,6 +493,19 @@ def test_social_post_is_always_wired() -> None:
     assert services.for_output("social_post") is services.social_post
 
 
+def test_ad_copy_is_always_wired() -> None:
+    """Deterministic ad copy runs without LLM or DB services."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=False,
+    )
+    assert services.ad_copy is not None
+    assert services.for_output("ad_copy") is services.ad_copy
+
+
 def test_e3_services_skip_together_when_no_active_llm() -> None:
     """E3 fallback: campaign / report / sales_brief slots all
     stay `None` when no LLM is active. Same short-circuit shape
@@ -504,6 +523,7 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
     assert services.sales_brief is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -530,6 +550,7 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
     assert services.blog_post is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -567,6 +588,7 @@ def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
     assert services.blog_post is None
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -592,6 +614,7 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         "landing_page",
         "sales_brief",
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -610,6 +633,7 @@ def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
     )
     assert services.configured_outputs() == (
         "social_post",
+        "ad_copy",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",

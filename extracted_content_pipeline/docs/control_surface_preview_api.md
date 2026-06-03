@@ -71,6 +71,7 @@ Current output ids:
 | `landing_page` | Implemented | `optional_host_context` | Landing page generation service path. |
 | `sales_brief` | Implemented | `optional_host_context` | Sales brief generation service path. |
 | `social_post` | Implemented | `absent` | Deterministic source-evidence social post drafts; no LLM call. |
+| `ad_copy` | Implemented | `absent` | Deterministic source-evidence ad-copy drafts; no LLM call. |
 | `signal_extraction` | Implemented | `absent` | Deterministic source-row normalization into campaign opportunities; no LLM call. |
 
 Future outputs should be added to the catalog first, then exposed through
@@ -376,6 +377,7 @@ Runnable outputs dispatch to:
 | `landing_page` | `LandingPageGenerationService.generate(...)` |
 | `sales_brief` | `SalesBriefGenerationService.generate(...)` |
 | `social_post` | `SocialPostGenerationService.generate(...)` |
+| `ad_copy` | `AdCopyGenerationService.generate(...)` |
 | `signal_extraction` | `SignalExtractionService.generate(...)` |
 
 Non-executable plans return HTTP 400 with the blocked execution result. Missing
