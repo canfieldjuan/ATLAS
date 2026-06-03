@@ -23,6 +23,7 @@ from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReport
 from extracted_content_pipeline.quote_card_generation import QuoteCardGenerationService
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
 from extracted_content_pipeline.social_post_generation import SocialPostGenerationService
+from extracted_content_pipeline.stat_card_generation import StatCardGenerationService
 from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownService
 
 
@@ -180,6 +181,17 @@ def test_services_with_reasoning_context_preserves_ad_copy_service() -> None:
     assert derived.ad_copy is ad_copy
     assert derived.for_output("ad_copy") is ad_copy
     assert "ad_copy" in derived.configured_outputs()
+
+
+def test_services_with_reasoning_context_preserves_stat_card_service() -> None:
+    stat_card = StatCardGenerationService()
+    derived = ContentOpsExecutionServices(stat_card=stat_card).with_reasoning_context(
+        object()
+    )
+
+    assert derived.stat_card is stat_card
+    assert derived.for_output("stat_card") is stat_card
+    assert "stat_card" in derived.configured_outputs()
 
 
 def test_services_with_reasoning_context_accumulates_targeted_outputs() -> None:
@@ -704,6 +716,46 @@ async def test_execute_runs_quote_card_service_from_source_material() -> None:
     assert result["plan"]["steps"][0]["config"] == {
         "limit": 1,
         "max_text_chars": 20,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_stat_card_service_from_source_material() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["stat_card"],
+            "limit": 1,
+            "inputs": {
+                "source_max_text_chars": 40,
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "NPS score is 42 after renewal.",
+                        "nps_score": 42,
+                        "pain_category": "renewal risk",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            stat_card=StatCardGenerationService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["output"] == "stat_card"
+    assert step["runner"] == "StatCardGenerationService.generate"
+    assert step["result"]["generated"] == 1
+    stat = step["result"]["stats"][0]
+    assert stat["source_id"] == "review-1"
+    assert stat["vendor_name"] == "HubSpot"
+    assert stat["claim"] == "NPS score: 42"
+    assert result["plan"]["steps"][0]["config"] == {
+        "limit": 1,
+        "max_text_chars": 40,
     }
 
 

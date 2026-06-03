@@ -553,6 +553,34 @@ def test_plan_maps_quote_card_to_quote_card_service():
     }
 
 
+def test_plan_maps_stat_card_to_stat_card_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["stat_card"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "NPS score is 42 after renewal.",
+                        "nps_score": 42,
+                    }
+                ],
+                "source_max_text_chars": 300,
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "StatCardGenerationService.generate"
+    assert plan["steps"][0]["status"] == "runnable"
+    assert plan["steps"][0]["config"] == {
+        "limit": 3,
+        "max_text_chars": 300,
+    }
+
+
 def test_plan_maps_faq_markdown_to_ticket_faq_service():
     plan = build_generation_plan_from_mapping(
         {

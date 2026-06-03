@@ -20,6 +20,7 @@ the host has wired. Currently:
   deflection-report source.
 - `social_post`: deterministic; persists when DB services are enabled.
 - `quote_card`: deterministic; always wired (stateless).
+- `stat_card`: deterministic; always wired (stateless).
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
   `faq_markdown`).
 
@@ -29,7 +30,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (24 tests):
+Test inventory (25 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -55,18 +56,19 @@ Test inventory (24 tests):
 19. `social_post` is always wired.
 20. `ad_copy` is always wired.
 21. `quote_card` is always wired.
-22. `configured_outputs()` with LLM + db enabled advertises
+22. `stat_card` is always wired.
+23. `configured_outputs()` with LLM + db enabled advertises
     every wired output: `(email_campaign, blog_post, report,
     landing_page, sales_brief, social_post, ad_copy,
-    quote_card, signal_extraction, faq_markdown,
+    quote_card, stat_card, signal_extraction, faq_markdown,
     faq_deflection_report)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-23. `configured_outputs()` without an active LLM (even with
+24. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
-24. The hosted paywall mode can hide `faq_markdown` while
+25. The hosted paywall mode can hide `faq_markdown` while
     retaining a runnable `faq_deflection_report`.
 """
 
@@ -439,6 +441,7 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_deflection_report",
     )
@@ -490,6 +493,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -514,6 +518,7 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -542,6 +547,7 @@ def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -568,6 +574,7 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -655,6 +662,19 @@ def test_quote_card_is_always_wired() -> None:
     assert services.for_output("quote_card") is services.quote_card
 
 
+def test_stat_card_is_always_wired() -> None:
+    """Deterministic stat cards run without LLM or DB services."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=False,
+    )
+    assert services.stat_card is not None
+    assert services.for_output("stat_card") is services.stat_card
+
+
 def test_e3_services_skip_together_when_no_active_llm() -> None:
     """E3 fallback: campaign / report / sales_brief slots all
     stay `None` when no LLM is active. Same short-circuit shape
@@ -674,6 +694,7 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -702,6 +723,7 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -741,6 +763,7 @@ def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -768,6 +791,7 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -788,6 +812,7 @@ def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
         "social_post",
         "ad_copy",
         "quote_card",
+        "stat_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",

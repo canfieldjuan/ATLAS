@@ -216,6 +216,26 @@ def test_preview_allows_quote_card_when_source_material_present():
     assert preview["estimated_cost_usd"] == 0.0
 
 
+def test_preview_allows_stat_card_when_source_material_present():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["stat_card"],
+            "limit": 3,
+            "inputs": {
+                "source_material": [
+                    {"source_type": "review", "text": "NPS score is 42.", "nps_score": 42}
+                ],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["outputs"] == ["stat_card"]
+    assert preview["missing_inputs"] == []
+    assert preview["blocked_outputs"] == []
+    assert preview["estimated_cost_usd"] == 0.0
+
+
 def test_preview_allows_faq_markdown_when_source_material_present():
     preview = preview_from_mapping(
         {
@@ -447,6 +467,19 @@ def test_preview_keeps_ad_copy_blocked_without_source_material():
     assert preview["missing_inputs"] == ["source_material"]
 
 
+def test_preview_keeps_stat_card_blocked_without_source_material():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["stat_card"],
+            "inputs": {},
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["outputs"] == ["stat_card"]
+    assert preview["missing_inputs"] == ["source_material"]
+
+
 def test_output_catalog_states_reasoning_requirement():
     from extracted_content_pipeline.control_surfaces import OUTPUT_CATALOG
 
@@ -458,6 +491,7 @@ def test_output_catalog_states_reasoning_requirement():
     assert OUTPUT_CATALOG["social_post"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["ad_copy"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["quote_card"].reasoning_requirement == "absent"
+    assert OUTPUT_CATALOG["stat_card"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["signal_extraction"].reasoning_requirement == "absent"
     assert OUTPUT_CATALOG["faq_markdown"].reasoning_requirement == "absent"
 
