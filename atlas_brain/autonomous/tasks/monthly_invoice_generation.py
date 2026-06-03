@@ -382,7 +382,7 @@ async def run(task: ScheduledTask) -> dict:
             try:
                 from ...services.email_provider import get_email_provider
                 from ...templates.email.invoice import (
-                    BUSINESS_NAME, BUSINESS_PHONE, BUSINESS_EMAIL,
+                    BUSINESS_NAME, BUSINESS_SIGNATURE,
                 )
 
                 email_provider = get_email_provider()
@@ -393,9 +393,7 @@ async def run(task: ScheduledTask) -> dict:
                     f"Due Date: {due_date.strftime('%m/%d/%Y')}\n\n"
                     f"Make all checks payable to {BUSINESS_NAME}.\n\n"
                     f"Thank you for your business!\n\n"
-                    f"{BUSINESS_NAME}\n"
-                    f"{BUSINESS_PHONE}\n"
-                    f"{BUSINESS_EMAIL}"
+                    f"{BUSINESS_SIGNATURE}"
                 )
 
                 attachments = []

@@ -14,6 +14,15 @@ BUSINESS_PHONE = "(217) 207-3097"
 BUSINESS_EMAIL = "info@effinghamofficemaids.com"
 BUSINESS_WEBSITE = "effinghamofficemaids.com"
 
+# Sign-off block for invoice cover emails (operator: Juan Canfield).
+BUSINESS_SIGNATURE = (
+    "Juan Canfield | Office Manager\n"
+    "Effingham Office Maids.\n"
+    "1901 S. 4th St. STE 1 | Effingham IL, 62401\n"
+    "T: (217) 207-3097\n"
+    "Canfieldjuan24@gmail.com"
+)
+
 
 def _fmt(val, fallback: str = "") -> str:
     """Return string value or fallback for None/empty."""
