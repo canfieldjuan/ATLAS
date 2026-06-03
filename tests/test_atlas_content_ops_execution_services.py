@@ -19,6 +19,7 @@ the host has wired. Currently:
   customer-executable output lists while keeping it as the internal
   deflection-report source.
 - `social_post`: deterministic; persists when DB services are enabled.
+- `quote_card`: deterministic; always wired (stateless).
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
   `faq_markdown`).
 
@@ -28,7 +29,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (22 tests):
+Test inventory (24 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -49,20 +50,23 @@ Test inventory (22 tests):
 14. `faq_markdown` persists when DB services are enabled.
 15. `social_post` persists when DB services are enabled.
 16. `ad_copy` persists when DB services are enabled.
-17. `faq_deflection_report` runs through the full executor.
-18. `social_post` is always wired.
-19. `ad_copy` is always wired.
-20. `configured_outputs()` with LLM + db enabled advertises
+17. `quote_card` runs through the full executor.
+18. `faq_deflection_report` runs through the full executor.
+19. `social_post` is always wired.
+20. `ad_copy` is always wired.
+21. `quote_card` is always wired.
+22. `configured_outputs()` with LLM + db enabled advertises
     every wired output: `(email_campaign, blog_post, report,
     landing_page, sales_brief, social_post, ad_copy,
-    signal_extraction, faq_markdown, faq_deflection_report)` -- order
+    quote_card, signal_extraction, faq_markdown,
+    faq_deflection_report)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-21. `configured_outputs()` without an active LLM (even with
+23. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
-22. The hosted paywall mode can hide `faq_markdown` while
+24. The hosted paywall mode can hide `faq_markdown` while
     retaining a runnable `faq_deflection_report`.
 """
 
@@ -306,6 +310,40 @@ async def test_ad_copy_persists_when_db_services_enabled() -> None:
 
 
 @pytest.mark.asyncio
+async def test_quote_card_runs_through_host_bundle() -> None:
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["quote_card"],
+            "inputs": {
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "reviewer_company": "Acme Logistics",
+                    "review_text": "Pricing became hard to justify after renewal.",
+                    "pain_category": "pricing pressure",
+                }]
+            },
+        },
+        services=services,
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "quote_card"
+    assert step["status"] == "completed"
+    assert step["result"]["generated"] == 1
+    card = step["result"]["cards"][0]
+    assert card["source_id"] == "review-1"
+    assert card["headline"] == "Customer proof for HubSpot"
+
+
+@pytest.mark.asyncio
 async def test_faq_deflection_report_runs_through_host_bundle() -> None:
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,
@@ -354,6 +392,7 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_deflection_report",
     )
@@ -404,6 +443,7 @@ def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:
         "sales_brief",
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -427,6 +467,7 @@ def test_landing_page_slot_stays_none_when_no_active_llm() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -454,6 +495,7 @@ def test_landing_page_slot_stays_none_when_pool_is_none() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -479,6 +521,7 @@ def test_landing_page_slot_stays_none_in_production_default() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -553,6 +596,19 @@ def test_ad_copy_is_always_wired() -> None:
     assert services.for_output("ad_copy") is services.ad_copy
 
 
+def test_quote_card_is_always_wired() -> None:
+    """Deterministic quote cards run without LLM or DB services."""
+
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        enable_db_services=False,
+    )
+    assert services.quote_card is not None
+    assert services.for_output("quote_card") is services.quote_card
+
+
 def test_e3_services_skip_together_when_no_active_llm() -> None:
     """E3 fallback: campaign / report / sales_brief slots all
     stay `None` when no LLM is active. Same short-circuit shape
@@ -571,6 +627,7 @@ def test_e3_services_skip_together_when_no_active_llm() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -598,6 +655,7 @@ def test_e3_services_skip_together_when_pool_is_none() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -636,6 +694,7 @@ def test_blog_post_slot_stays_none_when_no_active_llm() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -662,6 +721,7 @@ def test_bundle_only_advertises_wired_outputs_with_llm_and_db_enabled() -> None:
         "sales_brief",
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",
@@ -681,6 +741,7 @@ def test_bundle_only_advertises_wired_outputs_without_llm() -> None:
     assert services.configured_outputs() == (
         "social_post",
         "ad_copy",
+        "quote_card",
         "signal_extraction",
         "faq_markdown",
         "faq_deflection_report",

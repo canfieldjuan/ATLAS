@@ -170,6 +170,11 @@ OUTPUT_REASONING_POLICIES: Mapping[str, OutputReasoningPolicy] = MappingProxyTyp
         default_preset="none",
         supported_presets=("none",),
     ),
+    "quote_card": OutputReasoningPolicy(
+        output="quote_card",
+        default_preset="none",
+        supported_presets=("none",),
+    ),
     "faq_markdown": OutputReasoningPolicy(
         output="faq_markdown",
         default_preset="none",

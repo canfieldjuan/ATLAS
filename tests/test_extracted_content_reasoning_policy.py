@@ -51,6 +51,7 @@ def test_output_policy_defaults_match_audit_recommendations() -> None:
         "signal_extraction": "none",
         "social_post": "none",
         "ad_copy": "none",
+        "quote_card": "none",
         "faq_markdown": "none",
         "faq_deflection_report": "none",
         "email_campaign": "single_pass",
@@ -111,6 +112,12 @@ def test_ad_copy_only_supports_no_reasoning() -> None:
     assert supported_reasoning_presets("ad_copy") == ("none",)
     with pytest.raises(ValueError, match="not supported"):
         resolve_reasoning_policy("ad_copy", "single_pass")
+
+
+def test_quote_card_only_supports_no_reasoning() -> None:
+    assert supported_reasoning_presets("quote_card") == ("none",)
+    with pytest.raises(ValueError, match="not supported"):
+        resolve_reasoning_policy("quote_card", "single_pass")
 
 
 def test_faq_markdown_only_supports_no_reasoning() -> None:

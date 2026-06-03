@@ -122,6 +122,23 @@
       "can_execute": false
     },
     {
+      "id": "quote_card",
+      "label": "Quote Cards",
+      "description": "Short quote-card drafts from source evidence.",
+      "implemented": true,
+      "estimated_unit_cost_usd": 0.0,
+      "default_parse_retry_attempts": 0,
+      "default_quality_repair_attempts": 0,
+      "estimated_retry_adjusted_unit_cost_usd": 0.0,
+      "required_inputs": [
+        "source_material"
+      ],
+      "default_max_items": 3,
+      "reasoning_requirement": "absent",
+      "execution_configured": false,
+      "can_execute": false
+    },
+    {
       "id": "signal_extraction",
       "label": "Signal Extraction",
       "description": "Extracted opportunity or churn signals from source evidence.",
