@@ -23,6 +23,7 @@
     "test:content-ops-upload-source-run-handoff": "node --test scripts/content-ops-upload-source-run-handoff.test.mjs",
     "test:content-ops-blog-review-public-link": "node --test scripts/content-ops-blog-review-public-link.test.mjs",
     "test:content-ops-social-post-review-assets": "node --test scripts/content-ops-social-post-review-assets.test.mjs",
+    "test:content-ops-ad-copy-review-assets": "node --test scripts/content-ops-ad-copy-review-assets.test.mjs",
     "test:content-ops-review-source-selection": "node --test scripts/content-ops-review-source-selection.test.mjs",
     "test:blog-public-generated-posts": "node --test scripts/blog-public-generated-posts.test.mjs",
     "test:blog-generated-sitemap-prerender": "node --test scripts/blog-generated-sitemap-prerender.test.mjs",

@@ -178,6 +178,11 @@ const ASSETS: Array<{
     description: 'Short-form posts generated from review and source evidence.',
   },
   {
+    id: 'ad_copy',
+    label: 'Ad Copy',
+    description: 'Paid-social ad drafts generated from review and source evidence.',
+  },
+  {
     id: 'faq_markdown',
     label: 'FAQ Markdown',
     description: 'Grounded FAQ documents generated from support-ticket evidence.',
@@ -2098,6 +2103,15 @@ function assetTitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): string
       'social_post draft'
     )
   }
+  if (asset === 'ad_copy') {
+    return (
+      textValue(row.headline) ||
+      textValue(row.company_name) ||
+      textValue(row.vendor_name) ||
+      textValue(row.target_id) ||
+      'ad_copy draft'
+    )
+  }
   return (
     textValue(row.title) ||
     textValue(row.headline) ||
@@ -2134,6 +2148,16 @@ function assetSubtitle(row: GeneratedAssetDraft, asset: GeneratedAssetType): str
   if (asset === 'social_post') {
     return [
       row.channel,
+      row.company_name,
+      row.vendor_name,
+      row.source_type,
+      row.source_id,
+    ].map(textValue).filter(Boolean).join(' | ')
+  }
+  if (asset === 'ad_copy') {
+    return [
+      row.channel,
+      row.format,
       row.company_name,
       row.vendor_name,
       row.source_type,
@@ -2203,6 +2227,15 @@ function addAssetSpecificFacts(
     addFact(facts, 'vendor', row.vendor_name)
     addFact(facts, 'source', [row.source_type, row.source_id].map(textValue).filter(Boolean).join(':'))
     addFact(facts, 'pain points', socialPostPainPointCount(row))
+    return
+  }
+  if (asset === 'ad_copy') {
+    addFact(facts, 'channel', row.channel)
+    addFact(facts, 'format', row.format)
+    addFact(facts, 'company', row.company_name)
+    addFact(facts, 'vendor', row.vendor_name)
+    addFact(facts, 'source', [row.source_type, row.source_id].map(textValue).filter(Boolean).join(':'))
+    addFact(facts, 'pain points', adCopyPainPointCount(row))
     return
   }
   addFact(facts, 'brief', row.brief_type)
@@ -2283,6 +2316,20 @@ function assetPreview(row: GeneratedAssetDraft, asset: GeneratedAssetType): Asse
       ].filter(Boolean).join(' | '),
       body: excerpt(textValue(row.text), 280),
       meta: painPoints.map((item) => `pain: ${item}`),
+    })
+  }
+  if (asset === 'ad_copy') {
+    const painPoints = valueList(row.pain_points).slice(0, 3)
+    const cta = textValue(row.cta)
+    return previewOrNull({
+      heading: textValue(row.headline),
+      body: excerpt(textValue(row.primary_text), 280),
+      meta: [
+        textValue(row.channel),
+        textValue(row.format),
+        cta ? `CTA: ${cta}` : '',
+        ...painPoints.map((item) => `pain: ${item}`),
+      ].filter(Boolean),
     })
   }
   const section = firstSection(row.sections)
@@ -2441,6 +2488,13 @@ function readinessMeta(row: GeneratedAssetDraft): string[] {
 }
 
 function socialPostPainPointCount(row: GeneratedAssetDraft): number | string {
+  if (typeof row.pain_point_count === 'number' && Number.isFinite(row.pain_point_count)) {
+    return row.pain_point_count
+  }
+  return valueList(row.pain_points).length || ''
+}
+
+function adCopyPainPointCount(row: GeneratedAssetDraft): number | string {
   if (typeof row.pain_point_count === 'number' && Number.isFinite(row.pain_point_count)) {
     return row.pain_point_count
   }

@@ -24,6 +24,8 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import LLMClient, SkillStore, TenantScope
+from ..ad_copy_export import export_ad_copy_drafts
+from ..ad_copy_postgres import PostgresAdCopyRepository
 from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
 from ..landing_page_export import (
@@ -66,6 +68,7 @@ ASSET_CHOICES = (
     "landing_page",
     "sales_brief",
     "social_post",
+    "ad_copy",
     "faq_markdown",
 )
 logger = logging.getLogger(__name__)
@@ -781,6 +784,15 @@ async def _export_for_asset(
             channel=channel,
             limit=limit,
         )
+    if asset == "ad_copy":
+        return await export_ad_copy_drafts(
+            PostgresAdCopyRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=target_mode,
+            channel=channel,
+            limit=limit,
+        )
     if asset == "faq_markdown":
         return await export_ticket_faq_drafts(
             PostgresTicketFAQRepository(pool),
@@ -810,6 +822,8 @@ async def _update_asset_status(
         return await PostgresSalesBriefRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "social_post":
         return await PostgresSocialPostRepository(pool).update_status(asset_id, status, scope=scope)
+    if asset == "ad_copy":
+        return await PostgresAdCopyRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_status(asset_id, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
@@ -833,6 +847,8 @@ async def _update_asset_statuses(
         return await PostgresSalesBriefRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "social_post":
         return await PostgresSocialPostRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "ad_copy":
+        return await PostgresAdCopyRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
