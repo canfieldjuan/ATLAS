@@ -43,6 +43,8 @@ from ..landing_page_ports import LandingPageDraft, LandingPageSection
 from ..faq_macro_writeback import MacroPublishProvider
 from ..faq_macro_writeback_postgres import PostgresFAQMacroPublishAttemptRepository
 from ..faq_macro_writeback_publish import FAQMacroWritebackPublishService
+from ..quote_card_export import export_quote_card_drafts
+from ..quote_card_postgres import PostgresQuoteCardRepository
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
 from ..sales_brief_export import export_sales_brief_drafts
@@ -69,6 +71,7 @@ ASSET_CHOICES = (
     "sales_brief",
     "social_post",
     "ad_copy",
+    "quote_card",
     "faq_markdown",
 )
 logger = logging.getLogger(__name__)
@@ -293,6 +296,7 @@ def create_generated_asset_router(
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
         channel: str | None = Query(None),
+        theme: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
     ) -> dict[str, Any]:
@@ -311,6 +315,7 @@ def create_generated_asset_router(
             topic_type=topic_type,
             brief_type=brief_type,
             channel=channel,
+            theme=theme,
             ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
@@ -327,6 +332,7 @@ def create_generated_asset_router(
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
         channel: str | None = Query(None),
+        theme: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
         format: str = Query("csv", description="csv or json"),
@@ -346,6 +352,7 @@ def create_generated_asset_router(
             topic_type=topic_type,
             brief_type=brief_type,
             channel=channel,
+            theme=theme,
             ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
@@ -730,6 +737,7 @@ async def _export_for_asset(
     topic_type: str | None,
     brief_type: str | None,
     channel: str | None,
+    theme: str | None,
     ids: Sequence[str] | None,
     limit: int,
 ) -> Any:
@@ -793,6 +801,15 @@ async def _export_for_asset(
             channel=channel,
             limit=limit,
         )
+    if asset == "quote_card":
+        return await export_quote_card_drafts(
+            PostgresQuoteCardRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=target_mode,
+            theme=theme,
+            limit=limit,
+        )
     if asset == "faq_markdown":
         return await export_ticket_faq_drafts(
             PostgresTicketFAQRepository(pool),
@@ -824,6 +841,8 @@ async def _update_asset_status(
         return await PostgresSocialPostRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "ad_copy":
         return await PostgresAdCopyRepository(pool).update_status(asset_id, status, scope=scope)
+    if asset == "quote_card":
+        return await PostgresQuoteCardRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_status(asset_id, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
@@ -849,6 +868,8 @@ async def _update_asset_statuses(
         return await PostgresSocialPostRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "ad_copy":
         return await PostgresAdCopyRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "quote_card":
+        return await PostgresQuoteCardRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
