@@ -432,6 +432,7 @@ export type GeneratedAssetType =
   | 'landing_page'
   | 'sales_brief'
   | 'social_post'
+  | 'ad_copy'
   | 'faq_markdown'
 
 export interface GeneratedAssetRepairHistoryEntry {
@@ -470,7 +471,9 @@ export interface GeneratedAssetDraft {
   campaign_name?: string
   brief_type?: string
   channel?: string
+  format?: string
   text?: string
+  primary_text?: string
   source_id?: string
   source_type?: string
   company_name?: string
@@ -486,7 +489,7 @@ export interface GeneratedAssetDraft {
   tags?: string[] | string
   hero?: Record<string, unknown>
   sections?: Array<Record<string, unknown>> | string
-  cta?: Record<string, unknown>
+  cta?: Record<string, unknown> | string
   metadata?: GeneratedAssetDraftMetadata | string
   reference_ids?: string[] | string
   generation_total_tokens?: number
