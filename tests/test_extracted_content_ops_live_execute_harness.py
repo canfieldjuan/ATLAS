@@ -951,6 +951,7 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
             "subject": "SSO setup",
             "message": "Can we sync users before enforcing SSO?",
             "pain_category": "single sign-on rollout",
+            "created_at": "2026-05-01T09:00:00Z",
             "resolution_text": (
                 "Enable SSO first, verify matching user emails, then enable SCIM."
             ),
@@ -961,6 +962,7 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
             "subject": "Dashboard refresh",
             "message": "Why is the executive dashboard not refreshing?",
             "pain_category": "warehouse refresh status",
+            "created_at": "2026-05-07",
             "resolution_text": (
                 "Open Data > Sync history, rerun the failed warehouse job, "
                 "then refresh the model."
@@ -972,6 +974,7 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
             "subject": "Renewal invoice",
             "message": "How do I confirm my renewal invoice before payment?",
             "pain_category": "renewal billing review",
+            "created_at": "2026-05-14",
             "resolution_text": (
                 "Open Billing > Invoices, compare the renewal line items, "
                 "then download the PDF."
@@ -983,6 +986,7 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
             "subject": "API token rotation",
             "message": "How do we rotate API tokens without downtime?",
             "pain_category": "api token rotation",
+            "created_at": "2026-05-20",
             "resolution_text": (
                 "Create the replacement token, deploy it alongside the old "
                 "token, then revoke the old token."
@@ -1016,6 +1020,9 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "drafted_answer_count": 4,
         "no_proven_answer_count": 0,
         "repeat_ticket_count": 4,
+        "source_date_start": "2026-05-01",
+        "source_date_end": "2026-05-20",
+        "source_window_days": 20,
     }
     assert len(snapshot["top_questions"]) == 2
     assert [question["ticket_count"] for question in snapshot["top_questions"]] == [1, 1]

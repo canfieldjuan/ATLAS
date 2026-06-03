@@ -15,7 +15,10 @@ from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
 )
-from extracted_content_pipeline.ticket_faq_markdown import TicketFAQMarkdownResult
+from extracted_content_pipeline.ticket_faq_markdown import (
+    TicketFAQMarkdownResult,
+    build_ticket_faq_markdown,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -273,6 +276,100 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
     assert "Can I enable SSO?" not in encoded
     assert "Weighted score is not a ticket count" not in encoded
     assert "ticket-sso-1" not in encoded
+
+
+def test_deflection_snapshot_exposes_complete_source_date_window() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "source_title": "Export report",
+                "text": "How do I export attribution reports?",
+                "created_at": "2026-05-01T13:00:00Z",
+                "resolution_text": "Open Analytics and download the report.",
+            },
+            {
+                "source_id": "ticket-sso-1",
+                "source_type": "support_ticket",
+                "source_title": "SSO setup",
+                "text": "Can I enable SSO for my workspace?",
+                "created_at": "2026-05-15",
+            },
+        ],
+        max_items=2,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    snapshot = build_deflection_snapshot(artifact).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert artifact.summary["source_date_start"] == "2026-05-01"
+    assert artifact.summary["source_date_end"] == "2026-05-15"
+    assert artifact.summary["source_window_days"] == 15
+    assert snapshot["summary"]["source_date_start"] == "2026-05-01"
+    assert snapshot["summary"]["source_date_end"] == "2026-05-15"
+    assert snapshot["summary"]["source_window_days"] == 15
+    assert "ticket-export-1" not in encoded
+    assert "source_date_span" not in encoded
+
+
+def test_deflection_snapshot_omits_date_window_when_source_dates_are_partial() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "source_title": "Export report",
+                "text": "How do I export attribution reports?",
+                "created_at": "2026-05-01",
+            },
+            {
+                "source_id": "ticket-sso-1",
+                "source_type": "support_ticket",
+                "source_title": "SSO setup",
+                "text": "Can I enable SSO for my workspace?",
+            },
+        ],
+        max_items=2,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    snapshot = build_deflection_snapshot(artifact).as_dict()
+
+    assert "source_date_start" not in artifact.summary
+    assert "source_date_end" not in artifact.summary
+    assert "source_window_days" not in artifact.summary
+    assert "source_date_start" not in snapshot["summary"]
+    assert "source_date_end" not in snapshot["summary"]
+    assert "source_window_days" not in snapshot["summary"]
+
+
+def test_deflection_snapshot_omits_contradictory_summary_date_window() -> None:
+    snapshot = build_deflection_snapshot(
+        {
+            "summary": {
+                "generated": 1,
+                "drafted_answer_count": 0,
+                "no_proven_answer_count": 1,
+                "source_date_start": "2026-05-01",
+                "source_date_end": "2026-05-15",
+                "source_window_days": 30,
+            },
+            "faq_result": {
+                "items": [
+                    {
+                        "question": "Can I enable SSO?",
+                        "source_ids": ["ticket-sso-1"],
+                    }
+                ],
+            },
+        }
+    ).as_dict()
+
+    assert "source_date_start" not in snapshot["summary"]
+    assert "source_date_end" not in snapshot["summary"]
+    assert "source_window_days" not in snapshot["summary"]
 
 
 def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:

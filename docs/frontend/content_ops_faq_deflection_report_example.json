@@ -22,6 +22,13 @@
         "question_source": "customer_wording",
         "resolution_evidence_scope": "scoped",
         "resolution_source_count": 2,
+        "source_date_span": {
+          "dated_source_count": 2,
+          "end": "2026-05-03",
+          "missing_source_count": 0,
+          "start": "2026-05-01",
+          "window_days": 3
+        },
         "source_ids": [
           "ticket-export-1",
           "ticket-export-2"
@@ -90,6 +97,13 @@
         "question_source": "customer_wording",
         "resolution_evidence_scope": "not_applicable",
         "resolution_source_count": 0,
+        "source_date_span": {
+          "dated_source_count": 2,
+          "end": "2026-05-15",
+          "missing_source_count": 0,
+          "start": "2026-05-10",
+          "window_days": 6
+        },
         "source_ids": [
           "ticket-sso-2",
           "ticket-sso-1"
@@ -152,6 +166,9 @@
       "uses_user_vocabulary": true
     },
     "source_count": 4,
+    "source_date_end": "2026-05-15",
+    "source_date_start": "2026-05-01",
+    "source_window_days": 15,
     "ticket_source_count": 4,
     "top_opportunity_score": 2,
     "top_question": "How do I export attribution reports?"

@@ -4,7 +4,10 @@
     "drafted_answer_count": 1,
     "generated": 2,
     "no_proven_answer_count": 1,
-    "repeat_ticket_count": 4
+    "repeat_ticket_count": 4,
+    "source_date_end": "2026-05-15",
+    "source_date_start": "2026-05-01",
+    "source_window_days": 15
   },
   "teaser": {
     "full_answer": {
