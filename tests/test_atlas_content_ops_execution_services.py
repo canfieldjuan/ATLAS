@@ -5,7 +5,7 @@
 the host has wired. Currently:
 
 - `signal_extraction` (E1, PR #452): always wired (stateless).
-- `ad_copy`: deterministic; always wired.
+- `ad_copy`: deterministic; persists when DB services are enabled.
 - `landing_page` (E2 + E2.5, PRs #454/#455): wired when an
   LLM + pool are active; slot stays `None` otherwise.
 - `campaign` / `report` / `sales_brief` (E3, PR #456):
@@ -28,7 +28,7 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (20 tests):
+Test inventory (22 tests):
 
 1. `signal_extraction` runs through the full executor.
 2. `landing_page` populated when LLM + db enabled (E2 canary).
@@ -48,19 +48,21 @@ Test inventory (20 tests):
 13. `faq_markdown` runs through the full executor.
 14. `faq_markdown` persists when DB services are enabled.
 15. `social_post` persists when DB services are enabled.
-16. `faq_deflection_report` runs through the full executor.
-17. `social_post` is always wired.
-18. `configured_outputs()` with LLM + db enabled advertises
-    all 8 outputs: `(email_campaign, blog_post, report,
+16. `ad_copy` persists when DB services are enabled.
+17. `faq_deflection_report` runs through the full executor.
+18. `social_post` is always wired.
+19. `ad_copy` is always wired.
+20. `configured_outputs()` with LLM + db enabled advertises
+    every wired output: `(email_campaign, blog_post, report,
     landing_page, sales_brief, social_post, ad_copy,
     signal_extraction, faq_markdown, faq_deflection_report)` -- order
     follows the upstream
     `ContentOpsExecutionServices.configured_outputs`
     iteration (not alphabetical).
-19. `configured_outputs()` without an active LLM (even with
+21. `configured_outputs()` without an active LLM (even with
     `enable_db_services=True`) advertises only
     deterministic outputs.
-20. The hosted paywall mode can hide `faq_markdown` while
+22. The hosted paywall mode can hide `faq_markdown` while
     retaining a runnable `faq_deflection_report`.
 """
 
@@ -255,6 +257,51 @@ async def test_social_post_persists_when_db_services_enabled() -> None:
         "vendor_retention",
         "linkedin",
         step["result"]["posts"][0]["text"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ad_copy_persists_when_db_services_enabled() -> None:
+    pool = _FAQPoolStub(return_id="ad-copy-uuid-1")
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["ad_copy"],
+            "inputs": {
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "reviewer_company": "Acme Logistics",
+                    "review_text": "Pricing became hard to justify after renewal.",
+                    "pain_category": "pricing pressure",
+                }]
+            },
+        },
+        services=services,
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "ad_copy"
+    assert step["status"] == "completed"
+    assert step["result"]["saved_ids"] == ["ad-copy-uuid-1"]
+    call = pool.fetchval_calls[0]
+    assert "INSERT INTO ad_copy_drafts" in call["query"]
+    assert call["args"][:7] == (
+        "acct-1",
+        "review-1",
+        "vendor_retention",
+        "paid_social",
+        "single_image",
+        step["result"]["ads"][0]["headline"],
+        step["result"]["ads"][0]["primary_text"],
     )
 
 

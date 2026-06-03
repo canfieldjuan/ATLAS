@@ -6,7 +6,22 @@ from extracted_content_pipeline.ad_copy_generation import (
     AdCopyGenerationConfig,
     AdCopyGenerationService,
 )
+from extracted_content_pipeline.ad_copy_ports import AdCopyDraft
 from extracted_content_pipeline.campaign_ports import TenantScope
+
+
+class _AdCopyRepository:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def save_drafts(
+        self,
+        drafts: list[AdCopyDraft] | tuple[AdCopyDraft, ...],
+        *,
+        scope: TenantScope,
+    ) -> tuple[str, ...]:
+        self.calls.append({"drafts": tuple(drafts), "scope": scope})
+        return ("ad-copy-db-id-1",)
 
 
 @pytest.mark.asyncio
@@ -31,6 +46,7 @@ async def test_ad_copy_service_generates_evidence_backed_ads() -> None:
     assert payload["generated"] == 1
     assert payload["target_mode"] == "vendor_retention"
     assert payload["warnings"] == []
+    assert payload["saved_ids"] == []
     assert payload["ads"] == [
         {
             "id": "review-1",
@@ -51,6 +67,47 @@ async def test_ad_copy_service_generates_evidence_backed_ads() -> None:
             "pain_points": ["pricing pressure"],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_ad_copy_service_persists_generated_drafts_when_repository_is_configured() -> None:
+    repository = _AdCopyRepository()
+    service = AdCopyGenerationService(ad_copy_drafts=repository)
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+        target_mode="vendor_retention",
+        source_material=[
+            {
+                "review_id": "review-1",
+                "reviewer_company": "Acme Logistics",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+                "pain_category": "pricing pressure",
+            }
+        ],
+    )
+
+    assert result.saved_ids == ("ad-copy-db-id-1",)
+    assert result.as_dict()["saved_ids"] == ["ad-copy-db-id-1"]
+    assert len(repository.calls) == 1
+    call = repository.calls[0]
+    assert call["scope"] == TenantScope(account_id="acct-1", user_id="user-1")
+    drafts = call["drafts"]
+    assert isinstance(drafts, tuple)
+    draft = drafts[0]
+    assert draft.target_id == "review-1"
+    assert draft.target_mode == "vendor_retention"
+    assert draft.channel == "paid_social"
+    assert draft.format == "single_image"
+    assert draft.headline == "HubSpot proof: pricing pressure"
+    assert draft.cta == "See the proof"
+    assert draft.source_id == "review-1"
+    assert draft.source_type == "review"
+    assert draft.company_name == "Acme Logistics"
+    assert draft.vendor_name == "HubSpot"
+    assert draft.pain_points == ("pricing pressure",)
+    assert draft.metadata["source_ad"]["id"] == "review-1"
 
 
 @pytest.mark.asyncio
