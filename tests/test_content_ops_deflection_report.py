@@ -548,16 +548,16 @@ def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:
     assert snapshot["summary"]["generated"] == 6
     assert len(snapshot["top_questions"]) == 3
     assert snapshot["teaser"]["full_answer"] == {
-        "rank": 4,
-        "question": "How do we rotate API tokens?",
-        "answer": "Create the replacement token, deploy it, then revoke the old token.",
-        "steps": ["Create the replacement token before revoking the old one."],
+        "rank": 1,
+        "question": "How do I export reports?",
+        "answer": "Locked top answer one",
+        "steps": ["Step for How do I export reports?"],
         "answer_evidence_status": "resolution_evidence",
         "resolution_evidence_scope": "scoped",
-        "weighted_frequency": 4,
+        "weighted_frequency": 1,
         "source_count": 1,
     }
-    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [1, 2]
+    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [2, 3]
     for preview in snapshot["teaser"]["previews"]:
         assert preview["body_withheld"] is True
         assert preview["answer_evidence_status"] == "resolution_evidence"
@@ -565,12 +565,56 @@ def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:
         assert "answer" not in preview
         assert "steps" not in preview
 
-    assert "Locked top answer" not in encoded
+    assert "Locked top answer one" in encoded
+    assert "Locked top answer two" not in encoded
+    assert "Locked top answer three" not in encoded
     assert "Mismatched answer must stay locked" not in encoded
     assert "Tail answer locked" not in encoded
     assert "ticket-" not in encoded
     assert "evidence_quotes" not in encoded
     assert "source_ids" not in encoded
+
+
+def test_deflection_snapshot_teaser_falls_through_to_next_eligible_rank() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=3,
+        ticket_source_count=3,
+        output_checks={"condensed": True},
+        items=(
+            {
+                **_scoped_answer_item(
+                    1,
+                    "How do I export reports?",
+                    "Blocked top answer must not leak.",
+                ),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            _scoped_answer_item(2, "How do I update billing?", "Second answer"),
+            _scoped_answer_item(3, "How do I enable SSO?", "Third answer"),
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(
+        build_deflection_report_artifact(result),
+        top_n=2,
+        teaser_preview_count=1,
+    ).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot["teaser"]["full_answer"] == {
+        "rank": 2,
+        "question": "How do I update billing?",
+        "answer": "Second answer",
+        "steps": ["Step for How do I update billing?"],
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "weighted_frequency": 2,
+        "source_count": 1,
+    }
+    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [3]
+    assert "Blocked top answer must not leak" not in encoded
+    assert "Third answer" not in encoded
 
 
 def test_deflection_snapshot_teaser_empty_when_no_scoped_resolution_evidence() -> None:
