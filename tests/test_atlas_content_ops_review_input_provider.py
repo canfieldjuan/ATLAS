@@ -66,6 +66,7 @@ _MARKETER_OUTPUTS = (
     "social_post",
     "ad_copy",
     "quote_card",
+    "stat_card",
 )
 
 
@@ -639,6 +640,7 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
             social_post=_RunnableService(),
             ad_copy=_RunnableService(),
             quote_card=_RunnableService(),
+            stat_card=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -672,6 +674,11 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
     assert quote_card_kwargs["source_material"][0]["target_id"] == "review-1"
     assert quote_card_kwargs["target_mode"] == "vendor_retention"
 
+    stat_card_step = next(step for step in result.steps if step.output == "stat_card")
+    stat_card_kwargs = stat_card_step.result["kwargs"]
+    assert stat_card_kwargs["source_material"][0]["target_id"] == "review-1"
+    assert stat_card_kwargs["target_mode"] == "vendor_retention"
+
 
 @pytest.mark.asyncio
 async def test_competitive_input_evidence_reaches_landing_and_blog_generators() -> None:
@@ -696,6 +703,7 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
             social_post=_RunnableService(),
             ad_copy=_RunnableService(),
             quote_card=_RunnableService(),
+            stat_card=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -729,6 +737,11 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
     assert quote_card_kwargs["source_material"][0]["target_id"] == "competitive-1"
     assert quote_card_kwargs["target_mode"] == "vendor_retention"
 
+    stat_card_step = next(step for step in result.steps if step.output == "stat_card")
+    stat_card_kwargs = stat_card_step.result["kwargs"]
+    assert stat_card_kwargs["source_material"][0]["target_id"] == "competitive-1"
+    assert stat_card_kwargs["target_mode"] == "vendor_retention"
+
 
 @pytest.mark.skipif(
     api_module.APIRouter is None,
@@ -746,6 +759,7 @@ async def test_plan_route_applies_review_input_provider() -> None:
             social_post=_RunnableService(),
             ad_copy=_RunnableService(),
             quote_card=_RunnableService(),
+            stat_card=_RunnableService(),
         ),
         scope_provider=lambda: TenantScope(account_id="acct-review-route"),
     )
