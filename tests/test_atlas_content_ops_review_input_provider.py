@@ -59,7 +59,13 @@ class _RunnableService:
         return {"kwargs": kwargs}
 
 
-_MARKETER_OUTPUTS = ("landing_page", "blog_post", "sales_brief", "social_post")
+_MARKETER_OUTPUTS = (
+    "landing_page",
+    "blog_post",
+    "sales_brief",
+    "social_post",
+    "ad_copy",
+)
 
 
 def _route(router, path: str, method: str):
@@ -630,6 +636,7 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
             landing_page=_RunnableService(),
             sales_brief=_RunnableService(),
             social_post=_RunnableService(),
+            ad_copy=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -653,6 +660,11 @@ async def test_review_input_evidence_reaches_landing_blog_and_sales_brief_genera
     assert social_post_kwargs["source_material"][0]["target_id"] == "review-1"
     assert social_post_kwargs["target_mode"] == "vendor_retention"
 
+    ad_copy_step = next(step for step in result.steps if step.output == "ad_copy")
+    ad_copy_kwargs = ad_copy_step.result["kwargs"]
+    assert ad_copy_kwargs["source_material"][0]["target_id"] == "review-1"
+    assert ad_copy_kwargs["target_mode"] == "vendor_retention"
+
 
 @pytest.mark.asyncio
 async def test_competitive_input_evidence_reaches_landing_and_blog_generators() -> None:
@@ -675,6 +687,7 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
             landing_page=_RunnableService(),
             sales_brief=_RunnableService(),
             social_post=_RunnableService(),
+            ad_copy=_RunnableService(),
         ),
         scope=TenantScope(account_id="acct-1"),
     )
@@ -698,6 +711,11 @@ async def test_competitive_input_evidence_reaches_landing_and_blog_generators() 
     assert social_post_kwargs["source_material"][0]["target_id"] == "competitive-1"
     assert social_post_kwargs["target_mode"] == "vendor_retention"
 
+    ad_copy_step = next(step for step in result.steps if step.output == "ad_copy")
+    ad_copy_kwargs = ad_copy_step.result["kwargs"]
+    assert ad_copy_kwargs["source_material"][0]["target_id"] == "competitive-1"
+    assert ad_copy_kwargs["target_mode"] == "vendor_retention"
+
 
 @pytest.mark.skipif(
     api_module.APIRouter is None,
@@ -713,6 +731,7 @@ async def test_plan_route_applies_review_input_provider() -> None:
             landing_page=_RunnableService(),
             sales_brief=_RunnableService(),
             social_post=_RunnableService(),
+            ad_copy=_RunnableService(),
         ),
         scope_provider=lambda: TenantScope(account_id="acct-review-route"),
     )
