@@ -73,6 +73,7 @@ Current output ids:
 | `social_post` | Implemented | `absent` | Deterministic source-evidence social post drafts; no LLM call. |
 | `ad_copy` | Implemented | `absent` | Deterministic source-evidence ad-copy drafts; no LLM call. |
 | `quote_card` | Implemented | `absent` | Deterministic source-evidence quote-card drafts; no LLM call. |
+| `stat_card` | Implemented | `absent` | Deterministic source-backed numeric stat-card drafts; no LLM call. |
 | `signal_extraction` | Implemented | `absent` | Deterministic source-row normalization into campaign opportunities; no LLM call. |
 
 Future outputs should be added to the catalog first, then exposed through
@@ -380,6 +381,7 @@ Runnable outputs dispatch to:
 | `social_post` | `SocialPostGenerationService.generate(...)` |
 | `ad_copy` | `AdCopyGenerationService.generate(...)` |
 | `quote_card` | `QuoteCardGenerationService.generate(...)` |
+| `stat_card` | `StatCardGenerationService.generate(...)` |
 | `signal_extraction` | `SignalExtractionService.generate(...)` |
 
 Non-executable plans return HTTP 400 with the blocked execution result. Missing

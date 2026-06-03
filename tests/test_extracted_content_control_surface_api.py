@@ -332,10 +332,12 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert "social_post" in output_ids
     assert "ad_copy" in output_ids
     assert "quote_card" in output_ids
+    assert "stat_card" in output_ids
     assert outputs["signal_extraction"]["implemented"] is True
     assert outputs["social_post"]["implemented"] is True
     assert outputs["ad_copy"]["implemented"] is True
     assert outputs["quote_card"]["implemented"] is True
+    assert outputs["stat_card"]["implemented"] is True
     assert outputs["email_campaign"]["execution_configured"] is False
     assert outputs["email_campaign"]["can_execute"] is False
     assert outputs["email_campaign"]["estimated_unit_cost_usd"] == 0.18
@@ -398,6 +400,7 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
     assert outputs["social_post"]["reasoning_requirement"] == "absent"
     assert outputs["ad_copy"]["reasoning_requirement"] == "absent"
     assert outputs["quote_card"]["reasoning_requirement"] == "absent"
+    assert outputs["stat_card"]["reasoning_requirement"] == "absent"
     assert outputs["signal_extraction"]["reasoning_requirement"] == "absent"
     assert outputs["faq_markdown"]["reasoning_requirement"] == "absent"
     assert payload["execution"] == {
@@ -540,6 +543,7 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
             social_post=_CampaignService(),
             ad_copy=_CampaignService(),
             quote_card=_CampaignService(),
+            stat_card=_CampaignService(),
             signal_extraction=_CampaignService(),
             faq_markdown=_CampaignService(),
         )
@@ -559,6 +563,7 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
                 "report",
                 "signal_extraction",
                 "social_post",
+                "stat_card",
             ],
         "limits": dict(_DEFAULT_EXECUTION_LIMITS),
     }
@@ -572,6 +577,8 @@ async def test_describe_control_surfaces_reports_configured_execution_services()
     assert outputs["ad_copy"]["can_execute"] is True
     assert outputs["quote_card"]["execution_configured"] is True
     assert outputs["quote_card"]["can_execute"] is True
+    assert outputs["stat_card"]["execution_configured"] is True
+    assert outputs["stat_card"]["can_execute"] is True
     assert outputs["signal_extraction"]["execution_configured"] is True
     assert outputs["signal_extraction"]["can_execute"] is True
     assert outputs["faq_markdown"]["execution_configured"] is True

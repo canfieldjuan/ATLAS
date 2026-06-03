@@ -315,6 +315,9 @@
       "target": "extracted_content_pipeline/quote_card_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/stat_card_generation.py"
+    },
+    {
       "target": "extracted_content_pipeline/quote_card_export.py"
     },
     {

@@ -15,6 +15,8 @@ Currently wired:
   with no external dependencies; persists when DB services are enabled.
 - `quote_card`: deterministic source-evidence quote-card drafts
   with no external dependencies; persists when DB services are enabled.
+- `stat_card`: deterministic source-backed numeric stat-card drafts
+  with no external dependencies.
 - `landing_page` (E2, PR #454 + E2.5, PR #455): plugs the
   host LLM + Skill adapters from PR #453 +
   `PostgresLandingPageRepository` backed by the host's
@@ -113,6 +115,9 @@ from extracted_content_pipeline.social_post_generation import (
 from extracted_content_pipeline.social_post_postgres import (
     PostgresSocialPostRepository,
 )
+from extracted_content_pipeline.stat_card_generation import (
+    StatCardGenerationService,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
 )
@@ -127,6 +132,7 @@ _SIGNAL_EXTRACTION_SERVICE: SignalExtractionService = SignalExtractionService()
 _SOCIAL_POST_SERVICE: SocialPostGenerationService = SocialPostGenerationService()
 _AD_COPY_SERVICE: AdCopyGenerationService = AdCopyGenerationService()
 _QUOTE_CARD_SERVICE: QuoteCardGenerationService = QuoteCardGenerationService()
+_STAT_CARD_SERVICE: StatCardGenerationService = StatCardGenerationService()
 _FAQ_MARKDOWN_SERVICE: TicketFAQMarkdownService = TicketFAQMarkdownService()
 _FAQ_DEFLECTION_REPORT_SERVICE: FAQDeflectionReportService = FAQDeflectionReportService(
     faq_markdown=_FAQ_MARKDOWN_SERVICE
@@ -365,6 +371,7 @@ def build_content_ops_execution_services(
     social_post = _SOCIAL_POST_SERVICE
     ad_copy = _AD_COPY_SERVICE
     quote_card = _QUOTE_CARD_SERVICE
+    stat_card = _STAT_CARD_SERVICE
     faq_markdown_service = _FAQ_MARKDOWN_SERVICE
     faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
     faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
@@ -423,6 +430,7 @@ def build_content_ops_execution_services(
         social_post=social_post,
         ad_copy=ad_copy,
         quote_card=quote_card,
+        stat_card=stat_card,
         landing_page=landing_page,
         campaign=campaign,
         report=report,

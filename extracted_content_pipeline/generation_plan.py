@@ -36,6 +36,7 @@ from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
 from .social_post_generation import SocialPostGenerationConfig
+from .stat_card_generation import StatCardGenerationConfig
 from .ticket_faq_markdown import (
     DEFAULT_INTENT_RULES,
     TicketFAQMarkdownConfig,
@@ -240,6 +241,17 @@ def _quote_card_config_for_request(request: ContentOpsRequest) -> QuoteCardGener
     if max_text_chars is None:
         return config
     return QuoteCardGenerationConfig(
+        limit=config.limit,
+        max_text_chars=max_text_chars,
+    )
+
+
+def _stat_card_config_for_request(request: ContentOpsRequest) -> StatCardGenerationConfig:
+    config = StatCardGenerationConfig(limit=request.limit)
+    max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
+    if max_text_chars is None:
+        return config
+    return StatCardGenerationConfig(
         limit=config.limit,
         max_text_chars=max_text_chars,
     )
@@ -473,6 +485,17 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
         return GenerationPlanStep(
             output=output,
             runner="QuoteCardGenerationService.generate",
+            status="runnable",
+            config={
+                "limit": config.limit,
+                "max_text_chars": config.max_text_chars,
+            },
+        )
+    if output == "stat_card":
+        config = _stat_card_config_for_request(request)
+        return GenerationPlanStep(
+            output=output,
+            runner="StatCardGenerationService.generate",
             status="runnable",
             config={
                 "limit": config.limit,

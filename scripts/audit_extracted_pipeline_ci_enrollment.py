@@ -12,6 +12,7 @@ from typing import Iterable
 DEFAULT_ENROLLED_TEST_PATTERNS = (
     "tests/test_audit_extracted_pipeline_ci_enrollment.py",
     "tests/test_extracted_content*.py",
+    "tests/test_extracted_*_card_generation.py",
     "tests/test_extracted_campaign*.py",
     "tests/test_extracted_blog*.py",
     "tests/test_extracted_landing_page*.py",

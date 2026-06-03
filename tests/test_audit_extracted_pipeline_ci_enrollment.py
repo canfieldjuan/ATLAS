@@ -155,6 +155,35 @@ def test_audit_checker_and_evaluator_tests_are_candidates(tmp_path: Path) -> Non
     )
 
 
+def test_audit_card_generation_tests_are_candidates(tmp_path: Path) -> None:
+    root = _repo(
+        tmp_path,
+        runner_paths=(
+            "tests/test_extracted_quote_card_generation.py",
+            "tests/test_extracted_stat_card_generation.py",
+        ),
+        pull_request_filters=("tests/test_extracted_*_card_generation.py",),
+        push_filters=("tests/test_extracted_*_card_generation.py",),
+        include_candidate=False,
+    )
+    (root / "tests/test_extracted_quote_card_generation.py").write_text(
+        "def test_quote_card():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (root / "tests/test_extracted_stat_card_generation.py").write_text(
+        "def test_stat_card():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    audit = _load_ci_enrollment_auditor().audit_ci_enrollment(root)
+
+    assert audit.ok
+    assert audit.candidates == (
+        "tests/test_extracted_quote_card_generation.py",
+        "tests/test_extracted_stat_card_generation.py",
+    )
+
+
 def test_audit_reports_missing_runner_entry(tmp_path: Path) -> None:
     audit = _load_ci_enrollment_auditor().audit_ci_enrollment(
         _repo(tmp_path, runner_paths=())

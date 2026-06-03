@@ -220,6 +220,17 @@ OUTPUT_CATALOG: Mapping[str, OutputDefinition] = MappingProxyType({
         reasoning_requirement="absent",
         default_parse_retry_attempts=0,
     ),
+    "stat_card": OutputDefinition(
+        id="stat_card",
+        label="Stat Cards",
+        description="Short stat-card drafts from source-backed numeric metrics.",
+        implemented=True,
+        estimated_unit_cost_usd=0.0,
+        required_inputs=("source_material",),
+        default_max_items=3,
+        reasoning_requirement="absent",
+        default_parse_retry_attempts=0,
+    ),
     "signal_extraction": OutputDefinition(
         id="signal_extraction",
         label="Signal Extraction",
