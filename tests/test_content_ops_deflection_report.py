@@ -617,6 +617,52 @@ def test_deflection_snapshot_teaser_falls_through_to_next_eligible_rank() -> Non
     assert "Third answer" not in encoded
 
 
+def test_deflection_snapshot_omits_full_teaser_rank_from_locked_rows() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                **_scoped_answer_item(
+                    1,
+                    "How do I export reports?",
+                    "Blocked top answer must not leak.",
+                ),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            {
+                **_scoped_answer_item(
+                    2,
+                    "How do I update billing?",
+                    "Blocked second answer must not leak.",
+                ),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            _scoped_answer_item(3, "How do I enable SSO?", "Third answer"),
+            _scoped_answer_item(4, "How do I rotate tokens?", "Fourth answer"),
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(
+        build_deflection_report_artifact(result),
+        top_n=1,
+        teaser_preview_count=1,
+    ).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert snapshot["teaser"]["full_answer"]["rank"] == 3
+    assert snapshot["locked_questions"] == [
+        {"rank": 2, "ticket_count": 1},
+        {"rank": 4, "ticket_count": 1},
+    ]
+    assert "Third answer" in encoded
+    assert "Blocked top answer must not leak" not in encoded
+    assert "Blocked second answer must not leak" not in encoded
+    assert "Fourth answer" not in encoded
+
+
 def test_deflection_snapshot_teaser_empty_when_no_scoped_resolution_evidence() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
