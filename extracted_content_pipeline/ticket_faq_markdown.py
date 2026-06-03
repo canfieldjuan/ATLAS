@@ -149,6 +149,7 @@ DEFAULT_INTENT_RULES = (
     ("renewal and cancellation", ("renewal", "cancel", "cancellation", "contract")),
 )
 _DATE_KEYS = (
+    "source_date",
     "created_at",
     "created",
     "ticket_created_at",
@@ -453,12 +454,14 @@ def build_ticket_faq_markdown(
             resolution_text = _resolution_text(evidence, opportunity)
             evidence_group_key = _evidence_group_key(resolution_text)
             group_key = (topic, evidence_group_key or f"topic:{_compact_key(topic)}")
+            source_date = _source_date(evidence) or _source_date(opportunity)
             groups[group_key].append({
                 "text": text,
                 "source_id": source_id or "unknown",
                 "source_key": source_key,
                 "source_type": source_type,
                 "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                "source_date": source_date.isoformat() if source_date is not None else "",
                 "evidence_group_key": evidence_group_key,
                 "results_count": _first_present(evidence, opportunity, key="results_count"),
                 "result_count": _first_present(evidence, opportunity, key="result_count"),
@@ -683,7 +686,7 @@ def _item(
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
     opportunity = _opportunity_score(topic, rows)
     term_mappings = _term_mappings(rows, documentation_terms, vocabulary_gap_rules)
-    return {
+    item = {
         "topic": topic,
         "question": question,
         "question_source": question_source,
@@ -714,6 +717,34 @@ def _item(
         "evidence_count": len(display_rows),
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
+    }
+    source_date_span = _source_date_span(rows)
+    if source_date_span is not None:
+        item["source_date_span"] = source_date_span
+    return item
+
+
+def _source_date_span(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    date_by_source: dict[str, date] = {}
+    missing_sources: set[str] = set()
+    for index, row in enumerate(rows, start=1):
+        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        parsed = _source_date(row)
+        if parsed is None:
+            missing_sources.add(source_key)
+            continue
+        date_by_source[source_key] = parsed
+    missing_sources.difference_update(date_by_source)
+    if not date_by_source:
+        return None
+    start = min(date_by_source.values())
+    end = max(date_by_source.values())
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "window_days": (end - start).days + 1,
+        "dated_source_count": len(date_by_source),
+        "missing_source_count": len(missing_sources),
     }
 
 

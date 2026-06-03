@@ -85,6 +85,9 @@ type DeflectionSnapshot = {
     drafted_answer_count: number;
     no_proven_answer_count: number;
     repeat_ticket_count: number;
+    source_date_start?: string; // ISO date, only when source-date coverage is complete
+    source_date_end?: string; // ISO date, only when source-date coverage is complete
+    source_window_days?: number; // inclusive day count, only when coverage is complete
   };
   top_questions: DeflectionSnapshotQuestion[];
   locked_questions: DeflectionSnapshotLockedQuestion[];
@@ -152,6 +155,12 @@ must not feed spend or cost copy. If raw counts are unavailable, count-dependent
 frontend projections should stay hidden rather than fall back to the ranking
 score.
 
+`summary.source_date_start`, `summary.source_date_end`, and
+`summary.source_window_days` are optional and fail closed. ATLAS emits them only
+when every contributing ticket source has a parseable date. If any of the three
+fields is absent, the frontend must not normalize Support Tax copy to a source
+window or infer a monthly pace from the upload.
+
 ## FAQ Item
 
 ```ts
@@ -180,6 +189,13 @@ type TicketFAQItem = {
   source_labels: string[];
   source_type_counts: Record<string, number>;
   weighted_source_volume_by_type: Record<string, number>;
+  source_date_span?: {
+    start: string;
+    end: string;
+    window_days: number;
+    dated_source_count: number;
+    missing_source_count: number;
+  };
 
   term_mappings: FAQTermMapping[];
 

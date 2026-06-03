@@ -63,6 +63,7 @@ def _producer_deflection_report_payload() -> dict[str, object]:
                 "source_type": "support_ticket",
                 "source_title": "Export attribution",
                 "text": "How do I export attribution reports?",
+                "created_at": "2026-05-01T12:00:00Z",
                 "resolution_text": (
                     "Open Analytics, choose Attribution, then click Download report"
                 ),
@@ -72,6 +73,7 @@ def _producer_deflection_report_payload() -> dict[str, object]:
                 "source_type": "support_ticket",
                 "source_title": "Report download",
                 "text": "Where is the report download for attribution exports?",
+                "created_at": "2026-05-03",
                 "resolution_text": (
                     "Open Analytics, choose Attribution, then click Download report"
                 ),
@@ -81,12 +83,14 @@ def _producer_deflection_report_payload() -> dict[str, object]:
                 "source_type": "support_ticket",
                 "source_title": "SSO setup",
                 "text": "How do I enable SSO for my team?",
+                "created_at": "2026-05-10",
             },
             {
                 "source_id": "ticket-sso-2",
                 "source_type": "support_ticket",
                 "source_title": "Team login",
                 "text": "Can I turn on SSO for all users?",
+                "created_at": "2026-05-15",
             },
         ],
         title="Support Ticket FAQ Source",
@@ -195,6 +199,9 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
         "drafted_answer_count",
         "no_proven_answer_count",
         "repeat_ticket_count",
+        "source_date_start",
+        "source_date_end",
+        "source_window_days",
     }
     for question in payload["top_questions"]:
         assert set(question) == {

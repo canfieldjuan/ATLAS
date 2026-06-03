@@ -48,6 +48,13 @@ score, not a customer-specific ticket count; do not use it for spend
 calculations or projections. `locked_questions` intentionally exposes only
 rank and ticket count, with question text withheld until paid unlock.
 
+For period-normalized Support Tax copy, use
+`snapshot.summary.source_date_start`, `snapshot.summary.source_date_end`, and
+`snapshot.summary.source_window_days` only when all three are present. ATLAS
+omits them unless every contributing ticket source has a parseable date; the
+portfolio must not infer a date window, monthly pace, or annual run-rate from
+undated uploads.
+
 ## Portfolio Submit Endpoint
 
 The production PII-safe submit path is an authenticated server-to-server

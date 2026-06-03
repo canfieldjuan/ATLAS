@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from .campaign_ports import TenantScope
@@ -22,7 +23,7 @@ _UNCAPPED_REPORT_MAX_ITEMS = 0
 class DeflectionSnapshot:
     """Free preview projection that excludes paid answer/evidence fields."""
 
-    summary: dict[str, int]
+    summary: dict[str, Any]
     top_questions: tuple[dict[str, Any], ...]
     locked_questions: tuple[dict[str, int], ...]
     teaser: dict[str, Any]
@@ -157,12 +158,15 @@ def build_deflection_snapshot(
         raise ValueError("teaser_preview_count must be non-negative")
     summary = _artifact_summary(artifact)
     items = _artifact_items(artifact)
-    snapshot_summary = {
+    snapshot_summary: dict[str, Any] = {
         "generated": _int(summary.get("generated")),
         "drafted_answer_count": _int(summary.get("drafted_answer_count")),
         "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
         "repeat_ticket_count": sum(_ticket_count(item) for item in items),
     }
+    source_date_window = _complete_source_date_window(summary, items)
+    if source_date_window:
+        snapshot_summary.update(source_date_window)
     top_questions: list[dict[str, Any]] = []
     for rank, item in enumerate(items[:top_n], start=1):
         question = _text(item.get("question"))
@@ -243,7 +247,7 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         item for item in items
         if _text(item.get("answer_evidence_status")) != _RESOLUTION_EVIDENCE_STATUS
     )
-    return {
+    summary = {
         "generated": len(items),
         "source_count": int(faq_result.source_count),
         "ticket_source_count": int(faq_result.ticket_source_count),
@@ -253,6 +257,10 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         "top_question": _text(items[0].get("question")) if items else "",
         "top_opportunity_score": _int(items[0].get("opportunity_score")) if items else 0,
     }
+    source_date_window = _complete_source_date_window({}, items)
+    if source_date_window:
+        summary.update(source_date_window)
+    return summary
 
 
 def render_deflection_report(
@@ -548,6 +556,82 @@ def _ticket_count(item: Mapping[str, Any]) -> int:
         return ticket_count
     source_count = len(_texts(item.get("source_ids")))
     return source_count if source_count > 0 else 0
+
+
+def _complete_source_date_window(
+    summary: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    summary_window = _summary_source_date_window(summary)
+    if summary_window:
+        return summary_window
+    return _items_source_date_window(items)
+
+
+def _summary_source_date_window(summary: Mapping[str, Any]) -> dict[str, Any]:
+    start = _iso_date_text(summary.get("source_date_start"))
+    end = _iso_date_text(summary.get("source_date_end"))
+    days = _int(summary.get("source_window_days"))
+    if not start or not end or days < 1:
+        return {}
+    parsed_start = date.fromisoformat(start)
+    parsed_end = date.fromisoformat(end)
+    if parsed_end < parsed_start:
+        return {}
+    expected_days = (parsed_end - parsed_start).days + 1
+    if days != expected_days:
+        return {}
+    return {
+        "source_date_start": start,
+        "source_date_end": end,
+        "source_window_days": days,
+    }
+
+
+def _items_source_date_window(items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    starts: list[date] = []
+    ends: list[date] = []
+    missing_source_count = 0
+    saw_dated_span = False
+    for item in items:
+        raw_span = item.get("source_date_span")
+        if not isinstance(raw_span, Mapping):
+            if _ticket_count(item) > 0:
+                missing_source_count += _ticket_count(item)
+            continue
+        start = _iso_date(raw_span.get("start"))
+        end = _iso_date(raw_span.get("end"))
+        if start is None or end is None or end < start:
+            missing_source_count += 1
+            continue
+        saw_dated_span = True
+        starts.append(start)
+        ends.append(end)
+        missing_source_count += _int(raw_span.get("missing_source_count"))
+    if not saw_dated_span or missing_source_count > 0 or not starts or not ends:
+        return {}
+    start = min(starts)
+    end = max(ends)
+    return {
+        "source_date_start": start.isoformat(),
+        "source_date_end": end.isoformat(),
+        "source_window_days": (end - start).days + 1,
+    }
+
+
+def _iso_date_text(value: Any) -> str:
+    parsed = _iso_date(value)
+    return parsed.isoformat() if parsed is not None else ""
+
+
+def _iso_date(value: Any) -> date | None:
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _texts(value: Any) -> list[str]:
