@@ -426,6 +426,23 @@ def _sales_brief_row():
     }
 
 
+def _social_post_row():
+    return {
+        "id": "social-post-uuid-1",
+        "status": "draft",
+        "target_id": "review-1",
+        "target_mode": "review",
+        "channel": "linkedin",
+        "text": "Acme support teams can spot churn risk before renewal.",
+        "source_id": "source-1",
+        "source_type": "review",
+        "company_name": "Acme",
+        "vendor_name": "Zendesk",
+        "pain_points": ["slow response", "renewal pressure"],
+        "metadata": {"source_url": "https://example.test/reviews/1"},
+    }
+
+
 def _ticket_faq_row():
     return {
         "id": "faq-uuid-1",
@@ -1434,6 +1451,49 @@ def test_generated_asset_router_exports_ticket_faq_csv() -> None:
     assert args == ("", "draft", "support_account", 20)
 
 
+def test_generated_asset_router_lists_social_post_drafts_with_filters() -> None:
+    pool = _Pool(rows=[_social_post_row()])
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+    ).get(
+        "/content-assets/social_post/drafts"
+        "?target_mode=review&channel=linkedin&limit=5"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    row = body["rows"][0]
+    assert row["id"] == "social-post-uuid-1"
+    assert row["channel"] == "linkedin"
+    assert row["text"] == "Acme support teams can spot churn risk before renewal."
+    assert row["pain_point_count"] == 2
+    query, args = pool.fetch_calls[0]
+    assert "FROM social_posts" in query
+    assert args == ("acct_1", "draft", "review", "linkedin", 5)
+
+
+def test_generated_asset_router_exports_social_post_csv() -> None:
+    pool = _Pool(rows=[_social_post_row()])
+
+    response = _client(pool).get(
+        "/content-assets/social_post/drafts/export"
+        "?format=csv&status=&target_mode=review&channel=linkedin"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "content_assets_social_post.csv" in response.headers["content-disposition"]
+    assert "target_id,target_mode,channel" in response.text
+    assert "Acme support teams can spot churn risk before renewal." in response.text
+    query, args = pool.fetch_calls[0]
+    assert "FROM social_posts" in query
+    assert "status = " not in query
+    assert args == ("", "review", "linkedin", 20)
+
+
 def test_generated_asset_router_reviews_report_with_host_defined_status() -> None:
     pool = _Pool()
 
@@ -1457,6 +1517,27 @@ def test_generated_asset_router_reviews_report_with_host_defined_status() -> Non
     query, args = pool.execute_calls[0]
     assert "UPDATE reports" in query
     assert args == ("report-uuid-1", "published", "acct_1")
+
+
+def test_generated_asset_router_reviews_social_post() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/social_post/drafts/review",
+        json={"id": "social-post-uuid-1", "status": "approved"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "acct_1",
+        "asset": "social_post",
+        "id": "social-post-uuid-1",
+        "status": "approved",
+        "updated": True,
+    }
+    query, args = pool.execute_calls[0]
+    assert "UPDATE social_posts" in query
+    assert args == ("social-post-uuid-1", "approved", "acct_1")
 
 
 def test_generated_asset_router_reviews_ticket_faq_with_host_defined_status() -> None:
@@ -1795,6 +1876,31 @@ def test_generated_asset_router_batch_reviews_reports() -> None:
     assert "UPDATE reports" in query
     assert "RETURNING id" in query
     assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "approved", "acct_1")
+
+
+def test_generated_asset_router_batch_reviews_social_posts() -> None:
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}, {"id": BATCH_REPORT_ID_2}])
+
+    response = _client(
+        pool,
+        scope={"account_id": "acct_1"},
+    ).post(
+        "/content-assets/social_post/drafts/review-batch",
+        json={
+            "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
+            "status": "rejected",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["asset"] == "social_post"
+    assert response.json()["updated"] == 2
+    assert response.json()["updated_ids"] == [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2]
+    query, args = pool.fetch_calls[0]
+    assert "UPDATE social_posts" in query
+    assert "RETURNING id" in query
+    assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "rejected", "acct_1")
+    assert pool.execute_calls == []
 
 
 def test_generated_asset_router_batch_reviews_reports_misses() -> None:

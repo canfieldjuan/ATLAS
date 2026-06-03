@@ -431,6 +431,7 @@ export type GeneratedAssetType =
   | 'report'
   | 'landing_page'
   | 'sales_brief'
+  | 'social_post'
   | 'faq_markdown'
 
 export interface GeneratedAssetRepairHistoryEntry {
@@ -468,6 +469,14 @@ export interface GeneratedAssetDraft {
   topic_type?: string
   campaign_name?: string
   brief_type?: string
+  channel?: string
+  text?: string
+  source_id?: string
+  source_type?: string
+  company_name?: string
+  vendor_name?: string
+  pain_points?: string[] | string
+  pain_point_count?: number
   description?: string
   summary?: string
   headline?: string
@@ -525,6 +534,7 @@ export interface GeneratedAssetListParams {
   slug?: string
   topic_type?: string
   brief_type?: string
+  channel?: string
   id?: string | string[]
   format?: string
   limit?: number

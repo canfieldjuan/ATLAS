@@ -45,6 +45,8 @@ from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
 from ..sales_brief_export import export_sales_brief_drafts
 from ..sales_brief_postgres import PostgresSalesBriefRepository
+from ..social_post_export import export_social_post_drafts
+from ..social_post_postgres import PostgresSocialPostRepository
 from ..ticket_faq_export import export_ticket_faq_drafts
 from ..ticket_faq_postgres import PostgresTicketFAQRepository
 
@@ -58,7 +60,14 @@ MacroPublishProviderFactory = Callable[
     MacroPublishProvider | Awaitable[MacroPublishProvider],
 ]
 
-ASSET_CHOICES = ("blog_post", "report", "landing_page", "sales_brief", "faq_markdown")
+ASSET_CHOICES = (
+    "blog_post",
+    "report",
+    "landing_page",
+    "sales_brief",
+    "social_post",
+    "faq_markdown",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -280,6 +289,7 @@ def create_generated_asset_router(
         slug: str | None = Query(None),
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
+        channel: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
     ) -> dict[str, Any]:
@@ -297,6 +307,7 @@ def create_generated_asset_router(
             slug=slug,
             topic_type=topic_type,
             brief_type=brief_type,
+            channel=channel,
             ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
@@ -312,6 +323,7 @@ def create_generated_asset_router(
         slug: str | None = Query(None),
         topic_type: str | None = Query(None),
         brief_type: str | None = Query(None),
+        channel: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
         format: str = Query("csv", description="csv or json"),
@@ -330,6 +342,7 @@ def create_generated_asset_router(
             slug=slug,
             topic_type=topic_type,
             brief_type=brief_type,
+            channel=channel,
             ids=ids,
             limit=_api_limit(limit, resolved_config),
         )
@@ -713,6 +726,7 @@ async def _export_for_asset(
     slug: str | None,
     topic_type: str | None,
     brief_type: str | None,
+    channel: str | None,
     ids: Sequence[str] | None,
     limit: int,
 ) -> Any:
@@ -758,6 +772,15 @@ async def _export_for_asset(
             brief_type=brief_type,
             limit=limit,
         )
+    if asset == "social_post":
+        return await export_social_post_drafts(
+            PostgresSocialPostRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=target_mode,
+            channel=channel,
+            limit=limit,
+        )
     if asset == "faq_markdown":
         return await export_ticket_faq_drafts(
             PostgresTicketFAQRepository(pool),
@@ -785,6 +808,8 @@ async def _update_asset_status(
         return await PostgresLandingPageRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_status(asset_id, status, scope=scope)
+    if asset == "social_post":
+        return await PostgresSocialPostRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_status(asset_id, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
@@ -806,6 +831,8 @@ async def _update_asset_statuses(
         return await PostgresLandingPageRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "sales_brief":
         return await PostgresSalesBriefRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "social_post":
+        return await PostgresSocialPostRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
