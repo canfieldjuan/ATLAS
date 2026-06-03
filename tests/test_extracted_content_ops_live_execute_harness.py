@@ -809,7 +809,10 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
     assert step["result"]["full_report"]["status"] == "locked"
     assert "markdown" not in step["result"]
     assert "faq_result" not in step["result"]
-    assert "Open Analytics" not in json.dumps(step["result"], sort_keys=True)
+    gated_payload = json.dumps(step["result"], sort_keys=True)
+    assert "Open Analytics" in gated_payload
+    assert "ticket-export-1" not in gated_payload
+    assert "evidence_quotes" not in gated_payload
 
     request_id = payload["request_id"]
     artifact_route = _route(
@@ -931,7 +934,10 @@ async def test_live_execute_route_handles_bulk_faq_deflection_report() -> None:
 async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot_top_n() -> None:
     store = InMemoryDeflectionReportArtifactStore()
     router = create_content_ops_control_surface_router(
-        config=ContentOpsControlSurfaceApiConfig(deflection_snapshot_top_n=2),
+        config=ContentOpsControlSurfaceApiConfig(
+            deflection_snapshot_top_n=2,
+            deflection_snapshot_teaser_preview_count=1,
+        ),
         execution_services_provider=lambda: ContentOpsExecutionServices(
             faq_deflection_report=FAQDeflectionReportService(),
         ),
@@ -1011,10 +1017,28 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "no_proven_answer_count": 0,
     }
     assert len(snapshot["top_questions"]) == 2
+    assert snapshot["teaser"]["full_answer"]["answer_evidence_status"] == (
+        "resolution_evidence"
+    )
+    assert snapshot["teaser"]["full_answer"]["resolution_evidence_scope"] == "scoped"
+    assert len(snapshot["teaser"]["previews"]) == 1
+    assert snapshot["teaser"]["previews"][0]["body_withheld"] is True
+    assert "answer" not in snapshot["teaser"]["previews"][0]
+    assert "steps" not in snapshot["teaser"]["previews"][0]
     snapshot_payload = json.dumps(snapshot, sort_keys=True)
+    visible_answer_count = sum(
+        answer in snapshot_payload
+        for answer in (
+            "Enable SSO first",
+            "Open Data > Sync history",
+            "Open Billing > Invoices",
+            "Create the replacement token",
+        )
+    )
+    assert visible_answer_count == 1
     assert "resolution_text" not in snapshot_payload
-    assert "Open Billing" not in snapshot_payload
     assert "ticket-token-1" not in snapshot_payload
+    assert "source_ids" not in snapshot_payload
     assert step["result"]["full_report"]["status"] == "locked"
 
     await _route(

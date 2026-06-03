@@ -34,8 +34,11 @@ type GatedDeflectionExecuteResult = {
 };
 ```
 
-Render `snapshot` on the free page. Do not derive answer text, evidence, source
-IDs, or Markdown from this object.
+Render `snapshot` on the free page. The only answer body available before
+payment is `snapshot.teaser.full_answer`, when present. Teaser previews are
+body-withheld (`body_withheld: true`) and exist only to show answer structure.
+Do not derive other answer text, evidence, source IDs, or Markdown from this
+object.
 
 ## Portfolio Submit Endpoint
 
@@ -88,6 +91,11 @@ Responses:
 
 - `200`: `DeflectionSnapshot`
 - `404`: no report exists for this `request_id` in the authenticated account
+
+The snapshot teaser is bounded and fail-closed: at most one full scoped
+resolution-backed answer plus configured body-withheld previews. When no item
+has scoped resolution evidence, `teaser.full_answer` is `null` and previews are
+empty.
 
 The authenticated ATLAS scope supplies `account_id`; do not put `account_id` in
 the path or query string.

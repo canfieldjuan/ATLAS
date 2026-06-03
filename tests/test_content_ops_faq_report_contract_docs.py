@@ -184,7 +184,7 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
     encoded = json.dumps(payload, sort_keys=True)
 
     assert payload == producer_payload
-    assert set(payload) == {"summary", "top_questions"}
+    assert set(payload) == {"summary", "top_questions", "teaser"}
     assert set(payload["summary"]) == {
         "generated",
         "drafted_answer_count",
@@ -197,10 +197,39 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
             "weighted_frequency",
             "customer_wording",
         }
+    assert set(payload["teaser"]) == {"full_answer", "previews"}
+    if payload["teaser"]["full_answer"] is not None:
+        assert set(payload["teaser"]["full_answer"]) == {
+            "rank",
+            "question",
+            "answer",
+            "steps",
+            "answer_evidence_status",
+            "resolution_evidence_scope",
+            "weighted_frequency",
+            "source_count",
+        }
+        assert (
+            payload["teaser"]["full_answer"]["answer_evidence_status"]
+            == "resolution_evidence"
+        )
+        assert payload["teaser"]["full_answer"]["resolution_evidence_scope"] == "scoped"
+    for preview in payload["teaser"]["previews"]:
+        assert set(preview) == {
+            "rank",
+            "question",
+            "answer_evidence_status",
+            "resolution_evidence_scope",
+            "weighted_frequency",
+            "step_count",
+            "source_count",
+            "body_withheld",
+        }
+        assert preview["body_withheld"] is True
     assert "markdown" not in encoded
     assert "faq_result" not in encoded
-    assert "steps" not in encoded
-    assert "evidence" not in encoded
+    assert "steps" not in json.dumps(payload["top_questions"], sort_keys=True)
+    assert "evidence_quotes" not in encoded
     assert "source_ids" not in encoded
 
 
@@ -227,6 +256,8 @@ def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> Non
         "account_id: string;",
         "request_id: string;",
         "GET /content-ops/deflection-reports/{request_id}/snapshot",
+        "snapshot.teaser.full_answer",
+        "body_withheld: true",
         "GET /content-ops/deflection-reports/{request_id}/artifact",
         "csv_file: File;",
         "do not expose raw support-ticket CSVs through a",
