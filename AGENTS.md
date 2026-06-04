@@ -224,7 +224,7 @@ reassigns it and the map is updated first.
 Three scripts remove the PR-shape and failed-push friction — use them
 rather than hand-formatting:
 
-- `scripts/new_pr_plan.sh <Slice> --lane <lane> --phase "<phase>"` —
+- `bash scripts/new_pr_plan.sh <Slice> --lane <lane> --phase "<phase>"` —
   scaffolds `plans/PR-<Slice>.md` with the required 7 sections, a
   `### Files touched` placeholder, and a zero diff-size table. Refuses to
   overwrite an existing plan without `--force`.
@@ -233,13 +233,14 @@ rather than hand-formatting:
   `git diff` (tracked vs merge-base plus untracked). Run after
   implementation; `--check` mode fails if the plan is out of sync
   (CI-gateable).
-- `scripts/push_pr.sh <pr-body-file> [git-push-args]` — runs
+- `bash scripts/push_pr.sh <pr-body-file> [git-push-args]` — runs
   `local_pr_review.sh` with the body file, then pushes with
   `ATLAS_CURRENT_PR_BODY_FILE` exported so the installed pre-push hook
-  validates the same body. It does **not** bypass the hook (no
-  `--no-verify`).
+  validates the same body. The wrapper does **not** add `--no-verify`;
+  callers must not pass `--no-verify` through the forwarded push args.
 
-Flow: `new_pr_plan.sh` -> implement -> `sync_pr_plan.py` -> `push_pr.sh`.
+Flow: `bash scripts/new_pr_plan.sh` -> implement ->
+`python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh`.
 
 ### 3b. Per-package guardrails
 

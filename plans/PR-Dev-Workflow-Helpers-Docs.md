@@ -61,18 +61,21 @@ Parked hardening: none.
 
 ## Verification
 
-- The scaffold from `scripts/new_pr_plan.sh` passes `scripts/audit_plan_doc.py`
-  (all 7 headers) -- confirmed during prep.
+- The scaffold from `scripts/new_pr_plan.sh` passes
+  `scripts/audit_plan_doc.py` (all 7 headers) -- confirmed during prep.
 - After `scripts/sync_pr_plan.py`, the `scripts/audit_plan_doc_diff_size.py`
-  check reports status OK (drift within tolerance).
-- `scripts/push_pr.sh` ran `scripts/local_pr_review.sh` clean before pushing.
+  check reports status OK.
+- `scripts/local_pr_review.sh` passed after the comment fixes with the PR body
+  file supplied.
+- `scripts/push_pr.sh` ran `scripts/local_pr_review.sh` clean before the
+  initial push.
 - Both edited docs render (markdown headings intact).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `AGENTS.md` | 22 |
-| `docs/SESSION_BOOTSTRAP.md` | 1 |
-| `plans/PR-Dev-Workflow-Helpers-Docs.md` | 78 |
-| **Total** | **101** |
+| `AGENTS.md` | 23 |
+| `docs/SESSION_BOOTSTRAP.md` | 10 |
+| `plans/PR-Dev-Workflow-Helpers-Docs.md` | 81 |
+| **Total** | **114** |
