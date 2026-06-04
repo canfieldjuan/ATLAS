@@ -72,8 +72,10 @@ import {
   FAQ_INTENT_RULES_INPUT,
   FAQ_RESOLUTION_EVIDENCE_STATUS,
   FAQ_VOCABULARY_GAP_RULES_INPUT,
+  BRAND_VOICE_PROFILE_PRESETS,
   applyBrandVoiceProfileEditorPatch,
   blankBrandVoiceProfileEditorState,
+  brandVoicePresetEditorPatch,
   brandVoiceProfileEditorRequest,
   brandVoiceProfileEditorStateFromProfile,
   canSaveBrandVoiceProfileEditor,
@@ -183,6 +185,11 @@ type BrandVoiceSampleImportState =
   | { kind: 'idle' }
   | { kind: 'loading'; message: string }
   | { kind: 'loaded'; message: string }
+  | { kind: 'applied'; message: string }
+  | { kind: 'error'; message: string }
+
+type BrandVoicePresetApplyState =
+  | { kind: 'idle' }
   | { kind: 'applied'; message: string }
   | { kind: 'error'; message: string }
 
@@ -1936,6 +1943,11 @@ function BrandVoiceProfileSelector({
   const [sampleText, setSampleText] = useState('')
   const [sampleName, setSampleName] = useState('')
   const [sampleUrl, setSampleUrl] = useState('')
+  const [selectedPresetId, setSelectedPresetId] = useState(
+    BRAND_VOICE_PROFILE_PRESETS[0]?.id ?? '',
+  )
+  const [presetApplyState, setPresetApplyState] =
+    useState<BrandVoicePresetApplyState>({ kind: 'idle' })
   const [sampleImportState, setSampleImportState] =
     useState<BrandVoiceSampleImportState>({ kind: 'idle' })
   const mutating =
@@ -1962,6 +1974,7 @@ function BrandVoiceProfileSelector({
 
   const startCreate = () => {
     resetSampleImport()
+    setPresetApplyState({ kind: 'idle' })
     setEditor(blankBrandVoiceProfileEditorState())
     setMutationState({ kind: 'idle' })
   }
@@ -1969,6 +1982,7 @@ function BrandVoiceProfileSelector({
   const startEdit = () => {
     if (!selectedProfile) return
     resetSampleImport()
+    setPresetApplyState({ kind: 'idle' })
     setEditor(brandVoiceProfileEditorStateFromProfile(selectedProfile))
     setMutationState({ kind: 'idle' })
   }
@@ -2101,6 +2115,24 @@ function BrandVoiceProfileSelector({
         message: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  const handleApplyPreset = () => {
+    const patch = brandVoicePresetEditorPatch(selectedPresetId)
+    if (!patch) {
+      setPresetApplyState({
+        kind: 'error',
+        message: 'Select a preset before applying.',
+      })
+      return
+    }
+    setEditor((current) =>
+      current ? applyBrandVoiceProfileEditorPatch(current, patch) : current,
+    )
+    setPresetApplyState({
+      kind: 'applied',
+      message: 'Preset applied to empty profile fields.',
+    })
   }
 
   const handleApplySample = () => {
@@ -2244,6 +2276,50 @@ function BrandVoiceProfileSelector({
               <X className="h-3.5 w-3.5" />
               Cancel
             </button>
+          </div>
+
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="block text-sm">
+                <span className="text-slate-300">Preset</span>
+                <select
+                  value={selectedPresetId}
+                  onChange={(event) => {
+                    setSelectedPresetId(event.target.value)
+                    setPresetApplyState({ kind: 'idle' })
+                  }}
+                  disabled={mutating}
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                >
+                  {BRAND_VOICE_PROFILE_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={handleApplyPreset}
+                disabled={!selectedPresetId || mutating}
+                className="flex h-9 items-center justify-center gap-2 self-end rounded-md border border-cyan-500/60 px-2.5 text-xs text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50"
+              >
+                <Palette className="h-3.5 w-3.5" />
+                Apply preset
+              </button>
+            </div>
+            {presetApplyState.kind !== 'idle' && (
+              <div
+                className={clsx(
+                  'mt-2 text-xs',
+                  presetApplyState.kind === 'error'
+                    ? 'text-rose-200'
+                    : 'text-slate-400',
+                )}
+              >
+                {presetApplyState.message}
+              </div>
+            )}
           </div>
 
           <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
