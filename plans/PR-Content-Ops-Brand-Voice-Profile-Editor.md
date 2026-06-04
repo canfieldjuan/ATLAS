@@ -32,9 +32,9 @@ Slice phase: Vertical slice
 
 ### Files touched
 
-- `plans/PR-Content-Ops-Brand-Voice-Profile-Editor.md`
-- `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx`
 - `atlas-intel-ui/scripts/content-ops-brand-voice-profile-selector.test.mjs`
+- `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx`
+- `plans/PR-Content-Ops-Brand-Voice-Profile-Editor.md`
 
 ## Mechanism
 
@@ -90,6 +90,7 @@ Parked hardening: none.
 
 ## Verification
 
+- `cd atlas-intel-ui && npm run lint` -- passed.
 - `cd atlas-intel-ui && npm run test:content-ops-brand-voice-profile-selector` -- 6 passed.
 - `cd atlas-intel-ui && npm run build` -- passed.
 - `git diff --check` -- passed.
@@ -99,12 +100,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Content-Ops-Brand-Voice-Profile-Editor.md` | 110 |
-| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | 353 |
-| `atlas-intel-ui/scripts/content-ops-brand-voice-profile-selector.test.mjs` | 8 |
-| **Total** | **471** |
-
-Expected final: 3 files, +459 / -12. This lands over the 400 LOC soft
-cap because create/edit/archive, refresh/selection consistency, client-side
-validation, and the CI-enrolled wiring test need to ship together as one usable
-vertical slice.
+| `atlas-intel-ui/scripts/content-ops-brand-voice-profile-selector.test.mjs` | 10 |
+| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | 368 |
+| `plans/PR-Content-Ops-Brand-Voice-Profile-Editor.md` | 106 |
+| **Total** | **484** |

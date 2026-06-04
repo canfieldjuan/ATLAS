@@ -1,4 +1,11 @@
-import { useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react'
 import { Link } from 'react-router-dom'
 import {
   ChevronRight,
@@ -1927,6 +1934,10 @@ function BrandVoiceProfileSelector({
   const mutating =
     mutationState.kind === 'saving' || mutationState.kind === 'archiving'
   const canSave = editor ? canSaveBrandVoiceProfileEditor(editor) : false
+  const selectedProfileIdRef = useRef(selectedProfileId)
+  useEffect(() => {
+    selectedProfileIdRef.current = selectedProfileId
+  }, [selectedProfileId])
 
   const startCreate = () => {
     setEditor(blankBrandVoiceProfileEditorState())
@@ -1980,18 +1991,20 @@ function BrandVoiceProfileSelector({
 
   const handleArchive = async () => {
     if (!selectedProfile || mutationState.kind === 'archiving') return
+    const archiveProfileId = selectedProfile.id
+    const archiveProfileName = selectedProfile.name
     if (
-      !window.confirm(`Archive brand voice profile "${selectedProfile.name}"?`)
+      !window.confirm(`Archive brand voice profile "${archiveProfileName}"?`)
     ) {
       return
     }
-    setMutationState({ kind: 'archiving', id: selectedProfile.id })
+    setMutationState({ kind: 'archiving', id: archiveProfileId })
     try {
-      await deleteContentOpsBrandVoiceProfile(selectedProfile.id)
-      if (selectedProfileId === selectedProfile.id) {
+      await deleteContentOpsBrandVoiceProfile(archiveProfileId)
+      if (selectedProfileIdRef.current === archiveProfileId) {
         onChange(null)
       }
-      if (editor?.profileId === selectedProfile.id) {
+      if (editor?.profileId === archiveProfileId) {
         setEditor(null)
       }
       setMutationState({
@@ -2058,7 +2071,7 @@ function BrandVoiceProfileSelector({
         <span className="text-slate-300">Saved profile</span>
         <select
           value={selectedProfileId ?? ''}
-          disabled={loading}
+          disabled={loading || mutating}
           onChange={(event) => onChange(event.target.value || null)}
           className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
         >

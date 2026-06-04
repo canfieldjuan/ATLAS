@@ -209,6 +209,8 @@ test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('New brand voice'))
   assert.ok(newRunSource.includes('Edit brand voice'))
   assert.ok(newRunSource.includes('Archive'))
+  assert.ok(newRunSource.includes('disabled={loading || mutating}'))
+  assert.ok(newRunSource.includes('selectedProfileIdRef.current === archiveProfileId'))
   assert.ok(newRunSource.includes('function brandVoiceProfileEditorRequest'))
   assert.ok(newRunSource.includes('function canSaveBrandVoiceProfileEditor'))
 })
