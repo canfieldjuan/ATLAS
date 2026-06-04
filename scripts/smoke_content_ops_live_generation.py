@@ -68,6 +68,20 @@ DEFAULT_BLOG_TOPIC = (
     "Support ticket FAQ gaps: what 90 days of repeat tickets reveal"
 )
 DEFAULT_BLOG_TOPIC_TYPE = "content_ops_live_smoke"
+DEFAULT_STAT_CARD_SOURCE_MATERIAL: tuple[Mapping[str, Any], ...] = (
+    {
+        "review_id": "content-ops-live-stat-1",
+        "source_type": "review",
+        "vendor": "Atlas Helpdesk",
+        "reviewer_company": "Northstar Support",
+        "review_text": (
+            "NPS score dropped to 42 after renewal because customers could "
+            "not find clear export and account-change answers."
+        ),
+        "nps_score": 42,
+        "pain_category": "self-serve documentation gaps",
+    },
+)
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_sources.csv"
 )
@@ -101,7 +115,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        choices=("landing_page", "blog_post"),
+        choices=("landing_page", "blog_post", "stat_card"),
         default="landing_page",
         help="Content Ops output to smoke-test. Defaults to landing_page.",
     )
@@ -181,8 +195,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--export-saved-draft",
         type=Path,
         help=(
-            "Write a JSON export of the exact saved landing_page/blog_post "
-            "draft ids produced by this smoke run."
+            "Write a JSON export of the exact saved landing_page/blog_post/"
+            "stat_card draft ids produced by this smoke run."
         ),
     )
     parser.add_argument(
@@ -248,6 +262,8 @@ def _payload_from_args(args: argparse.Namespace) -> dict[str, Any]:
             "topic": DEFAULT_BLOG_TOPIC,
             "filters": {"topic_type": DEFAULT_BLOG_TOPIC_TYPE},
         }
+    elif output == "stat_card":
+        inputs = {"source_material": [dict(row) for row in DEFAULT_STAT_CARD_SOURCE_MATERIAL]}
     else:  # argparse enforces this for CLI callers; keep injected tests honest.
         raise SystemExit(f"unsupported --output: {output}")
     if args.input_json:
@@ -390,7 +406,7 @@ async def _export_saved_drafts(
     saved_ids: Sequence[str],
     scope: Any,
 ) -> Mapping[str, Any]:
-    if output not in {"landing_page", "blog_post"}:
+    if output not in {"landing_page", "blog_post", "stat_card"}:
         raise ValueError(f"saved draft export is unsupported for output: {output}")
 
     from atlas_brain.storage.database import get_db_pool  # noqa: PLC0415
@@ -405,6 +421,12 @@ async def _export_saved_drafts(
     )
     from extracted_content_pipeline.landing_page_postgres import (  # noqa: PLC0415
         PostgresLandingPageRepository,
+    )
+    from extracted_content_pipeline.stat_card_export import (  # noqa: PLC0415
+        export_stat_card_drafts,
+    )
+    from extracted_content_pipeline.stat_card_postgres import (  # noqa: PLC0415
+        PostgresStatCardRepository,
     )
 
     pool = get_db_pool()
@@ -428,6 +450,35 @@ async def _export_saved_drafts(
                 limit=len(saved_ids),
             )
         ).as_dict()
+    if output == "stat_card":
+        export = await export_stat_card_drafts(
+            PostgresStatCardRepository(pool),
+            scope=scope,
+            status=None,
+            limit=max(100, len(saved_ids)),
+        )
+        return _filter_saved_draft_export_rows(export.as_dict(), saved_ids)
+
+
+def _filter_saved_draft_export_rows(
+    export: Mapping[str, Any],
+    saved_ids: Sequence[str],
+) -> dict[str, Any]:
+    wanted = {str(item).strip() for item in saved_ids if str(item).strip()}
+    rows = [
+        dict(row)
+        for row in _export_rows(export)
+        if str(row.get("id") or "").strip() in wanted
+    ]
+    filters = dict(_as_mapping(export.get("filters")))
+    if wanted:
+        filters["id"] = [item for item in saved_ids if str(item).strip()]
+    return {
+        **dict(export),
+        "count": len(rows),
+        "filters": filters,
+        "rows": rows,
+    }
 
 
 _LANDING_PAGE_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS = (
@@ -475,6 +526,8 @@ def _expected_support_ticket_export_context(
     output: str,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if output not in {"landing_page", "blog_post"}:
+        return {}
     inputs = _as_mapping(payload.get("inputs"))
     context_keys = (
         _BLOG_POST_SUPPORT_TICKET_EXPORT_CONTEXT_KEYS
