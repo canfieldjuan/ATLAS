@@ -168,6 +168,7 @@ async def test_deflection_checkout_completion_skips_delivery_queue_without_email
         ("account_id", "not-a-uuid"),
         ("request_id", None),
         ("amount_total", 149999),
+        ("amount_total", 150001),
         ("amount_total", None),
         ("currency", "eur"),
     ],
@@ -212,6 +213,79 @@ async def test_deflection_checkout_completion_fails_closed_when_report_missing()
     assert args == (account_id, "req-123", "cs_test_deflection")
 
 
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_accepts_lower_allowlisted_amount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, amount_total=120000)
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+        "120000,150000,180000",
+    )
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+    )
+
+    assert returned is None
+    query, args = pool.execute_calls[0]
+    assert "UPDATE content_ops_deflection_reports" in query
+    assert args == (account_id, "req-123", "cs_test_deflection")
+
+
+def test_deflection_checkout_amount_requires_exact_default_amount() -> None:
+    account_id = str(uuid.uuid4())
+
+    assert (
+        billing._deflection_checkout_amount_is_valid(
+            _session(account_id=account_id, amount_total=150000)
+        )
+        is True
+    )
+    assert (
+        billing._deflection_checkout_amount_is_valid(
+            _session(account_id=account_id, amount_total=150001)
+        )
+        is False
+    )
+
+
+def test_deflection_checkout_amount_uses_allowed_amount_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+        "120000,150000,180000",
+    )
+
+    assert (
+        billing._deflection_checkout_amount_is_valid(
+            _session(account_id=account_id, amount_total=120000)
+        )
+        is True
+    )
+    assert (
+        billing._deflection_checkout_amount_is_valid(
+            _session(account_id=account_id, amount_total=180000)
+        )
+        is True
+    )
+    assert (
+        billing._deflection_checkout_amount_is_valid(
+            _session(account_id=account_id, amount_total=130000)
+        )
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     ("amount_cents", "currency"),
     [
@@ -235,6 +309,28 @@ def test_deflection_checkout_amount_rejects_misconfigured_price_gate(
         billing.settings.saas_auth,
         "stripe_content_ops_deflection_report_currency",
         currency,
+    )
+
+    assert billing._deflection_checkout_amount_is_valid(session) is False
+
+
+@pytest.mark.parametrize(
+    "allowed_amounts",
+    [
+        "120000,,150000",
+        "120000,not-cents,150000",
+        "120000,0,150000",
+    ],
+)
+def test_deflection_checkout_amount_rejects_misconfigured_allowed_amount_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    allowed_amounts: str,
+) -> None:
+    session = _session(account_id=str(uuid.uuid4()))
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_content_ops_deflection_report_allowed_amount_cents",
+        allowed_amounts,
     )
 
     assert billing._deflection_checkout_amount_is_valid(session) is False

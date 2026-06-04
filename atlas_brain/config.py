@@ -97,7 +97,17 @@ class SaaSAuthConfig(BaseSettings):
     stripe_content_ops_deflection_report_amount_cents: int = Field(
         default=150000,
         ge=0,
-        description="Minimum Stripe Checkout amount for the one-time Content Ops FAQ deflection report",
+        description=(
+            "Default Stripe Checkout amount for the one-time Content Ops FAQ "
+            "deflection report when no explicit allowed amount list is set"
+        ),
+    )
+    stripe_content_ops_deflection_report_allowed_amount_cents: str = Field(
+        default="",
+        description=(
+            "Comma-separated exact Stripe Checkout amounts, in cents, allowed "
+            "to unlock the one-time Content Ops FAQ deflection report"
+        ),
     )
     stripe_content_ops_deflection_report_currency: str = Field(
         default="usd",

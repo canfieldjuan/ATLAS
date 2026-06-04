@@ -149,7 +149,7 @@ Required session properties:
 - `metadata.source: "content_ops_deflection_report"`
 - `metadata.account_id`: the same ATLAS account/tenant id that owns the report
 - `metadata.request_id`: the Content Ops request id returned by execute
-- `amount_total >= 150000`
+- `amount_total`: exactly one ATLAS-configured allowed amount in cents
 - `currency: "usd"`
 
 ATLAS stores the Stripe Checkout session id as the report `payment_reference`

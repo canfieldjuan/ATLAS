@@ -119,8 +119,8 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
             errors.append("--account-id must be a UUID for the Stripe metadata contract")
     if not _clean(args.request_id):
         errors.append("ATLAS_DEFLECTION_REQUEST_ID or --request-id is required")
-    if int(args.amount_total) < DEFAULT_AMOUNT_CENTS:
-        errors.append(f"--amount-total must be at least {DEFAULT_AMOUNT_CENTS}")
+    if int(args.amount_total) <= 0:
+        errors.append("--amount-total must be positive")
     if _clean(args.currency).lower() != DEFAULT_CURRENCY:
         errors.append(f"--currency must be {DEFAULT_CURRENCY}")
     if not math.isfinite(float(args.timeout)) or float(args.timeout) <= 0:
