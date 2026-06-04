@@ -45,8 +45,10 @@ const {
 } = await loadTsModule('../src/domain/contentOps/fromWire.ts')
 
 const {
+  BRAND_VOICE_PROFILE_PRESETS,
   applyBrandVoiceProfileEditorPatch,
   blankBrandVoiceProfileEditorState,
+  brandVoicePresetEditorPatch,
   brandVoiceProfileEditorRequest,
   canSaveBrandVoiceProfileEditor,
   deriveBrandVoiceProfileEditorPatch,
@@ -318,8 +320,42 @@ test('brand voice sample patch preserves manually entered fields', () => {
   assert.equal(merged.preferredPov, 'second_person')
 })
 
+test('brand voice preset patch fills only empty guidance fields', () => {
+  assert.ok(BRAND_VOICE_PROFILE_PRESETS.length >= 4)
+  const patch = brandVoicePresetEditorPatch('technical_trust')
+
+  assert.ok(patch)
+  assert.equal(patch.name, undefined)
+  assert.equal(patch.exemplarsText, undefined)
+  assert.ok(patch.descriptorsText.includes('technical'))
+  assert.ok(patch.descriptorsText.includes('credible'))
+  assert.ok(patch.bannedTermsText.includes('magic'))
+  assert.equal(patch.preferredPov, 'second_person')
+  assert.equal(patch.readingLevel, 'detailed')
+  assert.deepEqual(patch.metadata, {
+    source: 'content_ops_ui_preset',
+    preset_id: 'technical_trust',
+  })
+
+  const editor = {
+    ...blankBrandVoiceProfileEditorState(),
+    name: 'Manual profile',
+    descriptorsText: 'already set',
+    bannedTermsText: '',
+  }
+  const merged = applyBrandVoiceProfileEditorPatch(editor, patch)
+
+  assert.equal(merged.name, 'Manual profile')
+  assert.equal(merged.descriptorsText, 'already set')
+  assert.ok(merged.bannedTermsText.includes('magic'))
+  assert.equal(merged.preferredPov, 'second_person')
+  assert.equal(brandVoicePresetEditorPatch('missing'), null)
+})
+
 test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('function BrandVoiceProfileSelector'))
+  assert.ok(newRunSource.includes('BRAND_VOICE_PROFILE_PRESETS'))
+  assert.ok(newRunSource.includes('brandVoicePresetEditorPatch'))
   assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceProfiles'))
   assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceSampleUrl'))
   assert.ok(newRunSource.includes('createContentOpsBrandVoiceProfile'))
@@ -331,6 +367,7 @@ test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('New brand voice'))
   assert.ok(newRunSource.includes('Edit brand voice'))
   assert.ok(newRunSource.includes('Archive'))
+  assert.ok(newRunSource.includes('Apply preset'))
   assert.ok(newRunSource.includes('Sample import'))
   assert.ok(newRunSource.includes('type="file"'))
   assert.ok(newRunSource.includes('Fetch URL'))

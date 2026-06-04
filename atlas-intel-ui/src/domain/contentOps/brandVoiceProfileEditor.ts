@@ -19,6 +19,50 @@ export type BrandVoiceProfileEditorPatch = Partial<
   Omit<BrandVoiceProfileEditorState, 'mode' | 'profileId'>
 >
 
+export type BrandVoiceProfilePreset = {
+  id: string
+  label: string
+  descriptors: readonly string[]
+  bannedTerms?: readonly string[]
+  preferredPov?: string
+  readingLevel?: string
+}
+
+export const BRAND_VOICE_PROFILE_PRESETS: readonly BrandVoiceProfilePreset[] = [
+  {
+    id: 'operator_plainspoken',
+    label: 'Plainspoken operator',
+    descriptors: ['plainspoken', 'concise', 'practical', 'customer-focused'],
+    bannedTerms: ['synergy', 'leverage'],
+    preferredPov: 'second_person',
+    readingLevel: 'plain',
+  },
+  {
+    id: 'technical_trust',
+    label: 'Technical trust',
+    descriptors: ['technical', 'credible', 'precise', 'calm'],
+    bannedTerms: ['magic', 'seamless'],
+    preferredPov: 'second_person',
+    readingLevel: 'detailed',
+  },
+  {
+    id: 'executive_brief',
+    label: 'Executive brief',
+    descriptors: ['strategic', 'direct', 'measured', 'outcome-focused'],
+    bannedTerms: ['game-changing', 'revolutionary'],
+    preferredPov: 'third_person',
+    readingLevel: 'plain',
+  },
+  {
+    id: 'founder_direct',
+    label: 'Founder direct',
+    descriptors: ['direct', 'conversational', 'confident', 'specific'],
+    bannedTerms: ['best-in-class', 'world-class'],
+    preferredPov: 'first_person',
+    readingLevel: 'plain',
+  },
+]
+
 export function blankBrandVoiceProfileEditorState(): BrandVoiceProfileEditorState {
   return {
     mode: 'create',
@@ -122,6 +166,23 @@ export function applyBrandVoiceProfileEditorPatch(
       ? editor.readingLevel
       : patch.readingLevel ?? editor.readingLevel,
     metadata: { ...editor.metadata, ...patch.metadata },
+  }
+}
+
+export function brandVoicePresetEditorPatch(
+  presetId: string,
+): BrandVoiceProfileEditorPatch | null {
+  const preset = BRAND_VOICE_PROFILE_PRESETS.find((item) => item.id === presetId)
+  if (!preset) return null
+  return {
+    descriptorsText: brandVoiceProfileListText([...preset.descriptors]),
+    bannedTermsText: brandVoiceProfileListText([...(preset.bannedTerms ?? [])]),
+    preferredPov: preset.preferredPov ?? '',
+    readingLevel: preset.readingLevel ?? '',
+    metadata: {
+      source: 'content_ops_ui_preset',
+      preset_id: preset.id,
+    },
   }
 }
 
