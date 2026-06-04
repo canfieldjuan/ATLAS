@@ -30,6 +30,7 @@ from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
 from ..card_visual_export import (
     render_card_visual_html,
+    render_card_visual_png,
     supports_card_visual_export,
 )
 from ..landing_page_export import (
@@ -342,7 +343,7 @@ def create_generated_asset_router(
         theme: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
-        format: str = Query("csv", description="csv, json, or html"),
+        format: str = Query("csv", description="csv, json, html, or png"),
     ) -> Any:
         asset_name = _asset_arg(asset)
         pool = await _resolve_pool(pool_provider)
@@ -380,10 +381,35 @@ def create_generated_asset_router(
                 media_type="text/html",
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'},
             )
+        if format_name == "png":
+            if not supports_card_visual_export(asset_name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "format png is only supported for quote_card and stat_card"
+                    ),
+                )
+            filename = f"{_clean(resolved_config.export_filename_prefix)}_{asset_name}.png"
+            try:
+                content = await render_card_visual_png(asset_name, result.rows)
+            except RuntimeError as exc:
+                logger.warning(
+                    "card visual png export unavailable",
+                    extra={"asset": asset_name},
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="PNG export renderer unavailable",
+                ) from exc
+            return Response(
+                content=content,
+                media_type="image/png",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
         if format_name != "csv":
             raise HTTPException(
                 status_code=400,
-                detail="format must be csv, json, or html",
+                detail="format must be csv, json, html, or png",
             )
         filename = f"{_clean(resolved_config.export_filename_prefix)}_{asset_name}.csv"
         return Response(

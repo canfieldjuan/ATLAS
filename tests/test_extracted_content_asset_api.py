@@ -18,6 +18,10 @@ from extracted_content_pipeline.api.generated_assets import (
 )
 import extracted_content_pipeline.api.generated_assets as asset_api
 from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
+from extracted_content_pipeline.card_visual_export import (
+    CardVisualPngConfig,
+    render_card_visual_png,
+)
 from extracted_content_pipeline.faq_macro_writeback import (
     MacroPublishResult,
     MacroPublishStatus,
@@ -50,6 +54,36 @@ class _Pool:
     async def execute(self, query, *args):
         self.execute_calls.append((str(query), args))
         return self.execute_result
+
+
+class _PngPage:
+    def __init__(self) -> None:
+        self.set_content_calls: list[dict[str, object]] = []
+        self.screenshot_calls: list[dict[str, object]] = []
+        self.closed = False
+
+    async def set_content(self, html: str, *, wait_until: str) -> None:
+        self.set_content_calls.append({
+            "html": html,
+            "wait_until": wait_until,
+        })
+
+    async def screenshot(self, **kwargs) -> bytes:
+        self.screenshot_calls.append(dict(kwargs))
+        return b"\x89PNG\r\nvisual"
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _PngBrowser:
+    def __init__(self) -> None:
+        self.page = _PngPage()
+        self.new_page_calls: list[dict[str, object]] = []
+
+    async def new_page(self, **kwargs) -> _PngPage:
+        self.new_page_calls.append(dict(kwargs))
+        return self.page
 
 
 class _FAQMacroPublishHistoryPool(_Pool):
@@ -1668,6 +1702,107 @@ def test_generated_asset_router_exports_quote_card_visual_html() -> None:
     assert args == ("", "approved", "review", "customer_proof", 20)
 
 
+async def test_card_visual_png_renderer_screenshots_static_html() -> None:
+    browser = _PngBrowser()
+
+    png = await render_card_visual_png(
+        "stat_card",
+        [_stat_card_row()],
+        browser=browser,
+        config=CardVisualPngConfig(
+            viewport_width=800,
+            viewport_height=600,
+            device_scale_factor=1,
+        ),
+    )
+
+    assert png == b"\x89PNG\r\nvisual"
+    assert browser.new_page_calls == [{
+        "viewport": {"width": 800, "height": 600},
+        "device_scale_factor": 1,
+    }]
+    assert len(browser.page.set_content_calls) == 1
+    content_call = browser.page.set_content_calls[0]
+    assert content_call["wait_until"] == "networkidle"
+    assert "NPS score: 42" in str(content_call["html"])
+    assert browser.page.screenshot_calls == [{"type": "png", "full_page": True}]
+    assert browser.page.closed is True
+
+
+def test_generated_asset_router_exports_quote_card_visual_png(monkeypatch) -> None:
+    pool = _Pool(rows=[_quote_card_row()])
+    calls = []
+
+    async def fake_png(asset, rows):
+        calls.append({"asset": asset, "rows": rows})
+        return b"\x89PNG\r\nroute"
+
+    monkeypatch.setattr(asset_api, "render_card_visual_png", fake_png)
+
+    response = _client(pool).get(
+        "/content-assets/quote_card/drafts/export"
+        "?format=png&status=approved&target_mode=review&theme=customer_proof"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert "content_assets_quote_card.png" in response.headers["content-disposition"]
+    assert response.content == b"\x89PNG\r\nroute"
+    assert len(calls) == 1
+    assert calls[0]["asset"] == "quote_card"
+    assert len(calls[0]["rows"]) == 1
+    assert calls[0]["rows"][0]["quote"] == (
+        "Pricing became hard to justify after renewal."
+    )
+    assert calls[0]["rows"][0]["pain_point_count"] == 2
+    query, args = pool.fetch_calls[0]
+    assert "FROM quote_card_drafts" in query
+    assert args == ("", "approved", "review", "customer_proof", 20)
+
+
+def test_generated_asset_router_returns_503_when_png_renderer_unavailable(
+    monkeypatch,
+) -> None:
+    async def unavailable_png(asset, rows):
+        raise RuntimeError("browser unavailable")
+
+    monkeypatch.setattr(asset_api, "render_card_visual_png", unavailable_png)
+
+    response = _client(_Pool(rows=[_quote_card_row()])).get(
+        "/content-assets/quote_card/drafts/export?format=png"
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "PNG export renderer unavailable"
+
+
+def test_generated_asset_router_exports_stat_card_visual_png(monkeypatch) -> None:
+    pool = _Pool(rows=[_stat_card_row()])
+    calls = []
+
+    async def fake_png(asset, rows):
+        calls.append({"asset": asset, "rows": rows})
+        return b"\x89PNG\r\nstat"
+
+    monkeypatch.setattr(asset_api, "render_card_visual_png", fake_png)
+
+    response = _client(pool).get(
+        "/content-assets/stat_card/drafts/export"
+        "?format=png&status=approved&target_mode=review&theme=customer_metric"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert "content_assets_stat_card.png" in response.headers["content-disposition"]
+    assert response.content == b"\x89PNG\r\nstat"
+    assert len(calls) == 1
+    assert calls[0]["asset"] == "stat_card"
+    assert calls[0]["rows"][0]["claim"] == "NPS score: 42"
+    query, args = pool.fetch_calls[0]
+    assert "FROM stat_card_drafts" in query
+    assert args == ("", "approved", "review", "customer_metric", 20)
+
+
 def test_generated_asset_router_lists_stat_card_drafts_with_filters() -> None:
     pool = _Pool(rows=[_stat_card_row()])
 
@@ -2446,7 +2581,7 @@ def test_generated_asset_router_rejects_unknown_export_format() -> None:
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "format must be csv, json, or html"
+    assert response.json()["detail"] == "format must be csv, json, html, or png"
 
 
 def test_generated_asset_router_rejects_visual_export_for_non_card_assets() -> None:
@@ -2458,6 +2593,18 @@ def test_generated_asset_router_rejects_visual_export_for_non_card_assets() -> N
     assert (
         response.json()["detail"]
         == "format html is only supported for quote_card and stat_card"
+    )
+
+
+def test_generated_asset_router_rejects_png_export_for_non_card_assets() -> None:
+    response = _client(_Pool(rows=[_report_row()])).get(
+        "/content-assets/report/drafts/export?format=png"
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "format png is only supported for quote_card and stat_card"
     )
 
 
