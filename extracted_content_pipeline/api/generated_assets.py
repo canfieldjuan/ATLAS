@@ -28,6 +28,10 @@ from ..ad_copy_export import export_ad_copy_drafts
 from ..ad_copy_postgres import PostgresAdCopyRepository
 from ..blog_post_export import export_blog_post_drafts
 from ..blog_post_postgres import PostgresBlogPostRepository
+from ..card_visual_export import (
+    render_card_visual_html,
+    supports_card_visual_export,
+)
 from ..landing_page_export import (
     export_landing_page_drafts,
     landing_page_draft_export_row,
@@ -338,7 +342,7 @@ def create_generated_asset_router(
         theme: str | None = Query(None),
         ids: list[str] | None = Query(None, alias="id"),
         limit: int | None = Query(None, ge=0),
-        format: str = Query("csv", description="csv or json"),
+        format: str = Query("csv", description="csv, json, or html"),
     ) -> Any:
         asset_name = _asset_arg(asset)
         pool = await _resolve_pool(pool_provider)
@@ -362,8 +366,25 @@ def create_generated_asset_router(
         format_name = _clean(format).lower()
         if format_name == "json":
             return result.as_dict()
+        if format_name == "html":
+            if not supports_card_visual_export(asset_name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "format html is only supported for quote_card and stat_card"
+                    ),
+                )
+            filename = f"{_clean(resolved_config.export_filename_prefix)}_{asset_name}.html"
+            return Response(
+                content=render_card_visual_html(asset_name, result.rows),
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
         if format_name != "csv":
-            raise HTTPException(status_code=400, detail="format must be csv or json")
+            raise HTTPException(
+                status_code=400,
+                detail="format must be csv, json, or html",
+            )
         filename = f"{_clean(resolved_config.export_filename_prefix)}_{asset_name}.csv"
         return Response(
             content=result.as_csv(),
