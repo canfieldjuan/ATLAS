@@ -106,7 +106,7 @@ None.
 Ran:
 
 - `python -m pytest tests/test_smoke_content_ops_live_generation.py -q`
-  - 38 passed.
+  - 39 passed.
 - `python -m py_compile scripts/smoke_content_ops_live_generation.py tests/test_smoke_content_ops_live_generation.py`
   - passed.
 - `git diff --check`
@@ -132,6 +132,9 @@ Ran:
   - account B review returned `updated=false`;
   - account A reject/approve returned `updated=true`;
   - JSON and HTML export included the generated stat-card id.
+- Review follow-up:
+  - stat-card saved-draft export now fails closed if the filtered export rows
+    omit any generated saved id.
 - Real Playwright/Chromium screenshot of the generated stat-card HTML visual
   export:
   - PNG bytes: 44,166; PNG header: `89504e470d0a1a0a`.
@@ -142,16 +145,16 @@ Validation artifact:
 
 Still to run before push:
 
-- `bash scripts/local_pr_review.sh`
+- `bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-body-content-ops-live-adapter-smoke.md`
 
 ## Estimated diff size
 
 | Area | LOC |
 |---|---:|
-| Plan | 153 |
-| Smoke harness and focused tests | 201 |
-| Validation doc from actual run | 158 |
-| **Total** | **521** |
+| Plan | 161 |
+| Smoke harness and focused tests | 231 |
+| Validation doc from actual run | 162 |
+| **Total** | **554** |
 
 The slice is slightly above the normal 400 LOC target because the committed
 validation artifact carries the live run evidence that #1299 requires before

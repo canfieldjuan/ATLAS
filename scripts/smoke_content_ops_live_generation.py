@@ -464,15 +464,25 @@ def _filter_saved_draft_export_rows(
     export: Mapping[str, Any],
     saved_ids: Sequence[str],
 ) -> dict[str, Any]:
-    wanted = {str(item).strip() for item in saved_ids if str(item).strip()}
+    wanted_ids = tuple(
+        dict.fromkeys(str(item).strip() for item in saved_ids if str(item).strip())
+    )
+    wanted = set(wanted_ids)
     rows = [
         dict(row)
         for row in _export_rows(export)
         if str(row.get("id") or "").strip() in wanted
     ]
+    exported = {str(row.get("id") or "").strip() for row in rows}
+    missing = [saved_id for saved_id in wanted_ids if saved_id not in exported]
+    if missing:
+        raise ValueError(
+            "saved draft export did not include generated "
+            f"saved_ids: {', '.join(missing)}"
+        )
     filters = dict(_as_mapping(export.get("filters")))
-    if wanted:
-        filters["id"] = [item for item in saved_ids if str(item).strip()]
+    if wanted_ids:
+        filters["id"] = list(wanted_ids)
     return {
         **dict(export),
         "count": len(rows),

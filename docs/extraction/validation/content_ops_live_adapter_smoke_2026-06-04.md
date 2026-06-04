@@ -144,7 +144,7 @@ git diff --check
 
 Results:
 
-- `tests/test_smoke_content_ops_live_generation.py`: 38 passed
+- `tests/test_smoke_content_ops_live_generation.py`: 39 passed
 - `py_compile`: passed
 - `git diff --check`: passed
 
@@ -156,3 +156,7 @@ primary evidence above is the rerun with a real UUID account and clean durable
 trace rows.
 
 #1300 remains untouched and unmerged in this slice.
+
+A review follow-up added a fail-closed guard for the stat-card saved-draft
+export: if the filtered export rows omit any generated saved id, the smoke now
+fails instead of writing an empty/non-exact artifact.

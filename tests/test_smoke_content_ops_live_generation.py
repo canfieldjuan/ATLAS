@@ -1266,6 +1266,22 @@ def test_filter_saved_draft_export_rows_keeps_only_saved_ids() -> None:
     }
 
 
+def test_filter_saved_draft_export_rows_fails_when_saved_id_is_missing() -> None:
+    with pytest.raises(
+        ValueError,
+        match="saved draft export did not include generated saved_ids: stat-card-missing",
+    ):
+        smoke._filter_saved_draft_export_rows(
+            {
+                "count": 1,
+                "limit": 100,
+                "filters": {"account_id": "acct-live-smoke"},
+                "rows": [{"id": "stat-card-live-smoke-1", "claim": "NPS score: 42"}],
+            },
+            ("stat-card-live-smoke-1", "stat-card-missing"),
+        )
+
+
 def test_support_ticket_export_context_is_ignored_for_stat_card() -> None:
     assert smoke._support_ticket_export_context_errors(
         output="stat_card",
