@@ -512,6 +512,7 @@ if BaseModel is not None:
         account_usage_budget_usd: float | None = Field(default=None, gt=0)
         account_usage_budget_days: int = Field(7, ge=1, le=90)
         content_ops_cache_policy: str | None = Field(default=None, max_length=40)
+        brand_voice_profile_id: str | None = Field(default=None, max_length=120)
         inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
         ingestion_profile: str = Field("domain_specific", min_length=1, max_length=80)
         require_quality_gates: bool = True

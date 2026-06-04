@@ -952,6 +952,44 @@ async def test_repair_draft_sends_current_draft_and_repair_issues_and_updates_sa
 
 
 @pytest.mark.asyncio
+async def test_repair_draft_applies_brand_voice_to_repaired_landing_page() -> None:
+    needs_repair = json.loads(_valid_response())
+    needs_repair["meta"].pop("description")
+    draft = _draft_from_response(needs_repair)
+    service, landing_pages, llm, _skills, _rp = _service(
+        responses=[_valid_response()],
+    )
+
+    result = await service.repair_draft(
+        scope=TenantScope(account_id="acct-1"),
+        draft=draft,
+        brand_voice_profile_id="acme-main",
+        brand_voice={
+            "id": "acme-main",
+            "account_id": "acct-1",
+            "name": "Acme main voice",
+            "descriptors": ["plainspoken"],
+            "exemplars": ["You explain the tradeoff before the CTA."],
+            "banned_terms": ["synergy"],
+        },
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "## Brand voice" in system_prompt
+    assert "plainspoken" in system_prompt
+    assert "You explain the tradeoff before the CTA." in system_prompt
+    repaired = landing_pages.updated[0]["draft"]
+    assert repaired.metadata["brand_voice_profile"] == {
+        "id": "acme-main",
+        "account_id": "acct-1",
+        "name": "Acme main voice",
+        "descriptors": ["plainspoken"],
+    }
+    assert repaired.metadata["brand_voice_audit"]["passed"] is True
+
+
+@pytest.mark.asyncio
 async def test_repair_draft_rejects_approved_draft_without_llm_call() -> None:
     draft = _draft_from_response(_valid_response(), status="approved")
     service, landing_pages, llm, _skills, _rp = _service()

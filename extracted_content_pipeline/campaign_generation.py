@@ -22,6 +22,12 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .brand_voice import (
+    BrandVoiceProfile,
+    apply_brand_voice_to_system_prompt,
+    brand_voice_profile_from_mapping,
+    brand_voice_result_metadata,
+)
 from .services.campaign_reasoning_context import (
     campaign_reasoning_context_metadata,
     campaign_reasoning_context_payload,
@@ -317,6 +323,7 @@ class CampaignGenerationService:
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
         opportunity_defaults: Mapping[str, Any] | None = None,
+        brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
     ) -> CampaignGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -352,6 +359,10 @@ class CampaignGenerationService:
             self._config.parse_retry_response_excerpt_chars
             if parse_retry_response_excerpt_chars is None
             else int(parse_retry_response_excerpt_chars)
+        )
+        resolved_brand_voice = brand_voice_profile_from_mapping(
+            brand_voice,
+            scope=scope,
         )
 
         requested = int(limit or self._config.limit)
@@ -410,6 +421,7 @@ class CampaignGenerationService:
                         max_tokens=resolved_max_tokens,
                         parse_retry_attempts=resolved_parse_retry_attempts,
                         parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                        brand_voice=resolved_brand_voice,
                     )
                 except Exception as exc:
                     skipped += 1
@@ -625,6 +637,7 @@ class CampaignGenerationService:
         max_tokens: int,
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
+        brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         system_prompt = (
@@ -634,6 +647,7 @@ class CampaignGenerationService:
             .replace("{opportunity}", opportunity_json)
             .replace("{opportunity_json}", opportunity_json)
         )
+        system_prompt = apply_brand_voice_to_system_prompt(system_prompt, brand_voice)
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
@@ -664,12 +678,12 @@ class CampaignGenerationService:
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_campaign_draft_response(response.content)
             if parsed:
-                return {
+                return brand_voice_result_metadata({
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
-                }
+                }, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -731,6 +745,8 @@ class CampaignGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
             "campaign_revalidation": parsed.get("_quality_revalidation"),
+            "brand_voice_profile": parsed.get("_brand_voice_profile"),
+            "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
         context = normalize_campaign_reasoning_context(opportunity)
         metadata.update(campaign_reasoning_context_metadata(context))

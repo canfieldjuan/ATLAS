@@ -71,6 +71,35 @@ def test_plan_maps_report_to_report_generation_service():
     }
 
 
+def test_plan_threads_brand_voice_profile_id_to_llm_copy_outputs_only():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": [
+                "email_campaign",
+                "blog_post",
+                "landing_page",
+                "sales_brief",
+                "social_post",
+            ],
+            "brand_voice_profile_id": "acme-main",
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "topic": "Churn pressure",
+                "audience": "B2B SaaS founders",
+                "source_material": [{"review_text": "Pricing pressure."}],
+            },
+        }
+    )
+
+    configs = {step["output"]: step["config"] for step in plan["steps"]}
+    assert configs["email_campaign"]["brand_voice_profile_id"] == "acme-main"
+    assert configs["blog_post"]["brand_voice_profile_id"] == "acme-main"
+    assert configs["landing_page"]["brand_voice_profile_id"] == "acme-main"
+    assert configs["sales_brief"]["brand_voice_profile_id"] == "acme-main"
+    assert "brand_voice_profile_id" not in configs["social_post"]
+
+
 def test_plan_threads_structured_reasoning_preset_to_report_and_sales_brief():
     plan = build_generation_plan_from_mapping(
         {

@@ -996,6 +996,52 @@ def test_generated_asset_router_repairs_landing_page_draft_and_returns_review_ro
     assert asset_api.LANDING_PAGE_REPAIR_CLAIM_METADATA_KEY not in body["metadata"]
 
 
+def test_generated_asset_router_threads_brand_voice_to_landing_page_repair() -> None:
+    repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
+    needs_repair = {
+        **repaired_row,
+        "meta": {
+            key: value
+            for key, value in repaired_row["meta"].items()
+            if key != "description"
+        },
+    }
+    pool = _LockingEditableLandingPagePool(needs_repair)
+    llm = _LLM([_landing_page_generation_response(repaired_row)])
+    skills = _Skills()
+
+    response = _client(
+        pool,
+        scope=TenantScope(account_id="acct_1"),
+        llm=llm,
+        skills=skills,
+    ).post(
+        "/content-assets/landing_page/drafts/"
+        "11111111-1111-1111-1111-111111111111/repair",
+        json={
+            "brand_voice_profile_id": "acme-main",
+            "brand_voice": {
+                "id": "acme-main",
+                "account_id": "acct_1",
+                "name": "Acme main voice",
+                "descriptors": ["plainspoken"],
+                "exemplars": ["You explain the tradeoff before the CTA."],
+                "banned_terms": ["synergy"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "## Brand voice" in system_prompt
+    assert "plainspoken" in system_prompt
+    assert "You explain the tradeoff before the CTA." in system_prompt
+    update_args = pool.fetch_calls[2][1]
+    persisted_metadata = json.loads(update_args[9])
+    assert persisted_metadata["brand_voice_profile"]["id"] == "acme-main"
+    assert persisted_metadata["brand_voice_audit"]["passed"] is True
+
+
 def test_generated_asset_router_repairs_without_advisory_lock_connection(caplog) -> None:
     repaired_row = {**_ready_landing_page_row(), "status": "quality_blocked"}
     needs_repair = {

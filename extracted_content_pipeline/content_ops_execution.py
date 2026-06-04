@@ -14,6 +14,7 @@ from .campaign_llm_client import (
     reset_content_ops_llm_trace_context,
     set_content_ops_llm_trace_context,
 )
+from .brand_voice import BrandVoiceProfile, brand_voice_profile_from_mapping
 from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_mapping
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
@@ -307,6 +308,14 @@ async def execute_content_ops_request(
         )
 
     resolved_scope = scope or TenantScope()
+    try:
+        brand_voice = _brand_voice_for_request(request, scope=resolved_scope)
+    except ValueError as exc:
+        return ContentOpsExecutionResult(
+            status="blocked",
+            plan=plan,
+            errors=({"reason": str(exc)},),
+        )
     filters = _filters_from_inputs(request.inputs)
     step_results = await asyncio.gather(*(
         _execute_step(
@@ -314,6 +323,7 @@ async def execute_content_ops_request(
             request=request,
             service=services.for_output(step.output),
             scope=resolved_scope,
+            brand_voice=brand_voice,
             trace_metadata=trace_metadata,
             filters=filters,
             reasoning_provider_configured=services.reasoning_provider_active_for(
@@ -348,6 +358,7 @@ async def _execute_step(
     request: ContentOpsRequest,
     service: Any | None,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     trace_metadata: Mapping[str, Any] | None,
     filters: Mapping[str, Any] | None,
     reasoning_provider_configured: bool,
@@ -376,6 +387,7 @@ async def _execute_step(
             request=request,
             service=service,
             scope=scope,
+            brand_voice=brand_voice,
             filters=filters,
         )
     except Exception as exc:
@@ -442,6 +454,18 @@ def _request_trace_metadata(
     return metadata
 
 
+def _brand_voice_for_request(
+    request: ContentOpsRequest,
+    *,
+    scope: TenantScope,
+) -> BrandVoiceProfile | None:
+    return brand_voice_profile_from_mapping(
+        request.inputs.get("brand_voice"),
+        scope=scope,
+        profile_id=request.brand_voice_profile_id,
+    )
+
+
 async def execute_content_ops_from_mapping(
     payload: Mapping[str, Any],
     *,
@@ -466,6 +490,7 @@ async def _run_step(
     request: ContentOpsRequest,
     service: Any,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     """Dispatch a step to its per-output handler.
@@ -482,6 +507,7 @@ async def _run_step(
         service=service,
         request=request,
         scope=scope,
+        brand_voice=brand_voice,
         filters=filters,
     )
 
@@ -492,6 +518,7 @@ async def _dispatch_email_campaign(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     kwargs: dict[str, Any] = {
@@ -513,6 +540,8 @@ async def _dispatch_email_campaign(
             step.config, "parse_retry_response_excerpt_chars"
         ),
     }
+    if brand_voice is not None:
+        kwargs["brand_voice"] = brand_voice
     opportunity_defaults = _opportunity_defaults_from_inputs(request.inputs)
     if opportunity_defaults is not None:
         kwargs["opportunity_defaults"] = opportunity_defaults
@@ -525,8 +554,10 @@ async def _dispatch_report(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     return await service.generate(
         scope=scope,
         target_mode=request.target_mode,
@@ -549,6 +580,7 @@ async def _dispatch_sales_brief(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     kwargs: dict[str, Any] = {
@@ -565,6 +597,8 @@ async def _dispatch_sales_brief(
         ),
         "quality_gates_enabled": _step_config_bool(step.config, "quality_gates_enabled"),
     }
+    if brand_voice is not None:
+        kwargs["brand_voice"] = brand_voice
     if "source_material" in request.inputs:
         kwargs["source_material"] = request.inputs.get("source_material")
     return await service.generate(**kwargs)
@@ -576,21 +610,25 @@ async def _dispatch_landing_page(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     del filters  # unused: landing pages take a campaign, not a target_mode
-    return await service.generate(
-        scope=scope,
-        campaign=_marketing_campaign_from_inputs(request.inputs),
-        temperature=_step_config_float(step.config, "temperature"),
-        max_tokens=_step_config_int(step.config, "max_tokens"),
-        parse_retry_attempts=_step_config_int(step.config, "parse_retry_attempts"),
-        parse_retry_response_excerpt_chars=_step_config_int(
+    kwargs: dict[str, Any] = {
+        "scope": scope,
+        "campaign": _marketing_campaign_from_inputs(request.inputs),
+        "temperature": _step_config_float(step.config, "temperature"),
+        "max_tokens": _step_config_int(step.config, "max_tokens"),
+        "parse_retry_attempts": _step_config_int(step.config, "parse_retry_attempts"),
+        "parse_retry_response_excerpt_chars": _step_config_int(
             step.config, "parse_retry_response_excerpt_chars"
         ),
-        quality_gates_enabled=_step_config_bool(step.config, "quality_gates_enabled"),
-        quality_repair_attempts=_step_config_int(step.config, "quality_repair_attempts"),
-    )
+        "quality_gates_enabled": _step_config_bool(step.config, "quality_gates_enabled"),
+        "quality_repair_attempts": _step_config_int(step.config, "quality_repair_attempts"),
+    }
+    if brand_voice is not None:
+        kwargs["brand_voice"] = brand_voice
+    return await service.generate(**kwargs)
 
 
 async def _dispatch_blog_post(
@@ -599,6 +637,7 @@ async def _dispatch_blog_post(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     # PR-OptionA-2: blog_post graduates from _dispatch_default into its own
@@ -619,6 +658,8 @@ async def _dispatch_blog_post(
         "quality_repair_attempts": _step_config_int(step.config, "quality_repair_attempts"),
         "topic": _step_config_text(step.config, "topic"),
     }
+    if brand_voice is not None:
+        kwargs["brand_voice"] = brand_voice
     data_context = (
         _competitive_blog_data_context_from_inputs(request.inputs)
         or _review_blog_data_context_from_inputs(request.inputs)
@@ -641,8 +682,10 @@ async def _dispatch_signal_extraction(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -659,8 +702,10 @@ async def _dispatch_social_post(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -677,8 +722,10 @@ async def _dispatch_ad_copy(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -695,8 +742,10 @@ async def _dispatch_quote_card(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -713,8 +762,10 @@ async def _dispatch_stat_card(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -731,8 +782,10 @@ async def _dispatch_faq_markdown(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -761,8 +814,10 @@ async def _dispatch_faq_deflection_report(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
+    del brand_voice
     del filters
     return await service.generate(
         scope=scope,
@@ -792,13 +847,15 @@ async def _dispatch_default(
     service: Any,
     request: ContentOpsRequest,
     scope: TenantScope,
+    brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
     """Fallback for outputs that don't yet thread step.config kwargs.
 
-    Currently used by `blog_post`. Future outputs that need per-call
-    config kwargs should register their own handler in `_DISPATCH`.
+    Future outputs that need per-call config kwargs should register their
+    own handler in `_DISPATCH`.
     """
+    del brand_voice
     del step  # config is informational for outputs without per-call overrides
     return await service.generate(
         scope=scope,

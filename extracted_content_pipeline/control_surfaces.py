@@ -61,6 +61,7 @@ class ContentOpsRequest:
     account_usage_budget_usd: float | None = None
     account_usage_budget_days: int = 7
     content_ops_cache_policy: str | None = None
+    brand_voice_profile_id: str | None = None
     inputs: Mapping[str, Any] = field(default_factory=dict)
     ingestion_profile: str = "domain_specific"
     require_quality_gates: bool = True
@@ -104,6 +105,9 @@ class ControlSurfacePreview:
                 ),
                 "content_ops_cache_policy": (
                     self.normalized_request.content_ops_cache_policy
+                ),
+                "brand_voice_profile_id": (
+                    self.normalized_request.brand_voice_profile_id
                 ),
                 "ingestion_profile": self.normalized_request.ingestion_profile,
                 "require_quality_gates": self.normalized_request.require_quality_gates,
@@ -390,6 +394,11 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         content_ops_cache_policy=normalize_content_ops_cache_policy(
             payload.get("content_ops_cache_policy")
         ),
+        brand_voice_profile_id=(
+            str(payload.get("brand_voice_profile_id")).strip() or None
+        )
+        if payload.get("brand_voice_profile_id") is not None
+        else None,
         inputs=raw_inputs if isinstance(raw_inputs, Mapping) else {},
         ingestion_profile=str(payload.get("ingestion_profile") or "domain_specific").strip()
         or "domain_specific",
@@ -603,6 +612,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         account_usage_budget_usd=request.account_usage_budget_usd,
         account_usage_budget_days=request.account_usage_budget_days,
         content_ops_cache_policy=request.content_ops_cache_policy,
+        brand_voice_profile_id=request.brand_voice_profile_id,
         inputs=request.inputs,
         ingestion_profile=request.ingestion_profile,
         require_quality_gates=request.require_quality_gates,

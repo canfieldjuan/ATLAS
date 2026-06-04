@@ -16,6 +16,12 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .brand_voice import (
+    BrandVoiceProfile,
+    apply_brand_voice_to_system_prompt,
+    brand_voice_profile_from_mapping,
+    brand_voice_result_metadata,
+)
 from .content_image_provider import (
     ContentImageAsset,
     ContentImageProvider,
@@ -478,6 +484,7 @@ class BlogPostGenerationService:
         quality_repair_attempts: int | None = None,
         topic: str | None = None,
         data_context: Mapping[str, Any] | None = None,
+        brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -519,6 +526,10 @@ class BlogPostGenerationService:
         # Empty string when None so prompt substitution is a clean no-op.
         resolved_topic = (topic or "").strip()
         trusted_data_context = _mapping_dict(data_context)
+        resolved_brand_voice = brand_voice_profile_from_mapping(
+            brand_voice,
+            scope=scope,
+        )
 
         requested = int(limit or self._config.limit)
         rows = await self._blueprints.read_blog_blueprints(
@@ -551,6 +562,7 @@ class BlogPostGenerationService:
                     parse_retry_attempts=resolved_parse_retry_attempts,
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     topic=resolved_topic,
+                    brand_voice=resolved_brand_voice,
                 )
             except Exception as exc:
                 skipped += 1
@@ -583,6 +595,7 @@ class BlogPostGenerationService:
                             max_tokens=resolved_max_tokens,
                             quality_repair_attempt_no=repair_attempt_no,
                             topic=resolved_topic,
+                            brand_voice=resolved_brand_voice,
                         )
                     except Exception as exc:
                         skipped += 1
@@ -691,11 +704,13 @@ class BlogPostGenerationService:
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
         topic: str = "",
+        brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         system_prompt, base_user_prompt = _blog_generation_prompts(
             prompt_template,
             blueprint=blueprint,
             topic=topic,
+            brand_voice=brand_voice,
         )
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
@@ -725,13 +740,13 @@ class BlogPostGenerationService:
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_blog_post_response(response.content)
             if parsed:
-                return {
+                return brand_voice_result_metadata({
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
                     "_quality_repair_attempts": 0,
-                }
+                }, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -750,6 +765,7 @@ class BlogPostGenerationService:
         max_tokens: int,
         quality_repair_attempt_no: int,
         topic: str = "",
+        brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         blockers = tuple(str(item) for item in quality.get("blockers") or () if item)
         if not blockers:
@@ -759,6 +775,7 @@ class BlogPostGenerationService:
             prompt_template,
             blueprint=blueprint,
             topic=topic,
+            brand_voice=brand_voice,
         )
         response = await self._llm.complete(
             [
@@ -786,7 +803,7 @@ class BlogPostGenerationService:
         repaired = parse_blog_post_response(response.content)
         if not repaired:
             return None
-        return {
+        return brand_voice_result_metadata({
             **repaired,
             "_model": response.model,
             "_usage": accumulate_usage(
@@ -795,7 +812,7 @@ class BlogPostGenerationService:
             ),
             "_parse_attempts": parse_attempts_used,
             "_quality_repair_attempts": int(parsed.get("_quality_repair_attempts") or 0) + 1,
-        }
+        }, brand_voice)
 
     def _quality_check(
         self,
@@ -854,6 +871,8 @@ class BlogPostGenerationService:
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
             "generation_quality_repair_attempts": parsed.get("_quality_repair_attempts") or 0,
+            "brand_voice_profile": parsed.get("_brand_voice_profile"),
+            "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
         # PR-Blog-Reasoning-Parity: surface reasoning audit fields on
         # the draft metadata when the blueprint carried merged context.
@@ -1259,6 +1278,7 @@ def _blog_generation_prompts(
     *,
     blueprint: Mapping[str, Any],
     topic: str = "",
+    brand_voice: BrandVoiceProfile | None = None,
 ) -> tuple[str, str]:
     blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
     system_prompt = (
@@ -1266,6 +1286,7 @@ def _blog_generation_prompts(
         .replace("{blueprint_json}", "the blueprint JSON supplied in the user message")
         .replace("{topic}", "the operator-supplied topic provided in the user message")
     )
+    system_prompt = apply_brand_voice_to_system_prompt(system_prompt, brand_voice)
     base_user_prompt_parts = [
         "Generate one blog post from this blueprint JSON:",
         blueprint_json,

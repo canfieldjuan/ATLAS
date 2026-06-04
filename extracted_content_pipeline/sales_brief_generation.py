@@ -47,6 +47,12 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .brand_voice import (
+    BrandVoiceProfile,
+    apply_brand_voice_to_system_prompt,
+    brand_voice_profile_from_mapping,
+    brand_voice_result_metadata,
+)
 from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_rows_to_campaign_opportunities,
@@ -254,6 +260,7 @@ class SalesBriefGenerationService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         source_material: Any = None,
+        brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
     ) -> SalesBriefGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -283,6 +290,10 @@ class SalesBriefGenerationService:
             self._config.quality_gates_enabled
             if quality_gates_enabled is None
             else bool(quality_gates_enabled)
+        )
+        resolved_brand_voice = brand_voice_profile_from_mapping(
+            brand_voice,
+            scope=scope,
         )
 
         requested = int(limit or self._config.limit)
@@ -336,6 +347,7 @@ class SalesBriefGenerationService:
                     max_tokens=resolved_max_tokens,
                     parse_retry_attempts=resolved_parse_retry_attempts,
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                    brand_voice=resolved_brand_voice,
                 )
             except Exception as exc:
                 skipped += 1
@@ -439,6 +451,7 @@ class SalesBriefGenerationService:
         max_tokens: int,
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
+        brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         # Single source for the opportunity payload: in the system prompt
@@ -449,6 +462,7 @@ class SalesBriefGenerationService:
             .replace("{target_mode}", target_mode)
             .replace("{opportunity_json}", opportunity_json)
         )
+        system_prompt = apply_brand_voice_to_system_prompt(system_prompt, brand_voice)
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
@@ -474,12 +488,12 @@ class SalesBriefGenerationService:
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_sales_brief_response(response.content)
             if parsed:
-                return {
+                return brand_voice_result_metadata({
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
-                }
+                }, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -556,6 +570,8 @@ class SalesBriefGenerationService:
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
             "generation_parse_attempts": parsed.get("_parse_attempts"),
+            "brand_voice_profile": parsed.get("_brand_voice_profile"),
+            "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
         if opportunity is not None:
             context = normalize_campaign_reasoning_context(opportunity)
