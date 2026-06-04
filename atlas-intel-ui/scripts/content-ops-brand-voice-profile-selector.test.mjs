@@ -43,6 +43,14 @@ const {
   toWireRequest,
 } = await loadTsModule('../src/domain/contentOps/fromWire.ts')
 
+const {
+  applyBrandVoiceProfileEditorPatch,
+  blankBrandVoiceProfileEditorState,
+  brandVoiceProfileEditorRequest,
+  canSaveBrandVoiceProfileEditor,
+  deriveBrandVoiceProfileEditorPatch,
+} = await loadTsModule('../src/domain/contentOps/brandVoiceProfileEditor.ts')
+
 const newRunSource = readFileSync(
   new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
   'utf8',
@@ -197,6 +205,88 @@ test('brand voice profile id round-trips through domain request mapping', () => 
   assert.deepEqual(wire.inputs, { target_keyword: 'support tickets' })
 })
 
+test('brand voice editor request trims and bounds textarea fields', () => {
+  const editor = {
+    ...blankBrandVoiceProfileEditorState(),
+    name: '  Acme editorial  ',
+    descriptorsText: Array.from({ length: 10 }, (_, index) => ` descriptor ${index} `).join('\n'),
+    exemplarsText: ' First example. \n\n Second example. \n Third example. \n Fourth example. ',
+    bannedTermsText: ' synergy \n\n leverage ',
+    preferredPov: ' second_person ',
+    readingLevel: ' plain ',
+  }
+
+  assert.equal(canSaveBrandVoiceProfileEditor(editor), true)
+  const body = brandVoiceProfileEditorRequest(editor)
+
+  assert.equal(body.name, 'Acme editorial')
+  assert.deepEqual(body.descriptors, [
+    'descriptor 0',
+    'descriptor 1',
+    'descriptor 2',
+    'descriptor 3',
+    'descriptor 4',
+    'descriptor 5',
+    'descriptor 6',
+    'descriptor 7',
+  ])
+  assert.deepEqual(body.exemplars, [
+    'First example.',
+    'Second example.',
+    'Third example.',
+  ])
+  assert.deepEqual(body.banned_terms, ['synergy', 'leverage'])
+  assert.equal(body.preferred_pov, 'second_person')
+  assert.equal(body.reading_level, 'plain')
+  assert.equal(
+    canSaveBrandVoiceProfileEditor({
+      ...blankBrandVoiceProfileEditorState(),
+      name: 'Acme editorial',
+    }),
+    false,
+  )
+})
+
+test('brand voice sample import derives editable profile fields', () => {
+  const patch = deriveBrandVoiceProfileEditorPatch(
+    "You can launch secure workflows faster. Your team gets clean automation without waiting on a long integration project. We're here when your operators need help!",
+    { fallbackName: 'acme-homepage.txt' },
+  )
+
+  assert.equal(patch.name, 'acme homepage')
+  assert.equal(patch.preferredPov, 'second_person')
+  assert.equal(patch.readingLevel, 'plain')
+  assert.ok(patch.descriptorsText.includes('concise'))
+  assert.ok(patch.descriptorsText.includes('customer-focused'))
+  assert.ok(patch.descriptorsText.includes('conversational'))
+  assert.ok(patch.descriptorsText.includes('technical'))
+  assert.ok(patch.exemplarsText.includes('secure workflows'))
+  assert.deepEqual(patch.metadata, {
+    source: 'content_ops_ui_sample',
+    sample_character_count: 160,
+  })
+})
+
+test('brand voice sample patch preserves manually entered fields', () => {
+  const editor = {
+    ...blankBrandVoiceProfileEditorState(),
+    name: 'Manual profile',
+    descriptorsText: '',
+    exemplarsText: 'Existing example.',
+  }
+  const patch = deriveBrandVoiceProfileEditorPatch(
+    'Your support team can resolve data questions quickly.',
+    { fallbackName: 'sample.txt' },
+  )
+
+  const merged = applyBrandVoiceProfileEditorPatch(editor, patch)
+
+  assert.equal(merged.name, 'Manual profile')
+  assert.ok(merged.descriptorsText.includes('customer-focused'))
+  assert.equal(merged.exemplarsText, 'Existing example.')
+  assert.equal(merged.preferredPov, 'second_person')
+})
+
 test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('function BrandVoiceProfileSelector'))
   assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceProfiles'))
@@ -209,8 +299,9 @@ test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('New brand voice'))
   assert.ok(newRunSource.includes('Edit brand voice'))
   assert.ok(newRunSource.includes('Archive'))
+  assert.ok(newRunSource.includes('Sample import'))
+  assert.ok(newRunSource.includes('type="file"'))
+  assert.ok(newRunSource.includes('deriveBrandVoiceProfileEditorPatch'))
   assert.ok(newRunSource.includes('disabled={loading || mutating}'))
   assert.ok(newRunSource.includes('selectedProfileIdRef.current === archiveProfileId'))
-  assert.ok(newRunSource.includes('function brandVoiceProfileEditorRequest'))
-  assert.ok(newRunSource.includes('function canSaveBrandVoiceProfileEditor'))
 })
