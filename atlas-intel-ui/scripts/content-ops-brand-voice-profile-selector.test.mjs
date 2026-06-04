@@ -25,6 +25,7 @@ async function loadTsModule(path, replacements = []) {
 const {
   createContentOpsBrandVoiceProfile,
   deleteContentOpsBrandVoiceProfile,
+  fetchContentOpsBrandVoiceSampleUrl,
   fetchContentOpsBrandVoiceProfiles,
   updateContentOpsBrandVoiceProfile,
 } = await loadTsModule('../src/api/contentOps.ts', [
@@ -190,6 +191,36 @@ test('brand voice profile delete archives encoded profile id', async () => {
   assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
 })
 
+test('brand voice sample URL fetch posts authenticated URL payload', async () => {
+  const payload = {
+    url: 'https://example.test/about',
+    title: 'Acme About',
+    text: 'Launch secure workflows faster.',
+    source_character_count: 31,
+  }
+  const calls = installFetchResponder(payload)
+
+  const result = await fetchContentOpsBrandVoiceSampleUrl({
+    url: 'https://example.test/about',
+  })
+
+  assert.deepEqual(result, payload)
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-ops/brand-voice-profiles/sample-url`,
+  )
+  assert.equal(init.method, 'POST')
+  assert.deepEqual(init.headers, {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer test-token',
+  })
+  assert.deepEqual(JSON.parse(init.body), {
+    url: 'https://example.test/about',
+  })
+})
+
 test('brand voice profile id round-trips through domain request mapping', () => {
   const domain = fromWireRequest({
     target_mode: 'vendor_retention',
@@ -290,6 +321,7 @@ test('brand voice sample patch preserves manually entered fields', () => {
 test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('function BrandVoiceProfileSelector'))
   assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceProfiles'))
+  assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceSampleUrl'))
   assert.ok(newRunSource.includes('createContentOpsBrandVoiceProfile'))
   assert.ok(newRunSource.includes('updateContentOpsBrandVoiceProfile'))
   assert.ok(newRunSource.includes('deleteContentOpsBrandVoiceProfile'))
@@ -301,6 +333,8 @@ test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('Archive'))
   assert.ok(newRunSource.includes('Sample import'))
   assert.ok(newRunSource.includes('type="file"'))
+  assert.ok(newRunSource.includes('Fetch URL'))
+  assert.ok(newRunSource.includes('brandVoiceSampleFallbackName'))
   assert.ok(newRunSource.includes('deriveBrandVoiceProfileEditorPatch'))
   assert.ok(newRunSource.includes('disabled={loading || mutating}'))
   assert.ok(newRunSource.includes('selectedProfileIdRef.current === archiveProfileId'))
