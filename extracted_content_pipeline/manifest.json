@@ -321,6 +321,9 @@
       "target": "extracted_content_pipeline/stat_card_export.py"
     },
     {
+      "target": "extracted_content_pipeline/card_visual_export.py"
+    },
+    {
       "target": "extracted_content_pipeline/quote_card_export.py"
     },
     {

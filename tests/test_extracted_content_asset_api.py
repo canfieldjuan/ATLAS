@@ -1649,6 +1649,25 @@ def test_generated_asset_router_exports_quote_card_csv() -> None:
     assert args == ("", "review", "customer_proof", 20)
 
 
+def test_generated_asset_router_exports_quote_card_visual_html() -> None:
+    pool = _Pool(rows=[_quote_card_row()])
+
+    response = _client(pool).get(
+        "/content-assets/quote_card/drafts/export"
+        "?format=html&status=approved&target_mode=review&theme=customer_proof"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "content_assets_quote_card.html" in response.headers["content-disposition"]
+    assert '<article class="visual-card quote-card"' in response.text
+    assert "&quot;Pricing became hard to justify after renewal.&quot;" in response.text
+    assert "Customer proof for Zendesk" in response.text
+    query, args = pool.fetch_calls[0]
+    assert "FROM quote_card_drafts" in query
+    assert args == ("", "approved", "review", "customer_proof", 20)
+
+
 def test_generated_asset_router_lists_stat_card_drafts_with_filters() -> None:
     pool = _Pool(rows=[_stat_card_row()])
 
@@ -1693,6 +1712,50 @@ def test_generated_asset_router_exports_stat_card_csv() -> None:
     assert "FROM stat_card_drafts" in query
     assert "status = " not in query
     assert args == ("", "review", "customer_metric", 20)
+
+
+def test_generated_asset_router_exports_stat_card_visual_html_with_escaped_text() -> None:
+    row = _stat_card_row()
+    row["claim"] = "NPS <script>alert(1)</script>"
+    row["evidence"] = 'NPS used <img src=x onerror="alert(1)"> after renewal.'
+    pool = _Pool(rows=[row])
+
+    response = _client(pool).get(
+        "/content-assets/stat_card/drafts/export"
+        "?format=html&status=approved&target_mode=review&theme=customer_metric"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "content_assets_stat_card.html" in response.headers["content-disposition"]
+    assert '<article class="visual-card stat-card"' in response.text
+    assert "<script>" not in response.text
+    assert "<img" not in response.text
+    assert "NPS &lt;script&gt;alert(1)&lt;/script&gt;" in response.text
+    assert (
+        "NPS used &lt;img src=x onerror=&quot;alert(1)&quot;&gt; after renewal."
+        in response.text
+    )
+    query, args = pool.fetch_calls[0]
+    assert "FROM stat_card_drafts" in query
+    assert args == ("", "approved", "review", "customer_metric", 20)
+
+
+def test_generated_asset_router_preserves_zero_metric_in_stat_card_visual_html() -> None:
+    row = _stat_card_row()
+    row["metric_display"] = ""
+    row["metric_value"] = 0
+    row["claim"] = "NPS score: 0"
+    pool = _Pool(rows=[row])
+
+    response = _client(pool).get(
+        "/content-assets/stat_card/drafts/export"
+        "?format=html&status=approved&target_mode=review&theme=customer_metric"
+    )
+
+    assert response.status_code == 200
+    assert '<p class="metric">0</p>' in response.text
+    assert "NPS score: 0" in response.text
 
 
 def test_generated_asset_router_reviews_report_with_host_defined_status() -> None:
@@ -2383,7 +2446,19 @@ def test_generated_asset_router_rejects_unknown_export_format() -> None:
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "format must be csv or json"
+    assert response.json()["detail"] == "format must be csv, json, or html"
+
+
+def test_generated_asset_router_rejects_visual_export_for_non_card_assets() -> None:
+    response = _client(_Pool(rows=[_report_row()])).get(
+        "/content-assets/report/drafts/export?format=html"
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.json()["detail"]
+        == "format html is only supported for quote_card and stat_card"
+    )
 
 
 def test_generated_asset_router_requires_database() -> None:
