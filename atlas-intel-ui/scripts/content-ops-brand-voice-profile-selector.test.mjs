@@ -335,6 +335,8 @@ test('new run page renders brand voice profile selector wiring', () => {
   assert.ok(newRunSource.includes('type="file"'))
   assert.ok(newRunSource.includes('Fetch URL'))
   assert.ok(newRunSource.includes('brandVoiceSampleFallbackName'))
+  assert.ok(newRunSource.includes('sampleFetchTokenRef'))
+  assert.ok(newRunSource.includes('invalidateSampleFetch'))
   assert.ok(newRunSource.includes('deriveBrandVoiceProfileEditorPatch'))
   assert.ok(newRunSource.includes('disabled={loading || mutating}'))
   assert.ok(newRunSource.includes('selectedProfileIdRef.current === archiveProfileId'))

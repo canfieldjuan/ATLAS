@@ -98,7 +98,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `pytest tests/test_content_ops_brand_voice_profiles_api.py -q` (14 passed)
+- `pytest tests/test_content_ops_brand_voice_profiles_api.py -q` (16 passed)
 - `cd atlas-intel-ui && npm ci` (installed dependencies; npm reported
   pre-existing audit findings: 2 moderate, 6 high)
 - `cd atlas-intel-ui && npm run test:content-ops-brand-voice-profile-selector`
@@ -112,10 +112,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas-intel-ui/scripts/content-ops-brand-voice-profile-selector.test.mjs` | 34 |
+| `atlas-intel-ui/scripts/content-ops-brand-voice-profile-selector.test.mjs` | 36 |
 | `atlas-intel-ui/src/api/contentOps.ts` | 22 |
-| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | 78 |
-| `atlas_brain/api/content_ops_brand_voice_profiles.py` | 412 |
+| `atlas-intel-ui/src/pages/ContentOpsNewRun.tsx` | 105 |
+| `atlas_brain/api/content_ops_brand_voice_profiles.py` | 413 |
 | `plans/PR-Content-Ops-Brand-Voice-Scrape-Onboarding.md` | 121 |
-| `tests/test_content_ops_brand_voice_profiles_api.py` | 200 |
-| **Total** | **867** |
+| `tests/test_content_ops_brand_voice_profiles_api.py` | 257 |
+| **Total** | **954** |

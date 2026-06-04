@@ -1943,11 +1943,17 @@ function BrandVoiceProfileSelector({
   const sampleFetching = sampleImportState.kind === 'loading'
   const canSave = editor ? canSaveBrandVoiceProfileEditor(editor) : false
   const selectedProfileIdRef = useRef(selectedProfileId)
+  const sampleFetchTokenRef = useRef(0)
   useEffect(() => {
     selectedProfileIdRef.current = selectedProfileId
   }, [selectedProfileId])
 
+  const invalidateSampleFetch = () => {
+    sampleFetchTokenRef.current += 1
+  }
+
   const resetSampleImport = () => {
+    invalidateSampleFetch()
     setSampleText('')
     setSampleName('')
     setSampleUrl('')
@@ -1979,7 +1985,9 @@ function BrandVoiceProfileSelector({
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!editor || !canSave || mutationState.kind === 'saving') return
+    if (!editor || !canSave || mutationState.kind === 'saving' || sampleFetching) {
+      return
+    }
     const mode = editor.mode
     setMutationState({ kind: 'saving' })
     try {
@@ -1988,6 +1996,7 @@ function BrandVoiceProfileSelector({
         mode === 'edit' && editor.profileId
           ? await updateContentOpsBrandVoiceProfile(editor.profileId, body)
           : await createContentOpsBrandVoiceProfile(body)
+      resetSampleImport()
       onChange(profile.id)
       setEditor(null)
       setMutationState({
@@ -2022,6 +2031,7 @@ function BrandVoiceProfileSelector({
         onChange(null)
       }
       if (editor?.profileId === archiveProfileId) {
+        resetSampleImport()
         setEditor(null)
       }
       setMutationState({
@@ -2065,9 +2075,14 @@ function BrandVoiceProfileSelector({
       })
       return
     }
+    const requestToken = sampleFetchTokenRef.current + 1
+    sampleFetchTokenRef.current = requestToken
     setSampleImportState({ kind: 'loading', message: 'Fetching URL.' })
     try {
       const sample = await fetchContentOpsBrandVoiceSampleUrl({ url })
+      if (sampleFetchTokenRef.current !== requestToken) {
+        return
+      }
       const fallbackName =
         sample.title?.trim() || brandVoiceSampleFallbackName(sample.url)
       setSampleText(sample.text)
@@ -2078,6 +2093,9 @@ function BrandVoiceProfileSelector({
         message: `Loaded ${fallbackName}.`,
       })
     } catch (err) {
+      if (sampleFetchTokenRef.current !== requestToken) {
+        return
+      }
       setSampleImportState({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
@@ -2216,7 +2234,10 @@ function BrandVoiceProfileSelector({
             </h3>
             <button
               type="button"
-              onClick={() => setEditor(null)}
+              onClick={() => {
+                resetSampleImport()
+                setEditor(null)
+              }}
               disabled={mutating}
               className="flex items-center justify-center gap-1.5 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
             >
@@ -2381,7 +2402,7 @@ function BrandVoiceProfileSelector({
           <div className="flex justify-end">
             <button
               type="submit"
-              disabled={!canSave || mutating}
+              disabled={!canSave || mutating || sampleFetching}
               className="flex items-center justify-center gap-2 rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
             >
               <Save className="h-4 w-4" />

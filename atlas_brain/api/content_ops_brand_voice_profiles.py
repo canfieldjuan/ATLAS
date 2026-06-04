@@ -574,6 +574,7 @@ def _is_blocked_sample_url_host(host: str) -> bool:
         or address.is_multicast
         or address.is_reserved
         or address.is_unspecified
+        or not address.is_global
     )
 
 

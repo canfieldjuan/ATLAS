@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
-import urllib.error
 import uuid
 
 import pytest
@@ -281,19 +280,39 @@ def test_sample_url_rejects_private_dns_before_fetch(
     assert response.json()["detail"] == "Sample URL host is not allowed"
 
 
+def test_sample_url_rejects_shared_address_space_dns_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (api.socket.AF_INET, api.socket.SOCK_STREAM, 6, "", ("100.64.0.1", 443)),
+        ],
+    )
+
+    def open_request(target, *, timeout):
+        raise AssertionError("shared-address-space target must be rejected first")
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL host is not allowed"
+
+
 def test_sample_url_rejects_redirect_responses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _allow_public_sample_url_dns(monkeypatch)
 
     def open_request(target, *, timeout):
-        raise urllib.error.HTTPError(
-            target.url,
-            302,
-            "Found",
-            hdrs=None,
-            fp=None,
-        )
+        return _FakeSampleUrlResponse(b"", status=302)
 
     monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
     client = _client()
@@ -307,22 +326,60 @@ def test_sample_url_rejects_redirect_responses(
     assert response.json()["detail"] == "Sample URL redirects are not allowed."
 
 
-def test_sample_url_rejects_non_https_and_credentials() -> None:
+def test_sample_url_rejects_non_success_response_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_sample_url_dns(monkeypatch)
+
+    def open_request(target, *, timeout):
+        return _FakeSampleUrlResponse(b"", status=500)
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL could not be fetched."
+
+
+def test_sample_url_rejects_non_https_credentials_and_literal_private_hosts() -> None:
     client = _client()
 
     non_https = client.post(
         "/content-ops/brand-voice-profiles/sample-url",
         json={"url": "http://example.test/about"},
     )
+    file_scheme = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "file:///etc/passwd"},
+    )
     credentials = client.post(
         "/content-ops/brand-voice-profiles/sample-url",
         json={"url": "https://user:secret@example.test/about"},
     )
+    metadata_ip = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://169.254.169.254/latest/meta-data"},
+    )
+    shared_space = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://100.64.0.1/about"},
+    )
 
     assert non_https.status_code == 400
     assert non_https.json()["detail"] == "Sample URL must be an https URL"
+    assert file_scheme.status_code == 400
+    assert file_scheme.json()["detail"] == "Sample URL must be an https URL"
     assert credentials.status_code == 400
     assert credentials.json()["detail"] == "Sample URL must not include credentials"
+    assert metadata_ip.status_code == 400
+    assert metadata_ip.json()["detail"] == "Sample URL host is not allowed"
+    assert shared_space.status_code == 400
+    assert shared_space.json()["detail"] == "Sample URL host is not allowed"
 
 
 def test_sample_url_rejects_oversized_body(
