@@ -1,4 +1,11 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react'
 import { Link } from 'react-router-dom'
 import {
   ChevronRight,
@@ -6,14 +13,20 @@ import {
   KeyRound,
   Loader2,
   Palette,
+  Pencil,
   Play,
+  Plus,
   RefreshCw,
+  Save,
   Search,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
+  createContentOpsBrandVoiceProfile,
+  deleteContentOpsBrandVoiceProfile,
   executeContentOpsRun,
   fetchContentOpsBrandVoiceProfiles,
   fetchContentOpsZendeskCredentials,
@@ -28,6 +41,7 @@ import {
   previewContentOpsRun,
   revokeContentOpsZendeskCredential,
   saveContentOpsZendeskCredential,
+  updateContentOpsBrandVoiceProfile,
 } from '../api/contentOps'
 import { fetchTrackedVendors, type TrackedVendor } from '../api/b2bClient'
 import {
@@ -82,6 +96,7 @@ import type {
   ContentOpsZendeskCredential,
   GeneratedAssetDraft,
   GeneratedAssetType,
+  UpsertContentOpsBrandVoiceProfileRequest,
 } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
@@ -147,6 +162,25 @@ type ZendeskCredentialMutationState =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'revoking'; id: string }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string }
+
+type BrandVoiceProfileEditorState = {
+  mode: 'create' | 'edit'
+  profileId: string | null
+  name: string
+  descriptorsText: string
+  exemplarsText: string
+  bannedTermsText: string
+  preferredPov: string
+  readingLevel: string
+  metadata: Record<string, unknown>
+}
+
+type BrandVoiceProfileMutationState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'archiving'; id: string }
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string }
 
@@ -1890,9 +1924,101 @@ function BrandVoiceProfileSelector({
   onChange: (profileId: string | null) => void
 }) {
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId)
+  const selectedProfileUnavailable = Boolean(selectedProfileId && !selectedProfile)
   const missingSelectedProfile = Boolean(
-    selectedProfileId && !loading && !selectedProfile,
+    selectedProfileUnavailable && !loading && !refreshing,
   )
+  const [editor, setEditor] = useState<BrandVoiceProfileEditorState | null>(null)
+  const [mutationState, setMutationState] =
+    useState<BrandVoiceProfileMutationState>({ kind: 'idle' })
+  const mutating =
+    mutationState.kind === 'saving' || mutationState.kind === 'archiving'
+  const canSave = editor ? canSaveBrandVoiceProfileEditor(editor) : false
+  const selectedProfileIdRef = useRef(selectedProfileId)
+  useEffect(() => {
+    selectedProfileIdRef.current = selectedProfileId
+  }, [selectedProfileId])
+
+  const startCreate = () => {
+    setEditor(blankBrandVoiceProfileEditorState())
+    setMutationState({ kind: 'idle' })
+  }
+
+  const startEdit = () => {
+    if (!selectedProfile) return
+    setEditor(brandVoiceProfileEditorStateFromProfile(selectedProfile))
+    setMutationState({ kind: 'idle' })
+  }
+
+  const updateEditor = (
+    field: keyof Omit<
+      BrandVoiceProfileEditorState,
+      'mode' | 'profileId' | 'metadata'
+    >,
+    value: string,
+  ) => {
+    setEditor((current) => (current ? { ...current, [field]: value } : current))
+  }
+
+  const handleSave = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!editor || !canSave || mutationState.kind === 'saving') return
+    const mode = editor.mode
+    setMutationState({ kind: 'saving' })
+    try {
+      const body = brandVoiceProfileEditorRequest(editor)
+      const profile =
+        mode === 'edit' && editor.profileId
+          ? await updateContentOpsBrandVoiceProfile(editor.profileId, body)
+          : await createContentOpsBrandVoiceProfile(body)
+      onChange(profile.id)
+      setEditor(null)
+      setMutationState({
+        kind: 'success',
+        message:
+          mode === 'edit'
+            ? 'Brand voice profile updated.'
+            : 'Brand voice profile saved.',
+      })
+      onRefresh()
+    } catch (err) {
+      setMutationState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handleArchive = async () => {
+    if (!selectedProfile || mutationState.kind === 'archiving') return
+    const archiveProfileId = selectedProfile.id
+    const archiveProfileName = selectedProfile.name
+    if (
+      !window.confirm(`Archive brand voice profile "${archiveProfileName}"?`)
+    ) {
+      return
+    }
+    setMutationState({ kind: 'archiving', id: archiveProfileId })
+    try {
+      await deleteContentOpsBrandVoiceProfile(archiveProfileId)
+      if (selectedProfileIdRef.current === archiveProfileId) {
+        onChange(null)
+      }
+      if (editor?.profileId === archiveProfileId) {
+        setEditor(null)
+      }
+      setMutationState({
+        kind: 'success',
+        message: 'Brand voice profile archived.',
+      })
+      onRefresh()
+    } catch (err) {
+      setMutationState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 
   return (
     <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
@@ -1908,15 +2034,26 @@ function BrandVoiceProfileSelector({
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={loading || refreshing}
-          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
-        >
-          <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={startCreate}
+            disabled={mutating}
+            className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/60 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading || refreshing || mutating}
+            className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          >
+            <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {error && !loading && (
@@ -1934,14 +2071,14 @@ function BrandVoiceProfileSelector({
         <span className="text-slate-300">Saved profile</span>
         <select
           value={selectedProfileId ?? ''}
-          disabled={loading}
+          disabled={loading || mutating}
           onChange={(event) => onChange(event.target.value || null)}
           className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
         >
           <option value="">
             {loading ? 'Loading profiles...' : 'No saved brand voice'}
           </option>
-          {missingSelectedProfile && (
+          {selectedProfileUnavailable && (
             <option value={selectedProfileId ?? ''}>
               Selected profile unavailable
             </option>
@@ -1953,6 +2090,134 @@ function BrandVoiceProfileSelector({
           ))}
         </select>
       </label>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={startEdit}
+          disabled={!selectedProfile || loading || mutating}
+          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Edit selected
+        </button>
+        <button
+          type="button"
+          onClick={handleArchive}
+          disabled={!selectedProfile || loading || mutating}
+          className="flex items-center justify-center gap-2 rounded-md border border-rose-500/50 px-2.5 py-1 text-xs text-rose-100 hover:bg-rose-500/10 disabled:opacity-50"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Archive
+        </button>
+      </div>
+
+      {mutationState.kind === 'success' && (
+        <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+          {mutationState.message}
+        </div>
+      )}
+      {mutationState.kind === 'error' && (
+        <div className="mt-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+          {mutationState.message}
+        </div>
+      )}
+
+      {editor && (
+        <form onSubmit={handleSave} className="mt-4 space-y-3 border-t border-slate-800 pt-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium text-slate-100">
+              {editor.mode === 'edit' ? 'Edit brand voice' : 'New brand voice'}
+            </h3>
+            <button
+              type="button"
+              onClick={() => setEditor(null)}
+              disabled={mutating}
+              className="flex items-center justify-center gap-1.5 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+            >
+              <X className="h-3.5 w-3.5" />
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <label className="block text-sm">
+              <span className="text-slate-300">Name</span>
+              <input
+                value={editor.name}
+                onChange={(event) => updateEditor('name', event.target.value)}
+                disabled={mutating}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Preferred POV</span>
+              <input
+                value={editor.preferredPov}
+                onChange={(event) => updateEditor('preferredPov', event.target.value)}
+                disabled={mutating}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Reading level</span>
+              <input
+                value={editor.readingLevel}
+                onChange={(event) => updateEditor('readingLevel', event.target.value)}
+                disabled={mutating}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+            <label className="block text-sm lg:col-span-2">
+              <span className="text-slate-300">Descriptors</span>
+              <textarea
+                value={editor.descriptorsText}
+                onChange={(event) => updateEditor('descriptorsText', event.target.value)}
+                disabled={mutating}
+                rows={3}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Exemplars</span>
+              <textarea
+                value={editor.exemplarsText}
+                onChange={(event) => updateEditor('exemplarsText', event.target.value)}
+                disabled={mutating}
+                rows={4}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-300">Banned terms</span>
+              <textarea
+                value={editor.bannedTermsText}
+                onChange={(event) => updateEditor('bannedTermsText', event.target.value)}
+                disabled={mutating}
+                rows={4}
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+              />
+            </label>
+          </div>
+
+          {!canSave && (
+            <p className="text-xs text-slate-500">
+              Name and at least one guidance field are required.
+            </p>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={!canSave || mutating}
+              className="flex items-center justify-center gap-2 rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+            >
+              <Save className="h-4 w-4" />
+              {mutationState.kind === 'saving' ? 'Saving' : 'Save profile'}
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   )
 }
@@ -2889,6 +3154,83 @@ function formatBrandVoiceProfileSummary(
     parts.push(profile.reading_level)
   }
   return parts.length > 0 ? parts.join(' - ') : 'Saved profile selected'
+}
+
+function blankBrandVoiceProfileEditorState(): BrandVoiceProfileEditorState {
+  return {
+    mode: 'create',
+    profileId: null,
+    name: '',
+    descriptorsText: '',
+    exemplarsText: '',
+    bannedTermsText: '',
+    preferredPov: '',
+    readingLevel: '',
+    metadata: { source: 'content_ops_ui' },
+  }
+}
+
+function brandVoiceProfileEditorStateFromProfile(
+  profile: ContentOpsBrandVoiceProfile,
+): BrandVoiceProfileEditorState {
+  return {
+    mode: 'edit',
+    profileId: profile.id,
+    name: profile.name,
+    descriptorsText: brandVoiceProfileListText(profile.descriptors),
+    exemplarsText: brandVoiceProfileListText(profile.exemplars),
+    bannedTermsText: brandVoiceProfileListText(profile.banned_terms),
+    preferredPov: profile.preferred_pov ?? '',
+    readingLevel: profile.reading_level ?? '',
+    metadata: { ...profile.metadata },
+  }
+}
+
+function brandVoiceProfileEditorRequest(
+  editor: BrandVoiceProfileEditorState,
+): UpsertContentOpsBrandVoiceProfileRequest {
+  const preferredPov = cleanOptionalText(editor.preferredPov)
+  const readingLevel = cleanOptionalText(editor.readingLevel)
+  return {
+    name: editor.name.trim(),
+    descriptors: brandVoiceProfileListItems(editor.descriptorsText, 8),
+    exemplars: brandVoiceProfileListItems(editor.exemplarsText, 3),
+    banned_terms: brandVoiceProfileListItems(editor.bannedTermsText, 20),
+    preferred_pov: preferredPov,
+    reading_level: readingLevel,
+    metadata: { ...editor.metadata },
+  }
+}
+
+function canSaveBrandVoiceProfileEditor(
+  editor: BrandVoiceProfileEditorState,
+): boolean {
+  if (!editor.name.trim()) return false
+  const body = brandVoiceProfileEditorRequest(editor)
+  return Boolean(
+    (body.descriptors?.length ?? 0) > 0 ||
+      (body.exemplars?.length ?? 0) > 0 ||
+      (body.banned_terms?.length ?? 0) > 0 ||
+      body.preferred_pov ||
+      body.reading_level,
+  )
+}
+
+function brandVoiceProfileListText(values: string[]): string {
+  return values.join('\n')
+}
+
+function brandVoiceProfileListItems(text: string, limit: number): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit)
+}
+
+function cleanOptionalText(value: string): string | null {
+  const cleaned = value.trim()
+  return cleaned ? cleaned : null
 }
 
 function formatZendeskCredentialEndpoint(
