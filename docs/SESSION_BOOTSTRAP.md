@@ -29,6 +29,7 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >    - **CI is truth:** "passed locally" ≠ green. Run the test the way CI does and check `gh pr checks` is green before claiming done.
 >    - **Fixtures must match real producer output**, not hand-crafted shapes.
 >    - **The PR body's stated safety claim must be *enforced in code*, not just named.**
+>    - **Content Ops live model route:** generated-content validation must use the configured cloud/OpenRouter route (currently Claude via OpenRouter), not local Ollama/qwen. For live smokes, set `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false` so a missing cloud route fails closed instead of silently falling back to a local model.
 >
 > 5. **Plan first** (`plans/PR-<Slice>.md`, the 7 sections, <400 LOC soft cap), open PRs ready-for-review (not draft), and run the per-package validation gauntlet before pushing (see CLAUDE.md "Per-package validation gauntlets").
 >
