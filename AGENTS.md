@@ -219,6 +219,29 @@ not automatically owned. A PR that "looks abandoned" is not owned. A PR
 opened by another session is not owned unless the operator explicitly
 reassigns it and the map is updated first.
 
+### 3a.2. PR-prep helpers
+
+Three scripts remove the PR-shape and failed-push friction — use them
+rather than hand-formatting:
+
+- `bash scripts/new_pr_plan.sh <Slice> --lane <lane> --phase "<phase>"` —
+  scaffolds `plans/PR-<Slice>.md` with the required 7 sections, a
+  `### Files touched` placeholder, and a zero diff-size table. Refuses to
+  overwrite an existing plan without `--force`.
+- `python scripts/sync_pr_plan.py plans/PR-<Slice>.md [base-ref]` —
+  rewrites `### Files touched` and `## Estimated diff size` from the actual
+  `git diff` (tracked vs merge-base plus untracked). Run after
+  implementation; `--check` mode fails if the plan is out of sync
+  (CI-gateable).
+- `bash scripts/push_pr.sh <pr-body-file> [git-push-args]` — runs
+  `local_pr_review.sh` with the body file, then pushes with
+  `ATLAS_CURRENT_PR_BODY_FILE` exported so the installed pre-push hook
+  validates the same body. The wrapper does **not** add `--no-verify`;
+  callers must not pass `--no-verify` through the forwarded push args.
+
+Flow: `bash scripts/new_pr_plan.sh` -> implement ->
+`python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh`.
+
 ### 3b. Per-package guardrails
 
 Touching a package under `extracted_*/` requires the package's audit
