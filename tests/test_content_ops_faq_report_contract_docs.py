@@ -282,7 +282,7 @@ def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> Non
         "csv_file: File;",
         "do not expose raw support-ticket CSVs through a",
         "POST /content-ops/deflection-reports/{request_id}/paid",
-        "amount_total >= 150000",
+        "`amount_total`: exactly one ATLAS-configured allowed amount in cents",
         'currency: "usd"',
         "The portfolio does not call an authed \"mark paid\" endpoint",
         "Stripe webhook -> ATLAS verifies -> ATLAS marks paid",

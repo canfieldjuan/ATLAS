@@ -693,20 +693,14 @@ async def _queue_content_ops_deflection_report_delivery(
 
 def _deflection_checkout_amount_is_valid(session: Any) -> bool:
     cfg = settings.saas_auth
-    expected_cents = int(
-        getattr(cfg, "stripe_content_ops_deflection_report_amount_cents", 150000)
-        or 0
-    )
+    allowed_cents = _deflection_allowed_checkout_amounts_cents(cfg)
     expected_currency = str(
         getattr(cfg, "stripe_content_ops_deflection_report_currency", "usd") or ""
     ).strip().lower()
     amount_total = _stripe_object_value(session, "amount_total")
     currency = _stripe_text(session, "currency").lower()
-    if expected_cents <= 0:
-        logger.error(
-            "Deflection report checkout price gate misconfigured: expected_cents=%s",
-            expected_cents,
-        )
+    if not allowed_cents:
+        logger.error("Deflection report checkout amount gate is misconfigured")
         return False
     if not expected_currency:
         logger.error("Deflection report checkout currency gate is misconfigured")
@@ -717,7 +711,53 @@ def _deflection_checkout_amount_is_valid(session: Any) -> bool:
         actual_cents = int(amount_total)
     except (TypeError, ValueError):
         return False
-    return actual_cents >= expected_cents
+    return actual_cents in allowed_cents
+
+
+def _deflection_allowed_checkout_amounts_cents(cfg: Any) -> tuple[int, ...]:
+    configured = str(
+        getattr(
+            cfg,
+            "stripe_content_ops_deflection_report_allowed_amount_cents",
+            "",
+        )
+        or ""
+    ).strip()
+    if configured:
+        amounts: list[int] = []
+        for raw_part in configured.split(","):
+            part = raw_part.strip()
+            if not part:
+                logger.error(
+                    "Deflection report checkout allowed amount gate has an empty entry"
+                )
+                return ()
+            try:
+                amount_cents = int(part)
+            except ValueError:
+                logger.error(
+                    "Deflection report checkout allowed amount gate has an invalid entry"
+                )
+                return ()
+            if amount_cents <= 0:
+                logger.error(
+                    "Deflection report checkout allowed amount gate has a non-positive entry"
+                )
+                return ()
+            amounts.append(amount_cents)
+        return tuple(dict.fromkeys(amounts))
+
+    expected_cents = int(
+        getattr(cfg, "stripe_content_ops_deflection_report_amount_cents", 150000)
+        or 0
+    )
+    if expected_cents <= 0:
+        logger.error(
+            "Deflection report checkout price gate misconfigured: expected_cents=%s",
+            expected_cents,
+        )
+        return ()
+    return (expected_cents,)
 
 
 def _stripe_text(obj: Any, key: str) -> str:
