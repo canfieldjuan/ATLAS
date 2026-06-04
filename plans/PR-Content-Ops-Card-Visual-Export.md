@@ -12,6 +12,11 @@ review status, or #1268 output variations: approved or filtered quote/stat
 rows can be exported as self-contained HTML cards through the existing
 generated-assets export route.
 
+The final diff is slightly above the 400 LOC soft cap because the review fix
+for zero-valued stat metrics ships in the same slice with its regression test;
+splitting that fix would leave the new visual artifact knowingly corrupting a
+valid metric value.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/marketer-reviews-as-input
@@ -85,9 +90,9 @@ None.
 ## Verification
 
 - Passed: `pytest tests/test_extracted_content_asset_api.py -q`
-  (85 passed)
+  (86 passed)
 - Passed: `pytest tests/test_extracted_content_asset_api.py tests/test_atlas_content_ops_generated_assets_api.py -q`
-  (99 passed, 1 warning)
+  (100 passed, 1 warning)
 - Passed: `python -m py_compile extracted_content_pipeline/card_visual_export.py extracted_content_pipeline/api/generated_assets.py tests/test_extracted_content_asset_api.py`
 - Passed: `git diff --check`
 - Passed: `python scripts/audit_extracted_pipeline_ci_enrollment.py --atlas-brain-tests-from origin/main`
@@ -97,12 +102,12 @@ None.
 - Passed: `python scripts/audit_extracted_standalone.py --fail-on-debt`
 - Passed: `bash scripts/check_ascii_python.sh`
 - Passed: `bash scripts/run_extracted_pipeline_checks.sh`
-  (3057 passed, 10 skipped, 1 warning)
+  (3058 passed, 10 skipped, 1 warning)
 
 ## Estimated diff size
 
-Actual git diff: 5 files, +392 / -3.
+Actual git diff: 5 files, +415 / -5.
 
 | Area | LOC |
 |---|---:|
-| **Total** | **395** |
+| **Total** | **420** |

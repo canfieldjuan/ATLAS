@@ -116,11 +116,15 @@ def _pain_points(row: JsonDict) -> str:
 
 
 def _text(value: Any) -> str:
-    return _html_escape(str(value or "").strip())
+    if value is None:
+        return ""
+    return _html_escape(str(value).strip())
 
 
 def _attr(value: Any) -> str:
-    return _html_escape(str(value or "").strip(), quote=True)
+    if value is None:
+        return ""
+    return _html_escape(str(value).strip(), quote=True)
 
 
 def _plural(noun: str, count: int) -> str:

@@ -1741,6 +1741,23 @@ def test_generated_asset_router_exports_stat_card_visual_html_with_escaped_text(
     assert args == ("", "approved", "review", "customer_metric", 20)
 
 
+def test_generated_asset_router_preserves_zero_metric_in_stat_card_visual_html() -> None:
+    row = _stat_card_row()
+    row["metric_display"] = ""
+    row["metric_value"] = 0
+    row["claim"] = "NPS score: 0"
+    pool = _Pool(rows=[row])
+
+    response = _client(pool).get(
+        "/content-assets/stat_card/drafts/export"
+        "?format=html&status=approved&target_mode=review&theme=customer_metric"
+    )
+
+    assert response.status_code == 200
+    assert '<p class="metric">0</p>' in response.text
+    assert "NPS score: 0" in response.text
+
+
 def test_generated_asset_router_reviews_report_with_host_defined_status() -> None:
     pool = _Pool()
 
