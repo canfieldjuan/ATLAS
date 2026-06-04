@@ -954,6 +954,14 @@ export function exportGeneratedAssetDraftsCsv(
   return getAssetText(asset, '/drafts/export', { ...params, format: 'csv' })
 }
 
+/** GET /content-assets/{asset}/drafts/export?format=html -- static visual cards. */
+export function exportGeneratedAssetDraftsHtml(
+  asset: GeneratedAssetType,
+  params: GeneratedAssetListParams = {},
+): Promise<string> {
+  return getAssetText(asset, '/drafts/export', { ...params, format: 'html' })
+}
+
 /** POST /content-assets/{asset}/drafts/review -- approve/reject a draft. */
 export function reviewGeneratedAssetDraft(
   asset: GeneratedAssetType,
