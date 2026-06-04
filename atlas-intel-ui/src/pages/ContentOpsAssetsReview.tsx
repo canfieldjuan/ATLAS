@@ -28,6 +28,7 @@ import {
 import { clsx } from 'clsx'
 import {
   exportGeneratedAssetDraftsCsv,
+  exportGeneratedAssetDraftsHtml,
   fetchGeneratedAssetDrafts,
   fetchGeneratedFaqMacroPublishAttempts,
   publishGeneratedFaqMacros,
@@ -239,6 +240,10 @@ function assetSupportsIdFilter(asset: GeneratedAssetType): boolean {
   return ID_FILTERED_ASSETS.has(asset)
 }
 
+function assetSupportsVisualExport(asset: GeneratedAssetType): boolean {
+  return asset === 'quote_card' || asset === 'stat_card'
+}
+
 export default function ContentOpsAssetsReview() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [asset, setAsset] = useState<GeneratedAssetType>(() =>
@@ -371,7 +376,21 @@ export default function ContentOpsAssetsReview() {
     setActionError(null)
     try {
       const csv = await exportGeneratedAssetDraftsCsv(asset, params)
-      downloadCsv(csv, `${asset}_drafts.csv`)
+      downloadText(csv, `${asset}_drafts.csv`, 'text/csv;charset=utf-8')
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleVisualExport = async () => {
+    if (!assetSupportsVisualExport(asset)) return
+    setExporting(true)
+    setActionError(null)
+    try {
+      const html = await exportGeneratedAssetDraftsHtml(asset, params)
+      downloadText(html, `${asset}_visual_cards.html`, 'text/html;charset=utf-8')
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -637,6 +656,21 @@ export default function ContentOpsAssetsReview() {
               )}
               Export CSV
             </button>
+            {assetSupportsVisualExport(asset) && (
+              <button
+                type="button"
+                onClick={() => void handleVisualExport()}
+                disabled={exporting || loading}
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-400/50 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-400/10 disabled:opacity-60"
+              >
+                {exporting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+                Export HTML
+              </button>
+            )}
           </div>
         </div>
 
@@ -2732,8 +2766,8 @@ function excerpt(value: string, limit = 260): string {
   return `${clean.slice(0, limit - 3).trim()}...`
 }
 
-function downloadCsv(csv: string, filename: string): void {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+function downloadText(value: string, filename: string, type: string): void {
+  const blob = new Blob([value], { type })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
