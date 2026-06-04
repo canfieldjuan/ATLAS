@@ -78,6 +78,27 @@ class _BlogPostService:
         }
 
 
+class _StatCardService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def generate(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        return {
+            "generated": 1,
+            "target_mode": kwargs["target_mode"],
+            "stats": [{
+                "id": "content-ops-live-stat-1",
+                "metric_label": "NPS score",
+                "metric_value": 42,
+                "metric_display": "42",
+                "claim": "NPS score: 42",
+            }],
+            "warnings": [],
+            "saved_ids": ["stat-card-live-smoke-1"],
+        }
+
+
 def _args(**overrides: Any) -> argparse.Namespace:
     values = {
         "output": "landing_page",
@@ -763,6 +784,94 @@ async def test_live_generation_smoke_seeds_and_executes_blog_post_through_real_e
 
 
 @pytest.mark.asyncio
+async def test_live_generation_smoke_executes_stat_card_through_real_executor() -> None:
+    lifecycle = _Lifecycle()
+    service = _StatCardService()
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(output="stat_card"),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(stat_card=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["configured_outputs"] == ["stat_card"]
+    assert result["execution"]["status"] == "completed"
+    assert result["execution"]["steps"][0]["result"]["saved_ids"] == [
+        "stat-card-live-smoke-1"
+    ]
+    assert lifecycle.initialized is True
+    assert lifecycle.closed is True
+    assert len(service.calls) == 1
+
+    call = service.calls[0]
+    assert call["scope"].account_id == "acct-live-smoke"
+    assert call["scope"].user_id == "user-live-smoke"
+    assert call["target_mode"] == "vendor_retention"
+    assert call["limit"] == 1
+    assert call["source_material"] == [
+        dict(smoke.DEFAULT_STAT_CARD_SOURCE_MATERIAL[0])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_live_generation_smoke_exports_exact_saved_stat_card_draft(
+    tmp_path: Path,
+) -> None:
+    lifecycle = _Lifecycle()
+    service = _StatCardService()
+    export_calls: list[dict[str, Any]] = []
+
+    async def _export_saved_draft(
+        output: str,
+        saved_ids,
+        scope: TenantScope,
+    ) -> dict[str, Any]:
+        export_calls.append({
+            "output": output,
+            "saved_ids": tuple(saved_ids),
+            "scope": scope,
+        })
+        return {
+            "count": 1,
+            "rows": [{"id": saved_ids[0], "claim": "NPS score: 42"}],
+        }
+
+    code, result = await smoke.run_content_ops_live_generation_smoke(
+        _args(
+            output="stat_card",
+            export_saved_draft=tmp_path / "stat-card-draft.json",
+        ),
+        init_database_fn=lifecycle.init,
+        close_database_fn=lifecycle.close,
+        services_factory=lambda: ContentOpsExecutionServices(stat_card=service),
+        executor=execute_content_ops_from_mapping,
+        tenant_scope_cls=TenantScope,
+        draft_export_fn=_export_saved_draft,
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert result["saved_draft_export"] == {
+        "count": 1,
+        "rows": [{"id": "stat-card-live-smoke-1", "claim": "NPS score: 42"}],
+    }
+    assert export_calls == [{
+        "output": "stat_card",
+        "saved_ids": ("stat-card-live-smoke-1",),
+        "scope": TenantScope(
+            account_id="acct-live-smoke",
+            user_id="user-live-smoke",
+        ),
+    }]
+
+
+@pytest.mark.asyncio
 async def test_live_generation_smoke_packages_support_ticket_csv_for_blog_post(
     tmp_path: Path,
 ) -> None:
@@ -1128,6 +1237,57 @@ def test_saved_ids_for_output_strips_and_preserves_multiple_ids() -> None:
         },
         "blog_post",
     ) == ("blog-1", "blog-2")
+
+
+def test_filter_saved_draft_export_rows_keeps_only_saved_ids() -> None:
+    assert smoke._filter_saved_draft_export_rows(
+        {
+            "count": 3,
+            "limit": 100,
+            "filters": {"account_id": "acct-live-smoke"},
+            "rows": [
+                {"id": "stat-card-other", "claim": "Other"},
+                {"id": "stat-card-live-smoke-1", "claim": "NPS score: 42"},
+                {"id": "stat-card-live-smoke-2", "claim": "CSAT score: 81"},
+            ],
+        },
+        ("stat-card-live-smoke-1", "stat-card-live-smoke-2"),
+    ) == {
+        "count": 2,
+        "limit": 100,
+        "filters": {
+            "account_id": "acct-live-smoke",
+            "id": ["stat-card-live-smoke-1", "stat-card-live-smoke-2"],
+        },
+        "rows": [
+            {"id": "stat-card-live-smoke-1", "claim": "NPS score: 42"},
+            {"id": "stat-card-live-smoke-2", "claim": "CSAT score: 81"},
+        ],
+    }
+
+
+def test_filter_saved_draft_export_rows_fails_when_saved_id_is_missing() -> None:
+    with pytest.raises(
+        ValueError,
+        match="saved draft export did not include generated saved_ids: stat-card-missing",
+    ):
+        smoke._filter_saved_draft_export_rows(
+            {
+                "count": 1,
+                "limit": 100,
+                "filters": {"account_id": "acct-live-smoke"},
+                "rows": [{"id": "stat-card-live-smoke-1", "claim": "NPS score: 42"}],
+            },
+            ("stat-card-live-smoke-1", "stat-card-missing"),
+        )
+
+
+def test_support_ticket_export_context_is_ignored_for_stat_card() -> None:
+    assert smoke._support_ticket_export_context_errors(
+        output="stat_card",
+        payload={"inputs": {"source_row_count": 2}},
+        saved_draft_export={"rows": []},
+    ) == []
 
 
 @pytest.mark.asyncio
