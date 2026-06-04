@@ -28,6 +28,7 @@ import {
   createContentOpsBrandVoiceProfile,
   deleteContentOpsBrandVoiceProfile,
   executeContentOpsRun,
+  fetchContentOpsBrandVoiceSampleUrl,
   fetchContentOpsBrandVoiceProfiles,
   fetchContentOpsZendeskCredentials,
   fetchGeneratedAssetDrafts,
@@ -180,6 +181,7 @@ type BrandVoiceProfileMutationState =
 
 type BrandVoiceSampleImportState =
   | { kind: 'idle' }
+  | { kind: 'loading'; message: string }
   | { kind: 'loaded'; message: string }
   | { kind: 'applied'; message: string }
   | { kind: 'error'; message: string }
@@ -1933,19 +1935,28 @@ function BrandVoiceProfileSelector({
     useState<BrandVoiceProfileMutationState>({ kind: 'idle' })
   const [sampleText, setSampleText] = useState('')
   const [sampleName, setSampleName] = useState('')
+  const [sampleUrl, setSampleUrl] = useState('')
   const [sampleImportState, setSampleImportState] =
     useState<BrandVoiceSampleImportState>({ kind: 'idle' })
   const mutating =
     mutationState.kind === 'saving' || mutationState.kind === 'archiving'
+  const sampleFetching = sampleImportState.kind === 'loading'
   const canSave = editor ? canSaveBrandVoiceProfileEditor(editor) : false
   const selectedProfileIdRef = useRef(selectedProfileId)
+  const sampleFetchTokenRef = useRef(0)
   useEffect(() => {
     selectedProfileIdRef.current = selectedProfileId
   }, [selectedProfileId])
 
+  const invalidateSampleFetch = () => {
+    sampleFetchTokenRef.current += 1
+  }
+
   const resetSampleImport = () => {
+    invalidateSampleFetch()
     setSampleText('')
     setSampleName('')
+    setSampleUrl('')
     setSampleImportState({ kind: 'idle' })
   }
 
@@ -1974,7 +1985,9 @@ function BrandVoiceProfileSelector({
 
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!editor || !canSave || mutationState.kind === 'saving') return
+    if (!editor || !canSave || mutationState.kind === 'saving' || sampleFetching) {
+      return
+    }
     const mode = editor.mode
     setMutationState({ kind: 'saving' })
     try {
@@ -1983,6 +1996,7 @@ function BrandVoiceProfileSelector({
         mode === 'edit' && editor.profileId
           ? await updateContentOpsBrandVoiceProfile(editor.profileId, body)
           : await createContentOpsBrandVoiceProfile(body)
+      resetSampleImport()
       onChange(profile.id)
       setEditor(null)
       setMutationState({
@@ -2017,6 +2031,7 @@ function BrandVoiceProfileSelector({
         onChange(null)
       }
       if (editor?.profileId === archiveProfileId) {
+        resetSampleImport()
         setEditor(null)
       }
       setMutationState({
@@ -2044,6 +2059,43 @@ function BrandVoiceProfileSelector({
       setSampleName(file.name)
       setSampleImportState({ kind: 'loaded', message: `Loaded ${file.name}.` })
     } catch (err) {
+      setSampleImportState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handleFetchSampleUrl = async () => {
+    const url = sampleUrl.trim()
+    if (!url) {
+      setSampleImportState({
+        kind: 'error',
+        message: 'Add a URL before fetching.',
+      })
+      return
+    }
+    const requestToken = sampleFetchTokenRef.current + 1
+    sampleFetchTokenRef.current = requestToken
+    setSampleImportState({ kind: 'loading', message: 'Fetching URL.' })
+    try {
+      const sample = await fetchContentOpsBrandVoiceSampleUrl({ url })
+      if (sampleFetchTokenRef.current !== requestToken) {
+        return
+      }
+      const fallbackName =
+        sample.title?.trim() || brandVoiceSampleFallbackName(sample.url)
+      setSampleText(sample.text)
+      setSampleName(fallbackName)
+      setSampleUrl(sample.url)
+      setSampleImportState({
+        kind: 'loaded',
+        message: `Loaded ${fallbackName}.`,
+      })
+    } catch (err) {
+      if (sampleFetchTokenRef.current !== requestToken) {
+        return
+      }
       setSampleImportState({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
@@ -2182,7 +2234,10 @@ function BrandVoiceProfileSelector({
             </h3>
             <button
               type="button"
-              onClick={() => setEditor(null)}
+              onClick={() => {
+                resetSampleImport()
+                setEditor(null)
+              }}
               disabled={mutating}
               className="flex items-center justify-center gap-1.5 rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
             >
@@ -2202,11 +2257,40 @@ function BrandVoiceProfileSelector({
                 <input
                   type="file"
                   accept=".txt,.md,text/plain,text/markdown"
-                  disabled={mutating}
+                  disabled={mutating || sampleFetching}
                   onChange={handleSampleFileChange}
                   className="sr-only"
                 />
               </label>
+            </div>
+            <div className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="block text-sm">
+                <span className="text-slate-300">URL</span>
+                <input
+                  type="url"
+                  value={sampleUrl}
+                  onChange={(event) => {
+                    setSampleUrl(event.target.value)
+                    setSampleImportState({ kind: 'idle' })
+                  }}
+                  disabled={mutating || sampleFetching}
+                  placeholder="https://example.com/about"
+                  className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={handleFetchSampleUrl}
+                disabled={!sampleUrl.trim() || mutating || sampleFetching}
+                className="flex h-9 items-center justify-center gap-2 self-end rounded-md border border-slate-700 px-2.5 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+              >
+                {sampleFetching ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Search className="h-3.5 w-3.5" />
+                )}
+                Fetch URL
+              </button>
             </div>
             <textarea
               value={sampleText}
@@ -2215,7 +2299,7 @@ function BrandVoiceProfileSelector({
                 setSampleName('')
                 setSampleImportState({ kind: 'idle' })
               }}
-              disabled={mutating}
+              disabled={mutating || sampleFetching}
               rows={4}
               placeholder="Paste customer copy samples here."
               className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
@@ -2240,7 +2324,7 @@ function BrandVoiceProfileSelector({
               <button
                 type="button"
                 onClick={handleApplySample}
-                disabled={!sampleText.trim() || mutating}
+                disabled={!sampleText.trim() || mutating || sampleFetching}
                 className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/60 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50"
               >
                 <Palette className="h-3.5 w-3.5" />
@@ -2318,7 +2402,7 @@ function BrandVoiceProfileSelector({
           <div className="flex justify-end">
             <button
               type="submit"
-              disabled={!canSave || mutating}
+              disabled={!canSave || mutating || sampleFetching}
               className="flex items-center justify-center gap-2 rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
             >
               <Save className="h-4 w-4" />
@@ -3263,6 +3347,15 @@ function formatBrandVoiceProfileSummary(
     parts.push(profile.reading_level)
   }
   return parts.length > 0 ? parts.join(' - ') : 'Saved profile selected'
+}
+
+function brandVoiceSampleFallbackName(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname.replace(/^www\./, '') || 'sample URL'
+  } catch {
+    return 'sample URL'
+  }
 }
 
 function formatZendeskCredentialEndpoint(

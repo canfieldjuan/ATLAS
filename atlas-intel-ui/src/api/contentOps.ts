@@ -7,6 +7,7 @@
  *   GET  /content-ops/control-surfaces
  *   GET  /content-ops/brand-voice-profiles
  *   POST /content-ops/brand-voice-profiles
+ *   POST /content-ops/brand-voice-profiles/sample-url
  *   PUT  /content-ops/brand-voice-profiles/{profile_id}
  *   DELETE /content-ops/brand-voice-profiles/{profile_id}
  *   GET  /content-ops/zendesk-credentials
@@ -232,6 +233,17 @@ export interface UpsertContentOpsBrandVoiceProfileRequest {
   preferred_pov?: string | null
   reading_level?: string | null
   metadata?: Record<string, unknown>
+}
+
+export interface ContentOpsBrandVoiceSampleUrlRequest {
+  url: string
+}
+
+export interface ContentOpsBrandVoiceSampleUrlResponse {
+  url: string
+  title?: string | null
+  text: string
+  source_character_count: number
 }
 
 // POST /content-ops/preview, /plan, /execute share this body shape.
@@ -1013,6 +1025,16 @@ export function createContentOpsBrandVoiceProfile(
   body: UpsertContentOpsBrandVoiceProfileRequest,
 ): Promise<ContentOpsBrandVoiceProfile> {
   return postJson<ContentOpsBrandVoiceProfile>('/brand-voice-profiles', body)
+}
+
+/** POST /content-ops/brand-voice-profiles/sample-url -- extract public page copy. */
+export function fetchContentOpsBrandVoiceSampleUrl(
+  body: ContentOpsBrandVoiceSampleUrlRequest,
+): Promise<ContentOpsBrandVoiceSampleUrlResponse> {
+  return postJson<ContentOpsBrandVoiceSampleUrlResponse>(
+    '/brand-voice-profiles/sample-url',
+    body,
+  )
 }
 
 /** PUT /content-ops/brand-voice-profiles/{id} -- update a tenant saved profile. */

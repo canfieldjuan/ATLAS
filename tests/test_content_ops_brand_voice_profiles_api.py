@@ -42,6 +42,7 @@ def _load_api_module():
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -94,6 +95,45 @@ def _client(*, pool=None, user: AuthUser | None = None) -> TestClient:
         auth_dependency=auth_dependency,
     ))
     return TestClient(app)
+
+
+class _FakeSampleUrlResponse:
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        status: int = 200,
+        content_type: str = "text/html; charset=utf-8",
+    ) -> None:
+        self._body = body
+        self.status = status
+        self.content_type = content_type
+        self.closed = False
+
+    def read(self, size: int) -> bytes:
+        return self._body[:size]
+
+    def getheader(self, name: str, default: str = "") -> str:
+        if name.lower() == "content-type":
+            return self.content_type
+        return default
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _allow_public_sample_url_dns(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    address: str = "93.184.216.34",
+) -> None:
+    monkeypatch.setattr(
+        api.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (api.socket.AF_INET, api.socket.SOCK_STREAM, 6, "", (address, 443)),
+        ],
+    )
 
 
 def test_list_brand_voice_profiles_returns_tenant_rows(
@@ -158,6 +198,222 @@ def test_add_brand_voice_profile_requires_admin_role(
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Admin access required"
+
+
+def test_sample_url_fetch_returns_readable_text_and_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_sample_url_dns(monkeypatch)
+    responses: list[_FakeSampleUrlResponse] = []
+    calls: list[dict] = []
+
+    def open_request(target, *, timeout):
+        calls.append({"target": target, "timeout": timeout})
+        response = _FakeSampleUrlResponse(
+            b"""
+            <html>
+              <head><title>Acme About</title><style>.x{}</style></head>
+              <body>
+                <h1>Launch secure workflows faster.</h1>
+                <script>doNotInclude()</script>
+                <p>Your team gets clean automation without waiting.</p>
+              </body>
+            </html>
+            """,
+        )
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about?ref=atlas"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["url"] == "https://example.test/about?ref=atlas"
+    assert body["title"] == "Acme About"
+    assert body["text"] == (
+        "Launch secure workflows faster. "
+        "Your team gets clean automation without waiting."
+    )
+    assert body["source_character_count"] == len(body["text"])
+    assert calls[0]["target"].host == "example.test"
+    assert calls[0]["target"].connect_host == "93.184.216.34"
+    assert calls[0]["target"].path == "/about?ref=atlas"
+    assert responses[0].closed is True
+
+    member_response = _client(user=_user(role="member")).post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+    assert member_response.status_code == 403
+    assert member_response.json()["detail"] == "Admin access required"
+
+
+def test_sample_url_rejects_private_dns_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (api.socket.AF_INET, api.socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
+        ],
+    )
+
+    def open_request(target, *, timeout):
+        raise AssertionError("private DNS target must be rejected before fetch")
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL host is not allowed"
+
+
+def test_sample_url_rejects_shared_address_space_dns_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        api.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (api.socket.AF_INET, api.socket.SOCK_STREAM, 6, "", ("100.64.0.1", 443)),
+        ],
+    )
+
+    def open_request(target, *, timeout):
+        raise AssertionError("shared-address-space target must be rejected first")
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL host is not allowed"
+
+
+def test_sample_url_rejects_redirect_responses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_sample_url_dns(monkeypatch)
+
+    def open_request(target, *, timeout):
+        return _FakeSampleUrlResponse(b"", status=302)
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL redirects are not allowed."
+
+
+def test_sample_url_rejects_non_success_response_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_sample_url_dns(monkeypatch)
+
+    def open_request(target, *, timeout):
+        return _FakeSampleUrlResponse(b"", status=500)
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Sample URL could not be fetched."
+
+
+def test_sample_url_rejects_non_https_credentials_and_literal_private_hosts() -> None:
+    client = _client()
+
+    non_https = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "http://example.test/about"},
+    )
+    file_scheme = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "file:///etc/passwd"},
+    )
+    credentials = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://user:secret@example.test/about"},
+    )
+    metadata_ip = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://169.254.169.254/latest/meta-data"},
+    )
+    shared_space = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://100.64.0.1/about"},
+    )
+
+    assert non_https.status_code == 400
+    assert non_https.json()["detail"] == "Sample URL must be an https URL"
+    assert file_scheme.status_code == 400
+    assert file_scheme.json()["detail"] == "Sample URL must be an https URL"
+    assert credentials.status_code == 400
+    assert credentials.json()["detail"] == "Sample URL must not include credentials"
+    assert metadata_ip.status_code == 400
+    assert metadata_ip.json()["detail"] == "Sample URL host is not allowed"
+    assert shared_space.status_code == 400
+    assert shared_space.json()["detail"] == "Sample URL host is not allowed"
+
+
+def test_sample_url_rejects_oversized_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_sample_url_dns(monkeypatch)
+    body = b"a" * (api._SAMPLE_URL_MAX_BYTES + 1)
+
+    def open_request(target, *, timeout):
+        return _FakeSampleUrlResponse(body, content_type="text/plain")
+
+    monkeypatch.setattr(api, "_open_https_sample_url_request", open_request)
+    client = _client()
+
+    response = client.post(
+        "/content-ops/brand-voice-profiles/sample-url",
+        json={"url": "https://example.test/about"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == {
+        "reason": "brand_voice_sample_url_too_large",
+        "max_bytes": api._SAMPLE_URL_MAX_BYTES,
+    }
+
+
+def test_sample_url_plain_text_extraction_falls_back_without_html() -> None:
+    title, text = api._extract_readable_text(
+        b"  First line.\n\nSecond\tline.  ",
+        content_type="text/plain",
+    )
+
+    assert title is None
+    assert text == "First line. Second line."
 
 
 def test_update_brand_voice_profile_is_account_scoped(
@@ -264,6 +520,7 @@ spec = importlib.util.spec_from_file_location(
 )
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 print(module.BrandVoiceProfileView.__name__)
 """)
