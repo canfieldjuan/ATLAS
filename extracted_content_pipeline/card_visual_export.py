@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from html import escape as _html_escape
 from typing import Any
 
@@ -10,6 +11,23 @@ from typing import Any
 JsonDict = Mapping[str, Any]
 
 _SUPPORTED_ASSETS = frozenset({"quote_card", "stat_card"})
+
+
+@dataclass(frozen=True)
+class CardVisualPngConfig:
+    """Browser screenshot settings for card visual PNG export."""
+
+    viewport_width: int = 1280
+    viewport_height: int = 900
+    device_scale_factor: float = 2.0
+
+    def __post_init__(self) -> None:
+        if self.viewport_width <= 0:
+            raise ValueError("viewport_width must be positive")
+        if self.viewport_height <= 0:
+            raise ValueError("viewport_height must be positive")
+        if self.device_scale_factor <= 0:
+            raise ValueError("device_scale_factor must be positive")
 
 
 def supports_card_visual_export(asset: str) -> bool:
@@ -51,6 +69,61 @@ def render_card_visual_html(asset: str, rows: Sequence[JsonDict]) -> str:
         "</html>",
         "",
     ))
+
+
+async def render_card_visual_png(
+    asset: str,
+    rows: Sequence[JsonDict],
+    *,
+    browser: Any | None = None,
+    config: CardVisualPngConfig | None = None,
+) -> bytes:
+    """Render quote/stat rows as a PNG screenshot of the static HTML export."""
+
+    html = render_card_visual_html(asset, rows)
+    resolved_config = config or CardVisualPngConfig()
+    if browser is not None:
+        return await _screenshot_card_html(browser, html, resolved_config)
+
+    try:
+        from playwright.async_api import async_playwright  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - host dependency edge.
+        raise RuntimeError(
+            "Playwright is required for PNG card visual export."
+        ) from exc
+
+    try:
+        async with async_playwright() as playwright:
+            browser_instance = await playwright.chromium.launch()
+            try:
+                return await _screenshot_card_html(
+                    browser_instance,
+                    html,
+                    resolved_config,
+                )
+            finally:
+                await browser_instance.close()
+    except Exception as exc:
+        raise RuntimeError("PNG card visual export failed.") from exc
+
+
+async def _screenshot_card_html(
+    browser: Any,
+    html: str,
+    config: CardVisualPngConfig,
+) -> bytes:
+    page = await browser.new_page(
+        viewport={
+            "width": config.viewport_width,
+            "height": config.viewport_height,
+        },
+        device_scale_factor=config.device_scale_factor,
+    )
+    try:
+        await page.set_content(html, wait_until="networkidle")
+        return await page.screenshot(type="png", full_page=True)
+    finally:
+        await page.close()
 
 
 def _render_card(asset: str, row: JsonDict) -> str:
@@ -198,6 +271,8 @@ blockquote { margin: 0 0 18px; font-size: 30px; line-height: 1.16; font-weight: 
 
 
 __all__ = [
+    "CardVisualPngConfig",
     "render_card_visual_html",
+    "render_card_visual_png",
     "supports_card_visual_export",
 ]
