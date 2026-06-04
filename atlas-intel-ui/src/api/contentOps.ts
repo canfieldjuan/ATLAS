@@ -890,6 +890,21 @@ async function getAssetText(
   return rawText(res)
 }
 
+async function getAssetBlob(
+  asset: GeneratedAssetType,
+  path: string,
+  params: GeneratedAssetListParams = {},
+): Promise<Blob> {
+  const url = `${ASSETS_BASE}/${asset}${path}${queryString(params)}`
+  const doFetch = () => fetchWithApiFallback(url, { headers: authHeaders() })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const body = await rawText(res)
+    throw new Error(`API ${res.status}: ${body || res.statusText}`)
+  }
+  return res.blob()
+}
+
 async function getPublicAssetJson<T>(path: string): Promise<T> {
   const url = `${ASSETS_BASE}${path}`
   const res = await fetchWithApiFallback(url)
@@ -960,6 +975,14 @@ export function exportGeneratedAssetDraftsHtml(
   params: GeneratedAssetListParams = {},
 ): Promise<string> {
   return getAssetText(asset, '/drafts/export', { ...params, format: 'html' })
+}
+
+/** GET /content-assets/{asset}/drafts/export?format=png -- visual card screenshot. */
+export function exportGeneratedAssetDraftsPng(
+  asset: GeneratedAssetType,
+  params: GeneratedAssetListParams = {},
+): Promise<Blob> {
+  return getAssetBlob(asset, '/drafts/export', { ...params, format: 'png' })
 }
 
 /** POST /content-assets/{asset}/drafts/review -- approve/reject a draft. */

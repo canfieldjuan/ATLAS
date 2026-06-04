@@ -24,6 +24,7 @@ async function loadTsModule(path, replacements = []) {
 
 const {
   exportGeneratedAssetDraftsHtml,
+  exportGeneratedAssetDraftsPng,
   fetchGeneratedAssetDrafts,
   reviewGeneratedAssetDraft,
   reviewGeneratedAssetDrafts,
@@ -82,6 +83,18 @@ function installTextFetchResponder(payload, status = 200) {
     return new Response(payload, {
       status,
       headers: { 'content-type': 'text/html' },
+    })
+  }
+  return calls
+}
+
+function installPngFetchResponder(payload = new Uint8Array([137, 80, 78, 71]), status = 200) {
+  const calls = []
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init })
+    return new Response(payload, {
+      status,
+      headers: { 'content-type': 'image/png' },
     })
   }
   return calls
@@ -178,13 +191,36 @@ test('stat-card visual export fetches html from the typed content-assets route',
   assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
 })
 
+test('stat-card png export fetches binary image from the typed content-assets route', async () => {
+  const calls = installPngFetchResponder()
+
+  const result = await exportGeneratedAssetDraftsPng('stat_card', {
+    status: 'approved',
+    limit: 20,
+  })
+
+  assert.equal(result.type, 'image/png')
+  assert.equal(result.size, 4)
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-assets/stat_card/drafts/export?status=approved&limit=20&format=png`,
+  )
+  assert.equal(init.method, undefined)
+  assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
+})
+
 test('asset review UI exposes stat-card tab and preview branches', () => {
   assert.ok(reviewSource.includes("id: 'stat_card'"))
   assert.ok(reviewSource.includes("label: 'Stat Cards'"))
   assert.ok(reviewSource.includes("asset === 'stat_card'"))
   assert.ok(reviewSource.includes('assetSupportsVisualExport(asset)'))
+  assert.ok(reviewSource.includes('Export PNG'))
   assert.ok(reviewSource.includes('Export HTML'))
+  assert.ok(reviewSource.includes('exportGeneratedAssetDraftsPng(asset, params)'))
   assert.ok(reviewSource.includes('exportGeneratedAssetDraftsHtml(asset, params)'))
+  assert.ok(reviewSource.includes('downloadBlob(png, `${asset}_visual_cards.png`)'))
   assert.ok(reviewSource.includes('textValue(row.claim)'))
   assert.ok(reviewSource.includes('textValue(row.evidence)'))
   assert.ok(reviewSource.includes('statCardPainPointCount(row)'))
