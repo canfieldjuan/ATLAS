@@ -5,6 +5,7 @@ import {
   FileUp,
   KeyRound,
   Loader2,
+  Palette,
   Play,
   RefreshCw,
   Search,
@@ -14,6 +15,7 @@ import {
 import { clsx } from 'clsx'
 import {
   executeContentOpsRun,
+  fetchContentOpsBrandVoiceProfiles,
   fetchContentOpsZendeskCredentials,
   fetchGeneratedAssetDrafts,
   fetchContentOpsControlSurfaces,
@@ -76,6 +78,7 @@ import {
   type ContentOpsUsageBudgetEvaluation,
 } from '../domain/contentOps'
 import type {
+  ContentOpsBrandVoiceProfile,
   ContentOpsZendeskCredential,
   GeneratedAssetDraft,
   GeneratedAssetType,
@@ -233,6 +236,13 @@ export default function ContentOpsNewRun() {
     refresh: refreshZendeskCredentials,
     refreshing: zendeskCredentialsRefreshing,
   } = useApiData(() => fetchContentOpsZendeskCredentials(), [])
+  const {
+    data: brandVoiceProfiles,
+    loading: brandVoiceProfilesLoading,
+    error: brandVoiceProfilesError,
+    refresh: refreshBrandVoiceProfiles,
+    refreshing: brandVoiceProfilesRefreshing,
+  } = useApiData(() => fetchContentOpsBrandVoiceProfiles(), [])
   const {
     data: faqDrafts,
     loading: faqDraftsLoading,
@@ -494,6 +504,11 @@ export default function ContentOpsNewRun() {
     const updated = updateSourceModeInputJson(inputsJson, mode)
     if (!updated.ok) return
     setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleBrandVoiceProfileChange = (profileId: string | null) => {
+    setRequest((prev) => ({ ...prev, brandVoiceProfileId: profileId }))
     markStale()
   }
 
@@ -1006,6 +1021,15 @@ export default function ContentOpsNewRun() {
         refreshing={zendeskCredentialsRefreshing}
         error={zendeskCredentialsError}
         onRefresh={refreshZendeskCredentials}
+      />
+      <BrandVoiceProfileSelector
+        profiles={brandVoiceProfiles ?? []}
+        selectedProfileId={request.brandVoiceProfileId}
+        loading={brandVoiceProfilesLoading}
+        refreshing={brandVoiceProfilesRefreshing}
+        error={brandVoiceProfilesError}
+        onRefresh={refreshBrandVoiceProfiles}
+        onChange={handleBrandVoiceProfileChange}
       />
 
       <form onSubmit={handleSubmit} className="space-y-8">
@@ -1844,6 +1868,91 @@ function UsageSummaryCard({
           )}
         </>
       )}
+    </section>
+  )
+}
+
+function BrandVoiceProfileSelector({
+  profiles,
+  selectedProfileId,
+  loading,
+  refreshing,
+  error,
+  onRefresh,
+  onChange,
+}: {
+  profiles: ContentOpsBrandVoiceProfile[]
+  selectedProfileId: string | null
+  loading: boolean
+  refreshing: boolean
+  error: Error | null
+  onRefresh: () => void
+  onChange: (profileId: string | null) => void
+}) {
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId)
+  const missingSelectedProfile = Boolean(
+    selectedProfileId && !loading && !selectedProfile,
+  )
+
+  return (
+    <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-slate-100">
+            <Palette className="h-4 w-4 text-cyan-300" />
+            Brand voice
+          </h2>
+          {selectedProfile && (
+            <p className="mt-1 text-xs text-slate-500">
+              {formatBrandVoiceProfileSummary(selectedProfile)}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading || refreshing}
+          className="flex items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <RefreshCw className={clsx('h-3.5 w-3.5', refreshing && 'animate-spin')} />
+          Refresh
+        </button>
+      </div>
+
+      {error && !loading && (
+        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Brand voice profiles unavailable: {error.message}
+        </div>
+      )}
+      {missingSelectedProfile && (
+        <div className="mb-3 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+          Selected brand voice profile was not found for this tenant.
+        </div>
+      )}
+
+      <label className="block text-sm">
+        <span className="text-slate-300">Saved profile</span>
+        <select
+          value={selectedProfileId ?? ''}
+          disabled={loading}
+          onChange={(event) => onChange(event.target.value || null)}
+          className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+        >
+          <option value="">
+            {loading ? 'Loading profiles...' : 'No saved brand voice'}
+          </option>
+          {missingSelectedProfile && (
+            <option value={selectedProfileId ?? ''}>
+              Selected profile unavailable
+            </option>
+          )}
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
+      </label>
     </section>
   )
 }
@@ -2764,6 +2873,22 @@ function formatCredentialDate(value: string | null | undefined): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleDateString()
+}
+
+function formatBrandVoiceProfileSummary(
+  profile: ContentOpsBrandVoiceProfile,
+): string {
+  const parts: string[] = []
+  if (profile.descriptors.length > 0) {
+    parts.push(profile.descriptors.slice(0, 3).join(', '))
+  }
+  if (profile.preferred_pov) {
+    parts.push(profile.preferred_pov.replaceAll('_', ' '))
+  }
+  if (profile.reading_level) {
+    parts.push(profile.reading_level)
+  }
+  return parts.length > 0 ? parts.join(' - ') : 'Saved profile selected'
 }
 
 function formatZendeskCredentialEndpoint(

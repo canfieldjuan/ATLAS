@@ -257,6 +257,7 @@ export function fromWireRequest(
     accountUsageBudgetUsd: wire.account_usage_budget_usd ?? null,
     accountUsageBudgetDays: wire.account_usage_budget_days ?? 7,
     contentOpsCachePolicy: normalizedCachePolicy(wire.content_ops_cache_policy),
+    brandVoiceProfileId: wire.brand_voice_profile_id ?? null,
     inputs: { ...(wire.inputs ?? {}) },
     ingestionProfile: wire.ingestion_profile ?? 'domain_specific',
     requireQualityGates: wire.require_quality_gates ?? true,
@@ -280,6 +281,7 @@ export function toWireRequest(
     account_usage_budget_usd: domain.accountUsageBudgetUsd,
     account_usage_budget_days: domain.accountUsageBudgetDays,
     content_ops_cache_policy: domain.contentOpsCachePolicy,
+    brand_voice_profile_id: domain.brandVoiceProfileId,
     inputs: { ...domain.inputs },
     ingestion_profile: domain.ingestionProfile,
     require_quality_gates: domain.requireQualityGates,
@@ -395,6 +397,8 @@ export function fromWirePreview(
           contentOpsCachePolicy: normalizedCachePolicy(
             wire.normalized_request.content_ops_cache_policy,
           ),
+          brandVoiceProfileId:
+            wire.normalized_request.brand_voice_profile_id ?? null,
           ingestionProfile:
             wire.normalized_request.ingestion_profile ?? 'domain_specific',
           requireQualityGates:

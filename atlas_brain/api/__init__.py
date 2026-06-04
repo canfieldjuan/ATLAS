@@ -177,6 +177,7 @@ try:
     from .._content_ops_macro_writeback import (
         build_content_ops_macro_publish_provider,
     )
+    from .._content_ops_brand_voice_profiles import lookup_brand_voice_profile
     from .._content_ops_services import build_content_ops_execution_services
     from .._content_ops_scope import (
         build_content_ops_scope,
@@ -188,6 +189,9 @@ try:
     )
     from .content_ops_zendesk_credentials import (
         create_content_ops_zendesk_credentials_router,
+    )
+    from .content_ops_brand_voice_profiles import (
+        create_content_ops_brand_voice_profiles_router,
     )
     from ..auth.dependencies import AuthUser
     from ..config import settings
@@ -249,6 +253,13 @@ try:
         cache_policy_default_provider=_content_ops_cache_policy_default,
         opportunity_import_pool_provider=get_db_pool,
         usage_pool_provider=get_db_pool,
+        brand_voice_profile_provider=lambda scope, profile_id: (
+            lookup_brand_voice_profile(
+                get_db_pool(),
+                account_id=scope.account_id,
+                profile_id=profile_id,
+            )
+        ),
         usage_dependencies=[Depends(_require_content_ops_usage_operator)],
         deflection_report_paid_dependencies=[
             Depends(_require_content_ops_usage_operator)
@@ -282,6 +293,11 @@ try:
         auth_dependency=_capture_content_ops_auth_user,
     )
     router.include_router(zendesk_credentials_router)
+    brand_voice_profiles_router = create_content_ops_brand_voice_profiles_router(
+        pool_provider=get_db_pool,
+        auth_dependency=_capture_content_ops_auth_user,
+    )
+    router.include_router(brand_voice_profiles_router)
     public_landing_page_router = create_public_landing_page_router(
         pool_provider=get_db_pool,
     )

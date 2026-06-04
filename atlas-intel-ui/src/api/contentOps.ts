@@ -5,6 +5,10 @@
  * `/content-ops/*` and `/content-assets/*` routes the backend exposes:
  *
  *   GET  /content-ops/control-surfaces
+ *   GET  /content-ops/brand-voice-profiles
+ *   POST /content-ops/brand-voice-profiles
+ *   PUT  /content-ops/brand-voice-profiles/{profile_id}
+ *   DELETE /content-ops/brand-voice-profiles/{profile_id}
  *   GET  /content-ops/zendesk-credentials
  *   POST /content-ops/zendesk-credentials
  *   DELETE /content-ops/zendesk-credentials/{credential_id}
@@ -203,6 +207,33 @@ export interface UpsertContentOpsZendeskCredentialRequest {
   label?: string
 }
 
+// GET/POST/PUT/DELETE /content-ops/brand-voice-profiles
+
+export interface ContentOpsBrandVoiceProfile {
+  id: string
+  account_id: string
+  name: string
+  descriptors: string[]
+  exemplars: string[]
+  banned_terms: string[]
+  preferred_pov?: string | null
+  reading_level?: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  archived_at?: string | null
+}
+
+export interface UpsertContentOpsBrandVoiceProfileRequest {
+  name: string
+  descriptors?: string[]
+  exemplars?: string[]
+  banned_terms?: string[]
+  preferred_pov?: string | null
+  reading_level?: string | null
+  metadata?: Record<string, unknown>
+}
+
 // POST /content-ops/preview, /plan, /execute share this body shape.
 
 export interface ContentOpsRequestBody {
@@ -214,6 +245,7 @@ export interface ContentOpsRequestBody {
   account_usage_budget_usd?: number | null
   account_usage_budget_days?: number
   content_ops_cache_policy?: string | null
+  brand_voice_profile_id?: string | null
   inputs?: Record<string, unknown>
   ingestion_profile?: string                       // default "domain_specific"
   require_quality_gates?: boolean                  // default true
@@ -721,6 +753,22 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return rawJson<T>(res)
 }
 
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const url = `${BASE}${path}`
+  const doFetch = () =>
+    fetchWithApiFallback(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(body),
+    })
+  const res = await withRefreshOn401(doFetch)
+  if (!res.ok) {
+    const text = await rawText(res)
+    throw new Error(`API ${res.status}: ${text || res.statusText}`)
+  }
+  return rawJson<T>(res)
+}
+
 async function deleteJson(path: string): Promise<void> {
   const url = `${BASE}${path}`
   const doFetch = () =>
@@ -951,6 +999,36 @@ export function saveContentOpsZendeskCredential(
 /** DELETE /content-ops/zendesk-credentials/{id} -- revoke tenant Zendesk credential. */
 export function revokeContentOpsZendeskCredential(id: string): Promise<void> {
   return deleteJson(`/zendesk-credentials/${encodeURIComponent(id)}`)
+}
+
+/** GET /content-ops/brand-voice-profiles -- tenant saved profile list. */
+export function fetchContentOpsBrandVoiceProfiles(): Promise<
+  ContentOpsBrandVoiceProfile[]
+> {
+  return getJson<ContentOpsBrandVoiceProfile[]>('/brand-voice-profiles')
+}
+
+/** POST /content-ops/brand-voice-profiles -- create a tenant saved profile. */
+export function createContentOpsBrandVoiceProfile(
+  body: UpsertContentOpsBrandVoiceProfileRequest,
+): Promise<ContentOpsBrandVoiceProfile> {
+  return postJson<ContentOpsBrandVoiceProfile>('/brand-voice-profiles', body)
+}
+
+/** PUT /content-ops/brand-voice-profiles/{id} -- update a tenant saved profile. */
+export function updateContentOpsBrandVoiceProfile(
+  id: string,
+  body: UpsertContentOpsBrandVoiceProfileRequest,
+): Promise<ContentOpsBrandVoiceProfile> {
+  return putJson<ContentOpsBrandVoiceProfile>(
+    `/brand-voice-profiles/${encodeURIComponent(id)}`,
+    body,
+  )
+}
+
+/** DELETE /content-ops/brand-voice-profiles/{id} -- archive a tenant saved profile. */
+export function deleteContentOpsBrandVoiceProfile(id: string): Promise<void> {
+  return deleteJson(`/brand-voice-profiles/${encodeURIComponent(id)}`)
 }
 
 /** GET /content-assets/{asset}/drafts -- persisted generated assets. */

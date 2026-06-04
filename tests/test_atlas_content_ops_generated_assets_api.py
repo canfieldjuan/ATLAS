@@ -268,6 +268,37 @@ def test_content_ops_zendesk_credentials_route_uses_shared_auth_and_pool() -> No
     assert "_capture_content_ops_auth_user" in dependency_names
 
 
+def test_content_ops_brand_voice_profiles_route_uses_shared_auth_and_pool() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/brand-voice-profiles")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+    dependency_names = [
+        getattr(dependency.call, "__name__", "")
+        for dependency in route.dependant.dependencies
+    ]
+
+    assert closure["pool_provider"].__name__ == "get_db_pool"
+    assert "_capture_content_ops_auth_user" in dependency_names
+
+
+def test_content_ops_preview_route_uses_host_brand_voice_profile_provider() -> None:
+    api_pkg = _fresh_api_package()
+    route = _route(api_pkg, "/content-ops/preview")
+    closure = dict(
+        zip(
+            route.endpoint.__code__.co_freevars,
+            (cell.cell_contents for cell in route.endpoint.__closure__ or ()),
+        )
+    )
+
+    assert closure["brand_voice_profile_provider"].__name__ == "<lambda>"
+
+
 def test_content_ops_usage_summary_route_uses_shared_auth_and_pool() -> None:
     api_pkg = _fresh_api_package()
     route = _route(api_pkg, "/content-ops/usage/summary")

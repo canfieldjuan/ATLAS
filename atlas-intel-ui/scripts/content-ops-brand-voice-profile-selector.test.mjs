@@ -1,0 +1,206 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import test from 'node:test'
+import ts from 'typescript'
+
+const API_ORIGIN = 'https://api.example.test'
+
+async function loadTsModule(path, replacements = []) {
+  let source = readFileSync(new URL(path, import.meta.url), 'utf8')
+  for (const [needle, replacement] of replacements) {
+    source = source.replace(needle, replacement)
+  }
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ES2022,
+      target: ts.ScriptTarget.ES2022,
+      verbatimModuleSyntax: true,
+    },
+  }).outputText
+
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
+  return import(moduleUrl)
+}
+
+const {
+  createContentOpsBrandVoiceProfile,
+  deleteContentOpsBrandVoiceProfile,
+  fetchContentOpsBrandVoiceProfiles,
+  updateContentOpsBrandVoiceProfile,
+} = await loadTsModule('../src/api/contentOps.ts', [
+  [
+    "import { tryRefreshToken } from '../auth/AuthContext'\n",
+    'const tryRefreshToken = async () => null\n',
+  ],
+  [
+    "import { API_BASE } from './config'\n",
+    `const API_BASE = '${API_ORIGIN}'\n`,
+  ],
+])
+
+const {
+  fromWireRequest,
+  toWireRequest,
+} = await loadTsModule('../src/domain/contentOps/fromWire.ts')
+
+const newRunSource = readFileSync(
+  new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
+  'utf8',
+)
+
+function installBrowserStubs() {
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem(key) {
+        return key === 'atlas_token' ? 'test-token' : null
+      },
+      removeItem() {},
+    },
+  })
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { location: { href: '' } },
+  })
+}
+
+function installFetchResponder(payload, status = 200) {
+  const calls = []
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init })
+    const body = status === 204 ? null : JSON.stringify(payload)
+    return new Response(body, {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  return calls
+}
+
+function profilePayload(overrides = {}) {
+  return {
+    id: 'profile-1',
+    account_id: 'account-1',
+    name: 'Acme editorial',
+    descriptors: ['plainspoken'],
+    exemplars: ['Write like this.'],
+    banned_terms: ['synergy'],
+    preferred_pov: 'second_person',
+    reading_level: 'plain',
+    metadata: { source: 'operator' },
+    created_at: '2026-06-04T00:00:00+00:00',
+    updated_at: '2026-06-04T00:00:00+00:00',
+    archived_at: null,
+    ...overrides,
+  }
+}
+
+test.beforeEach(() => {
+  installBrowserStubs()
+})
+
+test('brand voice profile list calls tenant route', async () => {
+  const payload = [profilePayload()]
+  const calls = installFetchResponder(payload)
+
+  const result = await fetchContentOpsBrandVoiceProfiles()
+
+  assert.deepEqual(result, payload)
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-ops/brand-voice-profiles`,
+  )
+  assert.equal(init.method, undefined)
+  assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
+})
+
+test('brand voice profile create posts bounded profile payload', async () => {
+  const calls = installFetchResponder(profilePayload(), 201)
+  const body = {
+    name: 'Acme editorial',
+    descriptors: ['plainspoken'],
+    exemplars: ['Write like this.'],
+    banned_terms: ['synergy'],
+    preferred_pov: 'second_person',
+    reading_level: 'plain',
+    metadata: { source: 'operator' },
+  }
+
+  await createContentOpsBrandVoiceProfile(body)
+
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-ops/brand-voice-profiles`,
+  )
+  assert.equal(init.method, 'POST')
+  assert.deepEqual(init.headers, {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer test-token',
+  })
+  assert.deepEqual(JSON.parse(init.body), body)
+})
+
+test('brand voice profile update request shape is encoded and authenticated', async () => {
+  const calls = installFetchResponder(profilePayload())
+  const body = {
+    name: 'Acme editorial',
+    descriptors: ['plainspoken'],
+  }
+
+  await updateContentOpsBrandVoiceProfile('profile/id', body)
+
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-ops/brand-voice-profiles/profile%2Fid`,
+  )
+  assert.equal(init.method, 'PUT')
+  assert.deepEqual(init.headers, {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer test-token',
+  })
+  assert.deepEqual(JSON.parse(init.body), body)
+})
+
+test('brand voice profile delete archives encoded profile id', async () => {
+  const calls = installFetchResponder('', 204)
+
+  await deleteContentOpsBrandVoiceProfile('profile/id')
+
+  assert.equal(calls.length, 1)
+  const [{ url, init }] = calls
+  assert.equal(
+    url,
+    `${API_ORIGIN}/api/v1/content-ops/brand-voice-profiles/profile%2Fid`,
+  )
+  assert.equal(init.method, 'DELETE')
+  assert.deepEqual(init.headers, { Authorization: 'Bearer test-token' })
+})
+
+test('brand voice profile id round-trips through domain request mapping', () => {
+  const domain = fromWireRequest({
+    target_mode: 'vendor_retention',
+    outputs: ['landing_page'],
+    brand_voice_profile_id: 'profile-1',
+    inputs: { target_keyword: 'support tickets' },
+  })
+
+  assert.equal(domain.brandVoiceProfileId, 'profile-1')
+
+  const wire = toWireRequest(domain)
+  assert.equal(wire.brand_voice_profile_id, 'profile-1')
+  assert.deepEqual(wire.inputs, { target_keyword: 'support tickets' })
+})
+
+test('new run page renders brand voice profile selector wiring', () => {
+  assert.ok(newRunSource.includes('function BrandVoiceProfileSelector'))
+  assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceProfiles'))
+  assert.ok(newRunSource.includes('brandVoiceProfileId'))
+  assert.ok(newRunSource.includes('Saved profile'))
+  assert.ok(newRunSource.includes('No saved brand voice'))
+})

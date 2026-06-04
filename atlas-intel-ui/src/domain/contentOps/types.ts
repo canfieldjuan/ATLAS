@@ -163,6 +163,7 @@ export interface ContentOpsRequest {
   accountUsageBudgetUsd: number | null
   accountUsageBudgetDays: number
   contentOpsCachePolicy: ContentOpsCachePolicy | null
+  brandVoiceProfileId: string | null
   inputs: Record<string, unknown>
   ingestionProfile: string
   requireQualityGates: boolean
