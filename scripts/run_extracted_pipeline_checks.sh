@@ -94,6 +94,7 @@ pytest \
   tests/test_smoke_content_ops_support_ticket_package.py \
   tests/test_extracted_content_control_surface_api.py \
   tests/test_extracted_content_ops_usage_summary.py \
+  tests/test_extracted_brand_voice.py \
   tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_content_ops_execution_smoke.py \
   tests/test_atlas_content_ops_infrastructure.py \

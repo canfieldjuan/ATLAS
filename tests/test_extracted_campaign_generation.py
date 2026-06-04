@@ -290,6 +290,44 @@ async def test_generate_reads_opportunities_prompts_llm_and_saves_drafts():
 
 
 @pytest.mark.asyncio
+async def test_generate_injects_brand_voice_and_persists_audit_metadata():
+    service, _intelligence, campaigns, llm, _skills = _service(
+        [{"id": "opp-1", "company_name": "Acme", "pain": "pricing pressure"}],
+        [json.dumps({
+            "subject": "Acme pricing signal",
+            "body": "<p>You get the tradeoff without synergy.</p>",
+            "cta": "Reply",
+        })],
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="churning_company",
+        channels=("email_cold",),
+        brand_voice={
+            "id": "acme-main",
+            "account_id": "acct-1",
+            "name": "Acme main voice",
+            "descriptors": ["plainspoken", "operator-led"],
+            "exemplars": ["You get the tradeoff in one paragraph."],
+            "banned_terms": ["synergy"],
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "## Brand voice" in system_prompt
+    assert "operator-led" in system_prompt
+    assert "You get the tradeoff in one paragraph." in system_prompt
+    draft = campaigns.saved[0]["drafts"][0]
+    assert draft.metadata["brand_voice_profile"]["id"] == "acme-main"
+    assert draft.metadata["brand_voice_profile"]["account_id"] == "acct-1"
+    assert draft.metadata["brand_voice_audit"]["passed"] is False
+    assert draft.metadata["brand_voice_audit"]["banned_terms"] == ["synergy"]
+
+
+@pytest.mark.asyncio
 async def test_generate_merges_opportunity_defaults_into_prompt_and_metadata():
     service, _intelligence, campaigns, llm, _skills = _service(
         [{"id": "opp-1", "company_name": "Acme", "vendor": "Slack"}],

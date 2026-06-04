@@ -35,6 +35,12 @@ from .campaign_ports import (
     SkillStore,
     TenantScope,
 )
+from .brand_voice import (
+    BrandVoiceProfile,
+    apply_brand_voice_to_system_prompt,
+    brand_voice_profile_from_mapping,
+    brand_voice_result_metadata,
+)
 from .content_image_provider import (
     ContentImageAsset,
     ContentImageProvider,
@@ -282,6 +288,7 @@ class LandingPageGenerationService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
+        brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
     ) -> LandingPageGenerationResult:
         # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
         resolved_temperature = (
@@ -314,6 +321,10 @@ class LandingPageGenerationService:
         )
         resolved_quality_repair_attempts = normalize_landing_page_quality_repair_attempts(
             resolved_quality_repair_attempts
+        )
+        resolved_brand_voice = brand_voice_profile_from_mapping(
+            brand_voice,
+            scope=scope,
         )
 
         prompt_template = self._skills.get_prompt(self._config.skill_name)
@@ -366,6 +377,7 @@ class LandingPageGenerationService:
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     quality_blockers=quality_blockers,
                     quality_repair_attempt_no=repair_attempt_no,
+                    brand_voice=resolved_brand_voice,
                 )
             except Exception as exc:
                 return LandingPageGenerationResult(
@@ -473,6 +485,8 @@ class LandingPageGenerationService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
+        brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
+        brand_voice_profile_id: str | None = None,
     ) -> LandingPageGenerationResult:
         """Repair an existing saved landing-page draft and update the same row."""
 
@@ -493,6 +507,11 @@ class LandingPageGenerationService:
                     "reason": "approved_draft_not_repairable",
                 },),
             )
+        resolved_brand_voice = brand_voice_profile_from_mapping(
+            brand_voice,
+            scope=scope,
+            profile_id=brand_voice_profile_id,
+        )
 
         campaign = MarketingCampaign(
             name=draft.campaign_name,
@@ -593,6 +612,7 @@ class LandingPageGenerationService:
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     quality_blockers=quality_blockers,
                     quality_repair_attempt_no=repair_attempt_no,
+                    brand_voice=resolved_brand_voice,
                 )
             except Exception as exc:
                 return LandingPageGenerationResult(
@@ -745,12 +765,14 @@ class LandingPageGenerationService:
         parse_retry_response_excerpt_chars: int,
         quality_blockers: Sequence[str] = (),
         quality_repair_attempt_no: int = 0,
+        brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         campaign_json = json.dumps(dict(campaign_payload), separators=(",", ":"), default=str)
         # Single source for the campaign payload: in the system prompt
         # via {campaign_json}. User message is structural-only so the
         # campaign isn't sent twice (matches the report-generator fix).
         system_prompt = prompt_template.replace("{campaign_json}", campaign_json)
+        system_prompt = apply_brand_voice_to_system_prompt(system_prompt, brand_voice)
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
@@ -780,12 +802,12 @@ class LandingPageGenerationService:
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_landing_page_response(response.content)
             if parsed:
-                return {
+                return brand_voice_result_metadata({
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
-                }
+                }, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -878,6 +900,8 @@ class LandingPageGenerationService:
             "generation_quality_repair_attempts": parsed.get("_quality_repair_attempts"),
             "generation_quality_repair_history": parsed.get("_quality_repair_history")
             or (),
+            "brand_voice_profile": parsed.get("_brand_voice_profile"),
+            "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
         if campaign_payload is not None:
             context = normalize_campaign_reasoning_context(campaign_payload)

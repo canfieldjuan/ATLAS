@@ -192,6 +192,9 @@
       "target": "extracted_content_pipeline/content_image_provider.py"
     },
     {
+      "target": "extracted_content_pipeline/brand_voice.py"
+    },
+    {
       "target": "extracted_content_pipeline/campaign_ports.py"
     },
     {

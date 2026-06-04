@@ -604,6 +604,7 @@ def create_generated_asset_router(
     async def repair_landing_page_draft(
         asset: str,
         draft_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
     ) -> dict[str, Any]:
         asset_name = _asset_arg(asset)
         if asset_name != "landing_page":
@@ -653,7 +654,12 @@ def create_generated_asset_router(
                 landing_pages=claimed_repository,
                 llm=llm,
                 skills=skills,
-            ).repair_draft(scope=tenant, draft=claimed)
+            ).repair_draft(
+                scope=tenant,
+                draft=claimed,
+                brand_voice=(payload or {}).get("brand_voice"),
+                brand_voice_profile_id=(payload or {}).get("brand_voice_profile_id"),
+            )
             result_payload = result.as_dict()
             if result.generated == 0 and result.skipped > 0:
                 raise HTTPException(
@@ -677,6 +683,8 @@ def create_generated_asset_router(
             row = landing_page_draft_export_row(refreshed)
             row["repair_result"] = result_payload
             return row
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             if release_claim:
                 await _release_landing_page_repair_claim(

@@ -76,6 +76,7 @@ class _OpportunityService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         topic: str | None = None,
+        brand_voice: Any | None = None,
         opportunity_defaults: Mapping[str, Any] | None = None,
         source_material: Any | None = None,
         **extras: Any,
@@ -97,6 +98,7 @@ class _OpportunityService:
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "quality_gates_enabled": quality_gates_enabled,
             "topic": topic,
+            "brand_voice": brand_voice,
             "opportunity_defaults": dict(opportunity_defaults or {}),
             "source_material": source_material,
             "extras": dict(extras),
@@ -134,6 +136,7 @@ class _StrictCampaignService:
         quality_revalidation_enabled: bool | None = None,
         quality_prompt_proof_term_limit: int | None = None,
         parse_retry_response_excerpt_chars: int | None = None,
+        brand_voice: Any | None = None,
     ) -> _Result:
         del scope
         del target_mode
@@ -146,6 +149,7 @@ class _StrictCampaignService:
         del quality_revalidation_enabled
         del quality_prompt_proof_term_limit
         del parse_retry_response_excerpt_chars
+        del brand_voice
         self.calls += 1
         return _Result()
 
@@ -305,6 +309,7 @@ class _LandingPageService:
         parse_retry_response_excerpt_chars: int | None = None,
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
+        brand_voice: Any | None = None,
         **extras: Any,
     ) -> _Result:
         self.calls.append({
@@ -316,6 +321,7 @@ class _LandingPageService:
             "parse_retry_response_excerpt_chars": parse_retry_response_excerpt_chars,
             "quality_gates_enabled": quality_gates_enabled,
             "quality_repair_attempts": quality_repair_attempts,
+            "brand_voice": brand_voice,
             "extras": dict(extras),
         })
         return _Result()
@@ -533,6 +539,115 @@ async def test_execute_runs_landing_page_with_marketing_campaign_input() -> None
     assert campaign.persona == "B2B SaaS founders"
     assert campaign.vendors == ("HubSpot", "Salesforce")
     assert campaign.tags == ("retention", "pipeline")
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_brand_voice_to_llm_copy_outputs_only() -> None:
+    campaign = _OpportunityService()
+    blog = _OpportunityService()
+    sales_brief = _OpportunityService()
+    landing_page = _LandingPageService()
+    social_post = _OpportunityService()
+    scope = TenantScope(account_id="acct-1")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": [
+                "email_campaign",
+                "blog_post",
+                "landing_page",
+                "sales_brief",
+                "social_post",
+            ],
+            "target_mode": "vendor_retention",
+            "brand_voice_profile_id": "acme-main",
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "topic": "Churn pressure",
+                "audience": "B2B SaaS founders",
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "review_text": "Pricing is a problem after renewal.",
+                    }
+                ],
+                "brand_voice": {
+                    "id": "acme-main",
+                    "account_id": "acct-1",
+                    "name": "Acme main voice",
+                    "descriptors": ["plainspoken"],
+                    "exemplars": ["You get the tradeoff in one paragraph."],
+                },
+            },
+        },
+        services=ContentOpsExecutionServices(
+            campaign=campaign,
+            blog_post=blog,
+            landing_page=landing_page,
+            sales_brief=sales_brief,
+            social_post=social_post,
+        ),
+        scope=scope,
+    )
+
+    assert result["status"] == "completed"
+    for call in (
+        campaign.calls[0],
+        blog.calls[0],
+        sales_brief.calls[0],
+        landing_page.calls[0],
+    ):
+        assert call["brand_voice"].id == "acme-main"
+        assert call["brand_voice"].account_id == "acct-1"
+    assert social_post.calls[0]["brand_voice"] is None
+
+
+@pytest.mark.asyncio
+async def test_execute_blocks_brand_voice_profile_id_without_inline_profile() -> None:
+    campaign = _OpportunityService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "brand_voice_profile_id": "acme-main",
+            "inputs": {"target_account": "Acme", "offer": "Churn audit"},
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["errors"] == [{"reason": "brand_voice_profile_id requires inputs.brand_voice"}]
+    assert campaign.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_blocks_cross_tenant_inline_brand_voice() -> None:
+    campaign = _OpportunityService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+                "brand_voice": {
+                    "account_id": "acct-2",
+                    "name": "Wrong tenant voice",
+                    "descriptors": ["warm"],
+                },
+            },
+        },
+        services=ContentOpsExecutionServices(campaign=campaign),
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["errors"] == [
+        {"reason": "brand_voice.account_id does not match tenant scope"}
+    ]
+    assert campaign.calls == []
 
 
 @pytest.mark.asyncio

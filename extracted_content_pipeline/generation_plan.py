@@ -200,6 +200,14 @@ def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerat
     return BlogPostGenerationConfig(limit=request.limit)
 
 
+def _brand_voice_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
+    profile_id = str(request.brand_voice_profile_id or "").strip()
+    inline = request.inputs.get("brand_voice")
+    if not profile_id and isinstance(inline, Mapping):
+        profile_id = str(inline.get("id") or inline.get("profile_id") or "").strip()
+    return {"brand_voice_profile_id": profile_id} if profile_id else {}
+
+
 def _signal_extraction_config_for_request(
     request: ContentOpsRequest,
 ) -> SignalExtractionConfig:
@@ -372,6 +380,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_prompt_proof_term_limit": config.quality_prompt_proof_term_limit,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
         )
@@ -407,6 +416,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_repair_attempts": config.quality_repair_attempts,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
         )
@@ -425,6 +435,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_gates_enabled": request.require_quality_gates,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
         )
@@ -444,6 +455,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
+                **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
         )
