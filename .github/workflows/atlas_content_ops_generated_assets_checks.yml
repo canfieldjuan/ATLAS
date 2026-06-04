@@ -4,17 +4,29 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "atlas_brain/_content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/__init__.py"
+      - "atlas_brain/api/content_ops_brand_voice_profiles.py"
+      - "atlas_brain/storage/migrations/333_content_ops_brand_voice_profiles.sql"
+      - "extracted_content_pipeline/api/control_surfaces.py"
       - "extracted_content_pipeline/api/generated_assets.py"
       - "tests/test_atlas_content_ops_generated_assets_api.py"
+      - "tests/test_content_ops_brand_voice_profiles.py"
+      - "tests/test_content_ops_brand_voice_profiles_api.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "atlas_brain/_content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/__init__.py"
+      - "atlas_brain/api/content_ops_brand_voice_profiles.py"
+      - "atlas_brain/storage/migrations/333_content_ops_brand_voice_profiles.sql"
+      - "extracted_content_pipeline/api/control_surfaces.py"
       - "extracted_content_pipeline/api/generated_assets.py"
       - "tests/test_atlas_content_ops_generated_assets_api.py"
+      - "tests/test_content_ops_brand_voice_profiles.py"
+      - "tests/test_content_ops_brand_voice_profiles_api.py"
 
 jobs:
   atlas-content-ops-generated-assets-checks:
@@ -39,4 +51,6 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_generated_assets_api.py \
+            tests/test_content_ops_brand_voice_profiles.py \
+            tests/test_content_ops_brand_voice_profiles_api.py \
             -q

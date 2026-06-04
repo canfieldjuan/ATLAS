@@ -14,6 +14,7 @@
     "test:content-ops-cache-policy-ui": "node --test scripts/content-ops-cache-policy-ui.test.mjs",
     "test:content-ops-usage-budget-ui": "node --test scripts/content-ops-usage-budget-ui.test.mjs",
     "test:content-ops-usage-summary": "node --test scripts/content-ops-usage-summary.test.mjs",
+    "test:content-ops-brand-voice-profile-selector": "node --test scripts/content-ops-brand-voice-profile-selector.test.mjs",
     "test:content-ops-zendesk-credentials": "node --test scripts/content-ops-zendesk-credentials-ui.test.mjs",
     "test:content-ops-faq-macro-publish": "node --test scripts/content-ops-faq-macro-publish-ui.test.mjs",
     "test:content-ops-faq-source-selection": "node --test scripts/content-ops-faq-source-selection.test.mjs",

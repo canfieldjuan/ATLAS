@@ -1137,6 +1137,115 @@ async def test_plan_generation_route_marks_steps_blocked_when_account_budget_exc
 
 
 @pytest.mark.asyncio
+async def test_preview_generation_route_resolves_stored_brand_voice_profile():
+    calls: list[dict[str, str]] = []
+
+    def profile_provider(scope, profile_id):
+        calls.append({"account_id": scope.account_id, "profile_id": profile_id})
+        return {
+            "id": "acme-main",
+            "account_id": "acct-1",
+            "name": "Acme editorial",
+            "descriptors": ["plainspoken"],
+            "exemplars": ["Write like this."],
+            "banned_terms": ["synergy"],
+        }
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-1"},
+        brand_voice_profile_provider=profile_provider,
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint({
+        "brand_voice_profile_id": "acme-main",
+        "outputs": ["email_campaign"],
+        "inputs": {
+            "target_account": "Acme",
+            "offer": "Churn audit",
+        },
+    })
+
+    assert payload["can_run"] is True
+    assert payload["normalized_request"]["brand_voice_profile_id"] == "acme-main"
+    assert calls == [{"account_id": "acct-1", "profile_id": "acme-main"}]
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_fails_closed_without_brand_voice_provider():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-1"},
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "brand_voice_profile_id": "acme-main",
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        })
+
+    assert exc.value.status_code == 503
+    assert "brand voice profile lookup is not configured" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_preview_generation_route_fails_closed_on_missing_brand_voice_profile():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-1"},
+        brand_voice_profile_provider=lambda scope, profile_id: None,
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "brand_voice_profile_id": "missing-profile",
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        })
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Brand voice profile not found."
+
+
+@pytest.mark.asyncio
+async def test_plan_generation_route_fails_closed_on_brand_voice_scope_mismatch():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        scope_provider=lambda: {"account_id": "acct-1"},
+        brand_voice_profile_provider=lambda scope, profile_id: {
+            "id": profile_id,
+            "account_id": "acct-2",
+            "name": "Other tenant",
+            "descriptors": ["formal"],
+        },
+    )
+
+    route = _route(router, "/ops/plan", "POST")
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint({
+            "brand_voice_profile_id": "acme-main",
+            "outputs": ["email_campaign"],
+            "inputs": {
+                "target_account": "Acme",
+                "offer": "Churn audit",
+            },
+        })
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "brand_voice.account_id does not match tenant scope"
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_hides_noop_input_provider_diagnostics():
     provider = _SyncInputProvider(
         ContentOpsInputPackage(
@@ -2181,6 +2290,45 @@ async def test_execute_generation_route_runs_configured_services():
     assert service.calls[0]["limit"] == 2
     assert service.calls[0]["filters"] == {"status": "ready"}
     assert "input_provider" not in payload
+
+
+@pytest.mark.asyncio
+async def test_execute_generation_route_threads_stored_brand_voice_to_service():
+    service = _CampaignService()
+
+    async def profile_provider(scope, profile_id):
+        return {
+            "id": profile_id,
+            "account_id": scope.account_id,
+            "name": "Acme editorial",
+            "descriptors": ["plainspoken"],
+            "exemplars": ["Write like this."],
+            "banned_terms": ["synergy"],
+        }
+
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+        execution_services_provider=lambda: ContentOpsExecutionServices(campaign=service),
+        scope_provider=lambda: {"account_id": "acct-1"},
+        brand_voice_profile_provider=profile_provider,
+    )
+
+    route = _route(router, "/ops/execute", "POST")
+    payload = await route.endpoint({
+        "brand_voice_profile_id": "acme-main",
+        "outputs": ["email_campaign"],
+        "inputs": {
+            "target_account": "Acme",
+            "offer": "Churn audit",
+        },
+    })
+
+    assert payload["status"] == "completed"
+    brand_voice = service.calls[0]["kwargs"]["brand_voice"]
+    assert brand_voice.id == "acme-main"
+    assert brand_voice.account_id == "acct-1"
+    assert brand_voice.exemplars == ("Write like this.",)
+    assert brand_voice.banned_terms == ("synergy",)
 
 
 @pytest.mark.asyncio

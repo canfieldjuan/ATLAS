@@ -42,6 +42,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import TenantScope
+from ..brand_voice import BrandVoiceProfile, brand_voice_profile_from_mapping
 from ..campaign_postgres_import import import_campaign_opportunities
 from ..campaign_source_adapters import source_material_to_source_rows
 from ..campaign_source_adapters import load_source_rows_from_file
@@ -117,6 +118,15 @@ ImportAdmissionProvider = Callable[[], Any | Awaitable[Any]]
 CachePolicyDefaultProvider = Callable[
     [TenantScope],
     str | None | Awaitable[str | None],
+]
+BrandVoiceProfileProvider = Callable[
+    [TenantScope, str],
+    (
+        BrandVoiceProfile
+        | Mapping[str, Any]
+        | None
+        | Awaitable[BrandVoiceProfile | Mapping[str, Any] | None]
+    ),
 ]
 InputProvider = ContentOpsInputProvider
 
@@ -675,6 +685,7 @@ def create_content_ops_control_surface_router(
     deflection_report_paid_dependencies: Sequence[Any] | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     cache_policy_default_provider: CachePolicyDefaultProvider | None = None,
+    brand_voice_profile_provider: BrandVoiceProfileProvider | None = None,
     dependencies: Sequence[Any] | None = None,
 ) -> APIRouter:
     """Create host-mounted AI Content Ops control-surface routes.
@@ -823,6 +834,11 @@ def create_content_ops_control_surface_router(
             cache_policy_default_provider=cache_policy_default_provider,
             scope_provider=scope_provider,
         )
+        payload_mapping = await _payload_with_brand_voice_profile(
+            payload_mapping,
+            brand_voice_profile_provider=brand_voice_profile_provider,
+            scope_provider=scope_provider,
+        )
         budget_evaluation = await _evaluate_account_usage_budget(
             payload_mapping,
             usage_pool_provider=usage_pool_provider,
@@ -849,6 +865,11 @@ def create_content_ops_control_surface_router(
             payload_mapping = await _payload_with_cache_policy_default(
                 payload_mapping,
                 cache_policy_default_provider=cache_policy_default_provider,
+                scope_provider=scope_provider,
+            )
+            payload_mapping = await _payload_with_brand_voice_profile(
+                payload_mapping,
+                brand_voice_profile_provider=brand_voice_profile_provider,
                 scope_provider=scope_provider,
             )
             budget_evaluation = await _evaluate_account_usage_budget(
@@ -1042,6 +1063,11 @@ def create_content_ops_control_surface_router(
             payload_mapping = await _payload_with_cache_policy_default(
                 payload_mapping,
                 cache_policy_default_provider=cache_policy_default_provider,
+                scope=scope,
+            )
+            payload_mapping = await _payload_with_brand_voice_profile(
+                payload_mapping,
+                brand_voice_profile_provider=brand_voice_profile_provider,
                 scope=scope,
             )
             _enforce_faq_execute_source_material_limit(
@@ -1991,6 +2017,81 @@ async def _payload_with_cache_policy_default(
     if normalized:
         out["content_ops_cache_policy"] = normalized
     return out
+
+
+async def _payload_with_brand_voice_profile(
+    payload: Mapping[str, Any],
+    *,
+    brand_voice_profile_provider: BrandVoiceProfileProvider | None,
+    scope_provider: ScopeProvider | None = None,
+    scope: TenantScope | None = None,
+) -> dict[str, Any]:
+    out = dict(payload)
+    profile_id = _clean(out.get("brand_voice_profile_id"))
+    if not profile_id:
+        return out
+    inputs = out.get("inputs")
+    if isinstance(inputs, Mapping) and inputs.get("brand_voice") is not None:
+        return out
+    if brand_voice_profile_provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops brand voice profile lookup is not configured.",
+        )
+    resolved_scope = scope
+    if resolved_scope is None:
+        resolved_scope = await _resolve_scope(scope_provider)
+    _required_scope_account_id(resolved_scope)
+    try:
+        value = brand_voice_profile_provider(resolved_scope or TenantScope(), profile_id)
+        if hasattr(value, "__await__"):
+            value = await value
+        if value is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Brand voice profile not found.",
+            )
+        profile = brand_voice_profile_from_mapping(
+            value,
+            scope=resolved_scope,
+            profile_id=profile_id,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning(
+            "Content Ops brand voice profile provider failed",
+            extra={"error_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Content Ops brand voice profile lookup is unavailable.",
+        ) from exc
+    if profile is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Brand voice profile not found.",
+        )
+    out_inputs = dict(inputs) if isinstance(inputs, Mapping) else {}
+    out_inputs["brand_voice"] = _brand_voice_profile_payload(profile)
+    out["inputs"] = out_inputs
+    return out
+
+
+def _brand_voice_profile_payload(profile: BrandVoiceProfile) -> dict[str, Any]:
+    return {
+        "id": profile.id,
+        "account_id": profile.account_id,
+        "name": profile.name,
+        "descriptors": list(profile.descriptors),
+        "exemplars": list(profile.exemplars),
+        "banned_terms": list(profile.banned_terms),
+        "preferred_pov": profile.preferred_pov,
+        "reading_level": profile.reading_level,
+        "metadata": dict(profile.metadata or {}),
+    }
 
 
 def _with_input_provider_diagnostics(
