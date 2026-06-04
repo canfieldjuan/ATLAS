@@ -71,6 +71,12 @@ import {
   FAQ_INTENT_RULES_INPUT,
   FAQ_RESOLUTION_EVIDENCE_STATUS,
   FAQ_VOCABULARY_GAP_RULES_INPUT,
+  applyBrandVoiceProfileEditorPatch,
+  blankBrandVoiceProfileEditorState,
+  brandVoiceProfileEditorRequest,
+  brandVoiceProfileEditorStateFromProfile,
+  canSaveBrandVoiceProfileEditor,
+  deriveBrandVoiceProfileEditorPatch,
   type ContentOpsCatalog,
   type ContentOpsCachePolicy,
   type ContentOpsIngestionDiagnostics,
@@ -90,13 +96,13 @@ import {
   type GenerationPlan,
   type GenerationPlanStep,
   type ContentOpsUsageBudgetEvaluation,
+  type BrandVoiceProfileEditorState,
 } from '../domain/contentOps'
 import type {
   ContentOpsBrandVoiceProfile,
   ContentOpsZendeskCredential,
   GeneratedAssetDraft,
   GeneratedAssetType,
-  UpsertContentOpsBrandVoiceProfileRequest,
 } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
@@ -165,23 +171,17 @@ type ZendeskCredentialMutationState =
   | { kind: 'success'; message: string }
   | { kind: 'error'; message: string }
 
-type BrandVoiceProfileEditorState = {
-  mode: 'create' | 'edit'
-  profileId: string | null
-  name: string
-  descriptorsText: string
-  exemplarsText: string
-  bannedTermsText: string
-  preferredPov: string
-  readingLevel: string
-  metadata: Record<string, unknown>
-}
-
 type BrandVoiceProfileMutationState =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'archiving'; id: string }
   | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string }
+
+type BrandVoiceSampleImportState =
+  | { kind: 'idle' }
+  | { kind: 'loaded'; message: string }
+  | { kind: 'applied'; message: string }
   | { kind: 'error'; message: string }
 
 const DEFAULT_INPUTS_JSON = '{\n  \n}'
@@ -1931,6 +1931,10 @@ function BrandVoiceProfileSelector({
   const [editor, setEditor] = useState<BrandVoiceProfileEditorState | null>(null)
   const [mutationState, setMutationState] =
     useState<BrandVoiceProfileMutationState>({ kind: 'idle' })
+  const [sampleText, setSampleText] = useState('')
+  const [sampleName, setSampleName] = useState('')
+  const [sampleImportState, setSampleImportState] =
+    useState<BrandVoiceSampleImportState>({ kind: 'idle' })
   const mutating =
     mutationState.kind === 'saving' || mutationState.kind === 'archiving'
   const canSave = editor ? canSaveBrandVoiceProfileEditor(editor) : false
@@ -1939,13 +1943,21 @@ function BrandVoiceProfileSelector({
     selectedProfileIdRef.current = selectedProfileId
   }, [selectedProfileId])
 
+  const resetSampleImport = () => {
+    setSampleText('')
+    setSampleName('')
+    setSampleImportState({ kind: 'idle' })
+  }
+
   const startCreate = () => {
+    resetSampleImport()
     setEditor(blankBrandVoiceProfileEditorState())
     setMutationState({ kind: 'idle' })
   }
 
   const startEdit = () => {
     if (!selectedProfile) return
+    resetSampleImport()
     setEditor(brandVoiceProfileEditorStateFromProfile(selectedProfile))
     setMutationState({ kind: 'idle' })
   }
@@ -2018,6 +2030,45 @@ function BrandVoiceProfileSelector({
         message: err instanceof Error ? err.message : String(err),
       })
     }
+  }
+
+  const handleSampleFileChange = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    try {
+      const text = await file.text()
+      setSampleText(text)
+      setSampleName(file.name)
+      setSampleImportState({ kind: 'loaded', message: `Loaded ${file.name}.` })
+    } catch (err) {
+      setSampleImportState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  const handleApplySample = () => {
+    if (!sampleText.trim()) {
+      setSampleImportState({
+        kind: 'error',
+        message: 'Add sample copy before applying.',
+      })
+      return
+    }
+    const patch = deriveBrandVoiceProfileEditorPatch(sampleText, {
+      fallbackName: sampleName,
+    })
+    setEditor((current) =>
+      current ? applyBrandVoiceProfileEditorPatch(current, patch) : current,
+    )
+    setSampleImportState({
+      kind: 'applied',
+      message: 'Sample applied to empty profile fields.',
+    })
   }
 
   return (
@@ -2138,6 +2189,64 @@ function BrandVoiceProfileSelector({
               <X className="h-3.5 w-3.5" />
               Cancel
             </button>
+          </div>
+
+          <div className="rounded-md border border-slate-800 bg-slate-950/40 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                Sample import
+              </h4>
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800">
+                <FileUp className="h-3.5 w-3.5" />
+                Load file
+                <input
+                  type="file"
+                  accept=".txt,.md,text/plain,text/markdown"
+                  disabled={mutating}
+                  onChange={handleSampleFileChange}
+                  className="sr-only"
+                />
+              </label>
+            </div>
+            <textarea
+              value={sampleText}
+              onChange={(event) => {
+                setSampleText(event.target.value)
+                setSampleName('')
+                setSampleImportState({ kind: 'idle' })
+              }}
+              disabled={mutating}
+              rows={4}
+              placeholder="Paste customer copy samples here."
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 focus:border-cyan-500 focus:outline-none disabled:opacity-50"
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              {sampleImportState.kind !== 'idle' ? (
+                <span
+                  className={clsx(
+                    'text-xs',
+                    sampleImportState.kind === 'error'
+                      ? 'text-rose-200'
+                      : 'text-slate-400',
+                  )}
+                >
+                  {sampleImportState.message}
+                </span>
+              ) : (
+                <span className="text-xs text-slate-500">
+                  Fields already filled stay unchanged.
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handleApplySample}
+                disabled={!sampleText.trim() || mutating}
+                className="flex items-center justify-center gap-2 rounded-md border border-cyan-500/60 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50"
+              >
+                <Palette className="h-3.5 w-3.5" />
+                Apply sample
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -3154,83 +3263,6 @@ function formatBrandVoiceProfileSummary(
     parts.push(profile.reading_level)
   }
   return parts.length > 0 ? parts.join(' - ') : 'Saved profile selected'
-}
-
-function blankBrandVoiceProfileEditorState(): BrandVoiceProfileEditorState {
-  return {
-    mode: 'create',
-    profileId: null,
-    name: '',
-    descriptorsText: '',
-    exemplarsText: '',
-    bannedTermsText: '',
-    preferredPov: '',
-    readingLevel: '',
-    metadata: { source: 'content_ops_ui' },
-  }
-}
-
-function brandVoiceProfileEditorStateFromProfile(
-  profile: ContentOpsBrandVoiceProfile,
-): BrandVoiceProfileEditorState {
-  return {
-    mode: 'edit',
-    profileId: profile.id,
-    name: profile.name,
-    descriptorsText: brandVoiceProfileListText(profile.descriptors),
-    exemplarsText: brandVoiceProfileListText(profile.exemplars),
-    bannedTermsText: brandVoiceProfileListText(profile.banned_terms),
-    preferredPov: profile.preferred_pov ?? '',
-    readingLevel: profile.reading_level ?? '',
-    metadata: { ...profile.metadata },
-  }
-}
-
-function brandVoiceProfileEditorRequest(
-  editor: BrandVoiceProfileEditorState,
-): UpsertContentOpsBrandVoiceProfileRequest {
-  const preferredPov = cleanOptionalText(editor.preferredPov)
-  const readingLevel = cleanOptionalText(editor.readingLevel)
-  return {
-    name: editor.name.trim(),
-    descriptors: brandVoiceProfileListItems(editor.descriptorsText, 8),
-    exemplars: brandVoiceProfileListItems(editor.exemplarsText, 3),
-    banned_terms: brandVoiceProfileListItems(editor.bannedTermsText, 20),
-    preferred_pov: preferredPov,
-    reading_level: readingLevel,
-    metadata: { ...editor.metadata },
-  }
-}
-
-function canSaveBrandVoiceProfileEditor(
-  editor: BrandVoiceProfileEditorState,
-): boolean {
-  if (!editor.name.trim()) return false
-  const body = brandVoiceProfileEditorRequest(editor)
-  return Boolean(
-    (body.descriptors?.length ?? 0) > 0 ||
-      (body.exemplars?.length ?? 0) > 0 ||
-      (body.banned_terms?.length ?? 0) > 0 ||
-      body.preferred_pov ||
-      body.reading_level,
-  )
-}
-
-function brandVoiceProfileListText(values: string[]): string {
-  return values.join('\n')
-}
-
-function brandVoiceProfileListItems(text: string, limit: number): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .slice(0, limit)
-}
-
-function cleanOptionalText(value: string): string | null {
-  const cleaned = value.trim()
-  return cleaned ? cleaned : null
 }
 
 function formatZendeskCredentialEndpoint(

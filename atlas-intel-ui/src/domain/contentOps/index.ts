@@ -71,6 +71,16 @@ export { inputContractDisplay } from './inputDisplay'
 export type { ContentOpsInputDisplayFallback } from './inputDisplay'
 
 export {
+  applyBrandVoiceProfileEditorPatch,
+  blankBrandVoiceProfileEditorState,
+  brandVoiceProfileEditorRequest,
+  brandVoiceProfileEditorStateFromProfile,
+  canSaveBrandVoiceProfileEditor,
+  deriveBrandVoiceProfileEditorPatch,
+} from './brandVoiceProfileEditor'
+export type { BrandVoiceProfileEditorState } from './brandVoiceProfileEditor'
+
+export {
   FAQ_CONFIGURATION_OUTPUTS,
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_DOCUMENTATION_TERMS_INPUT,
