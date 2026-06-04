@@ -65,11 +65,11 @@ None.
 ## Verification
 
 - `git diff --check` -- passed.
-- `rg -n "qwen|Ollama|ollama|OpenRouter|EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA|claude-sonnet" docs/SESSION_BOOTSTRAP.md docs/extraction/validation/content_ops_live_smoke_model_route.md plans/PR-Content-Ops-Live-Smoke-Model-Route.md` -- verified route wording.
+- `rg -n "qwen|Ollama|ollama|OpenRouter|ATLAS_LLM_OPENROUTER_REASONING_MODEL|ATLAS_LLM__OPENROUTER_REASONING_MODEL|EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA|claude-sonnet" docs/SESSION_BOOTSTRAP.md docs/extraction/validation/content_ops_live_smoke_model_route.md plans/PR-Content-Ops-Live-Smoke-Model-Route.md` -- verified route wording.
 - `gh issue view 1299 --json body,comments -q '{bodyHasOpenRouter: (.body | contains("configured cloud/OpenRouter model route")), bodyHasNoOllamaFallback: (.body | contains("EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false")), bodyHasPng: (.body | contains("real PNG/Chromium")), commentHasOpenRouter: (.comments[] | select(.id=="IC_kwDOQ5Uhrs8AAAABE0G38Q") | .body | contains("configured cloud/OpenRouter/Claude"))}'` -- all fields true.
 
 ## Estimated diff size
 
 | Area | LOC |
 |---|---:|
-| **Total** | **~140** |
+| **Total** | **~145** |

@@ -9,8 +9,10 @@ product actually uses.
 Content Ops generated content must run through the configured cloud LLM route:
 
 - Provider path: OpenRouter via `PipelineLLMClient`.
-- Current default model: `anthropic/claude-sonnet-4-5` unless the operator
-  explicitly sets `EXTRACTED_CAMPAIGN_LLM_OPENROUTER_MODEL`.
+- Model setting read by this host route:
+  `ATLAS_LLM_OPENROUTER_REASONING_MODEL` (or
+  `ATLAS_LLM__OPENROUTER_REASONING_MODEL`). The current default is
+  `anthropic/claude-sonnet-4-5`.
 - Credential source: the configured OpenRouter key.
 
 Local Ollama/qwen is not an acceptable substitute for the live smoke. It is a
