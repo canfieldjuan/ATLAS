@@ -29,6 +29,7 @@ import { clsx } from 'clsx'
 import {
   exportGeneratedAssetDraftsCsv,
   exportGeneratedAssetDraftsHtml,
+  exportGeneratedAssetDraftsPng,
   fetchGeneratedAssetDrafts,
   fetchGeneratedFaqMacroPublishAttempts,
   publishGeneratedFaqMacros,
@@ -398,6 +399,20 @@ export default function ContentOpsAssetsReview() {
     }
   }
 
+  const handlePngExport = async () => {
+    if (!assetSupportsVisualExport(asset)) return
+    setExporting(true)
+    setActionError(null)
+    try {
+      const png = await exportGeneratedAssetDraftsPng(asset, params)
+      downloadBlob(png, `${asset}_visual_cards.png`)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const handleAssetChange = (nextAsset: GeneratedAssetType) => {
     setAsset(nextAsset)
     setSearchParams(
@@ -657,19 +672,34 @@ export default function ContentOpsAssetsReview() {
               Export CSV
             </button>
             {assetSupportsVisualExport(asset) && (
-              <button
-                type="button"
-                onClick={() => void handleVisualExport()}
-                disabled={exporting || loading}
-                className="inline-flex items-center gap-2 rounded-md border border-emerald-400/50 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-400/10 disabled:opacity-60"
-              >
-                {exporting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-                Export HTML
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handlePngExport()}
+                  disabled={exporting || loading}
+                  className="inline-flex items-center gap-2 rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-60"
+                >
+                  {exporting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Export PNG
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleVisualExport()}
+                  disabled={exporting || loading}
+                  className="inline-flex items-center gap-2 rounded-md border border-emerald-400/50 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-400/10 disabled:opacity-60"
+                >
+                  {exporting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                  Export HTML
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -2768,6 +2798,10 @@ function excerpt(value: string, limit = 260): string {
 
 function downloadText(value: string, filename: string, type: string): void {
   const blob = new Blob([value], { type })
+  downloadBlob(blob, filename)
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
