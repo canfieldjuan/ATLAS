@@ -542,7 +542,7 @@ async def test_execute_runs_landing_page_with_marketing_campaign_input() -> None
 
 
 @pytest.mark.asyncio
-async def test_execute_threads_brand_voice_to_llm_copy_outputs_only() -> None:
+async def test_execute_threads_brand_voice_to_supported_copy_outputs() -> None:
     campaign = _OpportunityService()
     blog = _OpportunityService()
     sales_brief = _OpportunityService()
@@ -597,10 +597,10 @@ async def test_execute_threads_brand_voice_to_llm_copy_outputs_only() -> None:
         blog.calls[0],
         sales_brief.calls[0],
         landing_page.calls[0],
+        social_post.calls[0],
     ):
         assert call["brand_voice"].id == "acme-main"
         assert call["brand_voice"].account_id == "acct-1"
-    assert social_post.calls[0]["brand_voice"] is None
 
 
 @pytest.mark.asyncio
@@ -751,9 +751,48 @@ async def test_execute_runs_social_post_service_from_source_material() -> None:
     assert post["vendor_name"] == "HubSpot"
     assert "Pricing is a problem" in post["text"]
     assert result["plan"]["steps"][0]["config"] == {
+        "skill_name": "digest/social_post_generation",
         "limit": 1,
         "max_text_chars": 20,
+        "max_tokens": 700,
+        "temperature": 0.4,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800,
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_social_post_brand_voice_fails_when_service_lacks_llm() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "brand_voice_profile_id": "voice-1",
+            "inputs": {
+                "brand_voice": {
+                    "id": "voice-1",
+                    "account_id": "acct-1",
+                    "descriptors": ["plainspoken"],
+                },
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem after renewal.",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            social_post=SocialPostGenerationService()
+        ),
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    assert result["status"] == "failed"
+    step = result["steps"][0]
+    assert step["output"] == "social_post"
+    assert step["status"] == "failed"
+    assert "requires configured LLM and skill store" in step["error"]
 
 
 @pytest.mark.asyncio

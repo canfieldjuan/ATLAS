@@ -71,7 +71,7 @@ def test_plan_maps_report_to_report_generation_service():
     }
 
 
-def test_plan_threads_brand_voice_profile_id_to_llm_copy_outputs_only():
+def test_plan_threads_brand_voice_profile_id_to_supported_copy_outputs():
     plan = build_generation_plan_from_mapping(
         {
             "outputs": [
@@ -97,7 +97,7 @@ def test_plan_threads_brand_voice_profile_id_to_llm_copy_outputs_only():
     assert configs["blog_post"]["brand_voice_profile_id"] == "acme-main"
     assert configs["landing_page"]["brand_voice_profile_id"] == "acme-main"
     assert configs["sales_brief"]["brand_voice_profile_id"] == "acme-main"
-    assert "brand_voice_profile_id" not in configs["social_post"]
+    assert configs["social_post"]["brand_voice_profile_id"] == "acme-main"
 
 
 def test_plan_threads_structured_reasoning_preset_to_report_and_sales_brief():
@@ -523,8 +523,13 @@ def test_plan_maps_social_post_to_social_post_service():
     assert plan["steps"][0]["runner"] == "SocialPostGenerationService.generate"
     assert plan["steps"][0]["status"] == "runnable"
     assert plan["steps"][0]["config"] == {
+        "skill_name": "digest/social_post_generation",
         "limit": 3,
         "max_text_chars": 300,
+        "max_tokens": 700,
+        "temperature": 0.4,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800,
     }
 
 

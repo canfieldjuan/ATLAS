@@ -37,6 +37,10 @@
       "target": "extracted_content_pipeline/skills/digest/b2b_campaign_generation.md"
     },
     {
+      "source": "atlas_brain/skills/digest/social_post_generation.md",
+      "target": "extracted_content_pipeline/skills/digest/social_post_generation.md"
+    },
+    {
       "source": "atlas_brain/skills/digest/b2b_vendor_outreach.md",
       "target": "extracted_content_pipeline/skills/digest/b2b_vendor_outreach.md"
     },
