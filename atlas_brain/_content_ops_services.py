@@ -118,6 +118,9 @@ from extracted_content_pipeline.social_post_postgres import (
 from extracted_content_pipeline.stat_card_generation import (
     StatCardGenerationService,
 )
+from extracted_content_pipeline.stat_card_postgres import (
+    PostgresStatCardRepository,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownService,
 )
@@ -311,6 +314,16 @@ def _build_quote_card_service(*, pool: Any) -> QuoteCardGenerationService:
     )
 
 
+def _build_stat_card_service(*, pool: Any) -> StatCardGenerationService:
+    """Build stat-card generation with optional draft persistence."""
+
+    if pool is None:
+        return _STAT_CARD_SERVICE
+    return StatCardGenerationService(
+        stat_cards=PostgresStatCardRepository(pool=pool)
+    )
+
+
 def build_content_ops_execution_services(
     *,
     llm_factory: Callable[[], LLMClient | None] | None = None,
@@ -419,6 +432,7 @@ def build_content_ops_execution_services(
         social_post = _build_social_post_service(pool=pool)
         ad_copy = _build_ad_copy_service(pool=pool)
         quote_card = _build_quote_card_service(pool=pool)
+        stat_card = _build_stat_card_service(pool=pool)
         faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
         faq_deflection_report = FAQDeflectionReportService(

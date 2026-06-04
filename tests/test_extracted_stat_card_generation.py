@@ -9,6 +9,15 @@ from extracted_content_pipeline.stat_card_generation import (
 )
 
 
+class _StatCardRepository:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def save_drafts(self, drafts, *, scope):
+        self.calls.append({"drafts": tuple(drafts), "scope": scope})
+        return ("stat-card-uuid-1",)
+
+
 @pytest.mark.asyncio
 async def test_stat_card_service_generates_evidence_backed_stats() -> None:
     service = StatCardGenerationService()
@@ -31,6 +40,7 @@ async def test_stat_card_service_generates_evidence_backed_stats() -> None:
     payload = result.as_dict()
     assert payload["generated"] == 1
     assert payload["target_mode"] == "vendor_retention"
+    assert payload["saved_ids"] == []
     assert payload["warnings"] == []
     assert payload["stats"] == [
         {
@@ -51,6 +61,44 @@ async def test_stat_card_service_generates_evidence_backed_stats() -> None:
             "pain_points": ["renewal dissatisfaction"],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_stat_card_service_persists_generated_drafts_when_repository_is_configured() -> None:
+    repository = _StatCardRepository()
+    service = StatCardGenerationService(stat_cards=repository)
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+        target_mode="vendor_retention",
+        source_material=[
+            {
+                "review_id": "review-1",
+                "reviewer_company": "Acme Logistics",
+                "vendor": "Zendesk",
+                "review_text": "NPS score dropped to 42 after renewal.",
+                "nps_score": 42,
+                "pain_category": "renewal dissatisfaction",
+            }
+        ],
+    )
+
+    payload = result.as_dict()
+    assert payload["generated"] == 1
+    assert payload["saved_ids"] == ["stat-card-uuid-1"]
+    call = repository.calls[0]
+    assert call["scope"] == TenantScope(account_id="acct-1", user_id="user-1")
+    draft = call["drafts"][0]
+    assert draft.target_id == "review-1"
+    assert draft.target_mode == "vendor_retention"
+    assert draft.theme == "customer_metric"
+    assert draft.metric_label == "NPS score"
+    assert draft.metric_value == 42
+    assert draft.metric_display == "42"
+    assert draft.claim == "NPS score: 42"
+    assert draft.evidence == "NPS score dropped to 42 after renewal."
+    assert draft.pain_points == ("renewal dissatisfaction",)
+    assert draft.metadata["source_card"]["source_id"] == "review-1"
 
 
 @pytest.mark.asyncio

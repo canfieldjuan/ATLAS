@@ -51,6 +51,8 @@ from ..sales_brief_export import export_sales_brief_drafts
 from ..sales_brief_postgres import PostgresSalesBriefRepository
 from ..social_post_export import export_social_post_drafts
 from ..social_post_postgres import PostgresSocialPostRepository
+from ..stat_card_export import export_stat_card_drafts
+from ..stat_card_postgres import PostgresStatCardRepository
 from ..ticket_faq_export import export_ticket_faq_drafts
 from ..ticket_faq_postgres import PostgresTicketFAQRepository
 
@@ -72,6 +74,7 @@ ASSET_CHOICES = (
     "social_post",
     "ad_copy",
     "quote_card",
+    "stat_card",
     "faq_markdown",
 )
 logger = logging.getLogger(__name__)
@@ -810,6 +813,15 @@ async def _export_for_asset(
             theme=theme,
             limit=limit,
         )
+    if asset == "stat_card":
+        return await export_stat_card_drafts(
+            PostgresStatCardRepository(pool),
+            scope=scope,
+            status=status,
+            target_mode=target_mode,
+            theme=theme,
+            limit=limit,
+        )
     if asset == "faq_markdown":
         return await export_ticket_faq_drafts(
             PostgresTicketFAQRepository(pool),
@@ -843,6 +855,8 @@ async def _update_asset_status(
         return await PostgresAdCopyRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "quote_card":
         return await PostgresQuoteCardRepository(pool).update_status(asset_id, status, scope=scope)
+    if asset == "stat_card":
+        return await PostgresStatCardRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_status(asset_id, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
@@ -870,6 +884,8 @@ async def _update_asset_statuses(
         return await PostgresAdCopyRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "quote_card":
         return await PostgresQuoteCardRepository(pool).update_statuses(asset_ids, status, scope=scope)
+    if asset == "stat_card":
+        return await PostgresStatCardRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")

@@ -318,6 +318,9 @@
       "target": "extracted_content_pipeline/stat_card_generation.py"
     },
     {
+      "target": "extracted_content_pipeline/stat_card_export.py"
+    },
+    {
       "target": "extracted_content_pipeline/quote_card_export.py"
     },
     {
@@ -352,6 +355,15 @@
     },
     {
       "target": "extracted_content_pipeline/storage/migrations/333_quote_card_drafts.sql"
+    },
+    {
+      "target": "extracted_content_pipeline/stat_card_ports.py"
+    },
+    {
+      "target": "extracted_content_pipeline/stat_card_postgres.py"
+    },
+    {
+      "target": "extracted_content_pipeline/storage/migrations/334_stat_card_drafts.sql"
     },
     {
       "target": "extracted_content_pipeline/blog_ports.py"
