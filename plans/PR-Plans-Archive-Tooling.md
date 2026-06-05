@@ -10,7 +10,7 @@ the first slice of #1319 (bound governance-file growth): the tooling to give the
 directory a lifecycle. It deliberately does **not** perform the 877-file bulk move
 (see Deferred) so this PR stays small and reviewable.
 
-At 442 LOC it runs ~10% over the 400 soft cap: a review-driven collision-safety fix
+At 446 LOC it runs ~11% over the 400 soft cap: a review-driven collision-safety fix
 to `archive_plans` (refuse to overwrite an already-archived slice name) added code
 plus two fixtures. The overage is a data-loss guard, not new scope.
 

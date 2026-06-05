@@ -89,9 +89,9 @@ def build_index(plans_dir: Path) -> str:
         "# Plan archive index",
         "",
         (
-            f"{len(archived)} archived plan doc(s). The active `plans/` root holds "
-            "only in-flight slices; merged plans live under "
-            f"`{ARCHIVE_DIRNAME}/` and are listed here."
+            f"{len(archived)} archived plan doc(s). Merged plan docs are moved under "
+            f"`{ARCHIVE_DIRNAME}/` and listed below; once the archive sweep has run, "
+            "the `plans/` root holds only in-flight slices."
         ),
         "",
     ]
