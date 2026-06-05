@@ -75,6 +75,38 @@ def test_archive_is_idempotent(tmp_path):
     assert len(tool.archived_plan_files(plans)) == 1
 
 
+def test_archive_refuses_to_overwrite_existing_archived_plan(tmp_path):
+    import pytest
+
+    tool = load_tool()
+    plans = _make_plans(tmp_path, ["PR-Alpha"])
+    # an older archived plan already occupies the same slice name
+    archive = plans / "archive"
+    archive.mkdir()
+    older = archive / "PR-Alpha.md"
+    older.write_text("# OLDER archived plan\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="PR-Alpha.md"):
+        tool.archive_plans(plans)
+
+    # nothing moved: the root plan and the older archived plan are both intact
+    assert (plans / "PR-Alpha.md").is_file()
+    assert older.read_text(encoding="utf-8") == "# OLDER archived plan\n"
+
+
+def test_archive_command_reports_collision_and_returns_nonzero(tmp_path, capsys):
+    tool = load_tool()
+    plans = _make_plans(tmp_path, ["PR-Alpha"])
+    archive = plans / "archive"
+    archive.mkdir()
+    (archive / "PR-Alpha.md").write_text("# older\n", encoding="utf-8")
+
+    rc = tool.main(["archive", "--plans-dir", str(plans)])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "reused slice name" in err and "PR-Alpha.md" in err
+
+
 def test_index_ignores_non_plan_and_index_files(tmp_path):
     tool = load_tool()
     plans = _make_plans(tmp_path, ["PR-Alpha"])

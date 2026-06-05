@@ -106,11 +106,25 @@ def write_index(plans_dir: Path) -> Path:
 
 
 def archive_plans(plans_dir: Path) -> list[Path]:
-    """Move root ``PR-*.md`` plans into ``plans/archive/``. Returns moved paths."""
+    """Move root ``PR-*.md`` plans into ``plans/archive/``. Returns moved paths.
+
+    Refuses to move anything if a root plan's filename already exists under
+    ``plans/archive/`` -- plan filenames are human-chosen slice names, not
+    immutable PR numbers, so a reused name would otherwise silently overwrite
+    (and destroy) the older archived plan. Raises ``FileExistsError`` listing
+    the collisions; nothing is moved.
+    """
     archive = plans_dir / ARCHIVE_DIRNAME
     archive.mkdir(exist_ok=True)
+    plans = root_plan_files(plans_dir)
+    collisions = sorted(p.name for p in plans if (archive / p.name).exists())
+    if collisions:
+        raise FileExistsError(
+            "refusing to overwrite archived plan(s) with reused slice name(s): "
+            + ", ".join(collisions)
+        )
     moved: list[Path] = []
-    for plan in root_plan_files(plans_dir):
+    for plan in plans:
         target = archive / plan.name
         plan.rename(target)
         moved.append(target)
@@ -142,7 +156,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "archive":
-        moved = archive_plans(plans_dir)
+        try:
+            moved = archive_plans(plans_dir)
+        except FileExistsError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
         index_path = write_index(plans_dir)
         print(f"archived {len(moved)} plan doc(s) -> {plans_dir / ARCHIVE_DIRNAME}")
         print(f"wrote {index_path}")

@@ -10,6 +10,10 @@ the first slice of #1319 (bound governance-file growth): the tooling to give the
 directory a lifecycle. It deliberately does **not** perform the 877-file bulk move
 (see Deferred) so this PR stays small and reviewable.
 
+At 442 LOC it runs ~10% over the 400 soft cap: a review-driven collision-safety fix
+to `archive_plans` (refuse to overwrite an already-archived slice name) added code
+plus two fixtures. The overage is a data-loss guard, not new scope.
+
 ## Scope (this PR)
 
 Ownership lane: governance/plans-archive
@@ -56,6 +60,11 @@ INDEX.md is the navigation aid instead.
 - **`archive` is meant to run on a branch off `main`**, where every plan is merged.
   It is not run on an in-flight feature branch whose unmerged plan still sits in the
   root (that plan is active, not archivable).
+- **`archive` fails safe on slice-name collisions.** Plan filenames are
+  human-chosen, not immutable PR numbers, so a reused name could collide with an
+  already-archived plan; `Path.rename` would silently overwrite it. `archive_plans`
+  detects collisions up front and raises (moving nothing) rather than destroying the
+  older plan.
 - **The fixture is enrolled in `run_extracted_pipeline_checks.sh`**, beside the
   existing CI-tooling audit fixtures — shipping a fixture CI never runs would repeat
   the #1318 enrollment gap.
@@ -73,21 +82,21 @@ INDEX.md is the navigation aid instead.
 ## Verification
 
 ```bash
-python -m pytest tests/test_archive_plans.py -q          # 6 passed
+python -m pytest tests/test_archive_plans.py -q          # 8 passed
 python scripts/archive_plans.py check                    # WARNING (877 > 50), exit 0
 python scripts/archive_plans.py index                    # regenerates INDEX from archive
 ```
 
-Verified locally: 6/6 fixtures pass; `check` warns and exits 0; `archive`/`index`
-move + index round-trip on a temp tree.
+Verified locally: 8/8 fixtures pass (incl. collision-refusal + non-zero CLI exit);
+`check` warns and exits 0; `archive`/`index` move + index round-trip on a temp tree.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
-| `plans/PR-Plans-Archive-Tooling.md` | 89 |
-| `scripts/archive_plans.py` | 170 |
+| `plans/PR-Plans-Archive-Tooling.md` | 102 |
+| `scripts/archive_plans.py` | 188 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_archive_plans.py` | 119 |
-| **Total** | **383** |
+| `tests/test_archive_plans.py` | 151 |
+| **Total** | **446** |
