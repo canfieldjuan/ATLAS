@@ -242,6 +242,78 @@ subagents in one message so the main session waits once for N answers, not N tim
 
 ---
 
+## 9. Known gaps — where the net still has holes
+
+A description of this system that only listed its strengths would be a brochure,
+not an operating model. The mechanical gates cover the *common* failure modes
+cheaply; everything below lives in the residual that no amount of scripting has
+removed. Each is real, and most were found by auditing this very document.
+
+**(a) The frontend CI-enrollment hole is open right now.** The extracted-Python
+suite *auto-audits* that every test is wired into CI. The frontend workflow
+(`atlas_intel_ui_checks.yml`) does not — it runs a hand-maintained explicit list of
+`run: npm run test:*` steps. As of this writing, `atlas-intel-ui/package.json`
+declares **24** `test:*` suites and the workflow runs **15**; the other **9** exist,
+pass locally, and never execute in CI (verify:
+`comm -23` the `package.json` `test:*` keys against the workflow's run list). So
+"green" is partially a lie on the frontend, and which part is invisible without
+running that diff. The fix is mechanical and already exists in spirit — point an
+`audit_extracted_pipeline_ci_enrollment.py`-style check at the intel-ui workflow vs
+`package.json`. Until then this is patched with vigilance, the one anti-pattern the
+rest of the system is built to eliminate.
+
+**(b) Automated reviewers have no severity contract, and false-positives are the
+expensive direction.** The Claude reviewer speaks in BLOCKER / MAJOR / NIT / LGTM;
+the external bots (Codex, Copilot) post raw comments with no severity, outside that
+taxonomy. A bot false *negative* (missed nit) costs nothing; a bot false *positive
+applied blindly* turns correct work into incorrect work. There is **no mechanical
+fix** — the more automated reviewers you add, the more safety depends on a judgment
+session that can say "the reviewer is wrong." Rule: **external-bot findings are
+advisory inputs to a judgment session, never auto-applied.** A naive "auto-address
+all review comments" loop is strictly dangerous.
+
+**(c) Ownership rests partly on honor-system, git-ignored state.** Two checks guard
+lane ownership: `check_session_pr_ownership.py` reads `SESSION_STATE.local.md` —
+which is **git-ignored**, so the artifact that declares "who owns this PR" is the
+one artifact no reviewer or CI run can see; and `audit_pr_session_drift.py` reads
+the **public** `Ownership lane:` from plan docs. The hole: a PR with **no plan doc**
+declares no lane and is therefore invisible to the public collision audit entirely.
+Plan-less PRs are exempt from the drift detection that makes parallel lanes safe.
+Fix (in the system's own idiom — *surface, never silently skip*, §3g): treat
+plan-less PRs as an explicit `unlaned` bucket and warn, rather than skip.
+
+**(d) Parallel lanes manufacture a stale-merge surface the tooling is blind to.**
+Webhooks never deliver two events: **CI success** and **"your open PR now conflicts
+with main."** So with N lanes landing independently on one `main`, a PR can go
+semantically stale and nothing wakes its owner — the accrued interest is the
+"hundreds of commits behind" worktree and the 300-file dirty index AGENTS.md spends
+a section unwinding. The intended mitigation is a scheduled `send_later` self-check
+that re-polls mergeability; when that tool is absent from a session, staleness
+detection falls back entirely to the operator. This is the only one of the four
+with no clean in-repo mechanical fix short of a scheduled poll or a CI job that
+comments staleness back onto open PRs.
+
+**The meta-cost.** The governance layer is now itself a product-sized surface — ~236
+scripts, 20 workflows, 875 plan docs. Its second-order risk is *audit rot* (an audit
+that silently stops catching), which §3g (surface, never skip) and §3h (every audit
+ships fixture tests that prove its failure branch fires) directly defend against —
+but those defenses rest on a *convention* enforced by judgment, not a meta-audit.
+Follow the chain down — product guarded by audits, audits guarded by fixtures,
+fixtures guaranteed by a rule a person must remember — and there is an irreducible
+human-discipline floor. "Mechanical gates" is a ~95% claim; all four gaps above live
+in the residual 5%, which is where every real incident now comes from. Two visible
+carrying costs: `plans/` is a write-only sediment (875 and growing, navigated only
+by mtime-sort), and "non-trivial" — *when a plan is even required* — is judgment, so
+the system biases toward over-planning. That bias is the *safe* failure, but it is a
+throughput tax, which is the irony worth naming for a system whose thesis is speed.
+
+The point of listing these is not that the system is immature — it's the opposite.
+A mature system is honest about where it *can't* be mechanical and spends its
+automation budget on the failures that recur, leaving runbooks for the ones that are
+inherently judgment. These gaps are the visible edge of that boundary.
+
+---
+
 ## Why it works — the principles worth stealing
 
 1. **Mechanize every repeated mistake.** A failure that cost a review cycle becomes
