@@ -94,6 +94,33 @@ jobs:
       - name: Test Content Ops review source selection
         run: npm run test:content-ops-review-source-selection
 
+      - name: Test Content Ops cache policy UI
+        run: npm run test:content-ops-cache-policy-ui
+
+      - name: Test Content Ops FAQ macro publish
+        run: npm run test:content-ops-faq-macro-publish
+
+      - name: Test Content Ops FAQ source selection
+        run: npm run test:content-ops-faq-source-selection
+
+      - name: Test Content Ops ingestion limits
+        run: npm run test:content-ops-ingestion-limits
+
+      - name: Test Content Ops input display
+        run: npm run test:content-ops-input-display
+
+      - name: Test Content Ops usage budget UI
+        run: npm run test:content-ops-usage-budget-ui
+
+      - name: Test Content Ops usage summary
+        run: npm run test:content-ops-usage-summary
+
+      - name: Test Content Ops zendesk credentials
+        run: npm run test:content-ops-zendesk-credentials
+
+      - name: Test landing-page sitemap bridge
+        run: npm run test:sitemap-bridge
+
       - name: Build
         run: npm run build
 

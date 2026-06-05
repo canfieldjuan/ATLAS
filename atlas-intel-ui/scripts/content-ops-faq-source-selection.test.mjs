@@ -7,8 +7,16 @@ const newRunSource = readFileSync(
   'utf8',
 )
 
+const sourceModeSource = readFileSync(
+  new URL('../src/pages/contentOpsSourceMode.ts', import.meta.url),
+  'utf8',
+)
+
 test('new run page exposes saved FAQ source selection for blog and landing outputs', () => {
-  assert.ok(newRunSource.includes("const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'"))
+  // The source-key constant lives in contentOpsSourceMode.ts and is imported by
+  // the new run page (extracted from ContentOpsNewRun.tsx in a later refactor).
+  assert.ok(sourceModeSource.includes("const SOURCE_FAQ_IDS_INPUT = 'source_faq_ids'"))
+  assert.ok(newRunSource.includes('SOURCE_FAQ_IDS_INPUT'))
   assert.ok(newRunSource.includes("request.outputs.includes(BLOG_POST_OUTPUT)"))
   assert.ok(newRunSource.includes('landingPageOutputSelected || blogPostOutputSelected'))
   assert.ok(newRunSource.includes('<FaqSourceSelector'))
