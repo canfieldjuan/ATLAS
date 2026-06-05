@@ -161,6 +161,7 @@ pytest \
   tests/test_extracted_content_pipeline_migration_runner.py \
   tests/test_audit_extracted_pipeline_ci_enrollment.py \
   tests/test_audit_ui_test_enrollment.py \
+  tests/test_archive_plans.py \
   tests/test_extracted_pipeline_route_ci_contract.py \
   tests/test_extracted_pipeline_notify.py \
   tests/test_extracted_content_pipeline_reasoning_archetypes.py \
