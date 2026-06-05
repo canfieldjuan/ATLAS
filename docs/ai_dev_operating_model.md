@@ -21,6 +21,13 @@ Work is split into **two independent lanes** (e.g. "content generation" and
   verdict: **BLOCKER / MAJOR / NIT / LGTM**.
 
 So at full tilt the operator drives **4 sessions** (2 builders + 2 reviewers).
+
+> **How this maps to the contract:** `AGENTS.md` (lines 3–8) defines the *unit* of
+> the workflow — **one builder + one reviewer per non-trivial PR**. The four-session
+> figure is that unit *scaled*: the operator runs one builder/reviewer pair per
+> parallel ownership lane. Two lanes = two pairs = four sessions. The per-pair
+> contract is unchanged; the lane model is just how many pairs run at once.
+
 The builder and reviewer are deliberately *different* sessions because a model
 reviewing its own work inherits its own blind spots — the reviewer re-derives
 claims from scratch instead of trusting them.
@@ -158,7 +165,9 @@ forms so it can never silently recur:
 3. **A config/typed seam** — e.g. "never read `os.environ`, add a typed
    `ATLAS_*` field" makes the wrong thing structurally harder than the right thing.
 
-The bootstrap's recurring-lapse checklist (`SESSION_BOOTSTRAP.md §1.4`) is *the
+The bootstrap's recurring-lapse checklist (the *"Recurring mistakes — do NOT
+repeat these"* list in the **Fresh-session bootstrap** section of
+`docs/SESSION_BOOTSTRAP.md`) is *the
 same checklist the reviewer runs on every PR* — front-loaded into the builder so
 the repeats stop. A sampling of lapses already codified:
 
