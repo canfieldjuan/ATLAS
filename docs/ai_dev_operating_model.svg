@@ -1,0 +1,223 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1080" viewBox="0 0 1400 1080" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#15803d"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/>
+    </marker>
+    <style>
+      .title{font-size:30px;font-weight:700;fill:#0f172a}
+      .sub{font-size:15px;fill:#475569}
+      .lane{font-size:15px;font-weight:700;fill:#1e3a8a}
+      .box-t{font-size:16px;font-weight:700;fill:#0f172a}
+      .box-s{font-size:12.5px;fill:#334155}
+      .gate-t{font-size:14px;font-weight:700;fill:#7c2d12}
+      .gate-s{font-size:11.5px;fill:#7c2d12}
+      .hdr{font-size:17px;font-weight:700;fill:#fff}
+      .lbl{font-size:12px;fill:#475569;font-style:italic}
+      .pill{font-size:12px;font-weight:700;fill:#fff}
+      .foot{font-size:12.5px;fill:#64748b}
+      .k{font-size:13px;fill:#334155}
+    </style>
+  </defs>
+
+  <rect width="1400" height="1080" fill="#f8fafc"/>
+  <text x="40" y="50" class="title">The Atlas AI Dev Operating Model</text>
+  <text x="40" y="75" class="sub">2 builder + 2 reviewer sessions in parallel — kept safe by mechanical gates, not human vigilance. Every repeated mistake becomes a gate.</text>
+
+  <!-- ================= LANES ================= -->
+  <!-- Lane A -->
+  <rect x="40" y="100" width="1320" height="250" rx="12" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="60" y="125" class="lane">LANE A — e.g. "content generation"  (builder + reviewer pair)</text>
+  <!-- Lane B -->
+  <rect x="40" y="100" width="1320" height="250" rx="12" fill="none"/>
+  <text x="60" y="332" class="lane">LANE B — e.g. "deflection / monetization"  (independent builder + reviewer pair, separate ownership lane)</text>
+  <line x1="40" y1="300" x2="1360" y2="300" stroke="#cbd5e1" stroke-dasharray="4 4"/>
+
+  <!-- ===== Builder pipeline (Lane A) ===== -->
+  <!-- 1 Plan -->
+  <rect x="60" y="150" width="190" height="120" rx="9" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="75" y="172" class="box-t">1 · Plan first</text>
+  <text x="75" y="194" class="box-s">plans/PR-&lt;Slice&gt;.md</text>
+  <text x="75" y="212" class="box-s">7 fixed sections</text>
+  <text x="75" y="230" class="box-s">Ownership lane + phase</text>
+  <text x="75" y="248" class="box-s">&lt;400 LOC budget</text>
+  <text x="75" y="264" class="lbl">contract, not the code</text>
+
+  <!-- 2 Build -->
+  <rect x="285" y="150" width="190" height="120" rx="9" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="300" y="172" class="box-t">2 · Builder codes</text>
+  <text x="300" y="194" class="box-s">thin slice only</text>
+  <text x="300" y="212" class="box-s">extras → HARDENING.md</text>
+  <text x="300" y="230" class="box-s">ships its own tests</text>
+  <text x="300" y="248" class="box-s">+ CI enrollment</text>
+  <text x="300" y="264" class="lbl">no "while I was here"</text>
+
+  <!-- 3 Local gates -->
+  <rect x="510" y="150" width="200" height="120" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="525" y="172" class="gate-t">3 · Local gate bundle</text>
+  <text x="525" y="192" class="gate-s">local_pr_review.sh +</text>
+  <text x="525" y="208" class="gate-s">pre-push git hook</text>
+  <text x="525" y="226" class="gate-s">plan shape · diff size</text>
+  <text x="525" y="242" class="gate-s">file claims · drift · ASCII</text>
+  <text x="525" y="260" class="gate-s">cross-layer caller hints</text>
+
+  <!-- 4 Reviewer -->
+  <rect x="745" y="150" width="200" height="120" rx="9" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="760" y="172" class="box-t">4 · Reviewer session</text>
+  <text x="760" y="194" class="box-s">INDEPENDENT re-derive</text>
+  <text x="760" y="212" class="box-s">re-runs commands</text>
+  <text x="760" y="230" class="box-s">checks file:line claims</text>
+  <text x="760" y="248" class="box-s">BLOCKER/MAJOR/NIT/LGTM</text>
+  <text x="760" y="264" class="lbl">never rubber-stamps</text>
+
+  <!-- 5 CI -->
+  <rect x="980" y="150" width="180" height="120" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="995" y="172" class="gate-t">5 · GitHub CI</text>
+  <text x="995" y="192" class="gate-s">20 workflows</text>
+  <text x="995" y="208" class="gate-s">same bundle +</text>
+  <text x="995" y="224" class="gate-s">per-product suites</text>
+  <text x="995" y="242" class="gate-s">path-filtered</text>
+  <text x="995" y="260" class="gate-s">final layer, not first</text>
+
+  <!-- 6 Merge -->
+  <rect x="1195" y="150" width="145" height="120" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="1210" y="172" class="box-t">6 · Merge</text>
+  <text x="1210" y="194" class="box-s">squash → main</text>
+  <text x="1210" y="212" class="box-s">tear down branch</text>
+  <text x="1210" y="230" class="box-s">+ worktree</text>
+  <text x="1210" y="252" class="lbl">main = only</text>
+  <text x="1210" y="268" class="lbl">source of truth</text>
+
+  <!-- arrows builder pipeline -->
+  <line x1="250" y1="210" x2="283" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="475" y1="210" x2="508" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="710" y1="210" x2="743" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="945" y1="210" x2="978" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="1160" y1="210" x2="1193" y2="210" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <!-- reviewer reject loop -->
+  <path d="M845,270 q0,40 -270,40 q-270,0 -270,-36" fill="none" stroke="#b91c1c" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#arrowRed)"/>
+  <text x="430" y="332" fill="#b91c1c" font-size="12" font-weight="700" opacity="0">x</text>
+  <text x="560" y="305" fill="#b91c1c" font-size="11.5" font-weight="700">BLOCKER → fix &amp; re-push</text>
+
+  <!-- Lane B mini pipeline (compact mirror) -->
+  <rect x="60" y="316" width="1100" height="26" rx="6" fill="#dbeafe" stroke="#bfdbfe"/>
+  <text x="75" y="334" class="k">Plan → Build → Local gate → Independent reviewer → CI → Merge   ·   same contract, different ownership lane (lanes cannot collide — enforced)</text>
+
+  <!-- ================= DRIFT DEFENSE ================= -->
+  <rect x="40" y="370" width="650" height="250" rx="12" fill="#fef2f2" stroke="#fecaca"/>
+  <text x="60" y="397" class="lane" fill="#991b1b">DRIFT DEFENSE  (runs locally + in CI)</text>
+
+  <rect x="60" y="412" width="195" height="92" rx="8" fill="#fff" stroke="#ef4444"/>
+  <text x="73" y="432" class="box-t">Session ownership</text>
+  <text x="73" y="452" class="box-s">SESSION_STATE.local.md</text>
+  <text x="73" y="470" class="box-s">owns PR / branch / SHA</text>
+  <text x="73" y="488" class="box-s">check_session_pr_</text>
+  <text x="73" y="500" class="box-s">ownership.py</text>
+
+  <rect x="268" y="412" width="195" height="92" rx="8" fill="#fff" stroke="#ef4444"/>
+  <text x="281" y="432" class="box-t">Lane collision</text>
+  <text x="281" y="452" class="box-s">two PRs, same lane</text>
+  <text x="281" y="470" class="box-s">or same base files</text>
+  <text x="281" y="488" class="box-s">audit_pr_session_</text>
+  <text x="281" y="500" class="box-s">drift.py</text>
+
+  <rect x="476" y="412" width="200" height="92" rx="8" fill="#fff" stroke="#ef4444"/>
+  <text x="489" y="432" class="box-t">Plan ↔ code</text>
+  <text x="489" y="452" class="box-s">sections / order</text>
+  <text x="489" y="470" class="box-s">files touched · LOC ±50%</text>
+  <text x="489" y="488" class="box-s">named path/fn exists</text>
+  <text x="489" y="500" class="box-s">audit_plan_*.py</text>
+
+  <text x="60" y="536" class="k" font-weight="700">The rule for every audit:</text>
+  <text x="60" y="556" class="k">surface unfamiliar input as DRIFT — never silently skip. Silent green is the enemy.</text>
+  <text x="60" y="578" class="k">Every new audit ships with fixture tests that prove its <tspan font-weight="700">failure branch</tspan> actually fires</text>
+  <text x="60" y="598" class="k">(happy-path-only coverage of a detector is explicitly not enough).</text>
+
+  <!-- ================= COMPACTION ================= -->
+  <rect x="710" y="370" width="650" height="250" rx="12" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="730" y="397" class="lane" fill="#92400e">COMPACTION DISCIPLINE  (highest-leverage insight)</text>
+  <text x="730" y="420" class="k">Forensic finding: the agent's regressions <tspan font-weight="700">cluster at context-compaction</tspan></text>
+  <text x="730" y="438" class="k">boundaries — a summary landing near a PR-open causes hard drift</text>
+  <text x="730" y="456" class="k">(closing other lanes' PRs, redoing merged work, lane-jumping).</text>
+
+  <rect x="730" y="472" width="300" height="58" rx="8" fill="#fff" stroke="#d97706"/>
+  <text x="743" y="492" class="box-t">Keep sessions short</text>
+  <text x="743" y="512" class="box-s">restart fresh &gt; run long &amp; compact</text>
+  <text x="743" y="525" class="box-s">stop after opening a PR — don't poll CI</text>
+
+  <rect x="1042" y="472" width="298" height="58" rx="8" fill="#fff" stroke="#d97706"/>
+  <text x="1055" y="492" class="box-t">Externalize state</text>
+  <text x="1055" y="512" class="box-s">SESSION_STATE.local.md survives</text>
+  <text x="1055" y="525" class="box-s">compaction; re-read, don't guess</text>
+
+  <rect x="730" y="540" width="300" height="56" rx="8" fill="#fff" stroke="#d97706"/>
+  <text x="743" y="560" class="box-t">Read narrow / test scoped</text>
+  <text x="743" y="578" class="box-s">targeted line ranges, single test file;</text>
+  <text x="743" y="590" class="box-s">full gauntlet once, right before push</text>
+
+  <rect x="1042" y="540" width="298" height="56" rx="8" fill="#fff" stroke="#d97706"/>
+  <text x="1055" y="560" class="box-t">Two canned prompts</text>
+  <text x="1055" y="578" class="box-s">bootstrap (seed fresh) +</text>
+  <text x="1055" y="590" class="box-s">drift-redirect ("Stop. You compacted…")</text>
+
+  <text x="730" y="613" class="lbl">Principle: assume context will be summarized at the worst moment — design so no session holds critical state only in its head.</text>
+
+  <!-- ================= THE FLYWHEEL ================= -->
+  <rect x="40" y="640" width="1320" height="180" rx="12" fill="#f0fdf4" stroke="#bbf7d0"/>
+  <text x="60" y="667" class="lane" fill="#166534">THE FLYWHEEL — every mistake that costs a review cycle becomes a durable gate</text>
+
+  <rect x="60" y="685" width="250" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="75" y="708" class="box-t">A mistake ships</text>
+  <text x="75" y="730" class="box-s">reviewer or CI catches a</text>
+  <text x="75" y="746" class="box-s">failure mode that cost</text>
+  <text x="75" y="762" class="box-s">a review cycle</text>
+
+  <rect x="430" y="685" width="270" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="445" y="708" class="box-t">Convert it — 3 forms</text>
+  <text x="445" y="730" class="box-s">1 · mechanical audit + fixtures</text>
+  <text x="445" y="746" class="box-s">2 · a line in AGENTS.md / CLAUDE.md</text>
+  <text x="445" y="762" class="box-s">3 · a typed config/port seam</text>
+  <text x="445" y="781" class="lbl">make the wrong thing structurally hard</text>
+
+  <rect x="820" y="685" width="270" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="835" y="708" class="box-t">Front-load it</text>
+  <text x="835" y="730" class="box-s">recurring-lapse checklist =</text>
+  <text x="835" y="746" class="box-s">the same list the reviewer runs,</text>
+  <text x="835" y="762" class="box-s">pasted into the builder bootstrap</text>
+  <text x="835" y="781" class="lbl">repeats stop at the source</text>
+
+  <rect x="1200" y="685" width="140" height="110" rx="9" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="1215" y="712" class="box-t">Speed</text>
+  <text x="1215" y="732" class="box-t">compounds</text>
+  <text x="1215" y="758" class="box-s">same bug never</text>
+  <text x="1215" y="774" class="box-s">paid for twice</text>
+
+  <line x1="310" y1="740" x2="428" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="700" y1="740" x2="818" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="1090" y1="740" x2="1198" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <!-- loop back -->
+  <path d="M1270,795 q0,40 -640,40 q-630,0 -630,-36" fill="none" stroke="#15803d" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrowGreen)"/>
+  <text x="600" y="852" fill="#166534" font-size="12" font-weight="700">…and the gate guards every future PR — the loop tightens with each cycle</text>
+
+  <!-- ================= FOOTER PRINCIPLES ================= -->
+  <rect x="40" y="872" width="1320" height="180" rx="12" fill="#0f172a"/>
+  <text x="60" y="900" class="hdr">Principles worth stealing</text>
+  <text x="60" y="930" fill="#e2e8f0" font-size="13.5">1 · Mechanize every repeated mistake — a failure becomes a script with fixtures, or a line in the contract.</text>
+  <text x="60" y="956" fill="#e2e8f0" font-size="13.5">2 · The plan is the contract — fixed 7-section shape + LOC cap makes scope-creep a detectable, failing condition.</text>
+  <text x="60" y="982" fill="#e2e8f0" font-size="13.5">3 · Separate builder from reviewer — independent re-derivation catches what self-review can't.</text>
+  <text x="60" y="1008" fill="#e2e8f0" font-size="13.5">4 · Design for compaction — short sessions, stop after milestones, externalize state, keep a recovery prompt ready.</text>
+  <text x="60" y="1034" fill="#e2e8f0" font-size="13.5">5 · Fail closed, surface drift, catch it where it's cheap — local → hook → reviewer → CI, the same gate at each layer.</text>
+
+  <text x="1010" y="930" fill="#94a3b8" font-size="12">Source docs in repo:</text>
+  <text x="1010" y="952" fill="#cbd5e1" font-size="12">· AGENTS.md  (PR + reviewer contract)</text>
+  <text x="1010" y="972" fill="#cbd5e1" font-size="12">· SESSION_BOOTSTRAP.md  (compaction)</text>
+  <text x="1010" y="992" fill="#cbd5e1" font-size="12">· AUDITOR_PROMPT / CANONICAL</text>
+  <text x="1010" y="1012" fill="#cbd5e1" font-size="12">· INTEGRATION_MAP / CONTEXT</text>
+  <text x="1010" y="1032" fill="#cbd5e1" font-size="12">· 236 scripts · 20 CI workflows · 875 plans</text>
+</svg>
