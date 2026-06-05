@@ -37,7 +37,7 @@ _RUN_LINE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<command>.*)$")
 class EnrollmentRow:
     ui: str
     workflow: str
-    status: str  # OK | NO_TESTS | MISSING_WORKFLOW | UNENROLLED
+    status: str  # OK | NO_TESTS | MALFORMED_PACKAGE | MISSING_WORKFLOW | UNENROLLED
     missing: tuple[str, ...] = ()
 
 
