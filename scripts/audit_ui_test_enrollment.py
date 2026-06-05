@@ -27,7 +27,10 @@ WORKFLOWS_SUBDIR = Path(".github") / "workflows"
 # Match an explicit `npm run test:<name>` invocation. Names use letters, digits,
 # underscores, colons, and hyphens; the set comparison in audit_root avoids any
 # prefix-collision false positives (test:abc is not satisfied by test:abcd).
-_RUN_TOKEN = re.compile(r"npm run (test:[\w:-]+)")
+_TEST_TOKEN = re.compile(r"npm run (test:[\w:-]+)")
+# Anchor to actual `run:` step bodies so a `npm run test:foo` token in a comment,
+# a step name, or echoed text elsewhere in the YAML is not miscounted as enrolled.
+_RUN_LINE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?run:\s*(?P<command>.*)$")
 
 
 @dataclass(frozen=True)
@@ -39,11 +42,15 @@ class EnrollmentRow:
 
 
 def parse_test_scripts(package_json_text: str) -> set[str]:
-    """Return the set of ``test:*`` script names declared in a package.json."""
+    """Return the set of ``test:*`` script names declared in a package.json.
+
+    Raises ValueError on malformed JSON so the caller can surface it as drift
+    rather than silently treating a broken manifest as "no tests".
+    """
     try:
         data = json.loads(package_json_text)
-    except json.JSONDecodeError:
-        return set()
+    except json.JSONDecodeError as exc:
+        raise ValueError("malformed package.json") from exc
     scripts = data.get("scripts") if isinstance(data, dict) else None
     if not isinstance(scripts, dict):
         return set()
@@ -55,8 +62,31 @@ def parse_test_scripts(package_json_text: str) -> set[str]:
 
 
 def parse_workflow_runs(workflow_text: str) -> set[str]:
-    """Return the set of ``test:*`` scripts a workflow invokes via ``npm run``."""
-    return set(_RUN_TOKEN.findall(workflow_text))
+    """Return the set of ``test:*`` scripts a workflow invokes via ``npm run``.
+
+    Only the bodies of ``run:`` steps are scanned (including ``run: |`` blocks,
+    collected by indentation), so a ``test:*`` token in a comment, a step name,
+    or echoed text is not mistaken for an executed step.
+    """
+    found: set[str] = set()
+    lines = workflow_text.splitlines()
+    index = 0
+    while index < len(lines):
+        match = _RUN_LINE.match(lines[index])
+        if match is None:
+            index += 1
+            continue
+        indent = len(match.group("indent"))
+        command_lines = [match.group("command")]
+        index += 1
+        while index < len(lines):
+            nxt = lines[index]
+            if nxt.strip() and (len(nxt) - len(nxt.lstrip())) <= indent:
+                break
+            command_lines.append(nxt)
+            index += 1
+        found.update(_TEST_TOKEN.findall("\n".join(command_lines)))
+    return found
 
 
 def workflow_name_for(ui_dir_name: str) -> str:
@@ -76,10 +106,16 @@ def audit_root(root: Path) -> list[EnrollmentRow]:
     """Audit every discovered UI package's test:* CI enrollment under ``root``."""
     rows: list[EnrollmentRow] = []
     for ui_dir in discover_ui_dirs(root):
-        declared = parse_test_scripts(
-            (ui_dir / "package.json").read_text(encoding="utf-8")
-        )
         workflow_name = workflow_name_for(ui_dir.name)
+        try:
+            declared = parse_test_scripts(
+                (ui_dir / "package.json").read_text(encoding="utf-8")
+            )
+        except ValueError:
+            rows.append(
+                EnrollmentRow(ui_dir.name, workflow_name, "MALFORMED_PACKAGE")
+            )
+            continue
         if not declared:
             rows.append(EnrollmentRow(ui_dir.name, workflow_name, "NO_TESTS"))
             continue
@@ -102,7 +138,7 @@ def audit_root(root: Path) -> list[EnrollmentRow]:
 
 
 def row_is_drift(row: EnrollmentRow) -> bool:
-    return row.status in {"MISSING_WORKFLOW", "UNENROLLED"}
+    return row.status in {"MISSING_WORKFLOW", "UNENROLLED", "MALFORMED_PACKAGE"}
 
 
 def main() -> int:
@@ -114,12 +150,15 @@ def main() -> int:
         return 0
     drift = False
     for row in rows:
+        if row_is_drift(row):
+            drift = True
         if row.status == "OK":
             print(f"OK               {row.ui} -> {row.workflow}")
         elif row.status == "NO_TESTS":
             print(f"SKIP (no tests)  {row.ui}")
+        elif row.status == "MALFORMED_PACKAGE":
+            print(f"MALFORMED        {row.ui}: package.json is not valid JSON")
         elif row.status == "MISSING_WORKFLOW":
-            drift = True
             print(
                 f"MISSING WORKFLOW {row.ui}: expected {row.workflow} to run "
                 f"{len(row.missing)} declared test(s)"
@@ -127,7 +166,6 @@ def main() -> int:
             for name in row.missing:
                 print(f"    - {name}")
         else:  # UNENROLLED
-            drift = True
             print(
                 f"UNENROLLED       {row.ui} -> {row.workflow}: "
                 f"{len(row.missing)} declared test(s) not run by CI"

@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "audit_ui_test_enrollment.py"
 
@@ -106,13 +108,47 @@ def test_prefix_name_does_not_count_as_enrolled(tmp_path):
     assert row.missing == ("test:abc",)
 
 
-def test_parse_test_scripts_handles_malformed_json():
+def test_parse_test_scripts_raises_on_malformed_json():
     audit = load_auditor()
-    assert audit.parse_test_scripts("{not valid json") == set()
+    with pytest.raises(ValueError):
+        audit.parse_test_scripts("{not valid json")
+    # Valid JSON whose scripts is not a dict has no test scripts (not an error).
     assert audit.parse_test_scripts(json.dumps({"scripts": "oops"})) == set()
     assert audit.parse_test_scripts(
         json.dumps({"scripts": {"test:x": "x", "build": "b"}})
     ) == {"test:x"}
+
+
+def test_malformed_package_json_is_drift(tmp_path):
+    audit = load_auditor()
+    ui = tmp_path / "foo-ui"
+    ui.mkdir(parents=True)
+    (ui / "package.json").write_text("{not valid json", encoding="utf-8")
+
+    row = _rows_by_ui(tmp_path)["foo-ui"]
+    assert row.status == "MALFORMED_PACKAGE"
+    assert audit.row_is_drift(row)
+
+
+def test_npm_run_outside_run_step_is_not_counted(tmp_path):
+    # test:b appears only in a step name and a YAML comment, never in a run body.
+    audit = load_auditor()
+    _make_ui(tmp_path, "foo-ui", ["test:a", "test:b"])
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "foo_ui_checks.yml").write_text(
+        "name: c\n"
+        "on:\n  pull_request:\n"
+        "jobs:\n  c:\n    steps:\n"
+        "      - name: mentions npm run test:b in the step name only\n"
+        "        run: npm run test:a\n"
+        "      # run: npm run test:b\n",
+        encoding="utf-8",
+    )
+
+    row = _rows_by_ui(tmp_path)["foo-ui"]
+    assert row.status == "UNENROLLED"
+    assert row.missing == ("test:b",)
 
 
 def test_workflow_name_convention():

@@ -10,6 +10,12 @@ four times"). This slice makes the hole un-droppable: a mechanical audit that fa
 when any declared UI `test:*` script is not run by its CI workflow. This is PR-B of
 the #1318 plan.
 
+The diff is ~450 LOC, over the 400 soft cap. The overage is review-driven
+robustness (anchoring the parser to `run:` step bodies and surfacing a malformed
+`package.json` as drift, each with its own negative fixture) rather than added
+scope — splitting a single auditor and its fixtures across two PRs would ship a
+weaker checker first, which defeats the slice's purpose.
+
 ## Scope (this PR)
 
 Ownership lane: intel-ui/ci-enrollment
@@ -81,22 +87,22 @@ Against the current tree the audit is clean: atlas-intel-ui (24) and portfolio-u
 
 ```bash
 python scripts/audit_ui_test_enrollment.py        # exit 0; intel-ui + portfolio-ui OK
-python -m pytest tests/test_audit_ui_test_enrollment.py -q   # 7 passed
+python -m pytest tests/test_audit_ui_test_enrollment.py -q   # 9 passed
 python scripts/audit_extracted_pipeline_ci_enrollment.py     # still OK after enrolling the fixture
 bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-body-ui-test-enrollment-audit.md
 ```
 
-Verified locally: audit exit 0, 7/7 fixtures pass, CI-enrollment audit still OK
+Verified locally: audit exit 0, 9/9 fixtures pass, CI-enrollment audit still OK
 (148 enrolled).
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/extracted_pipeline_checks.yml` | 2 |
-| `plans/PR-UI-Test-Enrollment-Audit.md` | 102 |
-| `scripts/audit_ui_test_enrollment.py` | 147 |
+| `.github/workflows/extracted_pipeline_checks.yml` | 4 |
+| `plans/PR-UI-Test-Enrollment-Audit.md` | 108 |
+| `scripts/audit_ui_test_enrollment.py` | 185 |
 | `scripts/pre_push_audit.sh` | 1 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_audit_ui_test_enrollment.py` | 121 |
-| **Total** | **374** |
+| `tests/test_audit_ui_test_enrollment.py` | 157 |
+| **Total** | **456** |
