@@ -40,6 +40,12 @@ Required sections, in this order:
 | **Verification** | The specific commands the builder ran locally + their pass counts. Reviewer reproduces. |
 | **Estimated diff size** | LOC budget; flag if approaching 400 LOC. |
 
+The **Scope** section also carries a **Review Contract** block (a `### Review
+Contract` subsection): acceptance criteria the reviewer checks one-by-one,
+affected surfaces, risk areas, and the reviewer rule IDs the changed paths
+trigger. The builder codes against it; the reviewer reviews against it. See
+`docs/REVIEWER_RULES.md` for the rule pack and the path-to-rule trigger table.
+
 ### 1b. PR body
 
 Mirror the plan-doc framing in the PR description:
@@ -162,6 +168,15 @@ Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
+**Rule results (triggered rules only, see docs/REVIEWER_RULES.md):**
+- R1 Requirements match: Pass/Fail/N-A
+- R2 Test evidence: Pass/Fail/N-A
+- R3 Security/auth ... R12 Deployment+CI enrollment: Pass/Fail/N-A
+(List only the rules the changed paths trigger; cite file:line on any Fail.)
+
+**AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
+Waivers justified in PR body: Y/N.
+
 **Defensible trade-offs (no action needed):**
 - <decision> -- <why it's the right call>
 
@@ -170,6 +185,10 @@ named in Deferred or explicitly marked none.
 
 LGTM. (or: BLOCKER -- ...)
 ```
+
+A finding is written as `Rxx (LEVEL) file:line - issue - required fix`,
+mapping the rule to the verdict level above. A bare "LGTM" with no rule
+matrix and no independent verification is worse than no comment.
 
 ### 2b. CI gate
 
@@ -528,7 +547,18 @@ will cover it. "Covered by the happy path" is not enough for detection logic.
 
 ## 4. Reviewer workflow
 
+The reviewer's job is **not** "review the code" -- it is to **prove whether
+the PR satisfies its Review Contract and violates none of the rules in
+`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R12) and maps to
+a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
+go in the §2a template.
+
 ### 4a. Independent verification
+
+Run a **challenger pass first, before reading the builder's summary** -- the
+builder's confident narrative anchors you into believing the story. In order:
+read the Review Contract, predict which files *should* change and which tests
+*should* exist, *then* open the diff.
 
 Don't trust the PR description's claims; reproduce them. The
 reviewer should:
@@ -539,6 +569,19 @@ reviewer should:
 3. Sweep for missed call sites with grep patterns more reliable than
    the PR's claim (multi-line constructions, kwargs split across
    lines, etc.).
+4. Walk the rules triggered by the changed paths (per the trigger table in
+   `docs/REVIEWER_RULES.md`) and record Pass/Fail/N-A for each.
+
+### 4a.1. AI-finding reconciliation (mandatory before LGTM)
+
+External review bots (Codex, Copilot) post raw comments outside the
+BLOCKER/MAJOR/NIT taxonomy. They are **advisory inputs to a judgment session,
+never auto-applied** -- a bot false-positive applied blindly turns correct work
+into incorrect work, so there is no "auto-address all comments" loop. **A
+reviewer may not issue LGTM until every AI finding is either fixed or explicitly
+waived with a reason in the PR body.** The machine owns mechanical issues; the
+human owns intent mismatch, product logic, architecture, risky assumptions, and
+missing tests.
 
 ### 4b. Verdict frugality
 
@@ -558,7 +601,14 @@ out "this should be fixed."
 Before LGTM, the reviewer confirms:
 
 - [ ] CI green (extracted-checks ✅, Vercel ✅).
-- [ ] Plan doc has all 7 required sections.
+- [ ] Plan doc has all 7 required sections, including the `### Review
+      Contract` block in Scope (acceptance criteria, affected surfaces, risk
+      areas, triggered rule IDs).
+- [ ] Every rule triggered by the changed paths (`docs/REVIEWER_RULES.md`)
+      is recorded Pass/Fail/N-A, and every Fail at BLOCKER level cites
+      file:line.
+- [ ] Every AI (Codex/Copilot) finding is fixed or explicitly waived with a
+      reason in the PR body (§4a.1). No unresolved bot comments at LGTM.
 - [ ] Plan and PR body name a `Slice phase`, and the diff matches that
       phase. The squash commit message carries the phase from the PR body
       at merge.
@@ -724,23 +774,34 @@ defines:
 - The 400 LOC diff budget and how to handle overage.
 - Anti-patterns that should never appear in a builder PR.
 
+Read `docs/REVIEWER_RULES.md` before your first review. Your job is
+not "review the code" -- it is to prove the PR satisfies its Review
+Contract and violates none of R1-R12. Cite a rule ID on every finding.
+
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.
 
 For each PR you review:
 
-1. Reproduce the named verification commands from the PR body.
+1. Challenger pass first: read the Review Contract, predict which
+   files and tests should exist, THEN open the diff. Do not anchor
+   on the builder's summary.
+2. Reproduce the named verification commands from the PR body.
    Don't trust claims; re-run them. Spot-check the plan's
    invariants at the actual file:line cited in the diff.
-2. Sweep for missed call sites with grep patterns more reliable
+3. Sweep for missed call sites with grep patterns more reliable
    than the PR's claim (multi-line constructions, kwargs split
    across lines).
-3. Confirm CI is green (extracted-checks x2 + Vercel) before
+4. Record Pass/Fail/N-A for each rule the changed paths trigger
+   (`docs/REVIEWER_RULES.md`); cite file:line on any Fail.
+5. Reconcile AI findings: do not LGTM until every Codex/Copilot
+   finding is fixed or explicitly waived with a reason in the PR body.
+6. Confirm CI is green (extracted-checks x2 + Vercel) before
    issuing LGTM.
-4. Mark NITs as skip-worthy explicitly when they are. The builder
+7. Mark NITs as skip-worthy explicitly when they are. The builder
    applies 1-line / unambiguous NITs; ignores style/naming/comment
    NITs unless you specifically call out "this should be fixed."
-5. Sign your review with: `_Generated by [Claude Code](
+8. Sign your review with: `_Generated by [Claude Code](
    https://claude.ai/code)_`.
 
 The package under active iteration is `extracted_content_pipeline`.
