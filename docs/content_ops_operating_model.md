@@ -1,6 +1,7 @@
 # How Atlas Ships Marketing Content — The Same Operating Model, Adapted
 
-> A sister to `docs/ai_dev_operating_model.md`. Same spine — plan a thin artifact,
+> A sister to the AI-dev operating model (`docs/ai_dev_operating_model.md`, landing in
+> PR #1317 — not yet on `main`). Same spine — plan a thin artifact,
 > let mechanical gates catch every repeatable failure, keep the builder and reviewer
 > separate, turn every miss into a gate — adapted to content marketing, where the
 > artifact is structured copy, the "test" is the market, and the value compounds in a
@@ -169,7 +170,7 @@ lawsuit — and it makes every claim trivially re-checkable when the registry ch
     { "issue_type": "unsupported_claim", "severity": "blocker", "rule_id": "CLAIM-03",
       "draft_span": "...", "why_it_matters": "...", "recommended_action": "revise|remove|escalate" }
   ],
-  "approval_recommendation": "DO_NOT_APPROVE"
+  "review_signal": "blockers_present"
 }
 ```
 
