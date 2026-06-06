@@ -5,6 +5,7 @@ Pure value types + matching logic; no DB, no async, no Atlas imports, no LLM.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import date
 
 import pytest
@@ -85,6 +86,8 @@ def test_unregistered_when_no_or_unknown_registry_id() -> None:
         as_of=_AS_OF,
     )
     assert unknown.status is ClaimStatus.UNREGISTERED
+    # The stale/typo'd candidate id is preserved for diagnosis (not dropped to None).
+    assert unknown.registry_id == "does.not.exist"
 
 
 def test_expired_takes_precedence_even_if_wording_matches() -> None:
@@ -144,7 +147,7 @@ def test_is_clear_true_when_only_match_and_unregistered() -> None:
 def test_none_text_normalizes_to_unmatched_not_error() -> None:
     # None text (e.g. JSON null) must not raise; with a real registry id it
     # simply won't match the approved wording.
-    claim = ExtractedClaim(text=None, registry_id="feature.sso")  # type: ignore[arg-type]
+    claim = ExtractedClaim(text=None, registry_id="feature.sso")
     mapped = map_claim(claim, _REGISTRY, as_of=_AS_OF)
     assert mapped.status is ClaimStatus.MISMATCH
 
@@ -162,5 +165,5 @@ def test_mapped_claim_is_frozen() -> None:
         _REGISTRY,
         as_of=_AS_OF,
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         mapped.status = ClaimStatus.MATCH  # type: ignore[misc]

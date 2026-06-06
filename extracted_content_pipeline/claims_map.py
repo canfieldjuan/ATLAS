@@ -73,7 +73,7 @@ class ExtractedClaim:
     registry entry). Producing these from prose is the deferred LLM step.
     """
 
-    text: str
+    text: str | None
     location: str = ""
     registry_id: str | None = None
 
@@ -82,7 +82,7 @@ class ExtractedClaim:
 class MappedClaim:
     """A claims-map row: an extracted claim resolved against the registry."""
 
-    text: str
+    text: str | None
     location: str
     registry_id: str | None
     approved_wording: str | None
@@ -100,10 +100,13 @@ def map_claim(
 
     entry = registry.get(claim.registry_id) if claim.registry_id else None
     if entry is None:
+        # Preserve the extractor's candidate id (None if it had none, or the
+        # stale/typo'd id if it pointed at a missing registry entry) so a
+        # reviewer can tell "no candidate" apart from "bad candidate".
         return MappedClaim(
             text=claim.text,
             location=claim.location,
-            registry_id=None,
+            registry_id=claim.registry_id,
             approved_wording=None,
             status=ClaimStatus.UNREGISTERED,
         )
