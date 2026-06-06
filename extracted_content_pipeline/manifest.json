@@ -234,6 +234,9 @@
       "target": "extracted_content_pipeline/review_contract.py"
     },
     {
+      "target": "extracted_content_pipeline/claims_map.py"
+    },
+    {
       "target": "extracted_content_pipeline/blog_post_export.py"
     },
     {
