@@ -10,9 +10,10 @@ fix in its enforceable form. Without a gate, "fixed or waived before LGTM"
 is just another line a tired reviewer can skip; S1's own Deferred section
 names this audit as the next step.
 
-Diff budget: ~405 LOC, marginally over the 400 soft cap; the plan doc itself is
-~110 of that and the audit+fixtures are the irreducible substance. Net tooling
-prose excluding the plan doc is ~295 LOC.
+Diff budget: ~470 LOC, over the 400 soft cap; the plan doc is ~128 of that and
+the audit+fixtures (grown by the review-round hardening of the section parser
+and resolution markers) are the irreducible substance. Net tooling prose
+excluding the plan doc is ~345 LOC.
 
 ## Scope (this PR)
 
@@ -69,10 +70,12 @@ Slice phase: Workflow/process
 `scripts/audit_pr_session_drift.py`), anchors the reconciliation record on a
 heading-like line (`## AI reconciliation`, `**AI reconciliation**`, or a line
 starting with it) so prose mentions do not match, and bounds the record at the
-next heading. Within the record it fails closed on an unresolved marker
-(`fixed or waived: no`, `findings still open`, ...), a waiver line with no
-rationale, or -- when a record exists -- the absence of any resolution marker
-(`all fixed or waived: yes`, `no findings`, `no findings waived`). Local
+next same-or-higher-level heading so subheadings (`### Codex`) stay inside it.
+Within the record it fails closed on an unresolved marker (`fixed or waived:
+no`, `findings still open`, ...), a waiver line with no rationale, or -- when a
+record exists -- the absence of any resolution marker (`all fixed or waived:
+yes`, `no findings`, `nothing to reconcile`; a bare `no findings waived` is
+deliberately not a resolution marker). Local
 tooling cannot read live GitHub bot threads (the bundle has no `gh`), so this
 enforces the half that is checkable from the body: a recorded reconciliation
 can be trusted. The check is added to `scripts/local_pr_review.sh` next to the
@@ -104,8 +107,9 @@ Parked hardening: none.
 
 ## Verification
 
-- `tests/test_audit_ai_reconciliation.py` -- 12 fixtures pass (each detection
-  branch, lookalike rejection, CLI exit codes 0/1/2).
+- `tests/test_audit_ai_reconciliation.py` -- 14 fixtures pass (each detection
+  branch, lookalike + near-miss rejection, subheading retention, CLI exit
+  codes 0/1/2).
 - `tests/test_local_pr_review.py` -- unchanged suite still passes with the new
   bundle check.
 - `scripts/audit_ai_reconciliation.py` run on a resolved vs unresolved body --
@@ -119,9 +123,9 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 2 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reviewer-Reconciliation-Audit.md` | 127 |
+| `plans/PR-Reviewer-Reconciliation-Audit.md` | 131 |
 | `plans/archive/PR-Reviewer-Rules-Contract.md` | 0 |
-| `scripts/audit_ai_reconciliation.py` | 158 |
+| `scripts/audit_ai_reconciliation.py` | 179 |
 | `scripts/local_pr_review.sh` | 12 |
-| `tests/test_audit_ai_reconciliation.py` | 120 |
-| **Total** | **422** |
+| `tests/test_audit_ai_reconciliation.py` | 148 |
+| **Total** | **475** |

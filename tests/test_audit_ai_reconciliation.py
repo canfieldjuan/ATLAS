@@ -23,7 +23,24 @@ def test_extract_section_finds_heading():
     section = aud.extract_section(body)
     assert section is not None
     assert "All fixed or waived: Yes" in section
-    assert "Next" not in section  # bounded by the next heading
+    assert "Next" not in section  # bounded by the next same-level heading
+
+
+def test_subheadings_stay_inside_record():
+    # A record using "### Codex" subheadings must not be truncated, so a later
+    # unresolved marker is still detected (fail closed, not fail open).
+    aud = load_auditor()
+    body = (
+        "## AI reconciliation\n"
+        "### Codex\n- All fixed or waived: Yes\n"
+        "### Copilot\n- fixed or waived: No\n"
+        "## Next\nunrelated\n"
+    )
+    section = aud.extract_section(body)
+    assert "### Copilot" in section
+    assert "Next" not in section
+    errors = aud.reconciliation_errors(body, require=False)
+    assert any("incomplete" in e for e in errors)
 
 
 def test_prose_mention_is_not_treated_as_section():
@@ -49,9 +66,20 @@ def test_no_findings_marker_passes():
     assert aud.reconciliation_errors(body, require=True) == []
 
 
-def test_no_findings_waived_marker_passes():
+def test_no_findings_waived_alone_is_not_resolution():
+    # Allowed near-miss: "no findings waived" only says nothing was waived, not
+    # that findings were handled, so on its own it must NOT count as resolved.
     aud = load_auditor()
-    body = "## AI reconciliation\nBoth findings fixed. No findings waived.\n"
+    body = "## AI reconciliation\n- AI findings reviewed: Yes\n- No findings waived.\n"
+    errors = aud.reconciliation_errors(body, require=False)
+    assert any("no resolution" in e for e in errors)
+
+
+def test_fixed_then_no_findings_waived_passes():
+    # But a real resolution marker ("all fixed or waived: yes") still passes,
+    # even when "no findings waived" is also present.
+    aud = load_auditor()
+    body = "## AI reconciliation\n- All fixed or waived: Yes\n- No findings waived.\n"
     assert aud.reconciliation_errors(body, require=True) == []
 
 
