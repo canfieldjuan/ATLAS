@@ -208,6 +208,17 @@ def _missing_text(value: object) -> bool:
     return not (isinstance(value, str) and value.strip())
 
 
+def _missing_positive_int(value: object) -> bool:
+    """True if a required positive-int value should count as missing.
+
+    Present only if it is a real ``int`` (not ``bool``) greater than zero.
+    ``None`` or any non-int counts as missing rather than raising ``TypeError``
+    on the ``> 0`` comparison -- same robustness contract as ``_missing_text``.
+    """
+
+    return not (isinstance(value, int) and not isinstance(value, bool) and value > 0)
+
+
 class TriageDecision(StrEnum):
     """Stage-0 verdict: should this asset exist at all?
 
@@ -311,9 +322,9 @@ class ExperimentContract:
             for name in _EXPERIMENT_REQUIRED_TEXT
             if _missing_text(getattr(self, name))
         ]
-        if self.attribution_window_days <= 0:
+        if _missing_positive_int(self.attribution_window_days):
             missing.append("attribution_window_days")
-        if self.min_sample_size <= 0:
+        if _missing_positive_int(self.min_sample_size):
             missing.append("min_sample_size")
         return tuple(missing)
 

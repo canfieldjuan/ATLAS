@@ -230,6 +230,46 @@ def test_experiment_none_text_is_missing_not_error() -> None:
     assert holey.missing_fields() == ("hypothesis",)
 
 
+def test_experiment_none_numeric_is_missing_not_error() -> None:
+    # None / non-int numeric fields report missing, not raise TypeError.
+    contract = _complete_experiment()
+    holey = ExperimentContract(
+        hypothesis=contract.hypothesis,
+        primary_metric=contract.primary_metric,
+        secondary_metric=contract.secondary_metric,
+        audience=contract.audience,
+        comparison=contract.comparison,
+        success_definition=contract.success_definition,
+        inconclusive_definition=contract.inconclusive_definition,
+        decision_if_works=contract.decision_if_works,
+        decision_if_not=contract.decision_if_not,
+        attribution_window_days=None,  # type: ignore[arg-type]
+        min_sample_size=None,  # type: ignore[arg-type]
+    )
+    missing = holey.missing_fields()
+    assert "attribution_window_days" in missing
+    assert "min_sample_size" in missing
+
+
+def test_experiment_bool_sample_size_is_missing() -> None:
+    # bool is an int subclass but is non-conforming for a count.
+    contract = _complete_experiment()
+    holey = ExperimentContract(
+        hypothesis=contract.hypothesis,
+        primary_metric=contract.primary_metric,
+        secondary_metric=contract.secondary_metric,
+        audience=contract.audience,
+        comparison=contract.comparison,
+        success_definition=contract.success_definition,
+        inconclusive_definition=contract.inconclusive_definition,
+        decision_if_works=contract.decision_if_works,
+        decision_if_not=contract.decision_if_not,
+        attribution_window_days=contract.attribution_window_days,
+        min_sample_size=True,  # type: ignore[arg-type]
+    )
+    assert "min_sample_size" in holey.missing_fields()
+
+
 def test_experiment_contract_is_frozen() -> None:
     contract = _complete_experiment()
     with pytest.raises(FrozenInstanceError):

@@ -27,13 +27,13 @@ imports, no DB, no LLM:
   that keeps the pipeline from efficiently producing landfill).
 - `TriageRequest` (frozen dataclass) — the stage-0 inputs: audience_segment,
   lifecycle_stage, business_goal, expected_behavior_change, channel, opportunity_size,
-  reuse_potential, `risk_tier` (slice 1 `RiskTier`), why_now. `missing_fields()` /
-  `is_complete()` so triage can't be waved through blank.
+  reuse_potential, `risk_tier` (slice 1 `RiskTier`), why_now. `missing_fields` /
+  `is_complete` so triage can't be waved through blank.
 - `ExperimentContract` (frozen dataclass) — the stage-7 measurement plan: hypothesis,
   primary_metric, secondary_metric, attribution_window_days, audience, comparison,
   min_sample_size, success_definition, inconclusive_definition, decision_if_works,
-  decision_if_not (required set mirrors the doc's stage-7 list). `missing_fields()` /
-  `is_complete()` so a piece can't publish against an empty plan; completeness treats
+  decision_if_not (required set mirrors the doc's stage-7 list). `missing_fields` /
+  `is_complete` so a piece can't publish against an empty plan; completeness treats
   `None`/non-`str` as missing rather than raising.
 
 
@@ -47,8 +47,8 @@ imports, no DB, no LLM:
 ## Mechanism
 
 Frozen dataclasses + pure validation helpers, same conventions as slice 1 (`StrEnum` with
-the Python-3.10 fallback already imported in the module). `missing_fields()` returns the
-empty required-field names in declaration order; `is_complete()` is `not missing_fields()`.
+the Python-3.10 fallback already imported in the module). `missing_fields` returns the
+empty required-field names in declaration order; `is_complete` is `not missing_fields()`.
 `TriageRequest.risk_tier` reuses `RiskTier` so triage and the later risk-tier routing
 table speak the same vocabulary. No existing code path changes.
 
@@ -81,8 +81,8 @@ table speak the same vocabulary. No existing code path changes.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/review_contract.py` | 131 |
+| `extracted_content_pipeline/review_contract.py` | 142 |
 | `plans/PR-Content-Ops-Triage-Experiment.md` | 88 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_extracted_content_triage_experiment.py` | 236 |
-| **Total** | **456** |
+| `tests/test_extracted_content_triage_experiment.py` | 276 |
+| **Total** | **507** |
