@@ -79,6 +79,12 @@ def test_not_applicable_needs_no_evidence() -> None:
     assert row.is_resolved() is True
 
 
+def test_plain_string_not_applicable_is_resolved() -> None:
+    # Decoded JSON carries plain strings; value-equality must treat them the same.
+    row = CoverageRow(rule_id="R1", status="not_applicable")  # type: ignore[arg-type]
+    assert row.is_resolved() is True
+
+
 def test_optional_unresolved_row_does_not_count_as_required_gap() -> None:
     rows = [CoverageRow(rule_id="R1", required=False)]
     assert unresolved_required_rows(rows) == ()
@@ -95,6 +101,12 @@ def test_nit_comment_cannot_be_blocking() -> None:
 def test_nit_comment_non_blocking_is_fine() -> None:
     c = ReviewComment(category=CommentCategory.NIT, message="punchier?")
     assert c.blocking is False
+
+
+def test_plain_string_nit_cannot_be_blocking() -> None:
+    # Even when category arrives as the plain string "nit".
+    with pytest.raises(ValueError):
+        ReviewComment(category="nit", blocking=True)  # type: ignore[arg-type]
 
 
 def test_blocking_comments_filters() -> None:
@@ -155,6 +167,29 @@ def test_failed_required_row_requires_revision() -> None:
     )
     assert review_verdict(pr) is ReviewDecision.REVISION_REQUIRED
     assert failing_required_rows(pr.coverage)[0].rule_id == "R2"
+
+
+def test_plain_string_fail_status_blocks_approval() -> None:
+    # The P1 regression: a required row with status="fail" (plain string) must
+    # NOT slip through as APPROVED.
+    pr = ContentPR(
+        rule_packet=_PINNED,
+        coverage=(
+            _resolved_pass("R1"),
+            CoverageRow(rule_id="R2", status="fail", evidence="missing CTA"),  # type: ignore[arg-type]
+        ),
+    )
+    assert review_verdict(pr) is ReviewDecision.REVISION_REQUIRED
+    assert any("failed required coverage" in r for r in verdict_reasons(pr))
+
+
+def test_verdict_reasons_tolerates_non_str_rule_id() -> None:
+    pr = ContentPR(
+        rule_packet=_PINNED,
+        coverage=(CoverageRow(rule_id=None),),  # type: ignore[arg-type]  # unresolved
+    )
+    # Must not raise on join of a non-str rule_id.
+    assert any("unresolved required coverage" in r for r in verdict_reasons(pr))
 
 
 def test_blocking_claim_requires_revision() -> None:

@@ -85,9 +85,9 @@ slices 1-3 (`StrEnum` 3.10 fallback, frozen dataclasses, `None`/non-`str` tolera
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/content_pr.py` | 205 |
+| `extracted_content_pipeline/content_pr.py` | 211 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `plans/PR-Content-Ops-Content-PR.md` | 93 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_extracted_content_pr.py` | 209 |
-| **Total** | **511** |
+| `tests/test_extracted_content_pr.py` | 244 |
+| **Total** | **552** |

@@ -100,7 +100,10 @@ class CoverageRow:
     evidence: str = ""
 
     def is_resolved(self) -> bool:
-        if self.status is CoverageStatus.NOT_APPLICABLE:
+        # Compare by value, not identity: status may arrive as a plain string
+        # (e.g. "fail" from decoded JSON), which StrEnum equality handles but
+        # `is` would miss.
+        if self.status == CoverageStatus.NOT_APPLICABLE:
             return True
         if self.status in (CoverageStatus.PASS, CoverageStatus.FAIL):
             return _nonempty(self.evidence)
@@ -121,7 +124,8 @@ class ReviewComment:
     blocking: bool = False
 
     def __post_init__(self) -> None:
-        if self.category is CommentCategory.NIT and self.blocking:
+        # Value comparison so a plain "nit" string is caught too.
+        if self.category == CommentCategory.NIT and self.blocking:
             raise ValueError("a NIT comment cannot be blocking")
 
 
@@ -149,7 +153,7 @@ def unresolved_required_rows(rows: Iterable[CoverageRow]) -> tuple[CoverageRow, 
 def failing_required_rows(rows: Iterable[CoverageRow]) -> tuple[CoverageRow, ...]:
     """Required coverage rows the reviewer explicitly failed."""
 
-    return tuple(r for r in rows if r.required and r.status is CoverageStatus.FAIL)
+    return tuple(r for r in rows if r.required and r.status == CoverageStatus.FAIL)
 
 
 def blocking_comments(comments: Iterable[ReviewComment]) -> tuple[ReviewComment, ...]:
@@ -169,11 +173,13 @@ def verdict_reasons(pr: ContentPR) -> tuple[str, ...]:
     if unresolved:
         reasons.append(
             "unresolved required coverage: "
-            + ", ".join(r.rule_id for r in unresolved)
+            + ", ".join(str(r.rule_id) for r in unresolved)
         )
     failing = failing_required_rows(pr.coverage)
     if failing:
-        reasons.append("failed required coverage: " + ", ".join(r.rule_id for r in failing))
+        reasons.append(
+            "failed required coverage: " + ", ".join(str(r.rule_id) for r in failing)
+        )
     blocked_claims = blocking_claims(pr.claims)
     if blocked_claims:
         reasons.append(f"{len(blocked_claims)} blocking claim(s)")
