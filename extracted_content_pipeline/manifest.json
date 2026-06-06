@@ -231,6 +231,9 @@
       "target": "extracted_content_pipeline/report_export.py"
     },
     {
+      "target": "extracted_content_pipeline/review_contract.py"
+    },
+    {
       "target": "extracted_content_pipeline/blog_post_export.py"
     },
     {
