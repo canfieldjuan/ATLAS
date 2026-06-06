@@ -124,6 +124,18 @@ else
     echo "    SKIP (scripts/audit_cross_layer_callers.py not found)"
 fi
 
+if [ -f scripts/audit_ai_reconciliation.py ]; then
+    reconcile_args=(scripts/audit_ai_reconciliation.py)
+    if [ -n "$current_pr_body_file" ]; then
+        reconcile_args+=(--current-pr-body-file "$current_pr_body_file")
+    fi
+    run_check "AI reconciliation record" python "${reconcile_args[@]}"
+else
+    echo
+    echo "==> AI reconciliation record"
+    echo "    SKIP (scripts/audit_ai_reconciliation.py not found)"
+fi
+
 committed_plan_docs=$(
     git diff --name-only --diff-filter=AM "$base"...HEAD -- 'plans/PR-*.md' 2>/dev/null |
         sort -u |
