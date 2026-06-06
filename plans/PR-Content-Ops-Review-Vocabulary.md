@@ -12,9 +12,10 @@ It is deliberately enum/value-scale and changes no existing behavior. The existi
 generated-asset review API keeps its host-extensible string statuses untouched; wiring
 this vocabulary into validation/routing is slice 2.
 
-Diff total is marginally over the 400-LOC soft cap (~412). The overage is scaffolding,
-not scope: the module is ~190 LOC (largely docstrings), and the rest is the plan doc's
-own machine-generated tables plus thorough unit tests. The shippable surface stays tiny.
+Diff total is marginally over the 400-LOC soft cap (see the per-file breakdown in
+*Estimated diff size* below). The overage is scaffolding, not scope: the module is
+~190 LOC (largely docstrings), and the rest is the plan doc's own machine-generated
+tables plus thorough unit tests. The shippable surface stays tiny.
 
 ## Scope (this PR)
 
@@ -88,7 +89,7 @@ convention (full-path imports), so no export edit.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/review_contract.py` | 190 |
-| `plans/PR-Content-Ops-Review-Vocabulary.md` | 94 |
+| `plans/PR-Content-Ops-Review-Vocabulary.md` | 95 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_content_review_contract.py` | 131 |
-| **Total** | **419** |
+| **Total** | **420** |
