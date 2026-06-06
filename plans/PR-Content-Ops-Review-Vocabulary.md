@@ -1,8 +1,5 @@
 # PR — Content-Ops Review Vocabulary (operating-model slice 1)
 
-Ownership lane: content-ops/review-contract
-Slice phase: Vertical slice
-
 ## Why this slice exists
 
 `docs/content_ops_operating_model.md` defines a content-review subsystem and a
@@ -20,6 +17,9 @@ not scope: the module is ~190 LOC (largely docstrings), and the rest is the plan
 own machine-generated tables plus thorough unit tests. The shippable surface stays tiny.
 
 ## Scope (this PR)
+
+Ownership lane: content-ops/review-contract
+Slice phase: Vertical slice
 
 New owned module `extracted_content_pipeline/review_contract.py` (flat-module
 convention, per `brand_voice.py`) plus unit tests. It provides:
