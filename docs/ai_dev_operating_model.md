@@ -293,19 +293,25 @@ detection falls back entirely to the operator. This is the only one of the four
 with no clean in-repo mechanical fix short of a scheduled poll or a CI job that
 comments staleness back onto open PRs.
 
-**The meta-cost.** The governance layer is now itself a product-sized surface — ~236
-scripts, 20 workflows, 875 plan docs. Its second-order risk is *audit rot* (an audit
+**The meta-cost.** The governance layer is now itself a product-sized surface — ~238
+scripts, 20 workflows, and ~880 plan docs. Its second-order risk is *audit rot* (an audit
 that silently stops catching), which §3g (surface, never skip) and §3h (every audit
 ships fixture tests that prove its failure branch fires) directly defend against —
 but those defenses rest on a *convention* enforced by judgment, not a meta-audit.
 Follow the chain down — product guarded by audits, audits guarded by fixtures,
 fixtures guaranteed by a rule a person must remember — and there is an irreducible
 human-discipline floor. "Mechanical gates" is a ~95% claim; all four gaps above live
-in the residual 5%, which is where every real incident now comes from. Two visible
-carrying costs: `plans/` is a write-only sediment (875 and growing, navigated only
-by mtime-sort), and "non-trivial" — *when a plan is even required* — is judgment, so
-the system biases toward over-planning. That bias is the *safe* failure, but it is a
-throughput tax, which is the irony worth naming for a system whose thesis is speed.
+in the residual 5%, which is where every real incident now comes from. One carrying
+cost the system has since *closed* — by turning its own flywheel on itself — is
+`plans/`: it used to be write-only sediment (growing +1 per PR, navigated only by
+mtime-sort). That gap, surfaced while auditing this very document, became #1319, which
+gave `plans/` a retirement lifecycle — archive-on-merge wired into the teardown ritual
+(`AGENTS.md` §1g), a generated `plans/INDEX.md`, and a mechanical `HARDENING.md` drain —
+so the root now holds only in-flight slices and the trail lives in `plans/archive/`.
+The carrying cost that remains is judgment-shaped: "non-trivial" — *when a plan is even
+required* — is a call, so the system biases toward over-planning. That bias is the
+*safe* failure, but it is a throughput tax, which is the irony worth naming for a system
+whose thesis is speed.
 
 The point of listing these is not that the system is immature — it's the opposite.
 A mature system is honest about where it *can't* be mechanical and spends its

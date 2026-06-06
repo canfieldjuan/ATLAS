@@ -85,13 +85,14 @@
   <text x="995" y="260" class="gate-s">final layer, not first</text>
 
   <!-- 6 Merge -->
-  <rect x="1195" y="150" width="145" height="120" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <rect x="1195" y="150" width="145" height="142" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
   <text x="1210" y="172" class="box-t">6 · Merge</text>
   <text x="1210" y="194" class="box-s">squash → main</text>
   <text x="1210" y="212" class="box-s">tear down branch</text>
   <text x="1210" y="230" class="box-s">+ worktree</text>
-  <text x="1210" y="252" class="lbl">main = only</text>
-  <text x="1210" y="268" class="lbl">source of truth</text>
+  <text x="1210" y="248" class="box-s">+ archive plan doc</text>
+  <text x="1210" y="270" class="lbl">main = only</text>
+  <text x="1210" y="286" class="lbl">source of truth</text>
 
   <!-- arrows builder pipeline -->
   <line x1="250" y1="210" x2="283" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
@@ -219,5 +220,5 @@
   <text x="1010" y="972" fill="#cbd5e1" font-size="12">· SESSION_BOOTSTRAP.md  (compaction)</text>
   <text x="1010" y="992" fill="#cbd5e1" font-size="12">· AUDITOR_PROMPT / CANONICAL</text>
   <text x="1010" y="1012" fill="#cbd5e1" font-size="12">· INTEGRATION_MAP / CONTEXT</text>
-  <text x="1010" y="1032" fill="#cbd5e1" font-size="12">· 236 scripts · 20 CI workflows · 875 plans</text>
+  <text x="1010" y="1032" fill="#cbd5e1" font-size="12">· ~238 scripts · 20 workflows · plans auto-archived on merge</text>
 </svg>
