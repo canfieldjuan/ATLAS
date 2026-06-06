@@ -9,6 +9,11 @@ experiment contract** (the measurement plan frozen *before* publish). Like slice
 are additive, behavior-neutral schemas that consume slice 1's vocabulary; the routing /
 enforcement that *requires* them is a later slice.
 
+Diff total runs slightly over the 400-LOC soft cap (see *Estimated diff size*). The excess
+is test surface, not product: the module itself is ~130 LOC, and the tests grew with review
+hardening (None/non-`str` completeness, the required-field set). The shippable surface
+stays small.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/review-contract
@@ -25,10 +30,11 @@ imports, no DB, no LLM:
   reuse_potential, `risk_tier` (slice 1 `RiskTier`), why_now. `missing_fields()` /
   `is_complete()` so triage can't be waved through blank.
 - `ExperimentContract` (frozen dataclass) — the stage-7 measurement plan: hypothesis,
-  primary_metric, optional secondary_metric, attribution_window_days, audience,
-  comparison, min_sample_size, success_definition, inconclusive_definition,
-  decision_if_works, decision_if_not. `missing_fields()` / `is_complete()` so a piece
-  can't publish against an empty plan.
+  primary_metric, secondary_metric, attribution_window_days, audience, comparison,
+  min_sample_size, success_definition, inconclusive_definition, decision_if_works,
+  decision_if_not (required set mirrors the doc's stage-7 list). `missing_fields()` /
+  `is_complete()` so a piece can't publish against an empty plan; completeness treats
+  `None`/non-`str` as missing rather than raising.
 
 
 ### Files touched
@@ -75,8 +81,8 @@ table speak the same vocabulary. No existing code path changes.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/review_contract.py` | 116 |
-| `plans/PR-Content-Ops-Triage-Experiment.md` | 82 |
+| `extracted_content_pipeline/review_contract.py` | 131 |
+| `plans/PR-Content-Ops-Triage-Experiment.md` | 88 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_extracted_content_triage_experiment.py` | 186 |
-| **Total** | **385** |
+| `tests/test_extracted_content_triage_experiment.py` | 236 |
+| **Total** | **456** |

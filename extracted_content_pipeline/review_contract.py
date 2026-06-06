@@ -196,6 +196,18 @@ def recurring_failure_categories(
 # --------------------------------------------------------------------------
 
 
+def _missing_text(value: object) -> bool:
+    """True if a required text value should count as missing.
+
+    A value is present only if it is a non-empty, non-whitespace ``str``.
+    ``None`` or any non-``str`` (e.g. JSON ``null`` deserialized into the field)
+    counts as missing rather than raising ``AttributeError`` on ``.strip()`` --
+    these schemas are typed by convention, not enforced at runtime.
+    """
+
+    return not (isinstance(value, str) and value.strip())
+
+
 class TriageDecision(StrEnum):
     """Stage-0 verdict: should this asset exist at all?
 
@@ -245,9 +257,9 @@ class TriageRequest:
         missing = [
             name
             for name in _TRIAGE_REQUIRED_TEXT
-            if not getattr(self, name).strip()
+            if _missing_text(getattr(self, name))
         ]
-        if self.risk_tier is None:
+        if not isinstance(self.risk_tier, RiskTier):
             missing.append("risk_tier")
         return tuple(missing)
 
@@ -256,10 +268,12 @@ class TriageRequest:
 
 
 # Required stage-7 text fields, in declaration order. secondary_metric is
-# optional; the two numeric fields are checked separately (must be > 0).
+# required per docs/content_ops_operating_model.md (stage 7 "Required fields");
+# the two numeric fields are checked separately (must be > 0).
 _EXPERIMENT_REQUIRED_TEXT = (
     "hypothesis",
     "primary_metric",
+    "secondary_metric",
     "audience",
     "comparison",
     "success_definition",
@@ -275,11 +289,13 @@ class ExperimentContract:
 
     Defining this up front is what keeps the verdict ledger from rotting into
     "the graph went up and nobody wants to argue." Completeness only: it checks
-    the plan is filled, not that the hypothesis is sound.
+    the plan is filled, not that the hypothesis is sound. The required field set
+    mirrors stage 7 in ``docs/content_ops_operating_model.md``.
     """
 
     hypothesis: str = ""
     primary_metric: str = ""
+    secondary_metric: str = ""  # required (a guardrail metric, per the doc)
     audience: str = ""
     comparison: str = ""  # control or baseline being compared against
     success_definition: str = ""  # what counts as "worked"
@@ -288,13 +304,12 @@ class ExperimentContract:
     decision_if_not: str = ""
     attribution_window_days: int = 0
     min_sample_size: int = 0
-    secondary_metric: str = ""  # optional
 
     def missing_fields(self) -> tuple[str, ...]:
         missing = [
             name
             for name in _EXPERIMENT_REQUIRED_TEXT
-            if not getattr(self, name).strip()
+            if _missing_text(getattr(self, name))
         ]
         if self.attribution_window_days <= 0:
             missing.append("attribution_window_days")

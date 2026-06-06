@@ -33,6 +33,7 @@ def _complete_experiment() -> ExperimentContract:
     return ExperimentContract(
         hypothesis="a shorter subject lifts opens",
         primary_metric="open_rate",
+        secondary_metric="unsubscribe_rate",
         audience="trial users day 3",
         comparison="current subject line",
         success_definition="+3pp open rate",
@@ -115,6 +116,20 @@ def test_triage_request_is_frozen() -> None:
         req.channel = "other"  # type: ignore[misc]
 
 
+def test_triage_none_text_is_missing_not_error() -> None:
+    # A None field (e.g. from JSON null) must report missing, not raise.
+    req = TriageRequest(
+        audience_segment=None,  # type: ignore[arg-type]
+        lifecycle_stage="b",
+        business_goal="c",
+        expected_behavior_change="d",
+        channel="e",
+        why_now="f",
+        risk_tier=RiskTier.LOW,
+    )
+    assert req.missing_fields() == ("audience_segment",)
+
+
 def test_experiment_complete_contract_has_no_missing_fields() -> None:
     contract = _complete_experiment()
     assert contract.missing_fields() == ()
@@ -127,6 +142,7 @@ def test_experiment_empty_contract_lists_all_required() -> None:
     assert missing == (
         "hypothesis",
         "primary_metric",
+        "secondary_metric",
         "audience",
         "comparison",
         "success_definition",
@@ -139,10 +155,24 @@ def test_experiment_empty_contract_lists_all_required() -> None:
     assert contract.is_complete() is False
 
 
-def test_experiment_secondary_metric_is_optional() -> None:
+def test_experiment_secondary_metric_is_required() -> None:
+    # The canonical doc lists secondary_metric among the required stage-7 fields.
     contract = _complete_experiment()
-    assert contract.secondary_metric == ""
-    assert contract.is_complete() is True
+    without = ExperimentContract(
+        hypothesis=contract.hypothesis,
+        primary_metric=contract.primary_metric,
+        secondary_metric="",
+        audience=contract.audience,
+        comparison=contract.comparison,
+        success_definition=contract.success_definition,
+        inconclusive_definition=contract.inconclusive_definition,
+        decision_if_works=contract.decision_if_works,
+        decision_if_not=contract.decision_if_not,
+        attribution_window_days=contract.attribution_window_days,
+        min_sample_size=contract.min_sample_size,
+    )
+    assert without.missing_fields() == ("secondary_metric",)
+    assert without.is_complete() is False
 
 
 @pytest.mark.parametrize("window", [0, -1])
@@ -150,6 +180,7 @@ def test_experiment_nonpositive_window_is_missing(window: int) -> None:
     contract = ExperimentContract(
         hypothesis="h",
         primary_metric="m",
+        secondary_metric="m2",
         audience="a",
         comparison="c",
         success_definition="s",
@@ -168,6 +199,7 @@ def test_experiment_nonpositive_sample_size_is_missing() -> None:
     bad = ExperimentContract(
         hypothesis=contract.hypothesis,
         primary_metric=contract.primary_metric,
+        secondary_metric=contract.secondary_metric,
         audience=contract.audience,
         comparison=contract.comparison,
         success_definition=contract.success_definition,
@@ -178,6 +210,24 @@ def test_experiment_nonpositive_sample_size_is_missing() -> None:
         min_sample_size=0,
     )
     assert bad.missing_fields() == ("min_sample_size",)
+
+
+def test_experiment_none_text_is_missing_not_error() -> None:
+    contract = _complete_experiment()
+    holey = ExperimentContract(
+        hypothesis=None,  # type: ignore[arg-type]
+        primary_metric=contract.primary_metric,
+        secondary_metric=contract.secondary_metric,
+        audience=contract.audience,
+        comparison=contract.comparison,
+        success_definition=contract.success_definition,
+        inconclusive_definition=contract.inconclusive_definition,
+        decision_if_works=contract.decision_if_works,
+        decision_if_not=contract.decision_if_not,
+        attribution_window_days=contract.attribution_window_days,
+        min_sample_size=contract.min_sample_size,
+    )
+    assert holey.missing_fields() == ("hypothesis",)
 
 
 def test_experiment_contract_is_frozen() -> None:
