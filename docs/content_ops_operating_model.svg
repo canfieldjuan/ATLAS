@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1080" viewBox="0 0 1400 1080" font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0d9488"/>
+    </marker>
+    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b91c1c"/>
+    </marker>
+    <style>
+      .title{font-size:30px;font-weight:700;fill:#0f172a}
+      .sub{font-size:15px;fill:#475569}
+      .lane{font-size:15px;font-weight:700;fill:#1e3a8a}
+      .box-t{font-size:15px;font-weight:700;fill:#0f172a}
+      .box-s{font-size:12px;fill:#334155}
+      .gate-t{font-size:14px;font-weight:700;fill:#7c2d12}
+      .gate-s{font-size:11.5px;fill:#7c2d12}
+      .hdr{font-size:17px;font-weight:700;fill:#fff}
+      .lbl{font-size:11.5px;fill:#475569;font-style:italic}
+      .foot{font-size:12.5px;fill:#64748b}
+      .k{font-size:13px;fill:#334155}
+    </style>
+  </defs>
+
+  <rect width="1400" height="1080" fill="#f8fafc"/>
+  <text x="40" y="50" class="title">The Atlas Content Marketing Operating Model</text>
+  <text x="40" y="75" class="sub">Brief + schema contract -&gt; gated drafting -&gt; independent editor -&gt; publish -&gt; measure &amp; learn. Same gate discipline as code; a living source of truth and a winner-flywheel instead of a terminal merge.</text>
+
+  <!-- ================= LANES ================= -->
+  <rect x="40" y="100" width="1320" height="250" rx="12" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="60" y="125" class="lane">LANE A — e.g. "lifecycle email"  (writer + editor pair)</text>
+  <text x="60" y="332" class="lane">LANE B — e.g. "SEO blog"  (independent writer + editor pair, separate channel lane)</text>
+  <line x1="40" y1="300" x2="1360" y2="300" stroke="#cbd5e1" stroke-dasharray="4 4"/>
+
+  <!-- ===== pipeline (Lane A) ===== -->
+  <!-- 1 Brief + schema -->
+  <rect x="60" y="150" width="158" height="120" rx="9" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="73" y="172" class="box-t">1 · Brief + schema</text>
+  <text x="73" y="194" class="box-s">intent + asset schema</text>
+  <text x="73" y="212" class="box-s">the contract = the UI</text>
+  <text x="73" y="230" class="box-s">(no webpage needed)</text>
+  <text x="73" y="262" class="lbl">press enter to advance</text>
+
+  <!-- 2 Writer drafts -->
+  <rect x="238" y="150" width="158" height="120" rx="9" fill="#fff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="251" y="172" class="box-t">2 · Writer drafts</text>
+  <text x="251" y="194" class="box-s">fills the schema</text>
+  <text x="251" y="212" class="box-s">one asset, thin</text>
+  <text x="251" y="230" class="box-s">grounded in registry</text>
+  <text x="251" y="262" class="lbl">fields, not prose</text>
+
+  <!-- 3 Content gates -->
+  <rect x="416" y="150" width="158" height="120" rx="9" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="429" y="172" class="gate-t">3 · Content gates</text>
+  <text x="429" y="193" class="gate-s">voice-drift · claims</text>
+  <text x="429" y="210" class="gate-s">compliance · structure</text>
+  <text x="429" y="227" class="gate-s">determ. + LLM-judge</text>
+  <text x="429" y="244" class="gate-s">compliance fails closed</text>
+
+  <!-- 4 Editor -->
+  <rect x="594" y="150" width="158" height="120" rx="9" fill="#fff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="607" y="172" class="box-t">4 · Editor session</text>
+  <text x="607" y="194" class="box-s">INDEPENDENT</text>
+  <text x="607" y="212" class="box-s">judges vs the brief</text>
+  <text x="607" y="230" class="box-s">taste + persuasion</text>
+  <text x="607" y="248" class="box-s">BLOCKER/.../LGTM</text>
+
+  <!-- 5 Publish -->
+  <rect x="772" y="150" width="158" height="120" rx="9" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="785" y="172" class="box-t">5 · Publish</text>
+  <text x="785" y="194" class="box-s">ship to channel</text>
+  <text x="785" y="212" class="box-s">UTM-tagged</text>
+  <text x="785" y="244" class="lbl">attributable</text>
+
+  <!-- 6 Measure -->
+  <rect x="950" y="150" width="158" height="120" rx="9" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="963" y="172" class="box-t">6 · Measure</text>
+  <text x="963" y="194" class="box-s">signal lands (delayed)</text>
+  <text x="963" y="212" class="box-s">open/click/convert</text>
+  <text x="963" y="244" class="lbl">the market is the test</text>
+
+  <!-- 7 Verdict -->
+  <rect x="1128" y="150" width="158" height="120" rx="9" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="1141" y="172" class="box-t">7 · Verdict</text>
+  <text x="1141" y="194" class="box-s">worked / didn't / why</text>
+  <text x="1141" y="212" class="box-s">1 line -&gt; ledger</text>
+  <text x="1141" y="244" class="lbl">human call</text>
+
+  <!-- arrows -->
+  <line x1="218" y1="210" x2="236" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="396" y1="210" x2="414" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="574" y1="210" x2="592" y2="210" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="752" y1="210" x2="770" y2="210" stroke="#0d9488" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="930" y1="210" x2="948" y2="210" stroke="#0d9488" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="1108" y1="210" x2="1126" y2="210" stroke="#0d9488" stroke-width="2" marker-end="url(#arrowGreen)"/>
+
+  <!-- reject loop -->
+  <path d="M673,270 q0,34 -178,34 q-178,0 -178,-30" fill="none" stroke="#b91c1c" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#arrowRed)"/>
+  <text x="420" y="296" fill="#b91c1c" font-size="11.5" font-weight="700">BLOCKER -&gt; revise &amp; re-gate</text>
+
+  <!-- post-publish bracket -->
+  <text x="950" y="288" fill="#0f766e" font-size="11.5" font-weight="700">post-publish — the loop code doesn't have</text>
+
+  <!-- Lane B mini pipeline -->
+  <rect x="60" y="316" width="1226" height="26" rx="6" fill="#dbeafe" stroke="#bfdbfe"/>
+  <text x="75" y="334" class="k">Brief -&gt; Draft -&gt; Gates -&gt; Editor -&gt; Publish -&gt; Measure -&gt; Verdict   ·   same contract, different channel (lanes can't collide)</text>
+
+  <!-- ================= PRE-PUBLISH GATES ================= -->
+  <rect x="40" y="370" width="650" height="250" rx="12" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="60" y="397" class="lane" fill="#9a3412">PRE-PUBLISH GATES — what you can know before shipping</text>
+
+  <rect x="60" y="410" width="610" height="44" rx="8" fill="#fff" stroke="#ea580c"/>
+  <text x="73" y="430" class="box-t">Voice / tone drift  [LLM-judge]</text>
+  <text x="73" y="447" class="box-s">vs brand-voice contract: lexicon, reading level, POV, formality</text>
+
+  <rect x="60" y="460" width="610" height="44" rx="8" fill="#fff" stroke="#ea580c"/>
+  <text x="73" y="480" class="box-t">Claim consistency  [deterministic]</text>
+  <text x="73" y="497" class="box-s">vs claim/messaging registry: stats · price · product names · CTA</text>
+
+  <rect x="60" y="510" width="610" height="44" rx="8" fill="#fff" stroke="#ea580c"/>
+  <text x="73" y="530" class="box-t">Compliance + structure  [deterministic]</text>
+  <text x="73" y="547" class="box-s">required disclaimers (fail closed) · SEO · format · word budget</text>
+
+  <text x="60" y="578" class="k">Deterministic gates settle consistency / compliance / structure; the LLM-judge +</text>
+  <text x="60" y="596" class="k">editor handle voice &amp; persuasion. Effectiveness is <tspan font-weight="700">not</tspan> knowable pre-publish.</text>
+
+  <!-- ================= LIVING SOURCE OF TRUTH ================= -->
+  <rect x="710" y="370" width="650" height="250" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="730" y="397" class="lane" fill="#3730a3">LIVING SOURCE OF TRUTH — read before every brief</text>
+
+  <rect x="730" y="410" width="610" height="44" rx="8" fill="#fff" stroke="#6366f1"/>
+  <text x="743" y="430" class="box-t">Campaign ledger  (lightweight verdict log)</text>
+  <text x="743" y="447" class="box-s">hypothesis · assets · headline metric · worked / didn't / why</text>
+
+  <rect x="730" y="460" width="610" height="44" rx="8" fill="#fff" stroke="#6366f1"/>
+  <text x="743" y="480" class="box-t">Claim / messaging registry</text>
+  <text x="743" y="497" class="box-s">canonical stats · price · positioning   (content's CANONICAL.md)</text>
+
+  <rect x="730" y="510" width="610" height="44" rx="8" fill="#fff" stroke="#6366f1"/>
+  <text x="743" y="530" class="box-t">Brand-voice contract</text>
+  <text x="743" y="547" class="box-s">the voice rules the drift gate scores against   (content's AGENTS.md)</text>
+
+  <text x="730" y="578" class="k">Unlike plans/archive (write-only, forgotten), this is consulted constantly.</text>
+  <text x="730" y="596" class="k">Outcomes &amp; winning patterns live on; drafts are disposable.</text>
+
+  <!-- ================= TWO FLYWHEELS ================= -->
+  <rect x="40" y="640" width="1320" height="180" rx="12" fill="#f0fdf4" stroke="#bbf7d0"/>
+  <text x="60" y="667" class="lane" fill="#166534">TWO FLYWHEELS — kill the repeat, clone the winner</text>
+
+  <rect x="60" y="685" width="250" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="75" y="708" class="box-t">Every piece earns a verdict</text>
+  <text x="75" y="730" class="box-s">worked / didn't / why,</text>
+  <text x="75" y="746" class="box-s">recorded to the ledger</text>
+
+  <rect x="430" y="685" width="270" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="445" y="708" class="box-t">Convert it — two ways</text>
+  <text x="445" y="730" class="box-s">miss -&gt; a new gate (kill repeat)</text>
+  <text x="445" y="748" class="box-s">winner -&gt; a reusable prior (clone)</text>
+
+  <rect x="820" y="685" width="270" height="110" rx="9" fill="#fff" stroke="#16a34a"/>
+  <text x="835" y="708" class="box-t">Front-load the next brief</text>
+  <text x="835" y="730" class="box-s">gates auto-apply;</text>
+  <text x="835" y="748" class="box-s">winning patterns -&gt; schema defaults</text>
+
+  <rect x="1200" y="685" width="140" height="110" rx="9" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="1215" y="712" class="box-t">Quality</text>
+  <text x="1215" y="732" class="box-t">compounds</text>
+  <text x="1215" y="758" class="box-s">fewer misses,</text>
+  <text x="1215" y="774" class="box-s">more winners</text>
+
+  <line x1="310" y1="740" x2="428" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="700" y1="740" x2="818" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <line x1="1090" y1="740" x2="1198" y2="740" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <path d="M1270,795 q0,40 -640,40 q-630,0 -630,-36" fill="none" stroke="#15803d" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrowGreen)"/>
+  <text x="590" y="852" fill="#166534" font-size="12" font-weight="700">...and every verdict sharpens the next brief — the loop tightens with each cycle</text>
+
+  <!-- ================= FOOTER PRINCIPLES ================= -->
+  <rect x="40" y="872" width="1320" height="180" rx="12" fill="#0f172a"/>
+  <text x="60" y="900" class="hdr">Principles worth stealing</text>
+  <text x="60" y="930" fill="#e2e8f0" font-size="13.5">1 · The contract is the interface — brief + asset schema, filled &amp; gated. Not a UI; press enter to advance.</text>
+  <text x="60" y="956" fill="#e2e8f0" font-size="13.5">2 · Gate what you can know pre-publish — voice, consistency, compliance, structure. The market tests the rest.</text>
+  <text x="60" y="982" fill="#e2e8f0" font-size="13.5">3 · Separate the writer from the editor — independent judgment against the brief beats self-review.</text>
+  <text x="60" y="1008" fill="#e2e8f0" font-size="13.5">4 · Publish is the midpoint — measure, give a verdict, record it. The loop the value lives in.</text>
+  <text x="60" y="1034" fill="#e2e8f0" font-size="13.5">5 · Two flywheels — kill the repeat (miss -&gt; gate) and clone the winner (win -&gt; prior).</text>
+
+  <text x="1010" y="930" fill="#94a3b8" font-size="12">Living source of truth:</text>
+  <text x="1010" y="952" fill="#cbd5e1" font-size="12">· brand-voice contract  (voice gate)</text>
+  <text x="1010" y="972" fill="#cbd5e1" font-size="12">· claim/messaging registry  (consistency)</text>
+  <text x="1010" y="992" fill="#cbd5e1" font-size="12">· campaign ledger  (verdict log)</text>
+  <text x="1010" y="1012" fill="#cbd5e1" font-size="12">Builds on: extracted_content_pipeline</text>
+  <text x="1010" y="1032" fill="#cbd5e1" font-size="12">+ extracted_quality_gate  (gate packs)</text>
+</svg>
