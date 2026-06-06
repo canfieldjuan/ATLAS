@@ -39,6 +39,7 @@ pure functions; no I/O, no Atlas imports, no DB, no LLM:
   `failing_required_rows`, `blocking_comments`, and `verdict_reasons` (the transparency
   trail).
 
+Reviewer rules triggered: R1 (coverage rows record Pass/Fail/N-A requirement matches; the verdict enforces them), R10 (the verdict and its predicates are small, pure, and maintainable).
 
 ### Files touched
 
@@ -87,7 +88,7 @@ slices 1-3 (`StrEnum` 3.10 fallback, frozen dataclasses, `None`/non-`str` tolera
 |---|---:|
 | `extracted_content_pipeline/content_pr.py` | 216 |
 | `extracted_content_pipeline/manifest.json` | 3 |
-| `plans/PR-Content-Ops-Content-PR.md` | 93 |
+| `plans/PR-Content-Ops-Content-PR.md` | 94 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_content_pr.py` | 259 |
-| **Total** | **572** |
+| **Total** | **573** |
