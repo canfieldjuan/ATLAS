@@ -188,3 +188,119 @@ def recurring_failure_categories(
     return frozenset(
         category for category, count in counts.items() if count >= threshold
     )
+
+
+# --------------------------------------------------------------------------
+# Slice 2: stage-0 triage + stage-7 experiment contract.
+# Additive schemas; the routing that *requires* them is a later slice.
+# --------------------------------------------------------------------------
+
+
+class TriageDecision(StrEnum):
+    """Stage-0 verdict: should this asset exist at all?
+
+    The gate that keeps the pipeline from becoming an efficient machine for
+    producing polished landfill. ``CLONE_WINNER`` reuses an existing proven
+    asset instead of creating net-new.
+    """
+
+    CREATE = "create"
+    CLONE_WINNER = "clone_winner"
+    DEFER = "defer"
+    REJECT = "reject"
+
+
+# Required stage-0 text inputs, in declaration order. opportunity_size and
+# reuse_potential are optional context, not completeness-gating.
+_TRIAGE_REQUIRED_TEXT = (
+    "audience_segment",
+    "lifecycle_stage",
+    "business_goal",
+    "expected_behavior_change",
+    "channel",
+    "why_now",
+)
+
+
+@dataclass(frozen=True)
+class TriageRequest:
+    """Stage-0 triage inputs (what a triage decision is made from).
+
+    Completeness only: ``missing_fields`` reports blank required inputs so a
+    triage can't be waved through empty. It does not judge whether the asset is
+    *worth* making -- that is the human ``TriageDecision``.
+    """
+
+    audience_segment: str = ""
+    lifecycle_stage: str = ""
+    business_goal: str = ""
+    expected_behavior_change: str = ""
+    channel: str = ""
+    why_now: str = ""
+    opportunity_size: str = ""  # optional context
+    reuse_potential: str = ""  # optional context
+    risk_tier: RiskTier | None = None
+
+    def missing_fields(self) -> tuple[str, ...]:
+        missing = [
+            name
+            for name in _TRIAGE_REQUIRED_TEXT
+            if not getattr(self, name).strip()
+        ]
+        if self.risk_tier is None:
+            missing.append("risk_tier")
+        return tuple(missing)
+
+    def is_complete(self) -> bool:
+        return not self.missing_fields()
+
+
+# Required stage-7 text fields, in declaration order. secondary_metric is
+# optional; the two numeric fields are checked separately (must be > 0).
+_EXPERIMENT_REQUIRED_TEXT = (
+    "hypothesis",
+    "primary_metric",
+    "audience",
+    "comparison",
+    "success_definition",
+    "inconclusive_definition",
+    "decision_if_works",
+    "decision_if_not",
+)
+
+
+@dataclass(frozen=True)
+class ExperimentContract:
+    """Stage-7 measurement plan, frozen *before* publish.
+
+    Defining this up front is what keeps the verdict ledger from rotting into
+    "the graph went up and nobody wants to argue." Completeness only: it checks
+    the plan is filled, not that the hypothesis is sound.
+    """
+
+    hypothesis: str = ""
+    primary_metric: str = ""
+    audience: str = ""
+    comparison: str = ""  # control or baseline being compared against
+    success_definition: str = ""  # what counts as "worked"
+    inconclusive_definition: str = ""  # what counts as "inconclusive"
+    decision_if_works: str = ""
+    decision_if_not: str = ""
+    attribution_window_days: int = 0
+    min_sample_size: int = 0
+    secondary_metric: str = ""  # optional
+
+    def missing_fields(self) -> tuple[str, ...]:
+        missing = [
+            name
+            for name in _EXPERIMENT_REQUIRED_TEXT
+            if not getattr(self, name).strip()
+        ]
+        if self.attribution_window_days <= 0:
+            missing.append("attribution_window_days")
+        if self.min_sample_size <= 0:
+            missing.append("min_sample_size")
+        return tuple(missing)
+
+    def is_complete(self) -> bool:
+        return not self.missing_fields()
