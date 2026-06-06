@@ -102,6 +102,23 @@ is already used by worktree at ...`):
   (`--force` if it still holds throwaway state). This frees the branch.
 - `git branch -D <branch>` (squash-merge leaves the local branch
   unmerged by content, so `-d` refuses — `-D` is expected here).
+- Archive the merged plan doc so `plans/` only ever holds **in-flight**
+  slices (the plan's content is already preserved in the squash commit).
+  On a local `main` synced to `origin/main` (`git checkout main && git
+  pull`), move **your own** plan by name and refresh the index:
+
+  ```bash
+  git mv plans/PR-<Slice>.md plans/archive/
+  python scripts/archive_plans.py index   # rebuild plans/INDEX.md
+  ```
+
+  Land that move on `origin/main` as a trivial housekeeping commit (or
+  fold the `git mv` into your next branch off `main` if direct main
+  commits are gated). Move **only** your own merged plan by name — do
+  **not** run `archive_plans.py archive` (bulk) during teardown: it would
+  sweep concurrent sessions' still-in-flight plans out of the root. The
+  non-blocking "Plans archive backlog" advisory in `local_pr_review.sh` is
+  the backstop that nudges you if this step is ever missed.
 
 Do **not** let merged branches or finished worktrees linger. They drift
 behind `origin/main`, accumulate stale staged state, and become the
