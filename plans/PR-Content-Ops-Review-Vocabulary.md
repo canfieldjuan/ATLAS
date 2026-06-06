@@ -1,5 +1,8 @@
 # PR — Content-Ops Review Vocabulary (operating-model slice 1)
 
+Ownership lane: content-ops/review-contract
+Slice phase: Content operating model - slice 1 (review vocabulary)
+
 ## Why this slice exists
 
 `docs/content_ops_operating_model.md` defines a content-review subsystem and a
@@ -85,7 +88,7 @@ convention (full-path imports), so no export edit.
 |---|---:|
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `extracted_content_pipeline/review_contract.py` | 190 |
-| `plans/PR-Content-Ops-Review-Vocabulary.md` | 91 |
+| `plans/PR-Content-Ops-Review-Vocabulary.md` | 94 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_content_review_contract.py` | 131 |
-| **Total** | **416** |
+| **Total** | **419** |
