@@ -237,6 +237,9 @@
       "target": "extracted_content_pipeline/claims_map.py"
     },
     {
+      "target": "extracted_content_pipeline/content_pr.py"
+    },
+    {
       "target": "extracted_content_pipeline/blog_post_export.py"
     },
     {
