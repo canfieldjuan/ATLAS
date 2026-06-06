@@ -1,0 +1,882 @@
+# Plan archive index
+
+878 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+
+- [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
+- [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Affiliate-Partner-Drift-Check](archive/PR-Affiliate-Partner-Drift-Check.md)
+- [PR-Affiliate-Partner-Drift-Qualified-Names](archive/PR-Affiliate-Partner-Drift-Qualified-Names.md)
+- [PR-Affiliate-Partner-Migrations](archive/PR-Affiliate-Partner-Migrations.md)
+- [PR-Agents-Md-Framework](archive/PR-Agents-Md-Framework.md)
+- [PR-Agents-Md-Routing-Section](archive/PR-Agents-Md-Routing-Section.md)
+- [PR-Agents-No-Wait-After-Open](archive/PR-Agents-No-Wait-After-Open.md) - lane: workflow/agents-contract | phase: Workflow/process
+- [PR-Agents-Session-Map-Guard](archive/PR-Agents-Session-Map-Guard.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
+- [PR-Agents-Session-PR-Map](archive/PR-Agents-Session-PR-Map.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
+- [PR-Atlas-Brain-Test-CI-Enrollment-Audit](archive/PR-Atlas-Brain-Test-CI-Enrollment-Audit.md) - lane: content-ops/faq-deflection | phase: Workflow/process
+- [PR-Atlas-Local-PR-Body-Preflight](archive/PR-Atlas-Local-PR-Body-Preflight.md) - lane: atlas-workflow | phase: Workflow/process.
+- [PR-Atlas-Local-Review-CI](archive/PR-Atlas-Local-Review-CI.md) - lane: atlas-workflow | phase: Workflow/process.
+- [PR-Atlas-Slice-Phase-Audit](archive/PR-Atlas-Slice-Phase-Audit.md) - lane: atlas-workflow | phase: Workflow/process.
+- [PR-Atlas-Support-Ticket-FAQ-Execute-Cap](archive/PR-Atlas-Support-Ticket-FAQ-Execute-Cap.md) - lane: content-ops/faq-generator | phase: Functional validation.
+- [PR-Atlas-Support-Ticket-Provider-API-Route-Proof](archive/PR-Atlas-Support-Ticket-Provider-API-Route-Proof.md) - lane: content-ops/input-provider-ticket-package | phase: Functional validation
+- [PR-Atlas-Support-Ticket-Provider-Execute-Proof](archive/PR-Atlas-Support-Ticket-Provider-Execute-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof](archive/PR-Atlas-Support-Ticket-Provider-Warning-Route-Proof.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Atlas-Thin-Slice-Hardening-Contract](archive/PR-Atlas-Thin-Slice-Hardening-Contract.md) - lane: atlas-workflow
+- [PR-Atlas-UI-Lint-B2B-Reports](archive/PR-Atlas-UI-Lint-B2B-Reports.md)
+- [PR-Atlas-Workflow-Phase-Contract](archive/PR-Atlas-Workflow-Phase-Contract.md) - lane: atlas-workflow | phase: Workflow/process.
+- [PR-Audit-Agents-Auditor-Principles](archive/PR-Audit-Agents-Auditor-Principles.md)
+- [PR-Audit-Claude-Md-MCP-Counts](archive/PR-Audit-Claude-Md-MCP-Counts.md)
+- [PR-Audit-Close-Manifest-MCP-Drift](archive/PR-Audit-Close-Manifest-MCP-Drift.md)
+- [PR-Audit-Cross-Layer-Caller-Hints](archive/PR-Audit-Cross-Layer-Caller-Hints.md) - lane: audit/local-review
+- [PR-Audit-Extracted-Manifests](archive/PR-Audit-Extracted-Manifests.md)
+- [PR-Audit-Install-Local-Review-Hook](archive/PR-Audit-Install-Local-Review-Hook.md)
+- [PR-Audit-Local-Review-Dirty-Guard](archive/PR-Audit-Local-Review-Dirty-Guard.md)
+- [PR-Audit-Local-Review-Runner](archive/PR-Audit-Local-Review-Runner.md)
+- [PR-Audit-MCP-Port-Assignments](archive/PR-Audit-MCP-Port-Assignments.md)
+- [PR-Audit-MCP-Tool-Names](archive/PR-Audit-MCP-Tool-Names.md)
+- [PR-Audit-MINOR-Batch-1](archive/PR-Audit-MINOR-Batch-1.md)
+- [PR-Audit-MINOR-Batch-2](archive/PR-Audit-MINOR-Batch-2.md)
+- [PR-Audit-MINOR-Batch-3](archive/PR-Audit-MINOR-Batch-3.md)
+- [PR-Audit-ManifestDrivenSmokes-1](archive/PR-Audit-ManifestDrivenSmokes-1.md)
+- [PR-Audit-ManifestDrivenSmokes-2](archive/PR-Audit-ManifestDrivenSmokes-2.md)
+- [PR-Audit-PipelineStandaloneSmoke-1](archive/PR-Audit-PipelineStandaloneSmoke-1.md)
+- [PR-Audit-Plan-Code-Consistency](archive/PR-Audit-Plan-Code-Consistency.md)
+- [PR-Audit-Plan-Diff-Size](archive/PR-Audit-Plan-Diff-Size.md)
+- [PR-Audit-Plan-Doc-Shape](archive/PR-Audit-Plan-Doc-Shape.md)
+- [PR-Audit-Plan-Files-Touched](archive/PR-Audit-Plan-Files-Touched.md)
+- [PR-Audit-Pre-Push-CI](archive/PR-Audit-Pre-Push-CI.md)
+- [PR-Audit-Pre-Push-Wrapper](archive/PR-Audit-Pre-Push-Wrapper.md)
+- [PR-Blog-Affiliate-Disclosure-Prerender](archive/PR-Blog-Affiliate-Disclosure-Prerender.md)
+- [PR-Blog-Affiliate-Sponsored-Rel](archive/PR-Blog-Affiliate-Sponsored-Rel.md)
+- [PR-Blog-B2B-Complaint-Conflation](archive/PR-Blog-B2B-Complaint-Conflation.md) - lane: `content-ops/blog-b2b-complaint-conflation`
+- [PR-Blog-Blueprint-Storage-1](archive/PR-Blog-Blueprint-Storage-1.md)
+- [PR-Blog-D2-Competitor-Dedup](archive/PR-Blog-D2-Competitor-Dedup.md) - lane: `content-ops/blog-d2-competitor-dedup`
+- [PR-Blog-D3-Dominant-Pain-Metric](archive/PR-Blog-D3-Dominant-Pain-Metric.md) - lane: `content-ops/blog-d3-dominant-pain-metric`
+- [PR-Blog-D4-SW-Bucketing](archive/PR-Blog-D4-SW-Bucketing.md) - lane: `content-ops/blog-d4-sw-bucketing`
+- [PR-Blog-D5-Source-Generalization](archive/PR-Blog-D5-Source-Generalization.md) - lane: `content-ops/blog-d5-source-generalization`
+- [PR-Blog-D6-Quote-Source-Attribution](archive/PR-Blog-D6-Quote-Source-Attribution.md) - lane: `content-ops/blog-d6-quote-source`
+- [PR-Blog-D7-Corpus-Scope](archive/PR-Blog-D7-Corpus-Scope.md) - lane: `content-ops/blog-d7-corpus-scope`
+- [PR-Blog-D7b-Corpus-Data-Fix](archive/PR-Blog-D7b-Corpus-Data-Fix.md) - lane: `content-ops/blog-d7b-corpus-data-fix`
+- [PR-Blog-D7c-Landscape-Scope](archive/PR-Blog-D7c-Landscape-Scope.md) - lane: `content-ops/blog-d7c-landscape-scope`
+- [PR-Blog-D8-Vendor-Count](archive/PR-Blog-D8-Vendor-Count.md) - lane: `content-ops/blog-d8-vendor-count`
+- [PR-Blog-D8b-Profile-Coverage](archive/PR-Blog-D8b-Profile-Coverage.md) - lane: `content-ops/blog-d8b-profile-coverage`
+- [PR-Blog-DD1-Pain-As-Strength-A](archive/PR-Blog-DD1-Pain-As-Strength-A.md) - lane: `content-ops/blog-dd1-pain-as-strength-a`
+- [PR-Blog-DD1-Pain-As-Strength-B](archive/PR-Blog-DD1-Pain-As-Strength-B.md) - lane: `content-ops/blog-dd1-pain-as-strength-b`
+- [PR-Blog-DD1-Prose-Leak](archive/PR-Blog-DD1-Prose-Leak.md) - lane: `content-ops/blog-dd1-prose-leak`
+- [PR-Blog-DD2-Fabricated-Specifics](archive/PR-Blog-DD2-Fabricated-Specifics.md) - lane: `content-ops/blog-dd2-fabricated-specifics`
+- [PR-Blog-DD3-Prose-Vs-Chart](archive/PR-Blog-DD3-Prose-Vs-Chart.md) - lane: `content-ops/blog-dd3-prose-vs-chart`
+- [PR-Blog-Draft-Slug-Fallback](archive/PR-Blog-Draft-Slug-Fallback.md) - lane: `content-ops/blog-live-smoke`
+- [PR-Blog-Drop-Slashdot](archive/PR-Blog-Drop-Slashdot.md) - lane: `content-ops/blog-drop-slashdot`
+- [PR-Blog-Excluded-Source-Followup](archive/PR-Blog-Excluded-Source-Followup.md) - lane: `content-ops/blog-excluded-source-followup`
+- [PR-Blog-Fix-AWS-Orphan-LeadIn](archive/PR-Blog-Fix-AWS-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-aws-orphan-leadin`
+- [PR-Blog-Fix-Asana-Orphan-LeadIn](archive/PR-Blog-Fix-Asana-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-asana-orphan-leadin`
+- [PR-Blog-Fix-Count-Vs-List](archive/PR-Blog-Fix-Count-Vs-List.md) - lane: `content-ops/blog-fix-count-vs-list`
+- [PR-Blog-Fix-Form-Prompt-Quotes](archive/PR-Blog-Fix-Form-Prompt-Quotes.md)
+- [PR-Blog-Fix-Markdown-Lists](archive/PR-Blog-Fix-Markdown-Lists.md)
+- [PR-Blog-Fix-Misattributed-CRM-Quotes](archive/PR-Blog-Fix-Misattributed-CRM-Quotes.md)
+- [PR-Blog-Fix-Orphaned-Quote-Refs](archive/PR-Blog-Fix-Orphaned-Quote-Refs.md)
+- [PR-Blog-Fix-Prose-Vs-Chart](archive/PR-Blog-Fix-Prose-Vs-Chart.md) - lane: `content-ops/blog-fix-prose-vs-chart`
+- [PR-Blog-Fix-Salesforce-Orphan-LeadIn](archive/PR-Blog-Fix-Salesforce-Orphan-LeadIn.md) - lane: `content-ops/blog-fix-salesforce-orphan-leadin`
+- [PR-Blog-Fix-Stale-Review-Counts](archive/PR-Blog-Fix-Stale-Review-Counts.md) - lane: `content-ops/blog-fix-stale-review-counts`
+- [PR-Blog-Fix-Undeclared-Hubspot-Clickup](archive/PR-Blog-Fix-Undeclared-Hubspot-Clickup.md) - lane: `content-ops/blog-fix-undeclared-hubspot-clickup`
+- [PR-Blog-GEO-Citable-Readiness-Alignment](archive/PR-Blog-GEO-Citable-Readiness-Alignment.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Blog-GEO-Citable-Repair-Contract](archive/PR-Blog-GEO-Citable-Repair-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Blog-GEO-Contract-Definition](archive/PR-Blog-GEO-Contract-Definition.md)
+- [PR-Blog-GEO-Entity-Prompt-Alignment](archive/PR-Blog-GEO-Entity-Prompt-Alignment.md) - lane: content-ops/blog-geo-prompt-alignment
+- [PR-Blog-GEO-Publish-CI](archive/PR-Blog-GEO-Publish-CI.md)
+- [PR-Blog-GEO-Publish-Check](archive/PR-Blog-GEO-Publish-Check.md)
+- [PR-Blog-GEO-Quality-Gate](archive/PR-Blog-GEO-Quality-Gate.md)
+- [PR-Blog-GEO-Readiness-Summary](archive/PR-Blog-GEO-Readiness-Summary.md)
+- [PR-Blog-GEO-Repair-Loop](archive/PR-Blog-GEO-Repair-Loop.md)
+- [PR-Blog-GEO-Visible-Article-HTML](archive/PR-Blog-GEO-Visible-Article-HTML.md)
+- [PR-Blog-Generated-Sitemap-Prerender](archive/PR-Blog-Generated-Sitemap-Prerender.md) - lane: content-ops/blog-generated-sitemap-prerender | phase: Production hardening
+- [PR-Blog-Generator-D1-D9](archive/PR-Blog-Generator-D1-D9.md) - lane: content-ops/blog-generator-d1-d9
+- [PR-Blog-Generator-Orphan-Quote-Ref](archive/PR-Blog-Generator-Orphan-Quote-Ref.md)
+- [PR-Blog-Harden-Orphan-Disclaimer-Patterns](archive/PR-Blog-Harden-Orphan-Disclaimer-Patterns.md)
+- [PR-Blog-Headlines-Deep-Dives](archive/PR-Blog-Headlines-Deep-Dives.md) - lane: `content-ops/blog-headlines-deep-dives`
+- [PR-Blog-Headlines-Landscapes](archive/PR-Blog-Headlines-Landscapes.md) - lane: `content-ops/blog-headlines-landscapes`
+- [PR-Blog-Headlines-Sample](archive/PR-Blog-Headlines-Sample.md) - lane: `content-ops/blog-headlines-sample`
+- [PR-Blog-Headlines-Switch](archive/PR-Blog-Headlines-Switch.md) - lane: `content-ops/blog-headlines-switch`
+- [PR-Blog-Headlines-Vs](archive/PR-Blog-Headlines-Vs.md) - lane: `content-ops/blog-headlines-vs`
+- [PR-Blog-JSONLD-Publish-Contract](archive/PR-Blog-JSONLD-Publish-Contract.md)
+- [PR-Blog-Markdown-Lists-In-P-Tags](archive/PR-Blog-Markdown-Lists-In-P-Tags.md)
+- [PR-Blog-Orphaned-Quote-Reference-Cleanup](archive/PR-Blog-Orphaned-Quote-Reference-Cleanup.md)
+- [PR-Blog-Paraphrase-Excluded-A](archive/PR-Blog-Paraphrase-Excluded-A.md) - lane: `content-ops/blog-paraphrase-excluded-a`
+- [PR-Blog-Paraphrase-Excluded-B](archive/PR-Blog-Paraphrase-Excluded-B.md) - lane: `content-ops/blog-paraphrase-excluded-b`
+- [PR-Blog-Post-Subscriptions-1](archive/PR-Blog-Post-Subscriptions-1.md)
+- [PR-Blog-Post-Subscriptions-2](archive/PR-Blog-Post-Subscriptions-2.md)
+- [PR-Blog-Prerender-Chart-Fallbacks](archive/PR-Blog-Prerender-Chart-Fallbacks.md)
+- [PR-Blog-Prompt-Cache-Stability](archive/PR-Blog-Prompt-Cache-Stability.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Blog-Public-Generated-Posts](archive/PR-Blog-Public-Generated-Posts.md) - lane: content-ops/blog-public-productization | phase: Vertical slice
+- [PR-Blog-Readiness-Breakdown-UI](archive/PR-Blog-Readiness-Breakdown-UI.md)
+- [PR-Blog-Readiness-Review-UI](archive/PR-Blog-Readiness-Review-UI.md)
+- [PR-Blog-Reasoning-Parity](archive/PR-Blog-Reasoning-Parity.md)
+- [PR-Blog-Repair-Failure-Diagnostics](archive/PR-Blog-Repair-Failure-Diagnostics.md) - lane: content-ops/blog-repair-failure-diagnostics
+- [PR-Blog-Review-Public-Link](archive/PR-Blog-Review-Public-Link.md) - lane: content-ops/blog-public-productization | phase: Product polish
+- [PR-Blog-SEO-AEO-Quality-Gate](archive/PR-Blog-SEO-AEO-Quality-Gate.md)
+- [PR-Blog-SEO-AEO-Readiness-Summary](archive/PR-Blog-SEO-AEO-Readiness-Summary.md)
+- [PR-Blog-SEO-Field-Persistence](archive/PR-Blog-SEO-Field-Persistence.md)
+- [PR-Blog-SEO-GEO-Audit-Refresh](archive/PR-Blog-SEO-GEO-Audit-Refresh.md)
+- [PR-Blog-SEO-Infrastructure](archive/PR-Blog-SEO-Infrastructure.md)
+- [PR-Blog-SEO-Keyword-Sample-Wins](archive/PR-Blog-SEO-Keyword-Sample-Wins.md) - lane: `content-ops/blog-seo-keyword-sample-wins`
+- [PR-Blog-SEO-Keywords-CRM](archive/PR-Blog-SEO-Keywords-CRM.md) - lane: `content-ops/blog-seo-keywords-crm`
+- [PR-Blog-SEO-Keywords-Communication](archive/PR-Blog-SEO-Keywords-Communication.md) - lane: `content-ops/blog-seo-keywords-communication`
+- [PR-Blog-SEO-Keywords-Ecommerce](archive/PR-Blog-SEO-Keywords-Ecommerce.md) - lane: `content-ops/blog-seo-keywords-ecommerce`
+- [PR-Blog-SEO-Keywords-HR-HCM](archive/PR-Blog-SEO-Keywords-HR-HCM.md) - lane: `content-ops/blog-seo-keywords-hr-hcm`
+- [PR-Blog-SEO-Keywords-Helpdesk](archive/PR-Blog-SEO-Keywords-Helpdesk.md) - lane: `content-ops/blog-seo-keywords-helpdesk`
+- [PR-Blog-SEO-Keywords-Marketing-Automation](archive/PR-Blog-SEO-Keywords-Marketing-Automation.md) - lane: `content-ops/blog-seo-keywords-marketing-automation`
+- [PR-Blog-SEO-Keywords-Project-Management](archive/PR-Blog-SEO-Keywords-Project-Management.md) - lane: `content-ops/blog-seo-keywords-project-management`
+- [PR-Blog-SEO-Keywords-Technical](archive/PR-Blog-SEO-Keywords-Technical.md) - lane: `content-ops/blog-seo-keywords-technical`
+- [PR-Blog-SEO-Publish-Meta-Check](archive/PR-Blog-SEO-Publish-Meta-Check.md)
+- [PR-Blog-Shared-Source-Parser](archive/PR-Blog-Shared-Source-Parser.md)
+- [PR-Blog-Sitemap-Source-Lastmod](archive/PR-Blog-Sitemap-Source-Lastmod.md)
+- [PR-Blog-Strip-Empty-Blockquotes-Data](archive/PR-Blog-Strip-Empty-Blockquotes-Data.md)
+- [PR-Blog-Strip-Generic-H2-Generator](archive/PR-Blog-Strip-Generic-H2-Generator.md)
+- [PR-Blog-Strip-Generic-H2-Posts](archive/PR-Blog-Strip-Generic-H2-Posts.md)
+- [PR-Blog-Topic-Per-Call](archive/PR-Blog-Topic-Per-Call.md)
+- [PR-Campaign-Channel-Legacy-Cleanup](archive/PR-Campaign-Channel-Legacy-Cleanup.md)
+- [PR-Campaign-Config-V2](archive/PR-Campaign-Config-V2.md)
+- [PR-Checker-Detection-Branch-Discipline](archive/PR-Checker-Detection-Branch-Discipline.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Clear-Placeholder-Url-Gate-Inflight](archive/PR-Clear-Placeholder-Url-Gate-Inflight.md)
+- [PR-Clear-Real-Asset-Url-CTA-Inflight](archive/PR-Clear-Real-Asset-Url-CTA-Inflight.md)
+- [PR-Clear-Selling-Context-Inflight](archive/PR-Clear-Selling-Context-Inflight.md)
+- [PR-Clear-Stale-LLM-Usage-Hardening](archive/PR-Clear-Stale-LLM-Usage-Hardening.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Content-Assets-Review-Row-Ids](archive/PR-Content-Assets-Review-Row-Ids.md)
+- [PR-Content-Ops-API-Adapter](archive/PR-Content-Ops-API-Adapter.md)
+- [PR-Content-Ops-API-Key-Auth](archive/PR-Content-Ops-API-Key-Auth.md) - lane: content-ops/faq-deflection | phase: Production hardening
+- [PR-Content-Ops-Ad-Copy-Generated-Assets](archive/PR-Content-Ops-Ad-Copy-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Ad-Copy-Package-Handoff](archive/PR-Content-Ops-Ad-Copy-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Ad-Copy-Review-Assets](archive/PR-Content-Ops-Ad-Copy-Review-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Admin-Cost-Labels](archive/PR-Content-Ops-Admin-Cost-Labels.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Asset-Bulk-Review](archive/PR-Content-Ops-Asset-Bulk-Review.md)
+- [PR-Content-Ops-Asset-Export-CLI](archive/PR-Content-Ops-Asset-Export-CLI.md)
+- [PR-Content-Ops-Asset-Preview](archive/PR-Content-Ops-Asset-Preview.md)
+- [PR-Content-Ops-Asset-Review-CLI](archive/PR-Content-Ops-Asset-Review-CLI.md)
+- [PR-Content-Ops-Assets-Review-UI](archive/PR-Content-Ops-Assets-Review-UI.md)
+- [PR-Content-Ops-B2B-Displacement-Source-Selection](archive/PR-Content-Ops-B2B-Displacement-Source-Selection.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-B2B-Displacement-Vendor-UI](archive/PR-Content-Ops-B2B-Displacement-Vendor-UI.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Backlog-After-Source-Consolidation](archive/PR-Content-Ops-Backlog-After-Source-Consolidation.md)
+- [PR-Content-Ops-Backlog-Current](archive/PR-Content-Ops-Backlog-Current.md)
+- [PR-Content-Ops-Backlog-Reasoning-Admin-Close](archive/PR-Content-Ops-Backlog-Reasoning-Admin-Close.md)
+- [PR-Content-Ops-Backlog-Refresh](archive/PR-Content-Ops-Backlog-Refresh.md)
+- [PR-Content-Ops-Blog-Blueprint-Ingestion](archive/PR-Content-Ops-Blog-Blueprint-Ingestion.md)
+- [PR-Content-Ops-Blog-Blueprint-Json-Smoke](archive/PR-Content-Ops-Blog-Blueprint-Json-Smoke.md) - lane: content-ops/blog-blueprint-json-smoke
+- [PR-Content-Ops-Blog-Live-Generation-Smoke](archive/PR-Content-Ops-Blog-Live-Generation-Smoke.md) - lane: content-ops/blog-live-generation-smoke
+- [PR-Content-Ops-Blog-Narrative-Pack](archive/PR-Content-Ops-Blog-Narrative-Pack.md)
+- [PR-Content-Ops-Blog-Post-Api-Cli](archive/PR-Content-Ops-Blog-Post-Api-Cli.md)
+- [PR-Content-Ops-Blog-Post-Export](archive/PR-Content-Ops-Blog-Post-Export.md)
+- [PR-Content-Ops-Blog-Post-Repository](archive/PR-Content-Ops-Blog-Post-Repository.md)
+- [PR-Content-Ops-Blog-Post-Result-Summary](archive/PR-Content-Ops-Blog-Post-Result-Summary.md)
+- [PR-Content-Ops-Blog-Post-Review-Docs](archive/PR-Content-Ops-Blog-Post-Review-Docs.md)
+- [PR-Content-Ops-Blog-Reasoning-Catalog](archive/PR-Content-Ops-Blog-Reasoning-Catalog.md)
+- [PR-Content-Ops-Blog-Reasoning-Fixture-Doc](archive/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md)
+- [PR-Content-Ops-Blog-Reasoning-Key-Parity](archive/PR-Content-Ops-Blog-Reasoning-Key-Parity.md)
+- [PR-Content-Ops-Blog-SEO-Closeout](archive/PR-Content-Ops-Blog-SEO-Closeout.md)
+- [PR-Content-Ops-Brand-Voice-Onboarding](archive/PR-Content-Ops-Brand-Voice-Onboarding.md) - lane: content-ops/brand-voice/onboarding | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Presets](archive/PR-Content-Ops-Brand-Voice-Presets.md) - lane: content-ops/brand-voice/presets | phase: Product polish
+- [PR-Content-Ops-Brand-Voice-Profile-Editor](archive/PR-Content-Ops-Brand-Voice-Profile-Editor.md) - lane: content-ops/brand-voice-profile-editor | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Profile-Storage](archive/PR-Content-Ops-Brand-Voice-Profile-Storage.md) - lane: content-ops/brand-voice-profile-storage | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Profile](archive/PR-Content-Ops-Brand-Voice-Profile.md) - lane: content-ops/brand-voice-profile | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Scrape-Onboarding](archive/PR-Content-Ops-Brand-Voice-Scrape-Onboarding.md) - lane: content-ops/brand-voice/scrape-onboarding | phase: Vertical slice
+- [PR-Content-Ops-CFPB-FAQ-Live-Smoke](archive/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md)
+- [PR-Content-Ops-CFPB-Live-Fetch-Compat](archive/PR-Content-Ops-CFPB-Live-Fetch-Compat.md)
+- [PR-Content-Ops-CFPB-Live-Provider-Smoke](archive/PR-Content-Ops-CFPB-Live-Provider-Smoke.md)
+- [PR-Content-Ops-CFPB-Source](archive/PR-Content-Ops-CFPB-Source.md)
+- [PR-Content-Ops-CRM-Source-Rows](archive/PR-Content-Ops-CRM-Source-Rows.md)
+- [PR-Content-Ops-CSV-Export-Formula-Hardening](archive/PR-Content-Ops-CSV-Export-Formula-Hardening.md) - lane: content-ops/marketer-reviews-as-input-hardening | phase: Production hardening
+- [PR-Content-Ops-Cache-Default-Runbook](archive/PR-Content-Ops-Cache-Default-Runbook.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Cache-Diagnostics-Summary](archive/PR-Content-Ops-Cache-Diagnostics-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Cache-Diagnostics-UI](archive/PR-Content-Ops-Cache-Diagnostics-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Cache-Health-Section](archive/PR-Content-Ops-Cache-Health-Section.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Cache-Policy-Default](archive/PR-Content-Ops-Cache-Policy-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Cache-Policy-Request](archive/PR-Content-Ops-Cache-Policy-Request.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Cache-Policy-UI](archive/PR-Content-Ops-Cache-Policy-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Cache-Savings-Rollup](archive/PR-Content-Ops-Cache-Savings-Rollup.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Cache-Savings-UI](archive/PR-Content-Ops-Cache-Savings-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Call-Meeting-Source-Rows](archive/PR-Content-Ops-Call-Meeting-Source-Rows.md)
+- [PR-Content-Ops-Campaign-Export-Reasoning-Summary](archive/PR-Content-Ops-Campaign-Export-Reasoning-Summary.md)
+- [PR-Content-Ops-Card-PNG-Export-UI](archive/PR-Content-Ops-Card-PNG-Export-UI.md) - lane: content-ops/marketer-reviews-as-input-card-png-ui | phase: Product polish
+- [PR-Content-Ops-Card-PNG-Export](archive/PR-Content-Ops-Card-PNG-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Card-Visual-Export-UI](archive/PR-Content-Ops-Card-Visual-Export-UI.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Card-Visual-Export](archive/PR-Content-Ops-Card-Visual-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Clear-Stale-Inflight](archive/PR-Content-Ops-Clear-Stale-Inflight.md)
+- [PR-Content-Ops-Competitive-Input-Provider](archive/PR-Content-Ops-Competitive-Input-Provider.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Competitive-Sales-Brief-Handoff](archive/PR-Content-Ops-Competitive-Sales-Brief-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Consumed-Reasoning-Campaign-Blog](archive/PR-Content-Ops-Consumed-Reasoning-Campaign-Blog.md)
+- [PR-Content-Ops-Consumed-Reasoning-Execution](archive/PR-Content-Ops-Consumed-Reasoning-Execution.md)
+- [PR-Content-Ops-Consumed-Reasoning-Remaining-Assets](archive/PR-Content-Ops-Consumed-Reasoning-Remaining-Assets.md)
+- [PR-Content-Ops-Contract-Tests](archive/PR-Content-Ops-Contract-Tests.md)
+- [PR-Content-Ops-DB-Reasoning-Hardening](archive/PR-Content-Ops-DB-Reasoning-Hardening.md)
+- [PR-Content-Ops-DB-Reasoning-Smoke](archive/PR-Content-Ops-DB-Reasoning-Smoke.md)
+- [PR-Content-Ops-DB-Reasoning-Sweeper](archive/PR-Content-Ops-DB-Reasoning-Sweeper.md)
+- [PR-Content-Ops-Deferred-Backlog-Log](archive/PR-Content-Ops-Deferred-Backlog-Log.md)
+- [PR-Content-Ops-Deflection-MCP-Plan](archive/PR-Content-Ops-Deflection-MCP-Plan.md) - lane: content-ops/deflection-report-mcp | phase: Workflow/process
+- [PR-Content-Ops-Deflection-Readonly-MCP](archive/PR-Content-Ops-Deflection-Readonly-MCP.md) - lane: content-ops/deflection-report-mcp | phase: Vertical slice
+- [PR-Content-Ops-Deflection-Report-Artifact](archive/PR-Content-Ops-Deflection-Report-Artifact.md) - lane: content-ops/deflection-report | phase: Vertical slice
+- [PR-Content-Ops-Domain-Layer](archive/PR-Content-Ops-Domain-Layer.md)
+- [PR-Content-Ops-Email-Campaign-Result-Summary](archive/PR-Content-Ops-Email-Campaign-Result-Summary.md)
+- [PR-Content-Ops-Email-Reasoning-Usage-Summary](archive/PR-Content-Ops-Email-Reasoning-Usage-Summary.md)
+- [PR-Content-Ops-Exact-Cache-Adapter](archive/PR-Content-Ops-Exact-Cache-Adapter.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Exact-Cache-Policy](archive/PR-Content-Ops-Exact-Cache-Policy.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Execute-Concurrency-Gate](archive/PR-Content-Ops-Execute-Concurrency-Gate.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-Execute-Limits-Describe](archive/PR-Content-Ops-Execute-Limits-Describe.md) - lane: content-ops/control-surfaces | phase: Production hardening.
+- [PR-Content-Ops-Execution-Services-Wire-1](archive/PR-Content-Ops-Execution-Services-Wire-1.md)
+- [PR-Content-Ops-Execution-Services-Wire-2](archive/PR-Content-Ops-Execution-Services-Wire-2.md)
+- [PR-Content-Ops-Execution-Services-Wire-3](archive/PR-Content-Ops-Execution-Services-Wire-3.md)
+- [PR-Content-Ops-Execution-Services-Wire-4](archive/PR-Content-Ops-Execution-Services-Wire-4.md)
+- [PR-Content-Ops-Execution-Smoke-Reasoning](archive/PR-Content-Ops-Execution-Smoke-Reasoning.md)
+- [PR-Content-Ops-Export-API-Reasoning-Fields](archive/PR-Content-Ops-Export-API-Reasoning-Fields.md)
+- [PR-Content-Ops-FAQ-1000-Row-Scale-Run](archive/PR-Content-Ops-FAQ-1000-Row-Scale-Run.md)
+- [PR-Content-Ops-FAQ-50K-Gated-Validation](archive/PR-Content-Ops-FAQ-50K-Gated-Validation.md) - lane: content-ops/faq-generator | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Archive-Runbook](archive/PR-Content-Ops-FAQ-Archive-Runbook.md)
+- [PR-Content-Ops-FAQ-Article-Closeout](archive/PR-Content-Ops-FAQ-Article-Closeout.md)
+- [PR-Content-Ops-FAQ-Article-Renderer](archive/PR-Content-Ops-FAQ-Article-Renderer.md)
+- [PR-Content-Ops-FAQ-Asset-Review-UI](archive/PR-Content-Ops-FAQ-Asset-Review-UI.md)
+- [PR-Content-Ops-FAQ-CFPB-Archive-Profile](archive/PR-Content-Ops-FAQ-CFPB-Archive-Profile.md)
+- [PR-Content-Ops-FAQ-CFPB-Closeout](archive/PR-Content-Ops-FAQ-CFPB-Closeout.md)
+- [PR-Content-Ops-FAQ-CFPB-Report-Intent](archive/PR-Content-Ops-FAQ-CFPB-Report-Intent.md)
+- [PR-Content-Ops-FAQ-Catalog-Driven-Inputs](archive/PR-Content-Ops-FAQ-Catalog-Driven-Inputs.md) - lane: content-ops/faq-generator-ui-controls
+- [PR-Content-Ops-FAQ-Closeout](archive/PR-Content-Ops-FAQ-Closeout.md)
+- [PR-Content-Ops-FAQ-Complaint-Narrative-Questions](archive/PR-Content-Ops-FAQ-Complaint-Narrative-Questions.md)
+- [PR-Content-Ops-FAQ-Complaint-Source-Policy](archive/PR-Content-Ops-FAQ-Complaint-Source-Policy.md)
+- [PR-Content-Ops-FAQ-Continuous-Direction](archive/PR-Content-Ops-FAQ-Continuous-Direction.md) - lane: content-ops/faq-product-direction | phase: Product polish
+- [PR-Content-Ops-FAQ-Custom-Intent-Rules-CLI](archive/PR-Content-Ops-FAQ-Custom-Intent-Rules-CLI.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Custom-Vocabulary-Rules](archive/PR-Content-Ops-FAQ-Custom-Vocabulary-Rules.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Customer-Wording](archive/PR-Content-Ops-FAQ-Customer-Wording.md)
+- [PR-Content-Ops-FAQ-DB-Blank-Fallback](archive/PR-Content-Ops-FAQ-DB-Blank-Fallback.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-Date-Window](archive/PR-Content-Ops-FAQ-Date-Window.md)
+- [PR-Content-Ops-FAQ-Deflection-Host-Mount](archive/PR-Content-Ops-FAQ-Deflection-Host-Mount.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Deflection-Search-Route](archive/PR-Content-Ops-FAQ-Deflection-Search-Route.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Detail-Concurrency-Latency-Budget](archive/PR-Content-Ops-FAQ-Detail-Concurrency-Latency-Budget.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Detail-Empty-Results-Preflight](archive/PR-Content-Ops-FAQ-Detail-Empty-Results-Preflight.md) - lane: content-ops/faq-search | phase: Product polish
+- [PR-Content-Ops-FAQ-Detail-Item-Contract](archive/PR-Content-Ops-FAQ-Detail-Item-Contract.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Detail-Producer-Fidelity](archive/PR-Content-Ops-FAQ-Detail-Producer-Fidelity.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Documentation-Term-File](archive/PR-Content-Ops-FAQ-Documentation-Term-File.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Documentation-Term-Format](archive/PR-Content-Ops-FAQ-Documentation-Term-Format.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Documentation-Term-Structured-Files](archive/PR-Content-Ops-FAQ-Documentation-Term-Structured-Files.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Documentation-Term-Unrecognized-Fields](archive/PR-Content-Ops-FAQ-Documentation-Term-Unrecognized-Fields.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Execute-Admission-Limit](archive/PR-Content-Ops-FAQ-Execute-Admission-Limit.md) - lane: content-ops/faq-generation-scale | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Execution-Smoke](archive/PR-Content-Ops-FAQ-Execution-Smoke.md)
+- [PR-Content-Ops-FAQ-File-Input-Scale-Smoke](archive/PR-Content-Ops-FAQ-File-Input-Scale-Smoke.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Financial-Action-Language](archive/PR-Content-Ops-FAQ-Financial-Action-Language.md)
+- [PR-Content-Ops-FAQ-Generated-Asset-Persistence](archive/PR-Content-Ops-FAQ-Generated-Asset-Persistence.md)
+- [PR-Content-Ops-FAQ-Generated-Asset-Seam](archive/PR-Content-Ops-FAQ-Generated-Asset-Seam.md)
+- [PR-Content-Ops-FAQ-Generated-Asset-Switchboards](archive/PR-Content-Ops-FAQ-Generated-Asset-Switchboards.md)
+- [PR-Content-Ops-FAQ-Host-Runbook-E2E-Link](archive/PR-Content-Ops-FAQ-Host-Runbook-E2E-Link.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Hosted-Bulk-IO-Smoke](archive/PR-Content-Ops-FAQ-Hosted-Bulk-IO-Smoke.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Hosted-Bundle-IO-Smoke](archive/PR-Content-Ops-FAQ-Hosted-Bundle-IO-Smoke.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Hosted-Route-Preflight-URL-Guard](archive/PR-Content-Ops-FAQ-Hosted-Route-Preflight-URL-Guard.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Human-Action-Language](archive/PR-Content-Ops-FAQ-Human-Action-Language.md)
+- [PR-Content-Ops-FAQ-Intent-Clustering](archive/PR-Content-Ops-FAQ-Intent-Clustering.md)
+- [PR-Content-Ops-FAQ-Intent-Source-Coverage](archive/PR-Content-Ops-FAQ-Intent-Source-Coverage.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Item-Source-Mix-Diagnostics](archive/PR-Content-Ops-FAQ-Item-Source-Mix-Diagnostics.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Lifecycle-500-Validation](archive/PR-Content-Ops-FAQ-Lifecycle-500-Validation.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-FAQ-Lifecycle-Artifact-Runner](archive/PR-Content-Ops-FAQ-Lifecycle-Artifact-Runner.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-Console-Profile](archive/PR-Content-Ops-FAQ-Lifecycle-Console-Profile.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-DB-1000-Run](archive/PR-Content-Ops-FAQ-Lifecycle-DB-1000-Run.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-Result-Summary](archive/PR-Content-Ops-FAQ-Lifecycle-Result-Summary.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-Scale-Smoke](archive/PR-Content-Ops-FAQ-Lifecycle-Scale-Smoke.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-Setup-Failure-Result](archive/PR-Content-Ops-FAQ-Lifecycle-Setup-Failure-Result.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-FAQ-Lifecycle-Smoke](archive/PR-Content-Ops-FAQ-Lifecycle-Smoke.md)
+- [PR-Content-Ops-FAQ-Lifecycle-Summary-Docs](archive/PR-Content-Ops-FAQ-Lifecycle-Summary-Docs.md) - lane: content-ops/faq-generator-docs
+- [PR-Content-Ops-FAQ-Lifecycle-Summary-JSON](archive/PR-Content-Ops-FAQ-Lifecycle-Summary-JSON.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Lifecycle-Summary-Validation](archive/PR-Content-Ops-FAQ-Lifecycle-Summary-Validation.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-FAQ-Lifecycle-Warning-Visibility](archive/PR-Content-Ops-FAQ-Lifecycle-Warning-Visibility.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Markdown-Render-Proof](archive/PR-Content-Ops-FAQ-Markdown-Render-Proof.md)
+- [PR-Content-Ops-FAQ-Opportunity-Scoring](archive/PR-Content-Ops-FAQ-Opportunity-Scoring.md)
+- [PR-Content-Ops-FAQ-Output-Checks](archive/PR-Content-Ops-FAQ-Output-Checks.md)
+- [PR-Content-Ops-FAQ-Output-Contract](archive/PR-Content-Ops-FAQ-Output-Contract.md)
+- [PR-Content-Ops-FAQ-Result-Output](archive/PR-Content-Ops-FAQ-Result-Output.md)
+- [PR-Content-Ops-FAQ-Route-Concurrency-All-Case-Summaries](archive/PR-Content-Ops-FAQ-Route-Concurrency-All-Case-Summaries.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Route-Concurrency-Case-Error-Budget](archive/PR-Content-Ops-FAQ-Route-Concurrency-Case-Error-Budget.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Route-Concurrency-Case-Error-Samples](archive/PR-Content-Ops-FAQ-Route-Concurrency-Case-Error-Samples.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Route-Concurrency-Case-Latency-Budget](archive/PR-Content-Ops-FAQ-Route-Concurrency-Case-Latency-Budget.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Route-Concurrency-Case-Summary](archive/PR-Content-Ops-FAQ-Route-Concurrency-Case-Summary.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Route-Concurrency-Detail-Case-Preflight](archive/PR-Content-Ops-FAQ-Route-Concurrency-Detail-Case-Preflight.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Route-Concurrency-Runbook](archive/PR-Content-Ops-FAQ-Route-Concurrency-Runbook.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Route-Concurrency-Worst-Case-Summary](archive/PR-Content-Ops-FAQ-Route-Concurrency-Worst-Case-Summary.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Route-Result-Query-Alignment](archive/PR-Content-Ops-FAQ-Route-Result-Query-Alignment.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Rule-File-Docs](archive/PR-Content-Ops-FAQ-Rule-File-Docs.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Rule-File-Import](archive/PR-Content-Ops-FAQ-Rule-File-Import.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Run-Summary-Vocabulary-Gaps](archive/PR-Content-Ops-FAQ-Run-Summary-Vocabulary-Gaps.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-SaaS-Demo-Artifact](archive/PR-Content-Ops-FAQ-SaaS-Demo-Artifact.md) - lane: content-ops/faq-generator | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Corpus](archive/PR-Content-Ops-FAQ-SaaS-Demo-Corpus.md) - lane: content-ops/faq-generator | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-DB-Settings-Fallback](archive/PR-Content-Ops-FAQ-SaaS-Demo-DB-Settings-Fallback.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-E2E-Artifact-Dir](archive/PR-Content-Ops-FAQ-SaaS-Demo-E2E-Artifact-Dir.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-E2E-Runbook](archive/PR-Content-Ops-FAQ-SaaS-Demo-E2E-Runbook.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof](archive/PR-Content-Ops-FAQ-SaaS-Demo-Hosted-Route-Proof.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof](archive/PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Proof.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Stress](archive/PR-Content-Ops-FAQ-SaaS-Demo-Local-Route-Stress.md) - lane: content-ops/faq-search | phase: Robust testing.
+- [PR-Content-Ops-FAQ-SaaS-Demo-Migration-Env-Isolation](archive/PR-Content-Ops-FAQ-SaaS-Demo-Migration-Env-Isolation.md) - lane: ai-content-ops/faq-validation | phase: Functional validation.
+- [PR-Content-Ops-FAQ-SaaS-Demo-Migration-Pin](archive/PR-Content-Ops-FAQ-SaaS-Demo-Migration-Pin.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Result-Envelope](archive/PR-Content-Ops-FAQ-SaaS-Demo-Result-Envelope.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-SaaS-Demo-Route-Case-Output](archive/PR-Content-Ops-FAQ-SaaS-Demo-Route-Case-Output.md) - lane: content-ops/faq-search | phase: Vertical slice
+- [PR-Content-Ops-FAQ-SaaS-Demo-Route-Case-Runbook](archive/PR-Content-Ops-FAQ-SaaS-Demo-Route-Case-Runbook.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Route-E2E-Smoke](archive/PR-Content-Ops-FAQ-SaaS-Demo-Route-E2E-Smoke.md) - lane: content-ops/faq-search | phase: Vertical slice
+- [PR-Content-Ops-FAQ-SaaS-Demo-Route-Preflight](archive/PR-Content-Ops-FAQ-SaaS-Demo-Route-Preflight.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Runbook-Link](archive/PR-Content-Ops-FAQ-SaaS-Demo-Runbook-Link.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-SaaS-Demo-Search-Seeder](archive/PR-Content-Ops-FAQ-SaaS-Demo-Search-Seeder.md) - lane: content-ops/faq-generator | phase: Vertical slice
+- [PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Cleanup](archive/PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Cleanup.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Close-Result](archive/PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Close-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Preflight-Result](archive/PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Preflight-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Runtime-Result](archive/PR-Content-Ops-FAQ-SaaS-Demo-Seeder-Runtime-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Scale-Console-Profile](archive/PR-Content-Ops-FAQ-Scale-Console-Profile.md)
+- [PR-Content-Ops-FAQ-Scale-Failure-Examples](archive/PR-Content-Ops-FAQ-Scale-Failure-Examples.md)
+- [PR-Content-Ops-FAQ-Scale-Gates](archive/PR-Content-Ops-FAQ-Scale-Gates.md) - lane: content-ops/faq-generator | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Scale-Regression](archive/PR-Content-Ops-FAQ-Scale-Regression.md)
+- [PR-Content-Ops-FAQ-Scale-Run-Summary-Diagnostics](archive/PR-Content-Ops-FAQ-Scale-Run-Summary-Diagnostics.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Scale-Smoke-Observability](archive/PR-Content-Ops-FAQ-Scale-Smoke-Observability.md)
+- [PR-Content-Ops-FAQ-Scale-Smoke-Run-Summary](archive/PR-Content-Ops-FAQ-Scale-Smoke-Run-Summary.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Scale-Smoke-Source-Profile](archive/PR-Content-Ops-FAQ-Scale-Smoke-Source-Profile.md)
+- [PR-Content-Ops-FAQ-Scale-Smoke](archive/PR-Content-Ops-FAQ-Scale-Smoke.md)
+- [PR-Content-Ops-FAQ-Scale-Stress-Probe](archive/PR-Content-Ops-FAQ-Scale-Stress-Probe.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-FAQ-Scale-Summary-Examples](archive/PR-Content-Ops-FAQ-Scale-Summary-Examples.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Scale-Summary-Schema-Guard](archive/PR-Content-Ops-FAQ-Scale-Summary-Schema-Guard.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Search-Backfill](archive/PR-Content-Ops-FAQ-Search-Backfill.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Cleanup-Manifest](archive/PR-Content-Ops-FAQ-Search-Cleanup-Manifest.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Cleanup-Rowcount](archive/PR-Content-Ops-FAQ-Search-Cleanup-Rowcount.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Concurrency-Cases](archive/PR-Content-Ops-FAQ-Search-Concurrency-Cases.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Concurrency-Review-Fixes](archive/PR-Content-Ops-FAQ-Search-Concurrency-Review-Fixes.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Concurrency-Smoke](archive/PR-Content-Ops-FAQ-Search-Concurrency-Smoke.md) - lane: content-ops/faq-search | phase: robust testing.
+- [PR-Content-Ops-FAQ-Search-Concurrent-Scope-Integration](archive/PR-Content-Ops-FAQ-Search-Concurrent-Scope-Integration.md) - lane: content-ops/faq-search | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Search-Contract-Exact-Fields](archive/PR-Content-Ops-FAQ-Search-Contract-Exact-Fields.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-Search-Contract-Handoff](archive/PR-Content-Ops-FAQ-Search-Contract-Handoff.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-Content-Ops-FAQ-Search-Contract-Latency](archive/PR-Content-Ops-FAQ-Search-Contract-Latency.md) - lane: content-ops/faq-search | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Search-Contract-Result](archive/PR-Content-Ops-FAQ-Search-Contract-Result.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-DB-Cleanup-Result](archive/PR-Content-Ops-FAQ-Search-DB-Cleanup-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-DB-Close-Result](archive/PR-Content-Ops-FAQ-Search-DB-Close-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-DB-File-Output-Result](archive/PR-Content-Ops-FAQ-Search-DB-File-Output-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-DB-Preflight-Result](archive/PR-Content-Ops-FAQ-Search-DB-Preflight-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result](archive/PR-Content-Ops-FAQ-Search-DB-Setup-Failure-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-Detail-Case-Metadata](archive/PR-Content-Ops-FAQ-Search-Detail-Case-Metadata.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Detail-Contract](archive/PR-Content-Ops-FAQ-Search-Detail-Contract.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Detail-Not-Run-Reason](archive/PR-Content-Ops-FAQ-Search-Detail-Not-Run-Reason.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-Detail-Seed-Expectations](archive/PR-Content-Ops-FAQ-Search-Detail-Seed-Expectations.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Detail](archive/PR-Content-Ops-FAQ-Search-Detail.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-E2E-Artifact-Cleanup-Result](archive/PR-Content-Ops-FAQ-Search-E2E-Artifact-Cleanup-Result.md) - lane: content-ops/faq-generator | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-E2E-Case-Budgets](archive/PR-Content-Ops-FAQ-Search-E2E-Case-Budgets.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-E2E-Child-Result-Summaries](archive/PR-Content-Ops-FAQ-Search-E2E-Child-Result-Summaries.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-E2E-Cleanup-Errors](archive/PR-Content-Ops-FAQ-Search-E2E-Cleanup-Errors.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-E2E-Runbook](archive/PR-Content-Ops-FAQ-Search-E2E-Runbook.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-Hosted-Concurrency](archive/PR-Content-Ops-FAQ-Search-Hosted-Concurrency.md) - lane: content-ops/faq-search | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Search-Latency-Gates](archive/PR-Content-Ops-FAQ-Search-Latency-Gates.md) - lane: content-ops/faq-search | phase: robust testing.
+- [PR-Content-Ops-FAQ-Search-Local-Multi-Corpus-Route-Stress](archive/PR-Content-Ops-FAQ-Search-Local-Multi-Corpus-Route-Stress.md) - lane: content-ops/faq-search | phase: Robust testing.
+- [PR-Content-Ops-FAQ-Search-Log-Sources](archive/PR-Content-Ops-FAQ-Search-Log-Sources.md)
+- [PR-Content-Ops-FAQ-Search-Postgres-Projection](archive/PR-Content-Ops-FAQ-Search-Postgres-Projection.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Projection-V1](archive/PR-Content-Ops-FAQ-Search-Projection-V1.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Review-Index](archive/PR-Content-Ops-FAQ-Search-Review-Index.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Route-Contract](archive/PR-Content-Ops-FAQ-Search-Route-Contract.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-Route-Detail-Concurrency](archive/PR-Content-Ops-FAQ-Search-Route-Detail-Concurrency.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Search-Route-Not-Run-Reason](archive/PR-Content-Ops-FAQ-Search-Route-Not-Run-Reason.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-Route-Smoke](archive/PR-Content-Ops-FAQ-Search-Route-Smoke.md) - lane: content-ops/faq-search | phase: Vertical slice.
+- [PR-Content-Ops-FAQ-Search-SaaS-Smoke-Cases](archive/PR-Content-Ops-FAQ-Search-SaaS-Smoke-Cases.md) - lane: content-ops/faq-generator | phase: Functional validation
+- [PR-Content-Ops-FAQ-Search-Seed-Not-Run-Reason](archive/PR-Content-Ops-FAQ-Search-Seed-Not-Run-Reason.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Search-Seeded-Detail-E2E](archive/PR-Content-Ops-FAQ-Search-Seeded-Detail-E2E.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Seeded-Route-Cases](archive/PR-Content-Ops-FAQ-Search-Seeded-Route-Cases.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Seeded-Route-E2E](archive/PR-Content-Ops-FAQ-Search-Seeded-Route-E2E.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-Content-Ops-FAQ-Search-Setup-Failure-Result](archive/PR-Content-Ops-FAQ-Search-Setup-Failure-Result.md) - lane: content-ops/faq-search | phase: robust testing.
+- [PR-Content-Ops-FAQ-Search-Volume-Weighting](archive/PR-Content-Ops-FAQ-Search-Volume-Weighting.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Seeded-E2E-Detail-Budget](archive/PR-Content-Ops-FAQ-Seeded-E2E-Detail-Budget.md) - lane: content-ops/faq-search | phase: Robust testing
+- [PR-Content-Ops-FAQ-Seeded-E2E-Migration-Command](archive/PR-Content-Ops-FAQ-Seeded-E2E-Migration-Command.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Smoke-Input-Profile](archive/PR-Content-Ops-FAQ-Smoke-Input-Profile.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Source-Context-Policy](archive/PR-Content-Ops-FAQ-Source-Context-Policy.md)
+- [PR-Content-Ops-FAQ-Source-Mix-Diagnostics](archive/PR-Content-Ops-FAQ-Source-Mix-Diagnostics.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Startup-Migration-Drift](archive/PR-Content-Ops-FAQ-Startup-Migration-Drift.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Stress-Hardening-Closeout](archive/PR-Content-Ops-FAQ-Stress-Hardening-Closeout.md) - lane: content-ops/faq-generator-validation
+- [PR-Content-Ops-FAQ-Vocab-Gap-IO-Smoke](archive/PR-Content-Ops-FAQ-Vocab-Gap-IO-Smoke.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Execute-Config](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Execute-Config.md) - lane: content-ops/faq-generator-execute-config
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Execute-Summary](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Execute-Summary.md) - lane: content-ops/faq-generator-execute-summary
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Input-Contracts](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Input-Contracts.md) - lane: content-ops/faq-generator-input-contracts
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Ranking](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Ranking.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Review-UI](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Review-UI.md) - lane: content-ops/faq-generator-review-ui
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-Term-Mapping](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-Term-Mapping.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Vocabulary-Gap-UI-Inputs](archive/PR-Content-Ops-FAQ-Vocabulary-Gap-UI-Inputs.md) - lane: content-ops/faq-generator-ui-inputs
+- [PR-Content-Ops-FAQ-Voice-Startup-Guard](archive/PR-Content-Ops-FAQ-Voice-Startup-Guard.md) - lane: content-ops/faq-search | phase: Production hardening
+- [PR-Content-Ops-FAQ-Volume-Counts](archive/PR-Content-Ops-FAQ-Volume-Counts.md)
+- [PR-Content-Ops-FAQ-Weighted-Aggregation-Helper](archive/PR-Content-Ops-FAQ-Weighted-Aggregation-Helper.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Weighted-Input-Volume-Diagnostics](archive/PR-Content-Ops-FAQ-Weighted-Input-Volume-Diagnostics.md) - lane: content-ops/faq-generator
+- [PR-Content-Ops-FAQ-Zero-Result-Risk](archive/PR-Content-Ops-FAQ-Zero-Result-Risk.md)
+- [PR-Content-Ops-File-Concurrency-Hardening-Close](archive/PR-Content-Ops-File-Concurrency-Hardening-Close.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Cross-Process-Hardening-Register](archive/PR-Content-Ops-File-Cross-Process-Hardening-Register.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Import-Admission-Gate](archive/PR-Content-Ops-File-Import-Admission-Gate.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Import-Inprocess-Load](archive/PR-Content-Ops-File-Import-Inprocess-Load.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Ingestion-Route-Smoke](archive/PR-Content-Ops-File-Ingestion-Route-Smoke.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Multiprocess-Load-Probe](archive/PR-Content-Ops-File-Multiprocess-Load-Probe.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Reasoning-Target-Mode](archive/PR-Content-Ops-File-Reasoning-Target-Mode.md)
+- [PR-Content-Ops-File-Route-Concurrency-Validation](archive/PR-Content-Ops-File-Route-Concurrency-Validation.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Route-Postgres-10k-Validation](archive/PR-Content-Ops-File-Route-Postgres-10k-Validation.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-File-Route-Postgres-Smoke](archive/PR-Content-Ops-File-Route-Postgres-Smoke.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-Frontend-Contract](archive/PR-Content-Ops-Frontend-Contract.md)
+- [PR-Content-Ops-G2-Review-Source-Export](archive/PR-Content-Ops-G2-Review-Source-Export.md)
+- [PR-Content-Ops-Generated-Asset-API](archive/PR-Content-Ops-Generated-Asset-API.md)
+- [PR-Content-Ops-Generated-Asset-Batch-Scale](archive/PR-Content-Ops-Generated-Asset-Batch-Scale.md)
+- [PR-Content-Ops-Generated-Asset-Detail-Drawer](archive/PR-Content-Ops-Generated-Asset-Detail-Drawer.md)
+- [PR-Content-Ops-Generated-Asset-Preview-UX](archive/PR-Content-Ops-Generated-Asset-Preview-UX.md)
+- [PR-Content-Ops-Generated-Asset-Reasoning-Usage](archive/PR-Content-Ops-Generated-Asset-Reasoning-Usage.md)
+- [PR-Content-Ops-Generated-Asset-Result-Summaries](archive/PR-Content-Ops-Generated-Asset-Result-Summaries.md)
+- [PR-Content-Ops-Generated-Asset-Runbook](archive/PR-Content-Ops-Generated-Asset-Runbook.md)
+- [PR-Content-Ops-Generated-Assets-Route](archive/PR-Content-Ops-Generated-Assets-Route.md)
+- [PR-Content-Ops-Helpdesk-Source-Aliases](archive/PR-Content-Ops-Helpdesk-Source-Aliases.md)
+- [PR-Content-Ops-Host-Import-Admission-Provider](archive/PR-Content-Ops-Host-Import-Admission-Provider.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-Host-Import-Multiprocess-Proof](archive/PR-Content-Ops-Host-Import-Multiprocess-Proof.md) - lane: content-ops/backend-file-ingestion-validation | phase: robust testing.
+- [PR-Content-Ops-Host-Ticket-Input-Provider](archive/PR-Content-Ops-Host-Ticket-Input-Provider.md) - lane: content-ops/input-provider-ticket-package | phase: Vertical slice
+- [PR-Content-Ops-Hosted-Asset-Workflow](archive/PR-Content-Ops-Hosted-Asset-Workflow.md)
+- [PR-Content-Ops-Hosted-LLM-Trace-Wiring](archive/PR-Content-Ops-Hosted-LLM-Trace-Wiring.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Image-Provider-Addendum](archive/PR-Content-Ops-Image-Provider-Addendum.md) - lane: content-ops/image-provider | phase: Workflow/process
+- [PR-Content-Ops-Image-Provider-Unsplash](archive/PR-Content-Ops-Image-Provider-Unsplash.md) - lane: content-ops/image-provider | phase: Vertical slice
+- [PR-Content-Ops-Image-Provider](archive/PR-Content-Ops-Image-Provider.md) - lane: content-ops/image-provider | phase: Workflow/process
+- [PR-Content-Ops-Import-Admission-Provider](archive/PR-Content-Ops-Import-Admission-Provider.md) - lane: content-ops/backend-file-ingestion-validation
+- [PR-Content-Ops-Ingestion-CSV-File-Load-UI](archive/PR-Content-Ops-Ingestion-CSV-File-Load-UI.md)
+- [PR-Content-Ops-Ingestion-Closeout](archive/PR-Content-Ops-Ingestion-Closeout.md)
+- [PR-Content-Ops-Ingestion-Contract-File-Routes](archive/PR-Content-Ops-Ingestion-Contract-File-Routes.md) - lane: content-ops/ingestion-contract-docs
+- [PR-Content-Ops-Ingestion-Default-Fields-UI](archive/PR-Content-Ops-Ingestion-Default-Fields-UI.md)
+- [PR-Content-Ops-Ingestion-Diagnostics](archive/PR-Content-Ops-Ingestion-Diagnostics.md)
+- [PR-Content-Ops-Ingestion-File-Load-UI](archive/PR-Content-Ops-Ingestion-File-Load-UI.md)
+- [PR-Content-Ops-Ingestion-Import-API](archive/PR-Content-Ops-Ingestion-Import-API.md)
+- [PR-Content-Ops-Ingestion-Import-Error-UI](archive/PR-Content-Ops-Ingestion-Import-Error-UI.md)
+- [PR-Content-Ops-Ingestion-Import-UI](archive/PR-Content-Ops-Ingestion-Import-UI.md)
+- [PR-Content-Ops-Ingestion-Inspect-API](archive/PR-Content-Ops-Ingestion-Inspect-API.md)
+- [PR-Content-Ops-Ingestion-Inspect-Frontend-Contract](archive/PR-Content-Ops-Ingestion-Inspect-Frontend-Contract.md)
+- [PR-Content-Ops-Ingestion-Inspect-UI](archive/PR-Content-Ops-Ingestion-Inspect-UI.md)
+- [PR-Content-Ops-Ingestion-Limits-Catalog](archive/PR-Content-Ops-Ingestion-Limits-Catalog.md) - lane: content-ops/ingestion-limits-catalog
+- [PR-Content-Ops-Inline-Row-Label](archive/PR-Content-Ops-Inline-Row-Label.md) - lane: content-ops/inline-row-label
+- [PR-Content-Ops-Inline-Row-Preflight](archive/PR-Content-Ops-Inline-Row-Preflight.md) - lane: content-ops/inline-row-preflight
+- [PR-Content-Ops-Input-Provider-API-Wiring](archive/PR-Content-Ops-Input-Provider-API-Wiring.md) - lane: content-ops/input-provider-api-wiring
+- [PR-Content-Ops-Input-Provider-Contract](archive/PR-Content-Ops-Input-Provider-Contract.md) - lane: content-ops/input-provider-contract
+- [PR-Content-Ops-Input-Provider-Diagnostics-UI](archive/PR-Content-Ops-Input-Provider-Diagnostics-UI.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
+- [PR-Content-Ops-Input-Provider-Docs-Closeout](archive/PR-Content-Ops-Input-Provider-Docs-Closeout.md) - lane: content-ops/input-provider-ticket-package | phase: Product polish
+- [PR-Content-Ops-Intervention-Reasoning-Provider](archive/PR-Content-Ops-Intervention-Reasoning-Provider.md)
+- [PR-Content-Ops-LLM-Skills-Infra-1](archive/PR-Content-Ops-LLM-Skills-Infra-1.md)
+- [PR-Content-Ops-LLM-Usage-Tracing](archive/PR-Content-Ops-LLM-Usage-Tracing.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Landing-Page-Export](archive/PR-Content-Ops-Landing-Page-Export.md)
+- [PR-Content-Ops-Live-Adapter-Smoke](archive/PR-Content-Ops-Live-Adapter-Smoke.md) - lane: content-ops/marketer-reviews-as-input-live-smoke-gate | phase: Functional validation
+- [PR-Content-Ops-Live-Execute-Harness](archive/PR-Content-Ops-Live-Execute-Harness.md)
+- [PR-Content-Ops-Live-Generation-Smoke](archive/PR-Content-Ops-Live-Generation-Smoke.md) - lane: content-ops/live-generation-smoke
+- [PR-Content-Ops-Live-Persistence-Smoke](archive/PR-Content-Ops-Live-Persistence-Smoke.md)
+- [PR-Content-Ops-Live-Provider-Smoke-Closeout](archive/PR-Content-Ops-Live-Provider-Smoke-Closeout.md)
+- [PR-Content-Ops-Live-Smoke-Model-Route](archive/PR-Content-Ops-Live-Smoke-Model-Route.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
+- [PR-Content-Ops-Marketer-Ad-Copy-Output](archive/PR-Content-Ops-Marketer-Ad-Copy-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Evidence-Preset](archive/PR-Content-Ops-Marketer-Evidence-Preset.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Marketer-Quote-Card-Output](archive/PR-Content-Ops-Marketer-Quote-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Social-Post-Output](archive/PR-Content-Ops-Marketer-Social-Post-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketer-Stat-Card-Output](archive/PR-Content-Ops-Marketer-Stat-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Marketing-Claim-Audit](archive/PR-Content-Ops-Marketing-Claim-Audit.md) - lane: content-ops/product-positioning | phase: Workflow/process.
+- [PR-Content-Ops-Migration-Dry-Run-Skip-Summary](archive/PR-Content-Ops-Migration-Dry-Run-Skip-Summary.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-Persisted-Source-Execute](archive/PR-Content-Ops-Persisted-Source-Execute.md) - lane: content-ops/upload-source-run-handoff | phase: Vertical slice
+- [PR-Content-Ops-Pipeline-LLM-Routing](archive/PR-Content-Ops-Pipeline-LLM-Routing.md) - lane: content-ops/pipeline-llm-routing
+- [PR-Content-Ops-Placeholder-Url-Gate](archive/PR-Content-Ops-Placeholder-Url-Gate.md)
+- [PR-Content-Ops-Productization-Audit-Refresh](archive/PR-Content-Ops-Productization-Audit-Refresh.md)
+- [PR-Content-Ops-Quality-Cost-Model](archive/PR-Content-Ops-Quality-Cost-Model.md)
+- [PR-Content-Ops-Quote-Card-Generated-Assets](archive/PR-Content-Ops-Quote-Card-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Quote-Card-Package-Handoff](archive/PR-Content-Ops-Quote-Card-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Real-Asset-Url-CTA](archive/PR-Content-Ops-Real-Asset-Url-CTA.md)
+- [PR-Content-Ops-Reasoning-Admin-Api](archive/PR-Content-Ops-Reasoning-Admin-Api.md)
+- [PR-Content-Ops-Reasoning-Admin-Upsert-CLI](archive/PR-Content-Ops-Reasoning-Admin-Upsert-CLI.md)
+- [PR-Content-Ops-Reasoning-Admin-Visibility](archive/PR-Content-Ops-Reasoning-Admin-Visibility.md)
+- [PR-Content-Ops-Reasoning-Audit-UI](archive/PR-Content-Ops-Reasoning-Audit-UI.md)
+- [PR-Content-Ops-Reasoning-Backlog-Closeout](archive/PR-Content-Ops-Reasoning-Backlog-Closeout.md)
+- [PR-Content-Ops-Reasoning-Capability-Check](archive/PR-Content-Ops-Reasoning-Capability-Check.md)
+- [PR-Content-Ops-Reasoning-Capability-UI-Parity](archive/PR-Content-Ops-Reasoning-Capability-UI-Parity.md)
+- [PR-Content-Ops-Reasoning-Consumption-Summary](archive/PR-Content-Ops-Reasoning-Consumption-Summary.md)
+- [PR-Content-Ops-Reasoning-Context-Contract-Correction](archive/PR-Content-Ops-Reasoning-Context-Contract-Correction.md)
+- [PR-Content-Ops-Reasoning-Context-Delete](archive/PR-Content-Ops-Reasoning-Context-Delete.md)
+- [PR-Content-Ops-Reasoning-Context-List-CLI](archive/PR-Content-Ops-Reasoning-Context-List-CLI.md)
+- [PR-Content-Ops-Reasoning-DB-Check](archive/PR-Content-Ops-Reasoning-DB-Check.md)
+- [PR-Content-Ops-Reasoning-Detail-UI](archive/PR-Content-Ops-Reasoning-Detail-UI.md)
+- [PR-Content-Ops-Reasoning-Docs-Current](archive/PR-Content-Ops-Reasoning-Docs-Current.md)
+- [PR-Content-Ops-Reasoning-Policy-Audit](archive/PR-Content-Ops-Reasoning-Policy-Audit.md)
+- [PR-Content-Ops-Reasoning-Preset-Catalog](archive/PR-Content-Ops-Reasoning-Preset-Catalog.md)
+- [PR-Content-Ops-Reasoning-Provider-Host-Wire-1](archive/PR-Content-Ops-Reasoning-Provider-Host-Wire-1.md)
+- [PR-Content-Ops-Reasoning-Provider-Host-Wire-2](archive/PR-Content-Ops-Reasoning-Provider-Host-Wire-2.md)
+- [PR-Content-Ops-Reasoning-Provider-Status](archive/PR-Content-Ops-Reasoning-Provider-Status.md)
+- [PR-Content-Ops-Reasoning-Runtime-Invariants](archive/PR-Content-Ops-Reasoning-Runtime-Invariants.md)
+- [PR-Content-Ops-Reasoning-Smoke-Docs](archive/PR-Content-Ops-Reasoning-Smoke-Docs.md)
+- [PR-Content-Ops-Reasoning-Status-Capabilities](archive/PR-Content-Ops-Reasoning-Status-Capabilities.md)
+- [PR-Content-Ops-Reasoning-Status-Docs](archive/PR-Content-Ops-Reasoning-Status-Docs.md)
+- [PR-Content-Ops-Reasoning-Status-UI-Parity](archive/PR-Content-Ops-Reasoning-Status-UI-Parity.md)
+- [PR-Content-Ops-Reasoning-UI-Parity](archive/PR-Content-Ops-Reasoning-UI-Parity.md)
+- [PR-Content-Ops-Reasoning-Upsert-Audit-Log](archive/PR-Content-Ops-Reasoning-Upsert-Audit-Log.md)
+- [PR-Content-Ops-Reasoning-Upsert-Dry-Run](archive/PR-Content-Ops-Reasoning-Upsert-Dry-Run.md)
+- [PR-Content-Ops-Reasoning-Upsert-Validation](archive/PR-Content-Ops-Reasoning-Upsert-Validation.md)
+- [PR-Content-Ops-Reasoning-Upsert](archive/PR-Content-Ops-Reasoning-Upsert.md)
+- [PR-Content-Ops-Reasoning-Usage-Audit](archive/PR-Content-Ops-Reasoning-Usage-Audit.md)
+- [PR-Content-Ops-Renewal-Source-Rows](archive/PR-Content-Ops-Renewal-Source-Rows.md)
+- [PR-Content-Ops-Report-Export](archive/PR-Content-Ops-Report-Export.md)
+- [PR-Content-Ops-Report-Sales-Reasoning-Presets](archive/PR-Content-Ops-Report-Sales-Reasoning-Presets.md)
+- [PR-Content-Ops-Review-Evidence-Asset-Framing](archive/PR-Content-Ops-Review-Evidence-Asset-Framing.md)
+- [PR-Content-Ops-Review-Evidence-Copy-Framing](archive/PR-Content-Ops-Review-Evidence-Copy-Framing.md)
+- [PR-Content-Ops-Review-Sales-Brief-Handoff](archive/PR-Content-Ops-Review-Sales-Brief-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Review-Source-Closeout](archive/PR-Content-Ops-Review-Source-Closeout.md)
+- [PR-Content-Ops-Review-Source-Generation-Smoke](archive/PR-Content-Ops-Review-Source-Generation-Smoke.md)
+- [PR-Content-Ops-Review-Source-Live-Closeout](archive/PR-Content-Ops-Review-Source-Live-Closeout.md)
+- [PR-Content-Ops-Review-Source-Live-Provider-Smoke](archive/PR-Content-Ops-Review-Source-Live-Provider-Smoke.md)
+- [PR-Content-Ops-Review-Source-Postgres-Smoke](archive/PR-Content-Ops-Review-Source-Postgres-Smoke.md)
+- [PR-Content-Ops-Review-Source-Prefilter-Closeout](archive/PR-Content-Ops-Review-Source-Prefilter-Closeout.md)
+- [PR-Content-Ops-Review-Source-Quote-Grade-Prefilter](archive/PR-Content-Ops-Review-Source-Quote-Grade-Prefilter.md)
+- [PR-Content-Ops-Review-Source-Readiness](archive/PR-Content-Ops-Review-Source-Readiness.md)
+- [PR-Content-Ops-Review-Source-Schema-Preflight](archive/PR-Content-Ops-Review-Source-Schema-Preflight.md)
+- [PR-Content-Ops-Reviews-Input-Provider](archive/PR-Content-Ops-Reviews-Input-Provider.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Route-Reasoning-Payload-Regression](archive/PR-Content-Ops-Route-Reasoning-Payload-Regression.md)
+- [PR-Content-Ops-Run-Usage-Route-Isolation](archive/PR-Content-Ops-Run-Usage-Route-Isolation.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Run-Usage-Summary](archive/PR-Content-Ops-Run-Usage-Summary.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Sales-Brief-Export](archive/PR-Content-Ops-Sales-Brief-Export.md)
+- [PR-Content-Ops-Scope-Wire-1](archive/PR-Content-Ops-Scope-Wire-1.md)
+- [PR-Content-Ops-Screen-1-New-Run](archive/PR-Content-Ops-Screen-1-New-Run.md)
+- [PR-Content-Ops-Screen-2-Plan-Preview](archive/PR-Content-Ops-Screen-2-Plan-Preview.md)
+- [PR-Content-Ops-Server-File-Ingestion](archive/PR-Content-Ops-Server-File-Ingestion.md) - lane: content-ops/server-file-ingestion
+- [PR-Content-Ops-Signal-Extraction-Result-Summary](archive/PR-Content-Ops-Signal-Extraction-Result-Summary.md)
+- [PR-Content-Ops-Social-Post-Generated-Assets](archive/PR-Content-Ops-Social-Post-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Social-Post-Package-Handoff](archive/PR-Content-Ops-Social-Post-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Social-Post-Review-Assets](archive/PR-Content-Ops-Social-Post-Review-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Source-Adapter-Audit](archive/PR-Content-Ops-Source-Adapter-Audit.md)
+- [PR-Content-Ops-Source-Bundle-Example](archive/PR-Content-Ops-Source-Bundle-Example.md)
+- [PR-Content-Ops-Source-Bundle-Ingest](archive/PR-Content-Ops-Source-Bundle-Ingest.md)
+- [PR-Content-Ops-Source-Field-Aliases](archive/PR-Content-Ops-Source-Field-Aliases.md)
+- [PR-Content-Ops-Source-Field-Lookup-Cache](archive/PR-Content-Ops-Source-Field-Lookup-Cache.md)
+- [PR-Content-Ops-Source-File-Postgres-Smoke](archive/PR-Content-Ops-Source-File-Postgres-Smoke.md)
+- [PR-Content-Ops-Source-Smoke-Shared-Helpers](archive/PR-Content-Ops-Source-Smoke-Shared-Helpers.md)
+- [PR-Content-Ops-Source-Target-Defaults](archive/PR-Content-Ops-Source-Target-Defaults.md)
+- [PR-Content-Ops-Source-Ticket-Adapter](archive/PR-Content-Ops-Source-Ticket-Adapter.md)
+- [PR-Content-Ops-Source-Type-Precedence](archive/PR-Content-Ops-Source-Type-Precedence.md)
+- [PR-Content-Ops-Stat-Card-Generated-Assets](archive/PR-Content-Ops-Stat-Card-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Stat-Card-Package-Handoff](archive/PR-Content-Ops-Stat-Card-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Strict-Falsification-Policy](archive/PR-Content-Ops-Strict-Falsification-Policy.md)
+- [PR-Content-Ops-Strict-Reasoning-Policy](archive/PR-Content-Ops-Strict-Reasoning-Policy.md)
+- [PR-Content-Ops-Strict-Validation-Observability](archive/PR-Content-Ops-Strict-Validation-Observability.md)
+- [PR-Content-Ops-Strict-Validation-Telemetry](archive/PR-Content-Ops-Strict-Validation-Telemetry.md)
+- [PR-Content-Ops-Support-Ticket-Copy-Policy](archive/PR-Content-Ops-Support-Ticket-Copy-Policy.md)
+- [PR-Content-Ops-Support-Ticket-Examples](archive/PR-Content-Ops-Support-Ticket-Examples.md)
+- [PR-Content-Ops-Support-Ticket-Input-Package](archive/PR-Content-Ops-Support-Ticket-Input-Package.md) - lane: content-ops/input-provider-ticket-package
+- [PR-Content-Ops-Support-Ticket-Input-Provider](archive/PR-Content-Ops-Support-Ticket-Input-Provider.md) - lane: content-ops/input-provider-ticket-package
+- [PR-Content-Ops-Survey-Source-Adapter](archive/PR-Content-Ops-Survey-Source-Adapter.md)
+- [PR-Content-Ops-Tenant-Usage-Summary](archive/PR-Content-Ops-Tenant-Usage-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Ticket-FAQ-Markdown](archive/PR-Content-Ops-Ticket-FAQ-Markdown.md)
+- [PR-Content-Ops-Ticket-Thread-Adapter](archive/PR-Content-Ops-Ticket-Thread-Adapter.md)
+- [PR-Content-Ops-UI-File-Ingestion-Tests](archive/PR-Content-Ops-UI-File-Ingestion-Tests.md) - lane: content-ops/ui-file-ingestion-tests
+- [PR-Content-Ops-UI-File-Ingestion](archive/PR-Content-Ops-UI-File-Ingestion.md) - lane: content-ops/ui-file-ingestion
+- [PR-Content-Ops-Upload-Limits-UI](archive/PR-Content-Ops-Upload-Limits-UI.md) - lane: content-ops/upload-limits-ui
+- [PR-Content-Ops-Upload-Preflight](archive/PR-Content-Ops-Upload-Preflight.md) - lane: content-ops/upload-preflight
+- [PR-Content-Ops-Upload-Source-Browser-E2E](archive/PR-Content-Ops-Upload-Source-Browser-E2E.md) - lane: content-ops/upload-source-run-handoff | phase: Functional validation
+- [PR-Content-Ops-Upload-Source-CI-Enrollment](archive/PR-Content-Ops-Upload-Source-CI-Enrollment.md) - lane: content-ops/upload-source-run-handoff | phase: Workflow/process
+- [PR-Content-Ops-Upload-Source-Deployed-Smoke](archive/PR-Content-Ops-Upload-Source-Deployed-Smoke.md) - lane: content-ops/upload-source-run-handoff | phase: Functional validation
+- [PR-Content-Ops-Upload-Source-Lean-Import](archive/PR-Content-Ops-Upload-Source-Lean-Import.md) - lane: content-ops/upload-source-run-handoff | phase: Product polish
+- [PR-Content-Ops-Upload-Source-Public-Asset-Validation](archive/PR-Content-Ops-Upload-Source-Public-Asset-Validation.md) - lane: content-ops/upload-source-run-handoff | phase: Functional validation
+- [PR-Content-Ops-Upload-Source-Run-Handoff](archive/PR-Content-Ops-Upload-Source-Run-Handoff.md) - lane: content-ops/upload-source-run-handoff | phase: Vertical slice
+- [PR-Content-Ops-Upload-Source-Target-Ids-UI](archive/PR-Content-Ops-Upload-Source-Target-Ids-UI.md) - lane: content-ops/upload-source-run-handoff | phase: Vertical slice
+- [PR-Content-Ops-Usage-Account-Metadata](archive/PR-Content-Ops-Usage-Account-Metadata.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Usage-Budget-Gate](archive/PR-Content-Ops-Usage-Budget-Gate.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Ops-Usage-Budget-UI](archive/PR-Content-Ops-Usage-Budget-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Usage-Cards](archive/PR-Content-Ops-Usage-Cards.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Usage-Summary](archive/PR-Content-Ops-Usage-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
+- [PR-Content-Selling-Context-Inputs](archive/PR-Content-Selling-Context-Inputs.md)
+- [PR-Content-Selling-Url-Source-Cli](archive/PR-Content-Selling-Url-Source-Cli.md)
+- [PR-ContentAssets-Consistency-2](archive/PR-ContentAssets-Consistency-2.md)
+- [PR-ContentAssets-Consistency-3](archive/PR-ContentAssets-Consistency-3.md)
+- [PR-ContentOps-Email-Packaged-Reasoning](archive/PR-ContentOps-Email-Packaged-Reasoning.md)
+- [PR-ContentOps-Landing-Reasoning-Parity](archive/PR-ContentOps-Landing-Reasoning-Parity.md)
+- [PR-ContentOps-Reasoning-Policy-Closeout-2026-05-17](archive/PR-ContentOps-Reasoning-Policy-Closeout-2026-05-17.md)
+- [PR-Control-Surfaces-Reasoning-Provider](archive/PR-Control-Surfaces-Reasoning-Provider.md)
+- [PR-Cross-Session-PR-Drift-Guard](archive/PR-Cross-Session-PR-Drift-Guard.md) - lane: workflow/pr-drift-guard
+- [PR-D6e-chat-response-cached-field](archive/PR-D6e-chat-response-cached-field.md)
+- [PR-D6f-cache-control-no-store](archive/PR-D6f-cache-control-no-store.md)
+- [PR-D6g-1-batch-cache-prefilter-schema](archive/PR-D6g-1-batch-cache-prefilter-schema.md)
+- [PR-D6g-2-batch-cache-100pct-hit-shortcircuit](archive/PR-D6g-2-batch-cache-100pct-hit-shortcircuit.md)
+- [PR-Decouple-CompIntel-1](archive/PR-Decouple-CompIntel-1.md)
+- [PR-Decouple-PoolCompression-1](archive/PR-Decouple-PoolCompression-1.md)
+- [PR-Deflection-Answer-Copy-Polish](archive/PR-Deflection-Answer-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
+- [PR-Deflection-Delivery-Email-Metadata](archive/PR-Deflection-Delivery-Email-Metadata.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Delivery-Privacy-Regressions](archive/PR-Deflection-Delivery-Privacy-Regressions.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
+- [PR-Deflection-Paid-Delivery-Queue](archive/PR-Deflection-Paid-Delivery-Queue.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Paid-Delivery-Script](archive/PR-Deflection-Paid-Delivery-Script.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Paid-Delivery-Worker](archive/PR-Deflection-Paid-Delivery-Worker.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Paid-Report-Reframe](archive/PR-Deflection-Paid-Report-Reframe.md) - lane: content-ops/faq-deflection-paid-report | phase: Product polish
+- [PR-Deflection-Question-Evidence-Scoping](archive/PR-Deflection-Question-Evidence-Scoping.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Resolution-Copy-Polish](archive/PR-Deflection-Resolution-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
+- [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
+- [PR-Deflection-Session-Amount-Gate](archive/PR-Deflection-Session-Amount-Gate.md) - lane: ai-content-ops/faq-deflection-monetization | phase: Production hardening
+- [PR-Deflection-Snapshot-Counts](archive/PR-Deflection-Snapshot-Counts.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-Deflection-Snapshot-Date-Window](archive/PR-Deflection-Snapshot-Date-Window.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Production hardening
+- [PR-Deflection-Snapshot-Teaser](archive/PR-Deflection-Snapshot-Teaser.md) - lane: content-ops/faq-deflection | phase: Product polish
+- [PR-Deflection-Teaser-Locked-Dedupe](archive/PR-Deflection-Teaser-Locked-Dedupe.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
+- [PR-Deflection-Teaser-Top-Answer](archive/PR-Deflection-Teaser-Top-Answer.md) - lane: content-ops/faq-deflection-teaser | phase: Product polish
+- [PR-Deflection-To-Content-Upsell](archive/PR-Deflection-To-Content-Upsell.md) - lane: content-ops/deflection-to-content-upsell | phase: Workflow/process
+- [PR-Deflection-Uncap-Paid-Report](archive/PR-Deflection-Uncap-Paid-Report.md) - lane: content-ops/faq-deflection | phase: Production hardening
+- [PR-Demand-Opportunity-Report](archive/PR-Demand-Opportunity-Report.md)
+- [PR-Describe-Control-Surfaces-Cache](archive/PR-Describe-Control-Surfaces-Cache.md)
+- [PR-Dev-Workflow-Helpers-Docs](archive/PR-Dev-Workflow-Helpers-Docs.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
+- [PR-Dev-Workflow-PR-Prep](archive/PR-Dev-Workflow-PR-Prep.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
+- [PR-Dev-Workflow-Plan-Scaffold](archive/PR-Dev-Workflow-Plan-Scaffold.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
+- [PR-Docs-Preserve-Product-Audit-Notes](archive/PR-Docs-Preserve-Product-Audit-Notes.md) - lane: docs/product-history-preservation | phase: Workflow/process
+- [PR-Evaluator-Pattern-Precision-Contract](archive/PR-Evaluator-Pattern-Precision-Contract.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Extracted-CI-Enrollment-Checker-Evaluator-Patterns](archive/PR-Extracted-CI-Enrollment-Checker-Evaluator-Patterns.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-Extracted-Fastapi-Route-CI](archive/PR-Extracted-Fastapi-Route-CI.md) - lane: extracted-pipeline/route-ci
+- [PR-Extracted-Pipeline-CI-Enrollment-Scanner](archive/PR-Extracted-Pipeline-CI-Enrollment-Scanner.md) - lane: workflow/extracted-pipeline-ci | phase: Workflow/process
+- [PR-Extracted-Pipeline-CI-Scanner-Fixtures](archive/PR-Extracted-Pipeline-CI-Scanner-Fixtures.md) - lane: workflow/extracted-pipeline-ci | phase: Workflow/process
+- [PR-FAQ-Answer-Step-Grounding](archive/PR-FAQ-Answer-Step-Grounding.md) - lane: content-ops/faq-generator | phase: Production hardening.
+- [PR-FAQ-Config-Controls-Catalog-Gate](archive/PR-FAQ-Config-Controls-Catalog-Gate.md) - lane: content-ops/deflection-report-ui | phase: Product polish
+- [PR-FAQ-Deflection-Blob-DNS-Pinning](archive/PR-FAQ-Deflection-Blob-DNS-Pinning.md) - lane: content-ops/faq-deflection-blob-fetch | phase: Production hardening
+- [PR-FAQ-Deflection-Blob-Redirect-Hardening](archive/PR-FAQ-Deflection-Blob-Redirect-Hardening.md) - lane: content-ops/faq-deflection-submit | phase: Robust testing
+- [PR-FAQ-Deflection-Bulk-Route](archive/PR-FAQ-Deflection-Bulk-Route.md) - lane: content-ops/deflection-report | phase: Robust testing
+- [PR-FAQ-Deflection-Checkout-Contract](archive/PR-FAQ-Deflection-Checkout-Contract.md) - lane: content-ops/deflection-report-gating | phase: Product polish
+- [PR-FAQ-Deflection-Cleanup-Observability](archive/PR-FAQ-Deflection-Cleanup-Observability.md) - lane: portfolio-ui/faq-deflection | phase: Production hardening
+- [PR-FAQ-Deflection-Concurrent-Route](archive/PR-FAQ-Deflection-Concurrent-Route.md) - lane: content-ops/deflection-report | phase: Production hardening
+- [PR-FAQ-Deflection-Env-Handoff-Helper](archive/PR-FAQ-Deflection-Env-Handoff-Helper.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Execute-Limit](archive/PR-FAQ-Deflection-Execute-Limit.md) - lane: content-ops/deflection-report | phase: Production hardening
+- [PR-FAQ-Deflection-Hosted-Submit-Handoff](archive/PR-FAQ-Deflection-Hosted-Submit-Handoff.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Live-Upload-Fixture](archive/PR-FAQ-Deflection-Live-Upload-Fixture.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Live-Upload-Ingest-Fixture](archive/PR-FAQ-Deflection-Live-Upload-Ingest-Fixture.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Paid-Flow-Validation](archive/PR-FAQ-Deflection-Paid-Flow-Validation.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Paid-Gate](archive/PR-FAQ-Deflection-Paid-Gate.md) - lane: content-ops/deflection-report-gating | phase: Vertical slice
+- [PR-FAQ-Deflection-Paid-Postgres-Smoke](archive/PR-FAQ-Deflection-Paid-Postgres-Smoke.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Portfolio-Atlas-Proxy](archive/PR-FAQ-Deflection-Portfolio-Atlas-Proxy.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Portfolio-Checkout-Cancel-State](archive/PR-FAQ-Deflection-Portfolio-Checkout-Cancel-State.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
+- [PR-FAQ-Deflection-Portfolio-Checkout-Pending-CTA](archive/PR-FAQ-Deflection-Portfolio-Checkout-Pending-CTA.md) - lane: portfolio-ui/faq-deflection | phase: Production hardening
+- [PR-FAQ-Deflection-Portfolio-Checkout-RAK](archive/PR-FAQ-Deflection-Portfolio-Checkout-RAK.md) - lane: portfolio-ui/faq-deflection | phase: Production hardening
+- [PR-FAQ-Deflection-Portfolio-Checkout-Return-Token-Contract](archive/PR-FAQ-Deflection-Portfolio-Checkout-Return-Token-Contract.md) - lane: portfolio-ui/faq-deflection | phase: Robust testing
+- [PR-FAQ-Deflection-Portfolio-Checkout-Success-Retry](archive/PR-FAQ-Deflection-Portfolio-Checkout-Success-Retry.md) - lane: portfolio-ui/faq-deflection | phase: Production hardening
+- [PR-FAQ-Deflection-Portfolio-Hosted-Smoke](archive/PR-FAQ-Deflection-Portfolio-Hosted-Smoke.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Portfolio-Live-E2E-Smoke](archive/PR-FAQ-Deflection-Portfolio-Live-E2E-Smoke.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Portfolio-Live-Submit](archive/PR-FAQ-Deflection-Portfolio-Live-Submit.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Portfolio-Paid-Report-Renderer](archive/PR-FAQ-Deflection-Portfolio-Paid-Report-Renderer.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Portfolio-Result-Page-UI](archive/PR-FAQ-Deflection-Portfolio-Result-Page-UI.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Portfolio-Result-Page-Validation](archive/PR-FAQ-Deflection-Portfolio-Result-Page-Validation.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Portfolio-Smoke-Configured-Account](archive/PR-FAQ-Deflection-Portfolio-Smoke-Configured-Account.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Portfolio-Submit](archive/PR-FAQ-Deflection-Portfolio-Submit.md) - lane: content-ops/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Portfolio-Upload-Shell](archive/PR-FAQ-Deflection-Portfolio-Upload-Shell.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Postgres-Smoke-Cleanup](archive/PR-FAQ-Deflection-Postgres-Smoke-Cleanup.md) - lane: content-ops/deflection-report-gating | phase: Production hardening
+- [PR-FAQ-Deflection-Private-Blob-Cleanup](archive/PR-FAQ-Deflection-Private-Blob-Cleanup.md) - lane: portfolio-ui/faq-deflection | phase: Production hardening
+- [PR-FAQ-Deflection-Private-Blob-Persistence](archive/PR-FAQ-Deflection-Private-Blob-Persistence.md) - lane: portfolio-ui/faq-deflection | phase: Vertical slice
+- [PR-FAQ-Deflection-Report-CLI-Gate](archive/PR-FAQ-Deflection-Report-CLI-Gate.md) - lane: content-ops/deflection-report | phase: Production hardening
+- [PR-FAQ-Deflection-Report-Contract](archive/PR-FAQ-Deflection-Report-Contract.md) - lane: content-ops/deflection-report | phase: Product polish
+- [PR-FAQ-Deflection-Report-Intent-Rule-Input](archive/PR-FAQ-Deflection-Report-Intent-Rule-Input.md) - lane: content-ops/deflection-report-ui | phase: Product polish
+- [PR-FAQ-Deflection-Report-Intent-Rules](archive/PR-FAQ-Deflection-Report-Intent-Rules.md) - lane: content-ops/deflection-report | phase: Vertical slice
+- [PR-FAQ-Deflection-Report-Output](archive/PR-FAQ-Deflection-Report-Output.md) - lane: content-ops/deflection-report | phase: Vertical slice
+- [PR-FAQ-Deflection-Report-Rule-File-Docs](archive/PR-FAQ-Deflection-Report-Rule-File-Docs.md) - lane: content-ops/deflection-report | phase: Product polish
+- [PR-FAQ-Deflection-Report-Rule-File](archive/PR-FAQ-Deflection-Report-Rule-File.md) - lane: content-ops/deflection-report | phase: Vertical slice
+- [PR-FAQ-Deflection-Report-Term-File](archive/PR-FAQ-Deflection-Report-Term-File.md) - lane: content-ops/deflection-report | phase: Product polish
+- [PR-FAQ-Deflection-Report-UI-Controls](archive/PR-FAQ-Deflection-Report-UI-Controls.md) - lane: content-ops/deflection-report-ui | phase: Product polish
+- [PR-FAQ-Deflection-Report-UI-Readonly](archive/PR-FAQ-Deflection-Report-UI-Readonly.md) - lane: content-ops/deflection-report-ui | phase: Vertical slice
+- [PR-FAQ-Deflection-Result-Configured-Account](archive/PR-FAQ-Deflection-Result-Configured-Account.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
+- [PR-FAQ-Deflection-Result-Page-CTA-Metadata-Binding](archive/PR-FAQ-Deflection-Result-Page-CTA-Metadata-Binding.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Snapshot-Contract](archive/PR-FAQ-Deflection-Snapshot-Contract.md) - lane: content-ops/deflection-report-gating | phase: Product polish
+- [PR-FAQ-Deflection-Stripe-Event-Log-Best-Effort](archive/PR-FAQ-Deflection-Stripe-Event-Log-Best-Effort.md) - lane: content-ops/deflection-report-gating | phase: Production hardening
+- [PR-FAQ-Deflection-Stripe-Paid-Replay-Smoke](archive/PR-FAQ-Deflection-Stripe-Paid-Replay-Smoke.md) - lane: content-ops/deflection-report-gating | phase: Robust testing
+- [PR-FAQ-Deflection-Stripe-Paid-Retry-Idempotency](archive/PR-FAQ-Deflection-Stripe-Paid-Retry-Idempotency.md) - lane: content-ops/deflection-report-gating | phase: Robust testing
+- [PR-FAQ-Deflection-Stripe-Paid-Unlock-Smoke](archive/PR-FAQ-Deflection-Stripe-Paid-Unlock-Smoke.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Stripe-Paid](archive/PR-FAQ-Deflection-Stripe-Paid.md) - lane: content-ops/deflection-report-gating | phase: Production hardening
+- [PR-FAQ-Deflection-Submit-Configured-Account-Smoke](archive/PR-FAQ-Deflection-Submit-Configured-Account-Smoke.md) - lane: portfolio-ui/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Submit-Configured-Account](archive/PR-FAQ-Deflection-Submit-Configured-Account.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
+- [PR-FAQ-Deflection-Submit-Deploy-Parity](archive/PR-FAQ-Deflection-Submit-Deploy-Parity.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Submit-Direct-Multipart-Deprecation](archive/PR-FAQ-Deflection-Submit-Direct-Multipart-Deprecation.md) - lane: content-ops/deflection-report-gating | phase: Production hardening
+- [PR-FAQ-Deflection-Submit-Fixture-Default](archive/PR-FAQ-Deflection-Submit-Fixture-Default.md) - lane: content-ops/deflection-report-gating | phase: Product polish
+- [PR-FAQ-Deflection-Submit-Live-Validation](archive/PR-FAQ-Deflection-Submit-Live-Validation.md) - lane: portfolio-ui/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Submit-Multipart-CSV](archive/PR-FAQ-Deflection-Submit-Multipart-CSV.md) - lane: content-ops/deflection-report-gating | phase: Production hardening
+- [PR-FAQ-Deflection-Submit-Multipart-Smoke](archive/PR-FAQ-Deflection-Submit-Multipart-Smoke.md) - lane: content-ops/deflection-report-gating | phase: Functional validation
+- [PR-FAQ-Deflection-Submit-Request-Mapping-Fix](archive/PR-FAQ-Deflection-Submit-Request-Mapping-Fix.md) - lane: content-ops/faq-deflection | phase: Functional validation
+- [PR-FAQ-Deflection-Upload-Progress-Retry-UX](archive/PR-FAQ-Deflection-Upload-Progress-Retry-UX.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
+- [PR-FAQ-Generator-Output-Proof](archive/PR-FAQ-Generator-Output-Proof.md) - lane: content-ops/faq-generator | phase: Functional validation.
+- [PR-FAQ-Get-Draft-Postgres-Isolation](archive/PR-FAQ-Get-Draft-Postgres-Isolation.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
+- [PR-FAQ-Intent-Rule-Regression-Net](archive/PR-FAQ-Intent-Rule-Regression-Net.md) - lane: content-ops/deflection-report-ui | phase: Functional validation
+- [PR-FAQ-Live-Run-Blocker-Preflight](archive/PR-FAQ-Live-Run-Blocker-Preflight.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-Macro-Writeback-Content-Hash-Update](archive/PR-FAQ-Macro-Writeback-Content-Hash-Update.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Credential-API](archive/PR-FAQ-Macro-Writeback-Credential-API.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed](archive/PR-FAQ-Macro-Writeback-Credential-Fallback-Fail-Closed.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Credential-UI](archive/PR-FAQ-Macro-Writeback-Credential-UI.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Functional-Validation](archive/PR-FAQ-Macro-Writeback-Functional-Validation.md) - lane: content-ops/faq-macro-writeback | phase: Functional validation
+- [PR-FAQ-Macro-Writeback-Idempotency](archive/PR-FAQ-Macro-Writeback-Idempotency.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Live-Smoke](archive/PR-FAQ-Macro-Writeback-Live-Smoke.md) - lane: content-ops/faq-macro-writeback | phase: Functional validation
+- [PR-FAQ-Macro-Writeback-Pending-Reconcile](archive/PR-FAQ-Macro-Writeback-Pending-Reconcile.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Preview](archive/PR-FAQ-Macro-Writeback-Preview.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Provider-Wiring](archive/PR-FAQ-Macro-Writeback-Provider-Wiring.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Publish-History-Read-Route](archive/PR-FAQ-Macro-Writeback-Publish-History-Read-Route.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Publish-History-UI](archive/PR-FAQ-Macro-Writeback-Publish-History-UI.md) - lane: content-ops/faq-macro-writeback | phase: Product polish
+- [PR-FAQ-Macro-Writeback-Publish-History](archive/PR-FAQ-Macro-Writeback-Publish-History.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Publish-Route](archive/PR-FAQ-Macro-Writeback-Publish-Route.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Publish-Trigger](archive/PR-FAQ-Macro-Writeback-Publish-Trigger.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Publish-UI](archive/PR-FAQ-Macro-Writeback-Publish-UI.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Reconcile-CLI](archive/PR-FAQ-Macro-Writeback-Reconcile-CLI.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Scheduled-Publish](archive/PR-FAQ-Macro-Writeback-Scheduled-Publish.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Macro-Writeback-Scheduled-Telemetry](archive/PR-FAQ-Macro-Writeback-Scheduled-Telemetry.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Tenant-Credentials](archive/PR-FAQ-Macro-Writeback-Tenant-Credentials.md) - lane: content-ops/faq-macro-writeback | phase: Production hardening
+- [PR-FAQ-Macro-Writeback-Zendesk-Adapter](archive/PR-FAQ-Macro-Writeback-Zendesk-Adapter.md) - lane: content-ops/faq-macro-writeback | phase: Vertical slice
+- [PR-FAQ-Output-As-Ingestion-Source](archive/PR-FAQ-Output-As-Ingestion-Source.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-FAQ-Output-By-ID-Selection](archive/PR-FAQ-Output-By-ID-Selection.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-FAQ-Output-Ingestion-Closeout](archive/PR-FAQ-Output-Ingestion-Closeout.md) - lane: content-ops/faq-output-ingestion | phase: Workflow/process
+- [PR-FAQ-Output-Proof-Ingestion-Bridge](archive/PR-FAQ-Output-Proof-Ingestion-Bridge.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
+- [PR-FAQ-Output-Resolution-Evidence-Contract](archive/PR-FAQ-Output-Resolution-Evidence-Contract.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-FAQ-Output-Selection-Wiring](archive/PR-FAQ-Output-Selection-Wiring.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-FAQ-Report-Contract-Example](archive/PR-FAQ-Report-Contract-Example.md) - lane: content-ops/faq-generator | phase: Product polish.
+- [PR-FAQ-Report-Contract-Producer-Fidelity](archive/PR-FAQ-Report-Contract-Producer-Fidelity.md) - lane: content-ops/faq-generator | phase: Functional validation
+- [PR-FAQ-SaaS-Demo-Artifact-Status-Gate](archive/PR-FAQ-SaaS-Demo-Artifact-Status-Gate.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-SaaS-Demo-Cleanup-Summary](archive/PR-FAQ-SaaS-Demo-Cleanup-Summary.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-SaaS-Demo-Malformed-Artifact-Gate](archive/PR-FAQ-SaaS-Demo-Malformed-Artifact-Gate.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-SaaS-Demo-Route-Case-Summary](archive/PR-FAQ-SaaS-Demo-Route-Case-Summary.md) - lane: content-ops/faq-search | phase: Functional validation.
+- [PR-FAQ-Scale-Hardening-Ledger-Closeout](archive/PR-FAQ-Scale-Hardening-Ledger-Closeout.md) - lane: content-ops/faq-generator-validation | phase: Production hardening.
+- [PR-FAQ-Search-Checker-Branch-Coverage](archive/PR-FAQ-Search-Checker-Branch-Coverage.md) - lane: content-ops/faq-search | phase: Functional validation
+- [PR-FAQ-Search-Cleanup-Rowcount-Gate](archive/PR-FAQ-Search-Cleanup-Rowcount-Gate.md) - lane: content-ops/faq-search | phase: Production hardening.
+- [PR-FAQ-Source-ID-Execute-Smoke](archive/PR-FAQ-Source-ID-Execute-Smoke.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
+- [PR-FAQ-Source-ID-Live-Harness](archive/PR-FAQ-Source-ID-Live-Harness.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
+- [PR-FAQ-Source-ID-UI-Selection](archive/PR-FAQ-Source-ID-UI-Selection.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-Frontend-Test-CI-Enrollment-Rule](archive/PR-Frontend-Test-CI-Enrollment-Rule.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Generated-Asset-API-Draft-Id-Filters](archive/PR-Generated-Asset-API-Draft-Id-Filters.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Generated-Asset-Repair-History-Type-Contract](archive/PR-Generated-Asset-Repair-History-Type-Contract.md)
+- [PR-Generated-Asset-Repair-History-UI](archive/PR-Generated-Asset-Repair-History-UI.md)
+- [PR-Generated-Asset-Repair-Summary](archive/PR-Generated-Asset-Repair-Summary.md)
+- [PR-Generated-Asset-Repair-Telemetry](archive/PR-Generated-Asset-Repair-Telemetry.md)
+- [PR-Gitignore-Secret-Env-Hardening](archive/PR-Gitignore-Secret-Env-Hardening.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Intel-UI-CI-Enrollment-Close-Hole](archive/PR-Intel-UI-CI-Enrollment-Close-Hole.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Invoice-Email-Signature](archive/PR-Invoice-Email-Signature.md) - lane: invoicing/cover-email-signature | phase: Product polish
+- [PR-Invoicing-Approval-Blockers-Import-Cycles](archive/PR-Invoicing-Approval-Blockers-Import-Cycles.md) - lane: invoicing | phase: Production hardening
+- [PR-Invoicing-Draft-Writer-Funnel-Route-Check](archive/PR-Invoicing-Draft-Writer-Funnel-Route-Check.md)
+- [PR-Invoicing-Draft-Writer-Funnel-Route-Guidance](archive/PR-Invoicing-Draft-Writer-Funnel-Route-Guidance.md)
+- [PR-Invoicing-Draft-Writer-Live-Write-Smoke](archive/PR-Invoicing-Draft-Writer-Live-Write-Smoke.md)
+- [PR-Invoicing-Draft-Writer-MCP](archive/PR-Invoicing-Draft-Writer-MCP.md)
+- [PR-Invoicing-Draft-Writer-OAuth-Public-Host](archive/PR-Invoicing-Draft-Writer-OAuth-Public-Host.md)
+- [PR-Invoicing-Draft-Writer-OAuth-Token-File](archive/PR-Invoicing-Draft-Writer-OAuth-Token-File.md)
+- [PR-Invoicing-Draft-Writer-OAuth](archive/PR-Invoicing-Draft-Writer-OAuth.md)
+- [PR-Invoicing-MCP-Write-Access-Guardrails](archive/PR-Invoicing-MCP-Write-Access-Guardrails.md)
+- [PR-Invoicing-Number-Case-Insensitive-Lookup](archive/PR-Invoicing-Number-Case-Insensitive-Lookup.md)
+- [PR-Invoicing-OAuth-State-File](archive/PR-Invoicing-OAuth-State-File.md)
+- [PR-Invoicing-Readonly-ChatGPT-MCP](archive/PR-Invoicing-Readonly-ChatGPT-MCP.md)
+- [PR-Invoicing-Readonly-ChatGPT-OAuth](archive/PR-Invoicing-Readonly-ChatGPT-OAuth.md)
+- [PR-Invoicing-Readonly-OAuth-Discovery-Smoke](archive/PR-Invoicing-Readonly-OAuth-Discovery-Smoke.md)
+- [PR-Invoicing-Readonly-OAuth-E2E-Smoke](archive/PR-Invoicing-Readonly-OAuth-E2E-Smoke.md)
+- [PR-Invoicing-Readonly-OAuth-Operator-Launcher](archive/PR-Invoicing-Readonly-OAuth-Operator-Launcher.md)
+- [PR-Invoicing-Readonly-Ops-Hardening](archive/PR-Invoicing-Readonly-Ops-Hardening.md)
+- [PR-LLM-Registry-Service-Export](archive/PR-LLM-Registry-Service-Export.md)
+- [PR-LLM-Usage-Schema-Cache-Telemetry](archive/PR-LLM-Usage-Schema-Cache-Telemetry.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Landing-Page-AEO-GEO-Section-Readiness](archive/PR-Landing-Page-AEO-GEO-Section-Readiness.md)
+- [PR-Landing-Page-AEO-GEO-Section-Source](archive/PR-Landing-Page-AEO-GEO-Section-Source.md)
+- [PR-Landing-Page-Draft-Edit-API](archive/PR-Landing-Page-Draft-Edit-API.md) - lane: content-ops/landing-page-draft-edit-api
+- [PR-Landing-Page-Draft-Edit-UI](archive/PR-Landing-Page-Draft-Edit-UI.md) - lane: content-ops/landing-page-draft-edit-ui
+- [PR-Landing-Page-Failure-Diagnostics](archive/PR-Landing-Page-Failure-Diagnostics.md) - lane: `content-ops/landing-page-live-smoke`
+- [PR-Landing-Page-Generation-Smoke](archive/PR-Landing-Page-Generation-Smoke.md) - lane: content-ops/landing-page-generation-smoke
+- [PR-Landing-Page-Index-Policy](archive/PR-Landing-Page-Index-Policy.md) - lane: content-ops/landing-page-index-policy
+- [PR-Landing-Page-Prerender-Env-Docs](archive/PR-Landing-Page-Prerender-Env-Docs.md) - lane: content-ops/landing-page-prerender-env-docs
+- [PR-Landing-Page-Prerender-Fallback-Title-Guard](archive/PR-Landing-Page-Prerender-Fallback-Title-Guard.md) - lane: content-ops/landing-page-public-prerender-verify
+- [PR-Landing-Page-Prompt-Consumes-SEO-GEO-AEO-Inputs](archive/PR-Landing-Page-Prompt-Consumes-SEO-GEO-AEO-Inputs.md) - lane: content-ops/landing-page-prompt-contract
+- [PR-Landing-Page-Prompt-Readiness](archive/PR-Landing-Page-Prompt-Readiness.md)
+- [PR-Landing-Page-Public-CTA-Index-Policy](archive/PR-Landing-Page-Public-CTA-Index-Policy.md) - lane: content-ops/landing-page-public-index-policy
+- [PR-Landing-Page-Public-CTA-Variant-Policy](archive/PR-Landing-Page-Public-CTA-Variant-Policy.md) - lane: content-ops/landing-page-public-index-policy
+- [PR-Landing-Page-Public-Prerender-Verify](archive/PR-Landing-Page-Public-Prerender-Verify.md) - lane: content-ops/landing-page-public-prerender-verify
+- [PR-Landing-Page-Public-Prerender](archive/PR-Landing-Page-Public-Prerender.md) - lane: content-ops/landing-page-public-prerender
+- [PR-Landing-Page-Public-Sitemap](archive/PR-Landing-Page-Public-Sitemap.md) - lane: content-ops/landing-page-public-sitemap
+- [PR-Landing-Page-Quality-Gate-Readiness](archive/PR-Landing-Page-Quality-Gate-Readiness.md)
+- [PR-Landing-Page-Quality-Repair-Execution](archive/PR-Landing-Page-Quality-Repair-Execution.md)
+- [PR-Landing-Page-Quality-Repair-Input-Override](archive/PR-Landing-Page-Quality-Repair-Input-Override.md)
+- [PR-Landing-Page-Quality-Repair-UI-Control](archive/PR-Landing-Page-Quality-Repair-UI-Control.md)
+- [PR-Landing-Page-Quality-Repair](archive/PR-Landing-Page-Quality-Repair.md)
+- [PR-Landing-Page-Readiness-Helper](archive/PR-Landing-Page-Readiness-Helper.md)
+- [PR-Landing-Page-Readiness-Review-UI](archive/PR-Landing-Page-Readiness-Review-UI.md)
+- [PR-Landing-Page-Readiness-Validator-Unification](archive/PR-Landing-Page-Readiness-Validator-Unification.md) - lane: content-ops/landing-page-readiness-validator
+- [PR-Landing-Page-Repair-Cost-Guard](archive/PR-Landing-Page-Repair-Cost-Guard.md) - lane: content-ops/landing-page-repair-cost-guard
+- [PR-Landing-Page-Repair-Error-Normalization](archive/PR-Landing-Page-Repair-Error-Normalization.md) - lane: content-ops/landing-page-repair-error-normalization
+- [PR-Landing-Page-Repair-Export](archive/PR-Landing-Page-Repair-Export.md)
+- [PR-Landing-Page-Repair-Lock-Hardening](archive/PR-Landing-Page-Repair-Lock-Hardening.md) - lane: content-ops/landing-page-repair-session
+- [PR-Landing-Page-Repair-Lock-Hash-Key](archive/PR-Landing-Page-Repair-Lock-Hash-Key.md) - lane: content-ops/landing-page-repair-lock-hash-key
+- [PR-Landing-Page-Repair-Lock-Skip-Warning](archive/PR-Landing-Page-Repair-Lock-Skip-Warning.md) - lane: content-ops/landing-page-repair-lock-skip-warning
+- [PR-Landing-Page-Repair-Lock-Warning-Context](archive/PR-Landing-Page-Repair-Lock-Warning-Context.md) - lane: content-ops/landing-page-repair-lock-warning-context
+- [PR-Landing-Page-Repair-UI-Polish](archive/PR-Landing-Page-Repair-UI-Polish.md) - lane: content-ops/landing-page-repair-ui-polish
+- [PR-Landing-Page-SEO-AEO-GEO-Contract](archive/PR-Landing-Page-SEO-AEO-GEO-Contract.md)
+- [PR-Landing-Page-SEO-GEO-AEO-Input-Contract](archive/PR-Landing-Page-SEO-GEO-AEO-Input-Contract.md) - lane: content-ops/landing-page-input-contract
+- [PR-Landing-Page-SEO-GEO-Audit-Refresh](archive/PR-Landing-Page-SEO-GEO-Audit-Refresh.md) - lane: content-ops/landing-page-seo-geo-audit-refresh
+- [PR-Landing-Page-SEO-GEO-Backlog-Closeout](archive/PR-Landing-Page-SEO-GEO-Backlog-Closeout.md) - lane: content-ops/landing-page-seo-geo-backlog-closeout
+- [PR-Landing-Page-Saved-Draft-Repair-API](archive/PR-Landing-Page-Saved-Draft-Repair-API.md) - lane: content-ops/landing-page-saved-draft-repair-api
+- [PR-Landing-Page-Saved-Draft-Repair-Service](archive/PR-Landing-Page-Saved-Draft-Repair-Service.md) - lane: content-ops/landing-page-saved-draft-repair-service
+- [PR-Landing-Page-Saved-Draft-Repair-UI](archive/PR-Landing-Page-Saved-Draft-Repair-UI.md) - lane: content-ops/landing-page-saved-draft-repair-ui
+- [PR-Landing-Page-Section-Kind-Contract](archive/PR-Landing-Page-Section-Kind-Contract.md) - lane: content-ops/landing-page-section-kind-contract
+- [PR-Landing-Page-Section-Metadata-Quality-Gate](archive/PR-Landing-Page-Section-Metadata-Quality-Gate.md) - lane: content-ops/landing-page-section-metadata-quality-gate
+- [PR-Landing-Page-Static-Sitemap-Bridge](archive/PR-Landing-Page-Static-Sitemap-Bridge.md) - lane: content-ops/landing-page-static-sitemap-bridge
+- [PR-Landing-Page-Structured-Data-Export](archive/PR-Landing-Page-Structured-Data-Export.md) - lane: content-ops/landing-page-structured-data-export
+- [PR-Landing-Page-Structured-Data-Preview-UI](archive/PR-Landing-Page-Structured-Data-Preview-UI.md) - lane: content-ops/landing-page-structured-data-preview-ui
+- [PR-Landing-Page-Support-Ticket-Source-Context](archive/PR-Landing-Page-Support-Ticket-Source-Context.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
+- [PR-Landing-Page-UI-E2E-Validation](archive/PR-Landing-Page-UI-E2E-Validation.md) - lane: content-ops/landing-pages-productization | phase: Vertical slice
+- [PR-Landing-Repair-Attempt-Contract](archive/PR-Landing-Repair-Attempt-Contract.md)
+- [PR-Live-Provider-Circular-Import](archive/PR-Live-Provider-Circular-Import.md)
+- [PR-Live-Smoke-Saved-Draft-Export](archive/PR-Live-Smoke-Saved-Draft-Export.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-MCP-ChatGPT-OAuth-Rollout-Runbook](archive/PR-MCP-ChatGPT-OAuth-Rollout-Runbook.md)
+- [PR-MCP-Connector-Session-Handoff](archive/PR-MCP-Connector-Session-Handoff.md)
+- [PR-Marketer-Reviews-As-Input](archive/PR-Marketer-Reviews-As-Input.md) - lane: content-ops/marketer-reviews-as-input | phase: Workflow/process
+- [PR-OptionA-1](archive/PR-OptionA-1.md)
+- [PR-OptionA-2](archive/PR-OptionA-2.md)
+- [PR-OptionA-3](archive/PR-OptionA-3.md)
+- [PR-OptionA-4](archive/PR-OptionA-4.md)
+- [PR-OptionA-5](archive/PR-OptionA-5.md)
+- [PR-Orphan-Detector-Question-Stacked](archive/PR-Orphan-Detector-Question-Stacked.md) - lane: `content-ops/blog-orphan-detector`
+- [PR-Plans-Archive-Tooling](archive/PR-Plans-Archive-Tooling.md) - lane: governance/plans-archive | phase: Workflow/process
+- [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
+- [PR-Post-586-Content-Ops-Closeout](archive/PR-Post-586-Content-Ops-Closeout.md)
+- [PR-Public-Landing-Page-Renderer-V1](archive/PR-Public-Landing-Page-Renderer-V1.md) - lane: content-ops/public-landing-page-renderer-v1
+- [PR-Ready-Review-PR-Docs](archive/PR-Ready-Review-PR-Docs.md)
+- [PR-Reasoning-Core-Checks-Wrapper](archive/PR-Reasoning-Core-Checks-Wrapper.md)
+- [PR-Reasoning-Core-Current-State](archive/PR-Reasoning-Core-Current-State.md)
+- [PR-Reasoning-Core-Graph-Boundary-Closeout-2026-05-17](archive/PR-Reasoning-Core-Graph-Boundary-Closeout-2026-05-17.md)
+- [PR-Reasoning-Core-Graph-Routing-Test-Seam-2026-05-17](archive/PR-Reasoning-Core-Graph-Routing-Test-Seam-2026-05-17.md)
+- [PR-Reasoning-Core-Manifest-Smoke-2026-05-17](archive/PR-Reasoning-Core-Manifest-Smoke-2026-05-17.md)
+- [PR-Reasoning-Core-Node-Reason-2026-05-17](archive/PR-Reasoning-Core-Node-Reason-2026-05-17.md)
+- [PR-Reasoning-Core-Postmerge-Cleanup-2026-05-17](archive/PR-Reasoning-Core-Postmerge-Cleanup-2026-05-17.md)
+- [PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17](archive/PR-Reasoning-Core-Reflection-Port-Adapter-2026-05-17.md)
+- [PR-Reasoning-Enrichment-Pack-Split](archive/PR-Reasoning-Enrichment-Pack-Split.md)
+- [PR-Reasoning-Phrase-Metadata-Utility](archive/PR-Reasoning-Phrase-Metadata-Utility.md)
+- [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
+- [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
+- [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
+- [PR-Stripe-Billing-Hardening](archive/PR-Stripe-Billing-Hardening.md) - lane: atlas-billing/stripe | phase: Production hardening
+- [PR-Stripe-Webhook-Secret-Rotation](archive/PR-Stripe-Webhook-Secret-Rotation.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Support-Ticket-Blog-Blueprint-Package-Context](archive/PR-Support-Ticket-Blog-Blueprint-Package-Context.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Blog-Compact-Quality](archive/PR-Support-Ticket-Blog-Compact-Quality.md) - lane: content-ops/support-ticket-provider/blog-quality | phase: Production hardening
+- [PR-Support-Ticket-Blog-Descriptive-Contract](archive/PR-Support-Ticket-Blog-Descriptive-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Support-Ticket-Blog-Descriptive-Prompt-Contract](archive/PR-Support-Ticket-Blog-Descriptive-Prompt-Contract.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Blog-False-Green-Outcome-Claims](archive/PR-Support-Ticket-Blog-False-Green-Outcome-Claims.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Blog-GEO-Clarity-Repair](archive/PR-Support-Ticket-Blog-GEO-Clarity-Repair.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Support-Ticket-Blog-Generated-Content-Gate](archive/PR-Support-Ticket-Blog-Generated-Content-Gate.md) - lane: content-ops/support-ticket-input-provider | phase: Vertical slice
+- [PR-Support-Ticket-Blog-Large-Context-Acceptance](archive/PR-Support-Ticket-Blog-Large-Context-Acceptance.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Robust testing
+- [PR-Support-Ticket-Blog-Large-Upload-Policy-Validation](archive/PR-Support-Ticket-Blog-Large-Upload-Policy-Validation.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Functional validation
+- [PR-Support-Ticket-Blog-Observed-Shell-Live-Retry](archive/PR-Support-Ticket-Blog-Observed-Shell-Live-Retry.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Blog-Observed-Shell-Live-Telemetry](archive/PR-Support-Ticket-Blog-Observed-Shell-Live-Telemetry.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Blog-Observed-Shell](archive/PR-Support-Ticket-Blog-Observed-Shell.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Support-Ticket-Blog-Small-Upload-Live-Validation](archive/PR-Support-Ticket-Blog-Small-Upload-Live-Validation.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Functional validation
+- [PR-Support-Ticket-Blog-Small-Upload-Trim](archive/PR-Support-Ticket-Blog-Small-Upload-Trim.md) - lane: content-ops/support-ticket-provider-blog-polish | phase: Product polish
+- [PR-Support-Ticket-CSV-Shape-Coverage](archive/PR-Support-Ticket-CSV-Shape-Coverage.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Context-Contract](archive/PR-Support-Ticket-Context-Contract.md) - lane: content-ops/support-ticket-provider | phase: Production hardening
+- [PR-Support-Ticket-Date-Outcome-Evidence-Contract](archive/PR-Support-Ticket-Date-Outcome-Evidence-Contract.md) - lane: content-ops/support-ticket-date-outcome-evidence | phase: Production hardening
+- [PR-Support-Ticket-Descriptive-Blog-Contract](archive/PR-Support-Ticket-Descriptive-Blog-Contract.md) - lane: content-ops/support-ticket-provider-descriptive-blog-contract | phase: Functional validation
+- [PR-Support-Ticket-Descriptive-Blog-Live-Validation](archive/PR-Support-Ticket-Descriptive-Blog-Live-Validation.md) - lane: content-ops/support-ticket-provider-descriptive-blog-live-validation | phase: Functional validation
+- [PR-Support-Ticket-Discoverability-Claim-Gate](archive/PR-Support-Ticket-Discoverability-Claim-Gate.md) - lane: content-ops/support-ticket-provider | phase: Robust testing
+- [PR-Support-Ticket-Evidence-Contract-Live-Validation](archive/PR-Support-Ticket-Evidence-Contract-Live-Validation.md) - lane: content-ops/support-ticket-provider-live-validation | phase: Functional validation
+- [PR-Support-Ticket-Export-Context-Validation](archive/PR-Support-Ticket-Export-Context-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Generated-Content-Acceptance-Matrix](archive/PR-Support-Ticket-Generated-Content-Acceptance-Matrix.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Generated-Content-Outcome-Claims](archive/PR-Support-Ticket-Generated-Content-Outcome-Claims.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Generated-Content-Quality-Eval](archive/PR-Support-Ticket-Generated-Content-Quality-Eval.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Input-Provider-Route-Parity](archive/PR-Support-Ticket-Input-Provider-Route-Parity.md) - lane: content-ops/input-provider-ticket-package | phase: Functional validation
+- [PR-Support-Ticket-Live-Blog-Gate-Validation](archive/PR-Support-Ticket-Live-Blog-Gate-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Live-Haiku-Generated-Content-Eval](archive/PR-Support-Ticket-Live-Haiku-Generated-Content-Eval.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Live-Smoke-Content-Eval](archive/PR-Support-Ticket-Live-Smoke-Content-Eval.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
+- [PR-Support-Ticket-Outcome-Live-Validation](archive/PR-Support-Ticket-Outcome-Live-Validation.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Package-CLI-Scale-Validation](archive/PR-Support-Ticket-Package-CLI-Scale-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Platform-CSV-Smoke](archive/PR-Support-Ticket-Platform-CSV-Smoke.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Platform-Smoke-Docs](archive/PR-Support-Ticket-Platform-Smoke-Docs.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
+- [PR-Support-Ticket-Provider-Landing-Blog-Execute](archive/PR-Support-Ticket-Provider-Landing-Blog-Execute.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Provider-Landing-Blog-Stress](archive/PR-Support-Ticket-Provider-Landing-Blog-Stress.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Provider-Live-Smoke-Source](archive/PR-Support-Ticket-Provider-Live-Smoke-Source.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Provider-Overload-Gate](archive/PR-Support-Ticket-Provider-Overload-Gate.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Provider-Package-Scale-Cap](archive/PR-Support-Ticket-Provider-Package-Scale-Cap.md) - lane: content-ops/support-ticket-input-provider | phase: Robust testing
+- [PR-Support-Ticket-Provider-Package-Smoke](archive/PR-Support-Ticket-Provider-Package-Smoke.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Provider-Real-Landing-Blog-Generation](archive/PR-Support-Ticket-Provider-Real-Landing-Blog-Generation.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Provider-Warning-Surface](archive/PR-Support-Ticket-Provider-Warning-Surface.md) - lane: content-ops/support-ticket-input-provider | phase: Production hardening
+- [PR-Support-Ticket-Resolution-Evidence-Contract](archive/PR-Support-Ticket-Resolution-Evidence-Contract.md) - lane: content-ops/support-ticket-resolution-evidence | phase: Production hardening
+- [PR-Support-Ticket-SaaS-Demo-Blog-Accepted-After-GEO](archive/PR-Support-Ticket-SaaS-Demo-Blog-Accepted-After-GEO.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture](archive/PR-Support-Ticket-SaaS-Demo-Blog-Accepted-Fixture.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-SaaS-Demo-Blog-Final-Retry](archive/PR-Support-Ticket-SaaS-Demo-Blog-Final-Retry.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-SaaS-Demo-Blog-Fixture-Promotion](archive/PR-Support-Ticket-SaaS-Demo-Blog-Fixture-Promotion.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-SaaS-Demo-Blog-Live-Retry](archive/PR-Support-Ticket-SaaS-Demo-Blog-Live-Retry.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-SaaS-Demo-Generated-Content-Acceptance](archive/PR-Support-Ticket-SaaS-Demo-Generated-Content-Acceptance.md) - lane: content-ops/support-ticket-provider | phase: Functional validation
+- [PR-Support-Ticket-Smoke-Closeout](archive/PR-Support-Ticket-Smoke-Closeout.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
+- [PR-Support-Ticket-Smoke-Contact-Summary](archive/PR-Support-Ticket-Smoke-Contact-Summary.md) - lane: content-ops/support-ticket-input-provider | phase: Product polish
+- [PR-Support-Ticket-Smoke-Draft-Export-Ids](archive/PR-Support-Ticket-Smoke-Draft-Export-Ids.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
+- [PR-Support-Ticket-Source-Context-Live-Validation](archive/PR-Support-Ticket-Source-Context-Live-Validation.md) - lane: content-ops/support-ticket-input-provider | phase: functional validation
+- [PR-Track-Preflight-Dotenv-Fix](archive/PR-Track-Preflight-Dotenv-Fix.md) - lane: content-ops/deflection-tracking | phase: workflow/process
+- [PR-UI-Test-Enrollment-Audit](archive/PR-UI-Test-Enrollment-Audit.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
+- [PR-Workflow-Teardown-On-Merge](archive/PR-Workflow-Teardown-On-Merge.md) - lane: workflow/process | phase: Workflow/process
