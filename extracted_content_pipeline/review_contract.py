@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from types import MappingProxyType
 from typing import Iterable, Mapping
 
 try:
@@ -32,8 +33,11 @@ class RiskTier(StrEnum):
 
     Distinct from ``extracted_quality_gate.RiskLevel``: that is a *computed*
     safety score (with auto-approve eligibility); this is an author-declared
-    routing tier that decides how much review an asset must clear. The labels
-    deliberately match so the two stay legible together.
+    routing tier that decides how much review an asset must clear. The member
+    *names* deliberately mirror ``RiskLevel`` so the two read alike, but the
+    string *values* differ in case (``RiskTier.LOW == "low"`` vs
+    ``RiskLevel.LOW == "LOW"``) -- do not compare the two enums' values
+    directly.
     """
 
     LOW = "low"
@@ -98,31 +102,36 @@ class GateStage(StrEnum):
 
 # Risk-tier -> ordered required gate stages (the doc's risk-tier table as data).
 # This is pure routing data; the code that *enforces* it is a later slice.
-REQUIRED_REVIEW_BY_TIER: Mapping[RiskTier, tuple[GateStage, ...]] = {
-    RiskTier.LOW: (
-        GateStage.SCHEMA,
-        GateStage.MODEL_ASSISTED,
-        GateStage.HUMAN_EDITOR,
-    ),
-    RiskTier.MEDIUM: (
-        GateStage.SCHEMA,
-        GateStage.CLAIMS_COMPLIANCE,
-        GateStage.MODEL_ASSISTED,
-        GateStage.HUMAN_EDITOR,
-    ),
-    RiskTier.HIGH: (
-        GateStage.SCHEMA,
-        GateStage.CLAIMS_COMPLIANCE,
-        GateStage.MODEL_ASSISTED,
-        GateStage.HUMAN_EDITOR,
-    ),
-    RiskTier.CRITICAL: (
-        GateStage.SCHEMA,
-        GateStage.CLAIMS_COMPLIANCE,
-        GateStage.MODEL_ASSISTED,
-        GateStage.HUMAN_EDITOR,
-    ),
-}
+# Wrapped in MappingProxyType (per the extracted_content_pipeline constant-table
+# convention, e.g. control_surfaces.OUTPUT_CATALOG) so accidental mutation of the
+# routing table fails loudly instead of silently corrupting review burden.
+REQUIRED_REVIEW_BY_TIER: Mapping[RiskTier, tuple[GateStage, ...]] = MappingProxyType(
+    {
+        RiskTier.LOW: (
+            GateStage.SCHEMA,
+            GateStage.MODEL_ASSISTED,
+            GateStage.HUMAN_EDITOR,
+        ),
+        RiskTier.MEDIUM: (
+            GateStage.SCHEMA,
+            GateStage.CLAIMS_COMPLIANCE,
+            GateStage.MODEL_ASSISTED,
+            GateStage.HUMAN_EDITOR,
+        ),
+        RiskTier.HIGH: (
+            GateStage.SCHEMA,
+            GateStage.CLAIMS_COMPLIANCE,
+            GateStage.MODEL_ASSISTED,
+            GateStage.HUMAN_EDITOR,
+        ),
+        RiskTier.CRITICAL: (
+            GateStage.SCHEMA,
+            GateStage.CLAIMS_COMPLIANCE,
+            GateStage.MODEL_ASSISTED,
+            GateStage.HUMAN_EDITOR,
+        ),
+    }
+)
 
 
 def required_stages_for(tier: RiskTier) -> tuple[GateStage, ...]:

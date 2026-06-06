@@ -12,7 +12,11 @@ It is deliberately enum/value-scale and changes no existing behavior. The existi
 generated-asset review API keeps its host-extensible string statuses untouched; wiring
 this vocabulary into validation/routing is slice 2.
 
-## Scope
+Diff total is marginally over the 400-LOC soft cap (~412). The overage is scaffolding,
+not scope: the module is ~190 LOC (largely docstrings), and the rest is the plan doc's
+own machine-generated tables plus thorough unit tests. The shippable surface stays tiny.
+
+## Scope (this PR)
 
 New owned module `extracted_content_pipeline/review_contract.py` (flat-module
 convention, per `brand_voice.py`) plus unit tests. It provides:
@@ -31,6 +35,15 @@ convention, per `brand_voice.py`) plus unit tests. It provides:
   + `is_active(as_of)`.
 - `recurring_failure_categories(categories, *, threshold=3)` — the flywheel
   "3+ same-reason misses -> candidate for a new gate" helper.
+
+
+### Files touched
+
+- `extracted_content_pipeline/manifest.json`
+- `extracted_content_pipeline/review_contract.py`
+- `plans/PR-Content-Ops-Review-Vocabulary.md`
+- `scripts/run_extracted_pipeline_checks.sh`
+- `tests/test_extracted_content_review_contract.py`
 
 ## Mechanism
 
@@ -60,7 +73,7 @@ convention (full-path imports), so no export edit.
 
 ## Verification
 
-- pytest `tests/test_extracted_content_review_contract.py` (16 tests)
+- pytest `tests/test_extracted_content_review_contract.py` (17 tests)
 - `scripts/check_ascii_python.sh` (run via bash) -- ASCII gate
 - `scripts/check_extracted_imports.py` (run via python3) -- import structure
 - `extracted/_shared/scripts/forbid_atlas_reasoning_imports.py` + `scripts/audit_extracted_standalone.py` (--fail-on-debt) -- both clean
@@ -68,4 +81,11 @@ convention (full-path imports), so no export edit.
 
 ## Estimated diff size
 
-~150 LOC module + ~150 LOC tests + this plan. Well under the 400 LOC soft cap.
+| File | LOC |
+|---|---:|
+| `extracted_content_pipeline/manifest.json` | 3 |
+| `extracted_content_pipeline/review_contract.py` | 190 |
+| `plans/PR-Content-Ops-Review-Vocabulary.md` | 91 |
+| `scripts/run_extracted_pipeline_checks.sh` | 1 |
+| `tests/test_extracted_content_review_contract.py` | 131 |
+| **Total** | **416** |

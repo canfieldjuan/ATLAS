@@ -5,6 +5,7 @@ Pure value types + helpers; no DB, no async, no Atlas imports.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from datetime import date
 
 import pytest
@@ -89,8 +90,14 @@ def test_exception_record_expiration_is_inclusive() -> None:
 
 def test_exception_record_is_frozen() -> None:
     rec = ExceptionRecord(rule="R", reason="x", owner="o")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         rec.rule = "other"  # type: ignore[misc]
+
+
+def test_required_review_table_is_immutable() -> None:
+    # MappingProxyType rejects mutation so routing data can't be corrupted.
+    with pytest.raises(TypeError):
+        REQUIRED_REVIEW_BY_TIER[RiskTier.LOW] = ()  # type: ignore[index]
 
 
 def test_recurring_failures_flags_at_threshold() -> None:
