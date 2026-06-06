@@ -9,9 +9,10 @@ derives the rule IDs a PR's changed files trigger and fails when the plan's
 Review Contract "Reviewer rules triggered" line omits one. It closes the loop so
 a checker PR cannot silently ship without declaring R2/R10, etc.
 
-Diff budget: ~446 LOC, over the 400 soft cap. The plan doc is ~99; the rest is
-the audit (213) plus its fixtures (125) -- the detector and its failure-proving
-coverage are the irreducible substance and do not split cleanly.
+Diff budget: ~530 LOC, over the 400 soft cap. The plan doc is ~116; the rest is
+the audit (250) plus its fixtures (156), grown by review-round hardening
+(wrapped-line declarations, mixed-row prose surfacing). The detector and its
+failure-proving coverage are the irreducible substance and do not split cleanly.
 
 ## Scope (this PR)
 
@@ -108,9 +109,9 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 2 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reviewer-Path-Trigger-Audit.md` | 116 |
+| `plans/PR-Reviewer-Path-Trigger-Audit.md` | 117 |
 | `plans/archive/PR-Reviewer-Reconciliation-Audit.md` | 0 |
-| `scripts/audit_review_rules_triggered.py` | 228 |
+| `scripts/audit_review_rules_triggered.py` | 250 |
 | `scripts/local_pr_review.sh` | 4 |
-| `tests/test_audit_review_rules_triggered.py` | 137 |
-| **Total** | **490** |
+| `tests/test_audit_review_rules_triggered.py` | 156 |
+| **Total** | **532** |

@@ -49,6 +49,25 @@ def test_parse_trigger_table_splits_glob_and_prose_rows():
     assert any("invoicing" in d for d in descs)
 
 
+def test_mixed_row_surfaces_prose_portion():
+    # A row with both a glob and prose must enforce the glob AND surface the
+    # prose part (not silently drop the non-glob trigger).
+    aud = load_auditor()
+    doc = (
+        "## Path-based rule triggers\n\n"
+        "| Changed path glob | Rules triggered |\n"
+        "|---|---|\n"
+        "| `**/auth/**`, login/token/permission code | R3, R2 |\n"
+        "| `db/migrations/**`, `*.sql` migrations | R4 |\n"
+    )
+    glob_rows, prose_rows = aud.parse_trigger_table(doc)
+    assert ("**/auth/**", frozenset({"R3", "R2"})) in glob_rows
+    # auth row's prose portion is surfaced...
+    assert any("login/token/permission" in d for d, _ in prose_rows)
+    # ...but a glob row whose only extra word is filler ("migrations") is not.
+    assert not any("migration" in d.lower() for d, _ in prose_rows)
+
+
 def test_parse_ignores_table_outside_the_section():
     aud = load_auditor()
     # The "Out of the trigger table now." line is past the next heading.

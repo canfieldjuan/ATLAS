@@ -31,6 +31,10 @@ TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 BACKTICK_RE = re.compile(r"`([^`]+)`")
 RULE_ID_RE = re.compile(r"\bR\d{1,2}\b")
 DECLARED_LINE_RE = re.compile(r"reviewer rules triggered\s*:\s*(.*)", re.IGNORECASE)
+# Filler words that describe a glob rather than naming a separate trigger
+# surface; a comma-segment made only of these is not surfaced as prose.
+PROSE_FILLER = {"migrations", "synced", "files", "etc"}
+WORD_RE = re.compile(r"[A-Za-z][\w/]*")
 
 
 def _table_rows(text: str) -> list[str]:
@@ -51,13 +55,31 @@ def _table_rows(text: str) -> list[str]:
     return rows
 
 
+def _prose_residual(path_cell: str) -> str:
+    """Return the non-glob, non-filler descriptor text of a path cell, if any.
+
+    A trigger row can mix backticked globs with prose that names a separate
+    surface (e.g. "login/token/permission code"). After removing the globs, any
+    comma-segment that still carries a non-filler word is surfaced so it is not
+    silently dropped (AGENTS.md section 3g).
+    """
+    segments = path_cell.split(",")
+    kept: list[str] = []
+    for segment in segments:
+        without_globs = BACKTICK_RE.sub("", segment).strip()
+        words = WORD_RE.findall(without_globs)
+        if any(word.lower() not in PROSE_FILLER for word in words):
+            kept.append(without_globs)
+    return ", ".join(kept)
+
+
 def parse_trigger_table(text: str):
     """Return (glob_rows, prose_rows).
 
-    glob_rows: list of (glob, frozenset(rule_ids)) for rows whose first column
-    carries at least one backticked glob.
-    prose_rows: list of (description, frozenset(rule_ids)) for rows whose first
-    column has no machine-matchable glob (surfaced, not silently skipped).
+    glob_rows: list of (glob, frozenset(rule_ids)) for backticked globs.
+    prose_rows: list of (description, frozenset(rule_ids)) for triggers with no
+    machine-matchable glob -- including the prose portion of a mixed row that
+    also has globs (surfaced, not silently skipped).
     """
     glob_rows: list[tuple[str, frozenset[str]]] = []
     prose_rows: list[tuple[str, frozenset[str]]] = []
@@ -73,11 +95,11 @@ def parse_trigger_table(text: str):
         if not rules:
             continue
         globs = BACKTICK_RE.findall(path_cell)
-        if globs:
-            for glob in globs:
-                glob_rows.append((glob, rules))
-        else:
-            prose_rows.append((path_cell, rules))
+        for glob in globs:
+            glob_rows.append((glob, rules))
+        residual = _prose_residual(path_cell) if globs else path_cell
+        if residual:
+            prose_rows.append((residual, rules))
     return glob_rows, prose_rows
 
 
