@@ -41,9 +41,9 @@ DEFAULT_SECTION_LEVEL = 2
 # the negative lookahead: a bare "no findings waived" must NOT count as
 # resolution (it only says nothing was waived, not that findings were handled).
 RESOLVED_RE = re.compile(
-    r"(all\s+(?:findings\s+)?(?:fixed|fixed\s+or\s+waived)\s*:?\s*yes"
-    r"|no\s+(?:automated[ -]review\s+|outstanding\s+|remaining\s+)?findings(?!\s+waived)"
-    r"|nothing\s+to\s+reconcile)",
+    r"(all\s+(?:findings\s+)?(?:fixed|fixed\s+or\s+waived)\s*:?\s*\byes\b"
+    r"|no\s+(?:automated[ -]review\s+|outstanding\s+|remaining\s+)?findings\b(?!\s+waived)"
+    r"|nothing\s+to\s+reconcile\b)",
     re.IGNORECASE,
 )
 # Markers that say the record is NOT resolved (any one fails the audit).
@@ -75,16 +75,24 @@ def extract_section(body: str) -> str | None:
     lines = body.splitlines()
     start = None
     section_level = DEFAULT_SECTION_LEVEL
+    anchor_remainder = ""
     for idx, line in enumerate(lines):
-        if SECTION_RE.match(line):
+        match = SECTION_RE.match(line)
+        if match:
             start = idx
             level = _heading_level(line)
             if level is not None:
                 section_level = level
+            # Keep any inline content after the label so a one-line record like
+            # "**AI reconciliation:** All fixed or waived: Yes" (the AGENTS.md
+            # section 2a template shape) is validated, not read as empty.
+            anchor_remainder = line[match.end():]
             break
     if start is None:
         return None
     collected: list[str] = []
+    if anchor_remainder.strip():
+        collected.append(anchor_remainder)
     for line in lines[start + 1:]:
         level = _heading_level(line)
         if level is not None and level <= section_level:

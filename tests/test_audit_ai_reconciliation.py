@@ -66,6 +66,29 @@ def test_no_findings_marker_passes():
     assert aud.reconciliation_errors(body, require=True) == []
 
 
+def test_inline_bold_label_record_passes():
+    # AGENTS.md section 2a template shape: a one-line bold-label record whose
+    # resolution marker is on the anchor line itself.
+    aud = load_auditor()
+    body = "## Summary\nx\n\n**AI reconciliation:** AI findings reviewed: Yes. All fixed or waived: Yes\n"
+    assert aud.reconciliation_errors(body, require=True) == []
+
+
+def test_inline_bold_label_unresolved_on_anchor_line_fails():
+    aud = load_auditor()
+    body = "**AI reconciliation:** All fixed or waived: No\n"
+    errors = aud.reconciliation_errors(body, require=False)
+    assert any("incomplete" in e for e in errors)
+
+
+def test_yes_requires_word_boundary():
+    # "yesterday" must not satisfy the "...: yes" resolution marker.
+    aud = load_auditor()
+    body = "## AI reconciliation\n- All fixed or waived: yesterday we discussed it\n"
+    errors = aud.reconciliation_errors(body, require=False)
+    assert any("no resolution" in e for e in errors)
+
+
 def test_no_findings_waived_alone_is_not_resolution():
     # Allowed near-miss: "no findings waived" only says nothing was waived, not
     # that findings were handled, so on its own it must NOT count as resolved.
