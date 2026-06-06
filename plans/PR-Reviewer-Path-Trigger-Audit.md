@@ -111,7 +111,7 @@ Parked hardening: none.
 | `plans/INDEX.md` | 3 |
 | `plans/PR-Reviewer-Path-Trigger-Audit.md` | 117 |
 | `plans/archive/PR-Reviewer-Reconciliation-Audit.md` | 0 |
-| `scripts/audit_review_rules_triggered.py` | 250 |
+| `scripts/audit_review_rules_triggered.py` | 257 |
 | `scripts/local_pr_review.sh` | 4 |
-| `tests/test_audit_review_rules_triggered.py` | 156 |
-| **Total** | **532** |
+| `tests/test_audit_review_rules_triggered.py` | 167 |
+| **Total** | **550** |

@@ -149,8 +149,15 @@ def declared_rules(plan_text: str) -> set[str]:
             continue
         collected = [match.group(1)]
         for cont in lines[idx + 1:]:
-            stripped = cont.strip()
-            if not stripped or stripped[0] in "-*#|" and not stripped.startswith("R"):
+            # Only the bullet's own wrapped/indented continuation lines belong to
+            # it. A blank line, a non-indented line, or a new bullet/heading/table
+            # ends the item -- otherwise unrelated later text (and its rule IDs)
+            # could be absorbed and mask an omission.
+            if not cont.strip():
+                break
+            if cont[0] not in " \t":
+                break
+            if cont.strip()[0] in "-*#|":
                 break
             collected.append(cont)
         return set(RULE_ID_RE.findall(" ".join(collected)))

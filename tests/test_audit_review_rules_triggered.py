@@ -125,6 +125,17 @@ def test_declared_rules_spans_wrapped_lines():
     assert aud.declared_rules(plan) == {"R2", "R10"}
 
 
+def test_declared_rules_ignores_unindented_later_text():
+    # A non-indented paragraph after the bullet is not part of it; its stray
+    # rule id must not be absorbed (which would mask an omission).
+    aud = load_auditor()
+    plan = (
+        "- Reviewer rules triggered: R2\n"
+        "Later prose mentioning R5 that is not part of the bullet.\n"
+    )
+    assert aud.declared_rules(plan) == {"R2"}
+
+
 # --- audit() happy path + detection branch ----------------------------------
 
 def test_audit_passes_when_plan_declares_triggered_rules():
