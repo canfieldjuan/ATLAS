@@ -146,6 +146,18 @@ fi
 
 run_check "git diff --check" git diff --check
 
+# Advisory only: nudge to archive merged plan docs once the plans/ root grows
+# past the threshold. Never affects the failure count -- archive_plans.py check
+# always exits 0, and the guard keeps set -e happy if it is ever absent.
+echo
+echo "==> Plans archive backlog (advisory, non-blocking)"
+if [ -f scripts/archive_plans.py ]; then
+    python scripts/archive_plans.py check || true
+    echo "    advisory only -- run 'python scripts/archive_plans.py archive' to archive merged plans"
+else
+    echo "    SKIP (scripts/archive_plans.py not found)"
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
     echo "local PR review passed"
