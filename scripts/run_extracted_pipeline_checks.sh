@@ -17,6 +17,7 @@ pytest \
   tests/test_extracted_campaign_install_check.py \
   tests/test_extracted_content_host_smoke.py \
   tests/test_extracted_content_review_contract.py \
+  tests/test_extracted_content_triage_experiment.py \
   tests/test_extracted_campaign_visibility.py \
   tests/test_extracted_campaign_visibility_reader_cli.py \
   tests/test_extracted_campaign_manifest.py \
