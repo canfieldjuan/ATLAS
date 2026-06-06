@@ -84,10 +84,27 @@ def split_sections(text: str) -> tuple[str, str, str]:
     return preamble, middle, footer
 
 
+def _entry_starts(lines: list[str]) -> list[int]:
+    return [i for i, line in enumerate(lines) if _DATE_HEADING.match(line)]
+
+
+def leading_text(entries_region: str) -> str:
+    """Region text before the first dated entry (undated notes, typo'd headings).
+
+    This is the only content in the entries region not carried by a dated block, so
+    it must be preserved verbatim across a drain rather than silently dropped.
+    """
+    lines = entries_region.splitlines()
+    starts = _entry_starts(lines)
+    if not starts:
+        return entries_region.strip("\n")
+    return "\n".join(lines[: starts[0]]).strip("\n")
+
+
 def parse_entries(entries_region: str) -> list[Entry]:
     """Parse the entries region into dated ``Entry`` blocks."""
     lines = entries_region.splitlines()
-    starts = [i for i, line in enumerate(lines) if _DATE_HEADING.match(line)]
+    starts = _entry_starts(lines)
     entries: list[Entry] = []
     for k, start in enumerate(starts):
         end = starts[k + 1] if k + 1 < len(starts) else len(lines)
@@ -113,9 +130,13 @@ def partition_by_age(
     return kept, drained
 
 
-def render_hardening(preamble: str, kept: list[Entry], footer: str) -> str:
-    """Reassemble HARDENING.md from preamble, kept entries, and footer."""
+def render_hardening(
+    preamble: str, leading: str, kept: list[Entry], footer: str
+) -> str:
+    """Reassemble HARDENING.md from preamble, carried leading text, kept, footer."""
     parts = [preamble.strip("\n")]
+    if leading.strip():
+        parts.append(leading.strip("\n"))
     parts.extend(entry.body.strip("\n") for entry in kept)
     if footer.strip():
         parts.append(footer.strip("\n"))
@@ -123,16 +144,19 @@ def render_hardening(preamble: str, kept: list[Entry], footer: str) -> str:
 
 
 def append_to_archive(archive_path: Path, drained: list[Entry]) -> None:
+    """Append drained blocks to the archive (O(1) append; header only on create)."""
     if not drained:
         return
-    header = (
-        "# HARDENING archive\n\n"
-        "Parked items drained from HARDENING.md by scripts/drain_hardening.py.\n"
-    )
-    existing = archive_path.read_text(encoding="utf-8") if archive_path.exists() else header
-    blocks = "\n\n".join(entry.body.strip("\n") for entry in drained)
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    archive_path.write_text(existing.rstrip() + "\n\n" + blocks + "\n", encoding="utf-8")
+    blocks = "\n\n".join(entry.body.strip("\n") for entry in drained)
+    is_new = not archive_path.exists()
+    with archive_path.open("a", encoding="utf-8") as handle:
+        if is_new:
+            handle.write(
+                "# HARDENING archive\n\n"
+                "Parked items drained from HARDENING.md by scripts/drain_hardening.py.\n"
+            )
+        handle.write("\n" + blocks + "\n")
 
 
 def oldest_entry_age_days(entries: list[Entry], today: date) -> int | None:
@@ -146,11 +170,14 @@ def drain(
     """Drain stale entries; write the leaner HARDENING.md and the archive."""
     text = hardening_path.read_text(encoding="utf-8")
     preamble, region, footer = split_sections(text)
+    leading = leading_text(region)
     entries = parse_entries(region)
     kept, drained = partition_by_age(entries, today, max_age_days)
     if drained:
         append_to_archive(archive_path, drained)
-        hardening_path.write_text(render_hardening(preamble, kept, footer), encoding="utf-8")
+        hardening_path.write_text(
+            render_hardening(preamble, leading, kept, footer), encoding="utf-8"
+        )
     return drained
 
 

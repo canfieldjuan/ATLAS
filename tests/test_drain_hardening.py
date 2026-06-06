@@ -87,6 +87,39 @@ def test_drain_moves_stale_keeps_fresh_and_preserves_footer(tmp_path):
     assert "2026-01-10" in archived and "stale" in archived
 
 
+def test_drain_preserves_undated_leading_text(tmp_path):
+    # An undated note / typo'd heading under "## Parked Items" must survive a drain
+    # triggered by an unrelated stale entry -- it is carried through, not dropped.
+    tool = load_tool()
+    hardening = tmp_path / "HARDENING.md"
+    archive = tmp_path / "archive.md"
+    note = "## 2026-6-01\n\n### typo-dated note that should not be lost"
+    body = "\n\n".join([PREAMBLE, note, _entry("2026-01-10", "stale"), FOOTER]) + "\n"
+    hardening.write_text(body, encoding="utf-8")
+
+    drained = tool.drain(hardening, archive, today=date(2026, 6, 6), max_age_days=90)
+
+    assert [e.date_str for e in drained] == ["2026-01-10"]
+    out = hardening.read_text(encoding="utf-8")
+    assert "typo-dated note that should not be lost" in out  # carried through, not dropped
+    assert "ATLAS-HARDENING.md" in out                        # footer still preserved
+    assert "2026-01-10" not in out                            # stale entry removed
+
+
+def test_archive_append_accumulates_without_rewrite(tmp_path):
+    tool = load_tool()
+    archive = tmp_path / "archive.md"
+    first = [tool.Entry(date_str="2026-01-10", body="## 2026-01-10\n\n### one")]
+    second = [tool.Entry(date_str="2026-02-11", body="## 2026-02-11\n\n### two")]
+
+    tool.append_to_archive(archive, first)
+    tool.append_to_archive(archive, second)
+
+    text = archive.read_text(encoding="utf-8")
+    assert text.count("# HARDENING archive") == 1   # header written once
+    assert "### one" in text and "### two" in text   # both blocks accumulated
+
+
 def test_drain_noop_leaves_file_byte_identical(tmp_path):
     tool = load_tool()
     hardening = tmp_path / "HARDENING.md"
