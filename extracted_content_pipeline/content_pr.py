@@ -169,6 +169,8 @@ def verdict_reasons(pr: ContentPR) -> tuple[str, ...]:
     missing = pr.rule_packet.missing()
     if missing:
         reasons.append(f"rule packet not pinned: {', '.join(missing)}")
+    if not any(r.required for r in pr.coverage):
+        reasons.append("missing coverage matrix (no required rows)")
     unresolved = unresolved_required_rows(pr.coverage)
     if unresolved:
         reasons.append(
@@ -198,6 +200,9 @@ def review_verdict(pr: ContentPR) -> ReviewDecision:
 
     # The review must be complete and trustworthy before it can approve at all.
     if not pr.rule_packet.is_pinned():
+        return ReviewDecision.BLOCKED
+    # An empty coverage matrix asserts nothing -- missing coverage = block.
+    if not any(r.required for r in pr.coverage):
         return ReviewDecision.BLOCKED
     if unresolved_required_rows(pr.coverage):
         return ReviewDecision.BLOCKED

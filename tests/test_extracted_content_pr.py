@@ -136,6 +136,21 @@ def _approvable_pr() -> ContentPR:
     )
 
 
+def test_empty_coverage_matrix_blocks_missing_coverage() -> None:
+    # Pinned packet but no required rows asserts nothing -> must not approve.
+    pr = ContentPR(rule_packet=_PINNED, coverage=())
+    assert review_verdict(pr) is ReviewDecision.BLOCKED
+    assert any("missing coverage matrix" in r for r in verdict_reasons(pr))
+
+
+def test_only_optional_rows_also_blocks_missing_coverage() -> None:
+    pr = ContentPR(
+        rule_packet=_PINNED,
+        coverage=(CoverageRow(rule_id="opt", required=False, status=CoverageStatus.PASS, evidence="e"),),
+    )
+    assert review_verdict(pr) is ReviewDecision.BLOCKED
+
+
 def test_clean_pr_is_approved() -> None:
     pr = _approvable_pr()
     assert review_verdict(pr) is ReviewDecision.APPROVED
