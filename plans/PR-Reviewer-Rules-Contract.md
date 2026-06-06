@@ -2,13 +2,15 @@
 
 ## Why this slice exists
 
-The operating model (`docs/ai_dev_operating_model.md`) is strong on the builder
-side and honest that the reviewer side is the weak link: gap (b) names that
-automated reviewers have no severity contract, and the recurring-lapse flywheel
+`AGENTS.md` section 4 (the reviewer workflow) is strong on the builder side and
+honest that the reviewer side is the weak link: automated reviewers have no
+severity contract, and the recurring-lapse flywheel in `docs/SESSION_BOOTSTRAP.md`
 only captures *builder* mistakes -- nothing captures escaped defects or reviewer
-patterns. This is slice S1 of the review-workflow redesign (issue #1328): the
-docs/contract foundation that the later mechanical gates (S2 AI-reconciliation
-audit, S3 path-trigger audit) cite. Docs/process only, no code paths.
+patterns. (The same gap is written up as "gap (b)" in the AI dev operating-model
+doc proposed in PR #1317, not yet merged to main.) This is slice S1 of the
+review-workflow redesign (issue #1328): the docs/contract foundation that the
+later mechanical gates (S2 AI-reconciliation audit, S3 path-trigger audit) cite.
+Docs/process only, no code paths.
 
 Diff budget: ~410 LOC, just over the 400 soft cap. The overage is the
 irreducible rule pack itself (`docs/REVIEWER_RULES.md`, ~183 LOC) plus this plan
@@ -116,6 +118,6 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | 73 |
 | `REVIEW_MISSES.md` | 45 |
-| `docs/REVIEWER_RULES.md` | 183 |
-| `plans/PR-Reviewer-Rules-Contract.md` | 121 |
-| **Total** | **422** |
+| `docs/REVIEWER_RULES.md` | 184 |
+| `plans/PR-Reviewer-Rules-Contract.md` | 123 |
+| **Total** | **425** |

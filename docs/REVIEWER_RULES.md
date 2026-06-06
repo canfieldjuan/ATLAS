@@ -149,6 +149,7 @@ these for the paths it touches:
 | `atlas_brain/autonomous/**`, webhooks, jobs | R6, R8 (retry safety) |
 | `atlas-*-ui/**`, `*.tsx` | R9, R12 (CI enrollment) |
 | `atlas_brain/config.py`, env/config | R11, R12 |
+| `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
 
 Phase 1 of this convention is documentation + reviewer discipline. A later
