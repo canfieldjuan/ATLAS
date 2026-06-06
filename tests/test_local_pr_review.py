@@ -97,6 +97,37 @@ def test_local_pr_review_runs_cross_session_drift_audit_when_present(tmp_path: P
     assert "drift guard ran" in result.stdout
 
 
+def test_local_pr_review_runs_plans_archive_advisory_when_present(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+    # A stub that deliberately exits non-zero. The real archive_plans.py check
+    # always exits 0; this simulates an *unexpected* failure to prove the advisory
+    # stays non-blocking regardless, because it is wrapped in `|| true`.
+    _write_executable(
+        repo / "scripts" / "archive_plans.py",
+        "#!/usr/bin/env python3\nimport sys\nprint('WARNING: plans backlog advisory ran')\nsys.exit(1)\n",
+    )
+    _git(repo, "add", "scripts/archive_plans.py")
+    _git(repo, "commit", "-m", "add archive_plans stub")
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Plans archive backlog (advisory, non-blocking)" in result.stdout
+    assert "plans backlog advisory ran" in result.stdout
+    assert "local PR review passed" in result.stdout
+
+
+def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_fixture_repo(repo)
+
+    result = _run(repo, ["bash", "scripts/local_pr_review.sh"])
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SKIP (scripts/archive_plans.py not found)" in result.stdout
+
+
 def _write_fixture_repo(repo: Path) -> None:
     (repo / "scripts").mkdir(parents=True)
     _write_executable(

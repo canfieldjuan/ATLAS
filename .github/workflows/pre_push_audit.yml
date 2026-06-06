@@ -32,3 +32,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/local_pr_review.sh
+
+      # Unit-cover the PR-review tooling itself (including the plans-archive
+      # advisory). This workflow runs the bundle above, so its fixtures belong
+      # in CI rather than only in local dev.
+      - name: PR-review tooling unit tests
+        run: |
+          python -m pip install --quiet pytest pytest-asyncio
+          python -m pytest tests/test_local_pr_review.py -q
