@@ -13,7 +13,7 @@ tax -- the same unbounded-governance-file problem the plans-archive arc (#1319 s
 
 It runs over the 400 LOC soft cap (see Estimated diff size): the drain tool needs
 section-splitting + date partitioning + archive append (more than the plain file-move
-in `archive_plans.py`), plus a 10-case fixture suite covering the fenced-example trap,
+in `archive_plans.py`), plus an 11-case fixture suite covering the fenced-example trap,
 footer/preamble/leading-text preservation, archive append, and no-op byte-identity. The overage is mechanism and
 coverage, not extra scope.
 
@@ -80,12 +80,12 @@ returns 0, so it never fails a PR.
 ## Verification
 
 ```bash
-python -m pytest tests/test_drain_hardening.py -q   # 10 passed
+python -m pytest tests/test_drain_hardening.py -q   # 11 passed
 python scripts/drain_hardening.py check             # OK (real file within thresholds)
 python scripts/drain_hardening.py drain             # "nothing to drain" (no entry > 90d)
 ```
 
-Verified locally: 10/10 fixtures pass; `check` reports OK and `drain` is a no-op on the
+Verified locally: 11/11 fixtures pass; `check` reports OK and `drain` is a no-op on the
 real `HARDENING.md` (file untouched); parser ignores the fenced example heading.
 
 ## Estimated diff size
@@ -96,5 +96,5 @@ real `HARDENING.md` (file untouched); parser ignores the fenced example heading.
 | `plans/PR-Hardening-Drain.md` | 100 |
 | `scripts/drain_hardening.py` | 247 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_drain_hardening.py` | 204 |
-| **Total** | **556** |
+| `tests/test_drain_hardening.py` | 217 |
+| **Total** | **569** |

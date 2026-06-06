@@ -120,6 +120,19 @@ def test_archive_append_accumulates_without_rewrite(tmp_path):
     assert "### one" in text and "### two" in text   # both blocks accumulated
 
 
+def test_archive_append_writes_header_into_preexisting_empty_file(tmp_path):
+    # A zero-length archive (manually created or truncated) must still get the header.
+    tool = load_tool()
+    archive = tmp_path / "archive.md"
+    archive.write_text("", encoding="utf-8")
+
+    tool.append_to_archive(archive, [tool.Entry(date_str="2026-01-10", body="## 2026-01-10\n\n### one")])
+
+    text = archive.read_text(encoding="utf-8")
+    assert text.count("# HARDENING archive") == 1   # header present, not malformed
+    assert "### one" in text
+
+
 def test_drain_noop_leaves_file_byte_identical(tmp_path):
     tool = load_tool()
     hardening = tmp_path / "HARDENING.md"

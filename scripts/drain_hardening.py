@@ -149,7 +149,7 @@ def append_to_archive(archive_path: Path, drained: list[Entry]) -> None:
         return
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     blocks = "\n\n".join(entry.body.strip("\n") for entry in drained)
-    is_new = not archive_path.exists()
+    is_new = not archive_path.exists() or archive_path.stat().st_size == 0
     with archive_path.open("a", encoding="utf-8") as handle:
         if is_new:
             handle.write(
