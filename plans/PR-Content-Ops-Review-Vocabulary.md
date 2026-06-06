@@ -1,7 +1,7 @@
 # PR — Content-Ops Review Vocabulary (operating-model slice 1)
 
 Ownership lane: content-ops/review-contract
-Slice phase: Content operating model - slice 1 (review vocabulary)
+Slice phase: Vertical slice
 
 ## Why this slice exists
 
