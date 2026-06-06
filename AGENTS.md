@@ -104,8 +104,8 @@ is already used by worktree at ...`):
   unmerged by content, so `-d` refuses — `-D` is expected here).
 - Archive the merged plan doc so `plans/` only ever holds **in-flight**
   slices (the plan's content is already preserved in the squash commit).
-  On an up-to-date `main`, move **your own** plan by name and refresh the
-  index:
+  On a local `main` synced to `origin/main` (`git checkout main && git
+  pull`), move **your own** plan by name and refresh the index:
 
   ```bash
   git mv plans/PR-<Slice>.md plans/archive/
