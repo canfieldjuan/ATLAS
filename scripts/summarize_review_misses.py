@@ -69,6 +69,16 @@ def _is_placeholder_row(cells: Sequence[str]) -> bool:
     return _is_empty(cells[0]) and (len(cells) < 2 or _is_empty(cells[1]))
 
 
+def _ledger_table_present(text: str) -> bool:
+    """True when a Ledger section with at least one table row exists.
+
+    Distinguishes a valid (possibly seed-only) ledger from a missing/renamed
+    Ledger heading or the wrong file -- the latter must fail closed rather than
+    masquerade as "no misses logged".
+    """
+    return len(_ledger_rows(text)) >= 1
+
+
 def parse_ledger(text: str) -> list[dict[str, str]]:
     """Return real miss rows as dicts (date, issue, missed_by, root_cause, gate, owner)."""
     fields = ["date", "issue", "missed_by", "root_cause", "gate", "owner"]
@@ -150,6 +160,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("reviewer miss ledger metrics")
     print(f"ledger: {args.ledger}")
     print("-" * 60)
+    if not _ledger_table_present(text):
+        print(
+            "FAIL: no Ledger table found; expected a '## Ledger' section with a "
+            "table (renamed heading, deleted table, or wrong file?)",
+            file=sys.stderr,
+        )
+        return 2
     if summary["total"] == 0:
         print("no escaped defects logged yet (ledger holds only the seed row).")
         return 0

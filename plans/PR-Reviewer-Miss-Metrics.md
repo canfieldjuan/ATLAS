@@ -96,8 +96,8 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/pre_push_audit.yml` | 2 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Reviewer-Miss-Metrics.md` | 92 |
+| `plans/PR-Reviewer-Miss-Metrics.md` | 103 |
 | `plans/archive/PR-Reviewer-Path-Trigger-Audit.md` | 0 |
-| `scripts/summarize_review_misses.py` | 174 |
-| `tests/test_summarize_review_misses.py` | 97 |
-| **Total** | **368** |
+| `scripts/summarize_review_misses.py` | 191 |
+| `tests/test_summarize_review_misses.py` | 109 |
+| **Total** | **408** |

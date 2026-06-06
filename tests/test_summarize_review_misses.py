@@ -95,3 +95,15 @@ def test_fail_on_ungated_exit_codes(tmp_path: Path):
 def test_missing_ledger_is_usage_error(tmp_path: Path):
     mod = load()
     assert mod.main(["--ledger", str(tmp_path / "nope.md")]) == 2
+
+
+def test_missing_ledger_table_fails_closed(tmp_path: Path):
+    # A real file with no "## Ledger" table must fail, not report seed-only
+    # success -- even (especially) under --fail-on-ungated.
+    mod = load()
+    assert mod._ledger_table_present("## Something else\nno table here\n") is False
+    assert mod._ledger_table_present(SEED_ONLY) is True
+    wrong = tmp_path / "wrong.md"
+    wrong.write_text("# Some other doc\n\nno ledger table at all\n", encoding="utf-8")
+    assert mod.main(["--ledger", str(wrong)]) == 2
+    assert mod.main(["--ledger", str(wrong), "--fail-on-ungated"]) == 2
