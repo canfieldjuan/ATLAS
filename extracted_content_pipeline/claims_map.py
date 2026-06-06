@@ -150,6 +150,10 @@ def blocking_claims(mapped: Iterable[MappedClaim]) -> tuple[MappedClaim, ...]:
 
 
 def is_clear(mapped: Iterable[MappedClaim]) -> bool:
-    """True if no mapped claim blocks (no MISMATCH/EXPIRED)."""
+    """True if no mapped claim blocks (no MISMATCH/EXPIRED).
 
-    return not blocking_claims(mapped)
+    Uses ``any`` so it short-circuits on the first blocking claim instead of
+    materializing the full ``blocking_claims`` tuple.
+    """
+
+    return not any(m.status in _BLOCKING_STATUSES for m in mapped)

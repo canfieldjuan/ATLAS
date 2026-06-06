@@ -82,9 +82,9 @@ dataclasses, `None`/non-`str` tolerated, not raised).
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/claims_map.py` | 155 |
+| `extracted_content_pipeline/claims_map.py` | 159 |
 | `extracted_content_pipeline/manifest.json` | 3 |
 | `plans/PR-Content-Ops-Claims-Map.md` | 90 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `tests/test_extracted_content_claims_map.py` | 169 |
-| **Total** | **418** |
+| **Total** | **422** |
