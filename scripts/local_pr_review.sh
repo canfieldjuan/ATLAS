@@ -149,6 +149,10 @@ if [ -n "$committed_plan_docs" ]; then
             run_check "Plan/code consistency: $doc" \
                 python scripts/audit_plan_code_consistency.py "$doc"
         fi
+        if [ -f scripts/audit_review_rules_triggered.py ]; then
+            run_check "Reviewer rules triggered: $doc" \
+                python scripts/audit_review_rules_triggered.py "$base_ref" --plan "$doc"
+        fi
     done <<< "$committed_plan_docs"
 else
     echo
