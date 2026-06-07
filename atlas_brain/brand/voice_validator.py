@@ -1,7 +1,22 @@
 import yaml
 import re
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
+
+
+SEVERITIES = frozenset({"BLOCKER", "MAJOR", "NIT"})
+
+
+@dataclass(frozen=True)
+class BrandVoiceFinding:
+    rule_id: str
+    severity: str
+    category: str
+    message: str
+
+    def __str__(self) -> str:
+        return self.message
 
 
 class BrandVoiceValidator:
@@ -41,13 +56,18 @@ class BrandVoiceValidator:
                         f"{section}[{index}] must be a mapping, got "
                         f"{type(rule).__name__}"
                     )
-                missing = {"pattern", "description"} - rule.keys()
+                required = {"id", "pattern", "description"}
+                if section == "content_rules":
+                    required.add("applies_to")
+                missing = required - rule.keys()
                 if missing:
                     rule_id = rule.get("id", "<unnamed>")
                     raise ValueError(
                         f"{section}[{index}] (id={rule_id!r}) missing required "
                         f"keys: {sorted(missing)}"
                     )
+                if not str(rule["id"]).strip():
+                    raise ValueError(f"{section}[{index}] has an empty rule id")
                 if section == "tone_rules" and rule.get("fail_on_match", True) is not True:
                     rule_id = rule.get("id", "<unnamed>")
                     raise ValueError(
@@ -55,6 +75,13 @@ class BrandVoiceValidator:
                         "fail_on_match or set it to true; tone rules only fail "
                         "on matches"
                     )
+                self._normalize_severity(
+                    rule.get("severity"),
+                    default=self._default_severity(section),
+                    section=section,
+                    index=index,
+                    rule_id=str(rule["id"]),
+                )
                 try:
                     re.compile(rule["pattern"])
                 except re.error as exc:
@@ -64,7 +91,42 @@ class BrandVoiceValidator:
                         f"regex pattern: {exc}"
                     ) from exc
 
-    def validate(self, text: str, content_type: str) -> list[str]:
+    @staticmethod
+    def _default_severity(section: str) -> str:
+        if section == "tone_rules":
+            return "MAJOR"
+        return "BLOCKER"
+
+    @staticmethod
+    def _normalize_severity(
+        value: object,
+        *,
+        default: str,
+        section: str,
+        index: int,
+        rule_id: str,
+    ) -> str:
+        if value is None:
+            return default
+        severity = str(value).upper()
+        if severity not in SEVERITIES:
+            allowed = ", ".join(sorted(SEVERITIES))
+            raise ValueError(
+                f"{section}[{index}] (id={rule_id!r}) has invalid severity "
+                f"{value!r}; expected one of: {allowed}"
+            )
+        return severity
+
+    def _rule_severity(self, rule: dict, *, section: str, default: str) -> str:
+        return self._normalize_severity(
+            rule.get("severity"),
+            default=default,
+            section=section,
+            index=-1,
+            rule_id=str(rule["id"]),
+        )
+
+    def validate(self, text: str, content_type: str) -> list[BrandVoiceFinding]:
         """
         Validates a piece of text against the loaded brand voice rules.
 
@@ -73,13 +135,13 @@ class BrandVoiceValidator:
             content_type: The type of content (e.g., 'landing_page', 'blog_post').
 
         Returns:
-            A list of string descriptions of any violations found. An empty
-            list means the content is on-brand.
+            A list of structured findings. An empty list means the content is
+            on-brand.
         """
         if not isinstance(text, str):
             raise TypeError("text must be str")
 
-        violations = []
+        findings = []
         lower_text = text.lower()
 
         # 1. Forbidden vocabulary -- whole-word match. Unanchored substring
@@ -89,12 +151,28 @@ class BrandVoiceValidator:
         #    'non-disruptive' is itself a boundary, so 'disrupt' no longer fires).
         for word in (self.config.get("vocabulary") or {}).get("avoid") or []:
             if re.search(r"\b" + re.escape(word) + r"\b", lower_text):
-                violations.append(f"Contains forbidden word: '{word}'")
+                findings.append(
+                    BrandVoiceFinding(
+                        rule_id=f"vocabulary.avoid.{word}",
+                        severity="BLOCKER",
+                        category="vocabulary",
+                        message=f"Contains forbidden word: '{word}'",
+                    )
+                )
 
         # 2. Tone rules (regex-based).
         for rule in self.config.get("tone_rules") or []:
             if re.search(rule["pattern"], text, re.IGNORECASE):
-                violations.append(f"Tone violation: {rule['description']}")
+                findings.append(
+                    BrandVoiceFinding(
+                        rule_id=str(rule["id"]),
+                        severity=self._rule_severity(
+                            rule, section="tone_rules", default="MAJOR"
+                        ),
+                        category="tone",
+                        message=f"Tone violation: {rule['description']}",
+                    )
+                )
 
         # 3. Content-specific rules.
         for rule in self.config.get("content_rules") or []:
@@ -108,13 +186,31 @@ class BrandVoiceValidator:
 
             # Fails if the pattern is found (e.g., "don't use future tense").
             if fail_on_match and pattern_found:
-                violations.append(f"Content rule violation: {rule['description']}")
+                findings.append(
+                    BrandVoiceFinding(
+                        rule_id=str(rule["id"]),
+                        severity=self._rule_severity(
+                            rule, section="content_rules", default="BLOCKER"
+                        ),
+                        category="content",
+                        message=f"Content rule violation: {rule['description']}",
+                    )
+                )
 
             # Fails if the pattern is NOT found (e.g., "must mention extensibility").
             elif not fail_on_match and not pattern_found:
-                violations.append(f"Content rule violation: {rule['description']}")
+                findings.append(
+                    BrandVoiceFinding(
+                        rule_id=str(rule["id"]),
+                        severity=self._rule_severity(
+                            rule, section="content_rules", default="BLOCKER"
+                        ),
+                        category="content",
+                        message=f"Content rule violation: {rule['description']}",
+                    )
+                )
 
-        return violations
+        return findings
 
 
 def main():
@@ -154,12 +250,12 @@ def main():
         content_to_validate = f.read()
 
     validator = BrandVoiceValidator(config_path=args.config)
-    violations = validator.validate(content_to_validate, args.type)
+    findings = validator.validate(content_to_validate, args.type)
 
-    if violations:
-        print(f"FAIL: Found {len(violations)} brand voice violations in {args.file}:")
-        for violation in violations:
-            print(f"  - {violation}")
+    if findings:
+        print(f"FAIL: Found {len(findings)} brand voice violations in {args.file}:")
+        for finding in findings:
+            print(f"  - [{finding.severity}] {finding.rule_id}: {finding.message}")
         exit(1)
     else:
         print(f"PASS: {args.file} is on-brand.")
