@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
       - "atlas_brain/_content_ops_review_workflow.py"
+      - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
       - "extracted_content_pipeline/content_pr.py"
       - "extracted_content_pipeline/review_contract.py"
@@ -15,6 +16,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
       - "atlas_brain/_content_ops_review_workflow.py"
+      - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
       - "extracted_content_pipeline/content_pr.py"
       - "extracted_content_pipeline/review_contract.py"

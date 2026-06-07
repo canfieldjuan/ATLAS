@@ -122,9 +122,9 @@ to wrap.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_content_ops_review_workflow_checks.yml` | 46 |
+| `.github/workflows/atlas_content_ops_review_workflow_checks.yml` | 48 |
 | `atlas_brain/_content_ops_review_workflow.py` | 189 |
 | `tests/test_atlas_content_ops_review_workflow.py` | 253 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `plans/PR-Content-Ops-Review-Service-Wiring.md` | 130 |
-| **Total** | **619** |
+| **Total** | **621** |
