@@ -204,7 +204,7 @@ def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerat
     return BlogPostGenerationConfig(limit=request.limit)
 
 
-def _blog_variant_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
+def _variant_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
     if request.variant_count <= 1:
         return {}
     angles = selected_variant_angles(request.variant_count)
@@ -437,6 +437,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_repair_attempts": config.quality_repair_attempts,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
@@ -476,7 +477,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
-                **_blog_variant_config_for_request(request),
+                **_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },

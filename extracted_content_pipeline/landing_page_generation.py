@@ -200,8 +200,19 @@ def _landing_page_user_prompt(
     prior_invalid_response: str = "",
     *,
     quality_blockers: Sequence[str] = (),
+    variant_angle: str | None = None,
 ) -> str:
     prompt = "Generate one landing page from the marketing campaign above."
+    resolved_variant_angle = str(variant_angle or "").strip()
+    if resolved_variant_angle:
+        prompt = (
+            f"{prompt}\n\n"
+            "Variant angle:\n"
+            f"- {resolved_variant_angle}\n"
+            "Use this angle to change framing and emphasis only. Keep the same "
+            "campaign facts, supplied evidence, CTA intent, and truthfulness "
+            "limits."
+        )
     if quality_blockers:
         blockers = "\n".join(f"- {str(item)}" for item in quality_blockers)
         prompt = (
@@ -289,6 +300,7 @@ class LandingPageGenerationService:
         quality_gates_enabled: bool | None = None,
         quality_repair_attempts: int | None = None,
         brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
+        variant_angle: str | None = None,
     ) -> LandingPageGenerationResult:
         # PR-OptionA-2: per-call LLM-tuning overrides; None falls through.
         resolved_temperature = (
@@ -326,6 +338,7 @@ class LandingPageGenerationService:
             brand_voice,
             scope=scope,
         )
+        resolved_variant_angle = str(variant_angle or "").strip() or None
 
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -378,6 +391,7 @@ class LandingPageGenerationService:
                     quality_blockers=quality_blockers,
                     quality_repair_attempt_no=repair_attempt_no,
                     brand_voice=resolved_brand_voice,
+                    variant_angle=resolved_variant_angle,
                 )
             except Exception as exc:
                 return LandingPageGenerationResult(
@@ -766,6 +780,7 @@ class LandingPageGenerationService:
         quality_blockers: Sequence[str] = (),
         quality_repair_attempt_no: int = 0,
         brand_voice: BrandVoiceProfile | None = None,
+        variant_angle: str | None = None,
     ) -> dict[str, Any] | None:
         campaign_json = json.dumps(dict(campaign_payload), separators=(",", ":"), default=str)
         # Single source for the campaign payload: in the system prompt
@@ -777,6 +792,17 @@ class LandingPageGenerationService:
         last_response = ""
         total_usage: dict[str, Any] = {}
         for attempt_no in range(1, attempts + 1):
+            metadata: dict[str, Any] = {
+                "campaign_name": campaign_payload.get("name"),
+                "skill_name": self._config.skill_name,
+                "asset_type": "landing_page",
+                "target_mode": _TARGET_MODE,
+                "attempt_no": attempt_no,
+                "quality_repair_attempt_no": quality_repair_attempt_no,
+            }
+            resolved_variant_angle = str(variant_angle or "").strip()
+            if resolved_variant_angle:
+                metadata["variant_angle"] = resolved_variant_angle
             response = await self._llm.complete(
                 [
                     LLMMessage(role="system", content=system_prompt),
@@ -785,29 +811,26 @@ class LandingPageGenerationService:
                         content=_landing_page_user_prompt(
                             last_response,
                             quality_blockers=quality_blockers,
+                            variant_angle=variant_angle,
                         ),
                     ),
                 ],
                 max_tokens=max_tokens,
                 temperature=temperature,
-                metadata={
-                    "campaign_name": campaign_payload.get("name"),
-                    "skill_name": self._config.skill_name,
-                    "asset_type": "landing_page",
-                    "target_mode": _TARGET_MODE,
-                    "attempt_no": attempt_no,
-                    "quality_repair_attempt_no": quality_repair_attempt_no,
-                },
+                metadata=metadata,
             )
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_landing_page_response(response.content)
             if parsed:
-                return brand_voice_result_metadata({
+                result_payload = {
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
-                }, brand_voice)
+                }
+                if resolved_variant_angle:
+                    result_payload["_variant_angle"] = resolved_variant_angle
+                return brand_voice_result_metadata(result_payload, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -903,6 +926,9 @@ class LandingPageGenerationService:
             "brand_voice_profile": parsed.get("_brand_voice_profile"),
             "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
+        variant_angle = str(parsed.get("_variant_angle") or "").strip()
+        if variant_angle:
+            metadata["variant_angle"] = variant_angle
         if campaign_payload is not None:
             context = normalize_campaign_reasoning_context(campaign_payload)
             metadata.update(campaign_reasoning_context_metadata(context))

@@ -511,7 +511,7 @@ def _item_multiplier_for_output(
     inputs: Mapping[str, Any],
     variant_count: int = 1,
 ) -> int:
-    if output_id == "blog_post":
+    if output_id in {"blog_post", "landing_page"}:
         return normalize_variant_count(variant_count)
     if output_id != "social_post":
         return 1

@@ -89,7 +89,22 @@ def test_preview_scales_blog_cost_by_variant_count():
     assert preview["normalized_request"]["variant_count"] == 3
 
 
-def test_preview_does_not_scale_non_blog_outputs_by_variant_count():
+def test_preview_scales_landing_page_cost_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["landing_page"],
+        "variant_count": 2,
+        "inputs": {
+            "offer": "Churn audit",
+            "audience": "B2B SaaS founders",
+        },
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 5.2
+    assert preview["normalized_request"]["variant_count"] == 2
+
+
+def test_preview_does_not_scale_sales_brief_by_variant_count():
     preview = preview_from_mapping({
         "outputs": ["sales_brief"],
         "variant_count": 3,
