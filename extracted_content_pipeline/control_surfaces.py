@@ -8,7 +8,7 @@ runs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -17,6 +17,9 @@ from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     landing_page_quality_repair_attempts_from_inputs,
 )
+
+SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD = 0.08
+SOCIAL_POST_BRAND_VOICE_PARSE_RETRY_ATTEMPTS = 1
 
 
 @dataclass(frozen=True)
@@ -460,12 +463,49 @@ def retry_adjusted_unit_cost_usd(
     return definition.estimated_unit_cost_usd * parse_attempts * (repair_attempts + 1)
 
 
+def _brand_voice_requested(
+    inputs: Mapping[str, Any],
+    *,
+    brand_voice_profile_id: str | None,
+) -> bool:
+    if str(brand_voice_profile_id or "").strip():
+        return True
+    value = inputs.get("brand_voice")
+    if value is None:
+        return False
+    if isinstance(value, Mapping):
+        return bool(value)
+    return True
+
+
+def _cost_definition_for_output(
+    output_id: str,
+    definition: OutputDefinition,
+    *,
+    inputs: Mapping[str, Any],
+    brand_voice_profile_id: str | None,
+) -> OutputDefinition:
+    """Return the dynamic preview-cost definition for one output."""
+
+    if output_id == "social_post" and _brand_voice_requested(
+        inputs,
+        brand_voice_profile_id=brand_voice_profile_id,
+    ):
+        return replace(
+            definition,
+            estimated_unit_cost_usd=SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD,
+            default_parse_retry_attempts=SOCIAL_POST_BRAND_VOICE_PARSE_RETRY_ATTEMPTS,
+        )
+    return definition
+
+
 def estimate_cost_usd(
     outputs: Sequence[str],
     *,
     limit: int,
     inputs: Mapping[str, Any] | None = None,
     require_quality_gates: bool = True,
+    brand_voice_profile_id: str | None = None,
 ) -> float:
     """Estimate cost from selected outputs and opportunity limit.
 
@@ -481,15 +521,21 @@ def estimate_cost_usd(
         definition = OUTPUT_CATALOG.get(output_id)
         if not definition:
             continue
-        repair_attempts = _quality_repair_attempts_for_output(
+        cost_definition = _cost_definition_for_output(
             output_id,
             definition,
+            inputs=provided_inputs,
+            brand_voice_profile_id=brand_voice_profile_id,
+        )
+        repair_attempts = _quality_repair_attempts_for_output(
+            output_id,
+            cost_definition,
             inputs=provided_inputs,
             require_quality_gates=require_quality_gates,
         )
         total += (
             retry_adjusted_unit_cost_usd(
-                definition,
+                cost_definition,
                 quality_repair_attempts=repair_attempts,
             )
             * max(1, limit)
@@ -578,6 +624,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         limit=request.limit,
         inputs=request.inputs,
         require_quality_gates=request.require_quality_gates,
+        brand_voice_profile_id=request.brand_voice_profile_id,
     )
 
     if request.max_cost_usd is not None and estimated_cost > request.max_cost_usd:

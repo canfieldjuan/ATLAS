@@ -40,18 +40,36 @@ Slice phase: Vertical slice
 7. Add focused package and host wiring tests for LLM rewrite, fail-closed
    missing LLM/prompt behavior, plan metadata, dispatcher threading, and
    deterministic fallback.
+8. Review follow-up: make the preview/budget estimator charge for
+   brand-voice social-post LLM rewrites, while preserving the zero-cost
+   deterministic social-post path when no brand voice is selected.
+
+### Review Contract
+
+- Acceptance criteria: brand-voice social posts route through the configured
+  LLM path; missing LLM or prompt wiring fails closed; no-brand-voice social
+  posts keep the deterministic fallback; preview/budget estimation charges
+  only brand-voice social-post rewrites.
+- Affected surfaces: extracted content execution, host social-post service
+  wiring, control-surface preview, synced prompt and manifest.
+- Risk areas: backcompat, cost gating, LLM failure handling, extracted package
+  sync.
+- Reviewer rules triggered: R1 (requirements match the plan/test contract),
+  R10 (LLM path and estimator changes stay centralized and maintainable).
 
 ### Files touched
 
 - `atlas_brain/_content_ops_services.py`
 - `atlas_brain/skills/digest/social_post_generation.md`
 - `extracted_content_pipeline/content_ops_execution.py`
+- `extracted_content_pipeline/control_surfaces.py`
 - `extracted_content_pipeline/generation_plan.py`
 - `extracted_content_pipeline/manifest.json`
 - `extracted_content_pipeline/skills/digest/social_post_generation.md`
 - `extracted_content_pipeline/social_post_generation.py`
 - `plans/PR-Content-Ops-Social-Post-LLM-Voice.md`
 - `tests/test_atlas_content_ops_execution_services.py`
+- `tests/test_extracted_content_control_surfaces.py`
 - `tests/test_extracted_content_generation_plan.py`
 - `tests/test_extracted_content_ops_execution.py`
 - `tests/test_extracted_social_post_generation.py`
@@ -84,6 +102,13 @@ Host wiring changes only the DB-enabled social-post builder: when an LLM and
 pool are available it passes the existing OpenRouter-configured Content Ops LLM
 client and skill store into `SocialPostGenerationService`. The no-DB/no-LLM
 singleton remains deterministic and wired.
+
+The control-surface estimator keeps deterministic social posts at zero cost,
+but applies a dynamic brand-voice premium when `social_post` is selected with
+either inline `inputs.brand_voice` or a stored `brand_voice_profile_id`. That
+dynamic cost mirrors the social-post LLM rewrite retry default so a low
+`max_cost_usd` blocks paid rewrites during preview instead of allowing budget
+gate bypass.
 
 ## Intentional
 
@@ -121,10 +146,16 @@ Parked hardening: none.
 - `bash extracted/_shared/scripts/sync_extracted.sh extracted_content_pipeline` --
   refreshed 46 mapped files.
 - `bash scripts/run_extracted_pipeline_checks.sh` -- 295 reasoning-core tests
-  passed; 3115 extracted-content tests passed / 10 skipped / 1 warning.
+  passed; 3216 extracted-content tests passed / 10 skipped / 1 warning.
 - `git diff --check` -- passed.
 - `bash scripts/local_pr_review.sh --current-pr-body-file tmp/pr-body-content-ops-social-post-llm-voice.md`
   -- passed.
+- Review follow-up:
+  - `python -m py_compile extracted_content_pipeline/control_surfaces.py tests/test_extracted_content_control_surfaces.py`
+    -- passed.
+  - `pytest tests/test_extracted_content_control_surfaces.py -q` -- 44 passed.
+  - `pytest tests/test_extracted_content_control_surface_api.py -q` -- 131
+    passed / 1 skipped.
 
 ## Estimated diff size
 
@@ -133,13 +164,15 @@ Parked hardening: none.
 | `atlas_brain/_content_ops_services.py` | 20 |
 | `atlas_brain/skills/digest/social_post_generation.md` | 59 |
 | `extracted_content_pipeline/content_ops_execution.py` | 25 |
+| `extracted_content_pipeline/control_surfaces.py` | 53 |
 | `extracted_content_pipeline/generation_plan.py` | 6 |
 | `extracted_content_pipeline/manifest.json` | 4 |
 | `extracted_content_pipeline/skills/digest/social_post_generation.md` | 59 |
 | `extracted_content_pipeline/social_post_generation.py` | 303 |
-| `plans/PR-Content-Ops-Social-Post-LLM-Voice.md` | 145 |
+| `plans/PR-Content-Ops-Social-Post-LLM-Voice.md` | 178 |
 | `tests/test_atlas_content_ops_execution_services.py` | 132 |
+| `tests/test_extracted_content_control_surfaces.py` | 34 |
 | `tests/test_extracted_content_generation_plan.py` | 9 |
 | `tests/test_extracted_content_ops_execution.py` | 43 |
 | `tests/test_extracted_social_post_generation.py` | 178 |
-| **Total** | **983** |
+| **Total** | **1103** |

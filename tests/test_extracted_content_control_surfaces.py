@@ -180,6 +180,40 @@ def test_preview_allows_social_post_when_source_material_present():
     assert preview["estimated_cost_usd"] == 0.0
 
 
+def test_preview_charges_brand_voice_social_post_rewrite():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "max_cost_usd": 0.01,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "brand_voice": {"id": "voice-1", "descriptors": ["direct"]},
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["estimated_cost_usd"] == 0.32
+    assert "Estimated cost exceeds max_cost_usd: 0.32 > 0.01" in preview["warnings"]
+
+
+def test_preview_charges_stored_brand_voice_social_post_rewrite():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 1,
+            "brand_voice_profile_id": "voice-1",
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.16
+
+
 def test_preview_allows_ad_copy_when_source_material_present():
     preview = preview_from_mapping(
         {
