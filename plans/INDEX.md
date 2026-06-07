@@ -1,6 +1,6 @@
 # Plan archive index
 
-887 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+888 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -171,6 +171,7 @@
 - [PR-Content-Ops-Blog-Reasoning-Fixture-Doc](archive/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md)
 - [PR-Content-Ops-Blog-Reasoning-Key-Parity](archive/PR-Content-Ops-Blog-Reasoning-Key-Parity.md)
 - [PR-Content-Ops-Blog-SEO-Closeout](archive/PR-Content-Ops-Blog-SEO-Closeout.md)
+- [PR-Content-Ops-Brand-Voice-Editor-Extraction](archive/PR-Content-Ops-Brand-Voice-Editor-Extraction.md) - lane: content-ops/brand-voice/editor-extraction | phase: Product polish
 - [PR-Content-Ops-Brand-Voice-Onboarding](archive/PR-Content-Ops-Brand-Voice-Onboarding.md) - lane: content-ops/brand-voice/onboarding | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Presets](archive/PR-Content-Ops-Brand-Voice-Presets.md) - lane: content-ops/brand-voice/presets | phase: Product polish
 - [PR-Content-Ops-Brand-Voice-Profile-Editor](archive/PR-Content-Ops-Brand-Voice-Profile-Editor.md) - lane: content-ops/brand-voice-profile-editor | phase: Vertical slice
