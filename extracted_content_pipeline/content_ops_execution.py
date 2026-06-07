@@ -705,15 +705,24 @@ async def _dispatch_social_post(
     brand_voice: BrandVoiceProfile | None,
     filters: Mapping[str, Any] | None,
 ) -> Any:
-    del brand_voice
     del filters
-    return await service.generate(
-        scope=scope,
-        target_mode=request.target_mode,
-        source_material=request.inputs.get("source_material"),
-        limit=request.limit,
-        max_text_chars=_step_config_int(step.config, "max_text_chars"),
-    )
+    kwargs: dict[str, Any] = {
+        "scope": scope,
+        "target_mode": request.target_mode,
+        "source_material": request.inputs.get("source_material"),
+        "limit": request.limit,
+        "max_text_chars": _step_config_int(step.config, "max_text_chars"),
+        "temperature": _step_config_float(step.config, "temperature"),
+        "max_tokens": _step_config_int(step.config, "max_tokens"),
+        "parse_retry_attempts": _step_config_int(step.config, "parse_retry_attempts"),
+        "parse_retry_response_excerpt_chars": _step_config_int(
+            step.config,
+            "parse_retry_response_excerpt_chars",
+        ),
+    }
+    if brand_voice is not None:
+        kwargs["brand_voice"] = brand_voice
+    return await service.generate(**kwargs)
 
 
 async def _dispatch_ad_copy(

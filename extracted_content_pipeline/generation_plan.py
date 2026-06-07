@@ -477,8 +477,14 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             runner="SocialPostGenerationService.generate",
             status="runnable",
             config={
+                "skill_name": config.skill_name,
                 "limit": config.limit,
                 "max_text_chars": config.max_text_chars,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_brand_voice_config_for_request(request),
             },
         )
     if output == "ad_copy":

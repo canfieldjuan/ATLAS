@@ -10,7 +10,8 @@ Currently wired:
 - `signal_extraction` (E1, PR #452): deterministic generator
   with no external dependencies.
 - `social_post`: deterministic source-evidence social post drafts
-  with no external dependencies.
+  with no external dependencies, plus optional brand-voice LLM rewrite when
+  DB services have the configured Content Ops LLM and skill store.
 - `ad_copy`: deterministic source-evidence ad-copy drafts
   with no external dependencies; persists when DB services are enabled.
 - `quote_card`: deterministic source-evidence quote-card drafts
@@ -284,13 +285,20 @@ def _build_ticket_faq_service(*, pool: Any) -> TicketFAQMarkdownService | None:
     return TicketFAQMarkdownService(ticket_faqs=PostgresTicketFAQRepository(pool=pool))
 
 
-def _build_social_post_service(*, pool: Any) -> SocialPostGenerationService:
+def _build_social_post_service(
+    *,
+    pool: Any,
+    llm: LLMClient | None = None,
+    skills: SkillStore | None = None,
+) -> SocialPostGenerationService:
     """Build social-post generation with optional draft persistence."""
 
     if pool is None:
         return _SOCIAL_POST_SERVICE
     return SocialPostGenerationService(
-        social_posts=PostgresSocialPostRepository(pool=pool)
+        social_posts=PostgresSocialPostRepository(pool=pool),
+        llm=llm,
+        skills=skills,
     )
 
 
@@ -429,7 +437,11 @@ def build_content_ops_execution_services(
             pool=pool,
             image_provider=image_provider,
         )
-        social_post = _build_social_post_service(pool=pool)
+        social_post = _build_social_post_service(
+            pool=pool,
+            llm=llm,
+            skills=skills,
+        )
         ad_copy = _build_ad_copy_service(pool=pool)
         quote_card = _build_quote_card_service(pool=pool)
         stat_card = _build_stat_card_service(pool=pool)
