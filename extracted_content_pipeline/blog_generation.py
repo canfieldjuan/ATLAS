@@ -866,7 +866,11 @@ class BlogPostGenerationService:
         blueprint: Mapping[str, Any],
     ) -> BlogPostDraft:
         title = str(parsed.get("title") or "").strip()
-        slug = _slugify(parsed.get("slug") or blueprint.get("slug") or title)
+        variant_angle = str(parsed.get("_variant_angle") or "").strip()
+        slug = _slug_with_variant_suffix(
+            _slugify(parsed.get("slug") or blueprint.get("slug") or title),
+            variant_angle,
+        )
         topic_type = str(
             parsed.get("topic_type")
             or blueprint.get("topic_type")
@@ -886,7 +890,6 @@ class BlogPostGenerationService:
             "brand_voice_profile": parsed.get("_brand_voice_profile"),
             "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
-        variant_angle = str(parsed.get("_variant_angle") or "").strip()
         if variant_angle:
             metadata["variant_angle"] = variant_angle
         # PR-Blog-Reasoning-Parity: surface reasoning audit fields on
@@ -1399,6 +1402,23 @@ def _slugify(value: Any) -> str:
     if len(slug) > _MAX_SLUG_CHARS:
         slug = slug[:_MAX_SLUG_CHARS].rstrip("-")
     return slug or "blog-post"
+
+
+def _variant_slug_suffix(variant_angle: str) -> str:
+    label = str(variant_angle or "").strip().split(":", 1)[0]
+    suffix = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")
+    return suffix[:40].rstrip("-")
+
+
+def _slug_with_variant_suffix(base_slug: str, variant_angle: str) -> str:
+    suffix = _variant_slug_suffix(variant_angle)
+    if not suffix:
+        return base_slug
+    if base_slug == suffix or base_slug.endswith(f"-{suffix}"):
+        return base_slug
+    max_base_chars = _MAX_SLUG_CHARS - len(suffix) - 1
+    trimmed = base_slug[:max_base_chars].rstrip("-") or "blog-post"
+    return f"{trimmed}-{suffix}"
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:

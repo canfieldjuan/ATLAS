@@ -55,6 +55,12 @@ class _BlogPosts:
         raise AssertionError("not used")
 
 
+class _SlugIdBlogPosts(_BlogPosts):
+    async def save_drafts(self, drafts, *, scope):
+        self.saved.append({"drafts": list(drafts), "scope": scope})
+        return [draft.slug for draft in drafts]
+
+
 class _LLM:
     def __init__(self, responses):
         self.responses = list(responses)
@@ -294,9 +300,10 @@ def _service(
     config=None,
     reasoning_context=None,
     image_provider=None,
+    blog_posts=None,
 ):
     blueprints = _Blueprints(rows or [_blueprint()])
-    blog_posts = _BlogPosts()
+    blog_posts = blog_posts or _BlogPosts()
     llm = _LLM(responses or [_valid_blog_json()])
     if prompts is None:
         prompts = {"digest/blog_post_generation": "Write from {blueprint_json}"}
@@ -757,7 +764,45 @@ async def test_generate_threads_variant_angle_to_prompt_and_metadata() -> None:
     assert "same blueprint" in user_prompt
     assert llm.calls[0]["metadata"]["variant_angle"] == angle
     draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.slug == "hubspot-pricing-pressure-pain-led"
     assert draft.metadata["variant_angle"] == angle
+
+
+@pytest.mark.asyncio
+async def test_generate_variant_angles_persist_under_distinct_slugs() -> None:
+    blog_posts = _SlugIdBlogPosts()
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[
+            _valid_blog_json(slug="hubspot-pricing-pressure"),
+            _valid_blog_json(slug="hubspot-pricing-pressure"),
+        ],
+        blog_posts=blog_posts,
+    )
+    scope = TenantScope(account_id="acct-1")
+
+    pain_result = await service.generate(
+        scope=scope,
+        target_mode="vendor_retention",
+        limit=1,
+        variant_angle="Pain-led: open with the buyer friction.",
+    )
+    outcome_result = await service.generate(
+        scope=scope,
+        target_mode="vendor_retention",
+        limit=1,
+        variant_angle="Outcome-led: lead with the business result.",
+    )
+
+    assert pain_result.saved_ids == ("hubspot-pricing-pressure-pain-led",)
+    assert outcome_result.saved_ids == ("hubspot-pricing-pressure-outcome-led",)
+    saved_slugs = [
+        saved["drafts"][0].slug
+        for saved in blog_posts.saved
+    ]
+    assert saved_slugs == [
+        "hubspot-pricing-pressure-pain-led",
+        "hubspot-pricing-pressure-outcome-led",
+    ]
 
 
 @pytest.mark.asyncio
