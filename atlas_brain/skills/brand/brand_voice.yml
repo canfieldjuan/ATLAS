@@ -12,9 +12,8 @@ persona:
     is to be a trusted, expert partner.
 
 vocabulary:
-  # FUTURE (not yet enforced): preferred replacements for discouraged words.
-  # The validator does not read this block yet; it is reserved for the
-  # suggested-fix slice (see plans/PR-Content-Marketing-Brand-Voice-Checks.md).
+  # Preferred replacements for discouraged words. Each item is
+  # "preferred": "discouraged" and surfaces a suggested fix.
   use:
     - "deterministic": "predictable"
     - "capability": "feature"
