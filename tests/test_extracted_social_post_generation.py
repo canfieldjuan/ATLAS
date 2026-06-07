@@ -31,6 +31,20 @@ class _LLM:
         )
 
 
+class _RaisingLLM:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append({
+            "messages": tuple(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "metadata": dict(metadata or {}),
+        })
+        raise RuntimeError("provider down")
+
+
 class _Skills:
     def __init__(self, prompt: str | None = "Social prompt\n{brand_voice}") -> None:
         self.prompt = prompt
@@ -311,6 +325,78 @@ async def test_social_post_service_retries_unparseable_llm_response() -> None:
     assert len(llm.calls) == 2
     retry_prompt = llm.calls[1]["messages"][1].content
     assert "Previous response excerpt:\nnot json" in retry_prompt
+
+
+@pytest.mark.asyncio
+async def test_social_post_service_drops_post_when_llm_raises() -> None:
+    repository = _SocialPostRepository()
+    llm = _RaisingLLM()
+    service = SocialPostGenerationService(
+        social_posts=repository,
+        llm=llm,
+        skills=_Skills(),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        brand_voice={
+            "id": "voice-1",
+            "account_id": "acct-1",
+            "descriptors": ["direct"],
+        },
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            }
+        ],
+    )
+
+    assert result.generated == 0
+    assert result.saved_ids == ()
+    assert repository.calls == []
+    assert [warning.code for warning in result.warnings] == [
+        "social_post_llm_error"
+    ]
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_social_post_service_drops_post_when_llm_never_returns_parseable_json() -> None:
+    repository = _SocialPostRepository()
+    llm = _LLM("not json", "still not json")
+    service = SocialPostGenerationService(
+        social_posts=repository,
+        llm=llm,
+        skills=_Skills(),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        brand_voice={
+            "id": "voice-1",
+            "account_id": "acct-1",
+            "descriptors": ["direct"],
+        },
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            }
+        ],
+    )
+
+    assert result.generated == 0
+    assert result.saved_ids == ()
+    assert repository.calls == []
+    assert [warning.code for warning in result.warnings] == [
+        "social_post_llm_unparseable_response"
+    ]
+    assert len(llm.calls) == 2
 
 
 @pytest.mark.asyncio

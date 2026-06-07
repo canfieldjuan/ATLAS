@@ -136,7 +136,7 @@ Parked hardening: none.
 - `python -m py_compile extracted_content_pipeline/social_post_generation.py extracted_content_pipeline/generation_plan.py extracted_content_pipeline/content_ops_execution.py atlas_brain/_content_ops_services.py tests/test_extracted_social_post_generation.py tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py tests/test_atlas_content_ops_execution_services.py`
   -- passed.
 - `pytest tests/test_extracted_social_post_generation.py tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py -q`
-  -- 126 passed.
+  -- 128 passed.
 - `pytest tests/test_atlas_content_ops_execution_services.py -q` -- 28 passed.
 - `bash scripts/validate_extracted_content_pipeline.sh` -- passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline`
@@ -156,6 +156,7 @@ Parked hardening: none.
   - `pytest tests/test_extracted_content_control_surfaces.py -q` -- 44 passed.
   - `pytest tests/test_extracted_content_control_surface_api.py -q` -- 131
     passed / 1 skipped.
+  - `pytest tests/test_extracted_social_post_generation.py -q` -- 12 passed.
 
 ## Estimated diff size
 
@@ -169,10 +170,10 @@ Parked hardening: none.
 | `extracted_content_pipeline/manifest.json` | 4 |
 | `extracted_content_pipeline/skills/digest/social_post_generation.md` | 59 |
 | `extracted_content_pipeline/social_post_generation.py` | 303 |
-| `plans/PR-Content-Ops-Social-Post-LLM-Voice.md` | 178 |
+| `plans/PR-Content-Ops-Social-Post-LLM-Voice.md` | 179 |
 | `tests/test_atlas_content_ops_execution_services.py` | 132 |
 | `tests/test_extracted_content_control_surfaces.py` | 34 |
 | `tests/test_extracted_content_generation_plan.py` | 9 |
 | `tests/test_extracted_content_ops_execution.py` | 43 |
-| `tests/test_extracted_social_post_generation.py` | 178 |
-| **Total** | **1103** |
+| `tests/test_extracted_social_post_generation.py` | 264 |
+| **Total** | **1190** |
