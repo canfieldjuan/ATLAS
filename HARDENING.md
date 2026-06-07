@@ -30,6 +30,62 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-07
+
+### Landing-page variants pass audits but are not meaningfully distinct
+- File/location: `docs/extraction/validation/fixtures/content_ops_gate_a_brand_voice_variants_2026-06-07/export-landing_page.json` and landing-page generation variant prompting.
+- Description: Gate A exported three landing-page variants with distinct hero headlines, but the same title and largely similar body copy; one page repeats the same "35 out of 36 tickets were question-shaped" point in adjacent paragraphs.
+- Why it matters: Audit-clean variants are not necessarily marketable variants. Review/export needs to prove meaningful whole-page differences, not only different hero text.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof review
+
+### Blog output uses debug-style source narration instead of publishable prose
+- File/location: `docs/extraction/validation/fixtures/content_ops_gate_a_brand_voice_variants_2026-06-07/export-blog_post.json` and blog generation prompt/quality gates.
+- Description: The approved blog row opens with "The uploaded CSV contains 36 support-ticket rows...", which reads like internal data narration rather than a publishable customer-facing article.
+- Why it matters: A generated blog can pass structural checks while still being unshippable marketing content.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof review
+
+### Gate A needs a messy-ticket grounding rerun
+- File/location: Gate A validation harness input selection / future validation artifact.
+- Description: The committed Gate A proof used the clean `support_ticket_saas_demo_sources.csv` fixture where nine clusters each contain exactly four tickets. That proves the live path, but does not stress grounding on lopsided clusters, junk rows, missing fields, or noisy real tickets.
+- Why it matters: Grounding quality is easiest on the tidy demo fixture; the next acceptance run should use messy real support data before treating Gate A as product-cleared.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof review
+
+### Blog post variants collapse to one persisted draft id
+- File/location: `extracted_content_pipeline/blog_post_postgres.py` / blog-post save path used by `BlogPostGenerationService.generate`.
+- Description: Gate A live validation generated two successful blog variants, but both returned `9c2cdf6c-9fbf-42db-8af8-6a59e850cf16`; the exact export contained one approved row, not distinct persisted variant rows.
+- Why it matters: `variant_count > 1` does not prove usable blog variants if the review/export surface collapses them into one draft by slug or blueprint identity.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof
+
+### Brand-voice second-person guidance is not consistently honored
+- File/location: `extracted_content_pipeline/brand_voice.py` audit surfaced from live blog and sales-brief exports.
+- Description: The Gate A profile requested `preferred_pov=second_person`. The exported blog draft and one sales brief had `brand_voice_audit.passed=false` with `preferred_pov_second_person_not_detected`.
+- Why it matters: the stored profile reaches the prompt, but live output can still miss the requested voice; the UI should not present brand voice as applied without exposing or repairing these misses.
+- Effort: M
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof
+
+### Sales brief live generation drifts from requested renewal brief type
+- File/location: `extracted_content_pipeline/sales_brief_generation.py`
+- Description: Gate A requested `inputs.brief_type=renewal`; all three exported sales briefs stored `brief_type=pre_call` because the model's parsed JSON won over the configured default.
+- Why it matters: review/export proves persistence, but the output contract can ignore the operator's requested sales-brief mode.
+- Effort: S
+- Category: correctness
+- Owner/session: Codex Gate A live output-quality proof
+- Found during: PR-Gate-A-Live-Output-Quality-Proof
+
 ## 2026-05-29
 
 ### atlas-intel-ui npm audit vulnerabilities
