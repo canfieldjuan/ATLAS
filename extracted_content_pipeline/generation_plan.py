@@ -21,6 +21,7 @@ from .control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from .output_variations import selected_variant_angles
 from .landing_page_generation import LandingPageGenerationConfig
 from .landing_page_repair_contract import (
     landing_page_quality_repair_attempts_from_inputs,
@@ -35,7 +36,10 @@ from .reasoning_policy import (
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
-from .social_post_generation import SocialPostGenerationConfig
+from .social_post_generation import (
+    SocialPostGenerationConfig,
+    normalize_social_post_channels,
+)
 from .stat_card_generation import StatCardGenerationConfig
 from .ticket_faq_markdown import (
     DEFAULT_INTENT_RULES,
@@ -200,6 +204,16 @@ def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerat
     return BlogPostGenerationConfig(limit=request.limit)
 
 
+def _variant_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
+    if request.variant_count <= 1:
+        return {}
+    angles = selected_variant_angles(request.variant_count)
+    return {
+        "variant_count": len(angles),
+        "variant_angles": [angle.as_dict() for angle in angles],
+    }
+
+
 def _brand_voice_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
     profile_id = str(request.brand_voice_profile_id or "").strip()
     inline = request.inputs.get("brand_voice")
@@ -222,12 +236,19 @@ def _signal_extraction_config_for_request(
 
 
 def _social_post_config_for_request(request: ContentOpsRequest) -> SocialPostGenerationConfig:
-    config = SocialPostGenerationConfig(limit=request.limit)
+    channels = request.inputs.get("social_channels")
+    if channels is None:
+        channels = request.inputs.get("social_post_channels")
+    config = SocialPostGenerationConfig(
+        limit=request.limit,
+        channels=normalize_social_post_channels(channels),
+    )
     max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
     if max_text_chars is None:
         return config
     return SocialPostGenerationConfig(
         limit=config.limit,
+        channels=config.channels,
         max_text_chars=max_text_chars,
     )
 
@@ -416,6 +437,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_repair_attempts": config.quality_repair_attempts,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
@@ -455,6 +477,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
+                **_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },
@@ -477,8 +500,15 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             runner="SocialPostGenerationService.generate",
             status="runnable",
             config={
+                "skill_name": config.skill_name,
+                "channels": list(config.channels),
                 "limit": config.limit,
                 "max_text_chars": config.max_text_chars,
+                "max_tokens": config.max_tokens,
+                "temperature": config.temperature,
+                "parse_retry_attempts": config.parse_retry_attempts,
+                "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_brand_voice_config_for_request(request),
             },
         )
     if output == "ad_copy":

@@ -76,11 +76,17 @@ jobs:
       - name: Test Content Ops brand voice profile selector
         run: npm run test:content-ops-brand-voice-profile-selector
 
+      - name: Test Content Ops brand voice settings page
+        run: npm run test:content-ops-brand-voice-settings-page
+
       - name: Test Content Ops blog review public link
         run: npm run test:content-ops-blog-review-public-link
 
       - name: Test Content Ops social post review assets
         run: npm run test:content-ops-social-post-review-assets
+
+      - name: Test Content Ops social post channel selector
+        run: npm run test:content-ops-social-post-channel-selector
 
       - name: Test Content Ops ad copy review assets
         run: npm run test:content-ops-ad-copy-review-assets

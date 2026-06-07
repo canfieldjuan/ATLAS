@@ -18,7 +18,8 @@ the host has wired. Currently:
 - `faq_markdown`: wired by default, but host callers can hide it from
   customer-executable output lists while keeping it as the internal
   deflection-report source.
-- `social_post`: deterministic; persists when DB services are enabled.
+- `social_post`: deterministic without brand voice; persists when DB services
+  are enabled and uses the configured LLM when brand voice is supplied.
 - `quote_card`: deterministic; persists when DB services are enabled.
 - `stat_card`: deterministic; persists when DB services are enabled.
 - `faq_deflection_report` (this slice): always wired (stateless wrapper over
@@ -30,47 +31,14 @@ infrastructure -- the canonical singletons trigger the heavy
 host init chain (torch / ollama / asyncpg) that dev envs may
 not have.
 
-Test inventory (25 tests):
-
-1. `signal_extraction` runs through the full executor.
-2. `landing_page` populated when LLM + db enabled (E2 canary).
-3. `landing_page` skips when no LLM (E2 fallback).
-4. `landing_page` skips when pool is None.
-5. `landing_page` skips in production default
-   (Codex P1 safety pin).
-6. `campaign` populated when LLM + db enabled (E3 canary).
-7. `report` populated when LLM + db enabled (E3 canary).
-8. `sales_brief` populated when LLM + db enabled (E3 canary).
-9. campaign / report / sales_brief skip together when no LLM.
-10. campaign / report / sales_brief skip together when pool
-    is None.
-11. `blog_post` populated when LLM + db enabled (E4 canary)
-    and `for_output("blog_post")` returns the service.
-12. `blog_post` skips when no LLM (E4 fallback).
-13. `faq_markdown` runs through the full executor.
-14. `faq_markdown` persists when DB services are enabled.
-15. `social_post` persists when DB services are enabled.
-16. `ad_copy` persists when DB services are enabled.
-17. `quote_card` runs through the full executor.
-18. `stat_card` persists when DB services are enabled.
-19. `faq_deflection_report` runs through the full executor.
-20. `social_post` is always wired.
-21. `ad_copy` is always wired.
-22. `quote_card` is always wired.
-23. `stat_card` is always wired.
-24. `configured_outputs()` with LLM + db enabled advertises
-    every wired output: `(email_campaign, blog_post, report,
-    landing_page, sales_brief, social_post, ad_copy,
-    quote_card, stat_card, signal_extraction, faq_markdown,
-    faq_deflection_report)` -- order
-    follows the upstream
-    `ContentOpsExecutionServices.configured_outputs`
-    iteration (not alphabetical).
-25. `configured_outputs()` without an active LLM (even with
-    `enable_db_services=True`) advertises only
-    deterministic outputs.
-26. The hosted paywall mode can hide `faq_markdown` while
-    retaining a runnable `faq_deflection_report`.
+Test inventory covers:
+- deterministic outputs running and persisting when DB services are enabled;
+- LLM-backed outputs wiring only when the configured LLM and pool are present;
+- social-post brand voice using the configured Content Ops LLM path;
+- always-wired deterministic outputs remaining available without an LLM;
+- configured output advertisement with and without active LLM services;
+- hosted paywall mode hiding `faq_markdown` while retaining
+  `faq_deflection_report`.
 """
 
 from __future__ import annotations
@@ -83,7 +51,7 @@ import pytest
 from atlas_brain._content_ops_services import (
     build_content_ops_execution_services,
 )
-from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
 from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
@@ -104,6 +72,37 @@ def _make_llm_stub() -> Any:
 
 def _make_skill_store_stub() -> Any:
     return SimpleNamespace(get_prompt=lambda _name: None)
+
+
+class _SocialPostLLMStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def complete(self, messages, *, max_tokens, temperature, metadata=None):
+        self.calls.append({
+            "messages": tuple(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "metadata": dict(metadata or {}),
+        })
+        return LLMResponse(
+            content=(
+                '{"channel":"linkedin","text":"You can use this renewal proof '
+                'without guessing."}'
+            ),
+            model="test-model",
+            usage={"input_tokens": 3, "output_tokens": 5},
+        )
+
+
+def _make_social_skill_store_stub() -> Any:
+    return SimpleNamespace(
+        get_prompt=lambda name: (
+            "Social prompt\n{brand_voice}"
+            if name == "digest/social_post_generation"
+            else None
+        )
+    )
 
 
 def _make_pool_stub() -> Any:
@@ -265,6 +264,53 @@ async def test_social_post_persists_when_db_services_enabled() -> None:
         "linkedin",
         step["result"]["posts"][0]["text"],
     )
+
+
+@pytest.mark.asyncio
+async def test_social_post_uses_configured_llm_for_brand_voice_when_db_enabled() -> None:
+    pool = _FAQPoolStub(return_id="social-post-uuid-1")
+    llm = _SocialPostLLMStub()
+    services = build_content_ops_execution_services(
+        llm_factory=lambda: llm,
+        skills_factory=_make_social_skill_store_stub,
+        pool_factory=lambda: pool,
+        enable_db_services=True,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "brand_voice_profile_id": "voice-1",
+            "inputs": {
+                "brand_voice": {
+                    "id": "voice-1",
+                    "account_id": "acct-1",
+                    "descriptors": ["plainspoken"],
+                    "preferred_pov": "second_person",
+                },
+                "source_material": [{
+                    "review_id": "review-1",
+                    "source_type": "review",
+                    "vendor": "HubSpot",
+                    "review_text": "Pricing became hard to justify after renewal.",
+                }],
+            },
+        },
+        services=services,
+        scope=TenantScope(account_id="acct-1", user_id="user-1"),
+    )
+
+    step = result["steps"][0]
+    assert step["output"] == "social_post"
+    assert step["status"] == "completed"
+    assert step["result"]["posts"][0]["text"] == (
+        "You can use this renewal proof without guessing."
+    )
+    assert step["result"]["posts"][0]["_brand_voice_profile"]["id"] == "voice-1"
+    assert llm.calls[0]["metadata"]["asset_type"] == "social_post"
+    assert "## Brand voice" in llm.calls[0]["messages"][0].content
+    persisted_metadata = pool.fetchval_calls[0]["args"][10]
+    assert "brand_voice_profile" in persisted_metadata
 
 
 @pytest.mark.asyncio

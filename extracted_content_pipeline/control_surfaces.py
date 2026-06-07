@@ -8,7 +8,7 @@ runs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -17,6 +17,11 @@ from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     landing_page_quality_repair_attempts_from_inputs,
 )
+from .output_variations import normalize_variant_count
+from .social_post_generation import normalize_social_post_channels
+
+SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD = 0.08
+SOCIAL_POST_BRAND_VOICE_PARSE_RETRY_ATTEMPTS = 1
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,7 @@ class ContentOpsRequest:
     reasoning_preset: str | None = None
     outputs: tuple[str, ...] = ()
     limit: int = 1
+    variant_count: int = 1
     max_cost_usd: float | None = None
     account_usage_budget_usd: float | None = None
     account_usage_budget_days: int = 7
@@ -96,6 +102,7 @@ class ControlSurfacePreview:
                 "reasoning_preset": self.normalized_request.reasoning_preset,
                 "outputs": list(self.normalized_request.outputs),
                 "limit": self.normalized_request.limit,
+                "variant_count": self.normalized_request.variant_count,
                 "max_cost_usd": self.normalized_request.max_cost_usd,
                 "account_usage_budget_usd": (
                     self.normalized_request.account_usage_budget_usd
@@ -342,6 +349,7 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
     limit = int(payload.get("limit") if payload.get("limit") is not None else 1)
     if limit < 1:
         raise ValueError(f"limit must be at least 1; got {limit}")
+    variant_count = normalize_variant_count(payload.get("variant_count"))
 
     max_cost_usd = (
         float(payload["max_cost_usd"])
@@ -388,6 +396,7 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         else None,
         outputs=normalize_outputs(payload.get("outputs")),
         limit=limit,
+        variant_count=variant_count,
         max_cost_usd=max_cost_usd,
         account_usage_budget_usd=account_usage_budget_usd,
         account_usage_budget_days=account_usage_budget_days,
@@ -460,12 +469,66 @@ def retry_adjusted_unit_cost_usd(
     return definition.estimated_unit_cost_usd * parse_attempts * (repair_attempts + 1)
 
 
+def _brand_voice_requested(
+    inputs: Mapping[str, Any],
+    *,
+    brand_voice_profile_id: str | None,
+) -> bool:
+    if str(brand_voice_profile_id or "").strip():
+        return True
+    value = inputs.get("brand_voice")
+    if value is None:
+        return False
+    if isinstance(value, Mapping):
+        return bool(value)
+    return True
+
+
+def _cost_definition_for_output(
+    output_id: str,
+    definition: OutputDefinition,
+    *,
+    inputs: Mapping[str, Any],
+    brand_voice_profile_id: str | None,
+) -> OutputDefinition:
+    """Return the dynamic preview-cost definition for one output."""
+
+    if output_id == "social_post" and _brand_voice_requested(
+        inputs,
+        brand_voice_profile_id=brand_voice_profile_id,
+    ):
+        return replace(
+            definition,
+            estimated_unit_cost_usd=SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD,
+            default_parse_retry_attempts=SOCIAL_POST_BRAND_VOICE_PARSE_RETRY_ATTEMPTS,
+        )
+    return definition
+
+
+def _item_multiplier_for_output(
+    output_id: str,
+    *,
+    inputs: Mapping[str, Any],
+    variant_count: int = 1,
+) -> int:
+    if output_id in {"blog_post", "landing_page"}:
+        return normalize_variant_count(variant_count)
+    if output_id != "social_post":
+        return 1
+    channels = inputs.get("social_channels")
+    if channels is None:
+        channels = inputs.get("social_post_channels")
+    return max(1, len(normalize_social_post_channels(channels)))
+
+
 def estimate_cost_usd(
     outputs: Sequence[str],
     *,
     limit: int,
     inputs: Mapping[str, Any] | None = None,
+    variant_count: int = 1,
     require_quality_gates: bool = True,
+    brand_voice_profile_id: str | None = None,
 ) -> float:
     """Estimate cost from selected outputs and opportunity limit.
 
@@ -481,18 +544,29 @@ def estimate_cost_usd(
         definition = OUTPUT_CATALOG.get(output_id)
         if not definition:
             continue
-        repair_attempts = _quality_repair_attempts_for_output(
+        cost_definition = _cost_definition_for_output(
             output_id,
             definition,
+            inputs=provided_inputs,
+            brand_voice_profile_id=brand_voice_profile_id,
+        )
+        repair_attempts = _quality_repair_attempts_for_output(
+            output_id,
+            cost_definition,
             inputs=provided_inputs,
             require_quality_gates=require_quality_gates,
         )
         total += (
             retry_adjusted_unit_cost_usd(
-                definition,
+                cost_definition,
                 quality_repair_attempts=repair_attempts,
             )
             * max(1, limit)
+            * _item_multiplier_for_output(
+                output_id,
+                inputs=provided_inputs,
+                variant_count=variant_count,
+            )
         )
     return total
 
@@ -571,13 +645,26 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
             blocked.append(output_id)
             warnings.append(f"Output not implemented yet: {output_id}")
 
+    if "social_post" in outputs and "social_post" not in blocked:
+        try:
+            _item_multiplier_for_output(
+                "social_post",
+                inputs=request.inputs,
+                variant_count=request.variant_count,
+            )
+        except ValueError as exc:
+            blocked.append("social_post")
+            warnings.append(f"Unsupported social channel: {exc}")
+
     selected_outputs = tuple(output for output in outputs if output not in blocked)
     missing = missing_required_inputs(selected_outputs, request.inputs)
     estimated_cost = estimate_cost_usd(
         selected_outputs,
         limit=request.limit,
         inputs=request.inputs,
+        variant_count=request.variant_count,
         require_quality_gates=request.require_quality_gates,
+        brand_voice_profile_id=request.brand_voice_profile_id,
     )
 
     if request.max_cost_usd is not None and estimated_cost > request.max_cost_usd:
@@ -608,6 +695,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         reasoning_preset=request.reasoning_preset,
         outputs=selected_outputs,
         limit=request.limit,
+        variant_count=request.variant_count,
         max_cost_usd=request.max_cost_usd,
         account_usage_budget_usd=request.account_usage_budget_usd,
         account_usage_budget_days=request.account_usage_budget_days,

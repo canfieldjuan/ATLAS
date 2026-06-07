@@ -58,6 +58,10 @@ const newRunSource = readFileSync(
   new URL('../src/pages/ContentOpsNewRun.tsx', import.meta.url),
   'utf8',
 )
+const managerSource = readFileSync(
+  new URL('../src/components/contentOps/BrandVoiceProfileManager.tsx', import.meta.url),
+  'utf8',
+)
 
 function installBrowserStubs() {
   Object.defineProperty(globalThis, 'localStorage', {
@@ -352,29 +356,35 @@ test('brand voice preset patch fills only empty guidance fields', () => {
   assert.equal(brandVoicePresetEditorPatch('missing'), null)
 })
 
-test('new run page renders brand voice profile selector wiring', () => {
-  assert.ok(newRunSource.includes('function BrandVoiceProfileSelector'))
-  assert.ok(newRunSource.includes('BRAND_VOICE_PROFILE_PRESETS'))
-  assert.ok(newRunSource.includes('brandVoicePresetEditorPatch'))
+test('brand voice manager owns shared profile editor wiring', () => {
+  assert.ok(managerSource.includes('export function BrandVoiceProfileManager'))
+  assert.ok(managerSource.includes('BRAND_VOICE_PROFILE_PRESETS'))
+  assert.ok(managerSource.includes('brandVoicePresetEditorPatch'))
+  assert.ok(managerSource.includes('fetchContentOpsBrandVoiceSampleUrl'))
+  assert.ok(managerSource.includes('createContentOpsBrandVoiceProfile'))
+  assert.ok(managerSource.includes('updateContentOpsBrandVoiceProfile'))
+  assert.ok(managerSource.includes('deleteContentOpsBrandVoiceProfile'))
+  assert.ok(managerSource.includes('Saved profile'))
+  assert.ok(managerSource.includes('No saved brand voice'))
+  assert.ok(managerSource.includes('New brand voice'))
+  assert.ok(managerSource.includes('Edit brand voice'))
+  assert.ok(managerSource.includes('Archive'))
+  assert.ok(managerSource.includes('Apply preset'))
+  assert.ok(managerSource.includes('Sample import'))
+  assert.ok(managerSource.includes('type="file"'))
+  assert.ok(managerSource.includes('Fetch URL'))
+  assert.ok(managerSource.includes('brandVoiceSampleFallbackName'))
+  assert.ok(managerSource.includes('sampleFetchTokenRef'))
+  assert.ok(managerSource.includes('invalidateSampleFetch'))
+  assert.ok(managerSource.includes('deriveBrandVoiceProfileEditorPatch'))
+  assert.ok(managerSource.includes('disabled={loading || mutating}'))
+  assert.ok(managerSource.includes('selectedProfileIdRef.current === archiveProfileId'))
+})
+
+test('new run page consumes shared brand voice manager for run selection', () => {
+  assert.ok(newRunSource.includes('BrandVoiceProfileManager'))
   assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceProfiles'))
-  assert.ok(newRunSource.includes('fetchContentOpsBrandVoiceSampleUrl'))
-  assert.ok(newRunSource.includes('createContentOpsBrandVoiceProfile'))
-  assert.ok(newRunSource.includes('updateContentOpsBrandVoiceProfile'))
-  assert.ok(newRunSource.includes('deleteContentOpsBrandVoiceProfile'))
   assert.ok(newRunSource.includes('brandVoiceProfileId'))
-  assert.ok(newRunSource.includes('Saved profile'))
-  assert.ok(newRunSource.includes('No saved brand voice'))
-  assert.ok(newRunSource.includes('New brand voice'))
-  assert.ok(newRunSource.includes('Edit brand voice'))
-  assert.ok(newRunSource.includes('Archive'))
-  assert.ok(newRunSource.includes('Apply preset'))
-  assert.ok(newRunSource.includes('Sample import'))
-  assert.ok(newRunSource.includes('type="file"'))
-  assert.ok(newRunSource.includes('Fetch URL'))
-  assert.ok(newRunSource.includes('brandVoiceSampleFallbackName'))
-  assert.ok(newRunSource.includes('sampleFetchTokenRef'))
-  assert.ok(newRunSource.includes('invalidateSampleFetch'))
-  assert.ok(newRunSource.includes('deriveBrandVoiceProfileEditorPatch'))
-  assert.ok(newRunSource.includes('disabled={loading || mutating}'))
-  assert.ok(newRunSource.includes('selectedProfileIdRef.current === archiveProfileId'))
+  assert.equal(newRunSource.includes('function BrandVoiceProfileSelector'), false)
+  assert.equal(newRunSource.includes('function BrandVoiceProfileManager'), false)
 })

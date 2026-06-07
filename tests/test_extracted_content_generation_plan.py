@@ -1,6 +1,7 @@
 import pytest
 
 from extracted_content_pipeline.generation_plan import build_generation_plan_from_mapping
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 from extracted_content_pipeline.reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
     packaged_reasoning_runtime_presets_for_output,
@@ -71,7 +72,7 @@ def test_plan_maps_report_to_report_generation_service():
     }
 
 
-def test_plan_threads_brand_voice_profile_id_to_llm_copy_outputs_only():
+def test_plan_threads_brand_voice_profile_id_to_supported_copy_outputs():
     plan = build_generation_plan_from_mapping(
         {
             "outputs": [
@@ -97,7 +98,7 @@ def test_plan_threads_brand_voice_profile_id_to_llm_copy_outputs_only():
     assert configs["blog_post"]["brand_voice_profile_id"] == "acme-main"
     assert configs["landing_page"]["brand_voice_profile_id"] == "acme-main"
     assert configs["sales_brief"]["brand_voice_profile_id"] == "acme-main"
-    assert "brand_voice_profile_id" not in configs["social_post"]
+    assert configs["social_post"]["brand_voice_profile_id"] == "acme-main"
 
 
 def test_plan_threads_structured_reasoning_preset_to_report_and_sales_brief():
@@ -332,6 +333,45 @@ def test_plan_maps_blog_to_blog_generation_service():
     }
 
 
+def test_plan_includes_blog_variant_angle_metadata_when_requested():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "variant_count": 2,
+            "inputs": {
+                "topic": "Churn pressure",
+            },
+        }
+    )
+
+    config = plan["steps"][0]["config"]
+    assert config["variant_count"] == 2
+    assert config["variant_angles"] == [
+        VARIANT_ANGLES[0].as_dict(),
+        VARIANT_ANGLES[1].as_dict(),
+    ]
+
+
+def test_plan_includes_landing_page_variant_angle_metadata_when_requested():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "variant_count": 2,
+            "inputs": {
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        }
+    )
+
+    config = plan["steps"][0]["config"]
+    assert config["variant_count"] == 2
+    assert config["variant_angles"] == [
+        VARIANT_ANGLES[0].as_dict(),
+        VARIANT_ANGLES[1].as_dict(),
+    ]
+
+
 def test_plan_stays_non_executable_when_preview_fails_budget():
     plan = build_generation_plan_from_mapping(
         {
@@ -523,9 +563,38 @@ def test_plan_maps_social_post_to_social_post_service():
     assert plan["steps"][0]["runner"] == "SocialPostGenerationService.generate"
     assert plan["steps"][0]["status"] == "runnable"
     assert plan["steps"][0]["config"] == {
+        "skill_name": "digest/social_post_generation",
+        "channels": ["linkedin"],
         "limit": 3,
         "max_text_chars": 300,
+        "max_tokens": 700,
+        "temperature": 0.4,
+        "parse_retry_attempts": 1,
+        "parse_retry_response_excerpt_chars": 800,
     }
+
+
+def test_plan_threads_social_post_channels_to_social_post_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "inputs": {
+                "social_channels": ["linkedin", "twitter"],
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing pressure came up at renewal.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "SocialPostGenerationService.generate"
+    assert plan["steps"][0]["config"]["channels"] == ["linkedin", "x"]
 
 
 def test_plan_maps_ad_copy_to_ad_copy_service():

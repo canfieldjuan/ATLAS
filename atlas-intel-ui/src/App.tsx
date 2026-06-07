@@ -34,6 +34,9 @@ const B2BReviews = lazy(() => import('./pages/b2b/B2BReviews'))
 const B2BCampaigns = lazy(() => import('./pages/b2b/B2BCampaigns'))
 const ContentOpsNewRun = lazy(() => import('./pages/ContentOpsNewRun'))
 const ContentOpsAssetsReview = lazy(() => import('./pages/ContentOpsAssetsReview'))
+const ContentOpsBrandVoiceSettings = lazy(
+  () => import('./pages/ContentOpsBrandVoiceSettings'),
+)
 
 function renderLazyRoute(Component: ComponentType) {
   return (
@@ -90,6 +93,7 @@ export default function App() {
 
                     {/* Content Ops routes */}
                     <Route path="/content-ops/new" element={renderLazyRoute(ContentOpsNewRun)} />
+                    <Route path="/content-ops/brand-voice" element={renderLazyRoute(ContentOpsBrandVoiceSettings)} />
                     <Route path="/content-ops/assets" element={renderLazyRoute(ContentOpsAssetsReview)} />
                   </Routes>
                 </Layout>

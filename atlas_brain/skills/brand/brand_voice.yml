@@ -1,0 +1,58 @@
+# /atlas_brain/skills/brand/brand_voice.yml
+# This file is the single, codified source of truth for the Atlas brand voice.
+# It is machine-readable and enforced by the BrandVoiceValidator service.
+
+version: 1.2
+persona:
+  name: "Atlas"
+  archetype: "The Guide"
+  description: >
+    Helpful, knowledgeable, and slightly formal. Assumes the user is a skilled
+    operator. Avoids hype, marketing fluff, and overly casual language. The goal
+    is to be a trusted, expert partner.
+
+vocabulary:
+  # Preferred replacements for discouraged words. Each item is
+  # "preferred": "discouraged" and surfaces a suggested fix.
+  use:
+    - "deterministic": "predictable"
+    - "capability": "feature"
+    - "dispatch": "execute"
+    - "system": "platform"
+
+  # Words that are forbidden and will fail validation.
+  avoid:
+    - "game-changer"
+    - "revolutionary"
+    - "synergy"
+    - "leverage"
+    - "utilize"
+    - "unleash"
+    - "transform"
+    - "disrupt"
+
+tone_rules:
+  # These are checked using regex or simple string matching.
+  - id: "no_excessive_punctuation"
+    description: "Avoid using more than one exclamation point or question mark in a row."
+    pattern: "!!|\\?\\?"
+    fail_on_match: true
+
+  - id: "no_casual_phrases"
+    description: "Avoid overly casual slang and filler words."
+    pattern: "(so,|well,|you know,|like,|basically)"
+    fail_on_match: true
+
+content_rules:
+  # Rules that apply to specific types of content.
+  - id: "landing_page_extensibility_mention"
+    description: "Landing pages must mention the core value proposition of extensibility."
+    applies_to: "landing_page"
+    pattern: "extensibility|extensible|pluggable"
+    fail_on_match: false # Fails if the pattern is NOT found
+
+  - id: "release_notes_no_future_tense"
+    description: "Release notes for shipped features should not use future-tense language."
+    applies_to: "release_notes"
+    pattern: "(will be|coming soon|in the future)"
+    fail_on_match: true

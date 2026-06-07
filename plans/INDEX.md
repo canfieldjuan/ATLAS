@@ -1,6 +1,6 @@
 # Plan archive index
 
-889 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+898 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -172,12 +172,14 @@
 - [PR-Content-Ops-Blog-Reasoning-Fixture-Doc](archive/PR-Content-Ops-Blog-Reasoning-Fixture-Doc.md)
 - [PR-Content-Ops-Blog-Reasoning-Key-Parity](archive/PR-Content-Ops-Blog-Reasoning-Key-Parity.md)
 - [PR-Content-Ops-Blog-SEO-Closeout](archive/PR-Content-Ops-Blog-SEO-Closeout.md)
+- [PR-Content-Ops-Brand-Voice-Editor-Extraction](archive/PR-Content-Ops-Brand-Voice-Editor-Extraction.md) - lane: content-ops/brand-voice/editor-extraction | phase: Product polish
 - [PR-Content-Ops-Brand-Voice-Onboarding](archive/PR-Content-Ops-Brand-Voice-Onboarding.md) - lane: content-ops/brand-voice/onboarding | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Presets](archive/PR-Content-Ops-Brand-Voice-Presets.md) - lane: content-ops/brand-voice/presets | phase: Product polish
 - [PR-Content-Ops-Brand-Voice-Profile-Editor](archive/PR-Content-Ops-Brand-Voice-Profile-Editor.md) - lane: content-ops/brand-voice-profile-editor | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Profile-Storage](archive/PR-Content-Ops-Brand-Voice-Profile-Storage.md) - lane: content-ops/brand-voice-profile-storage | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Profile](archive/PR-Content-Ops-Brand-Voice-Profile.md) - lane: content-ops/brand-voice-profile | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Scrape-Onboarding](archive/PR-Content-Ops-Brand-Voice-Scrape-Onboarding.md) - lane: content-ops/brand-voice/scrape-onboarding | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Settings-Page](archive/PR-Content-Ops-Brand-Voice-Settings-Page.md) - lane: content-ops/brand-voice/settings-page | phase: Product polish
 - [PR-Content-Ops-CFPB-FAQ-Live-Smoke](archive/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md)
 - [PR-Content-Ops-CFPB-Live-Fetch-Compat](archive/PR-Content-Ops-CFPB-Live-Fetch-Compat.md)
 - [PR-Content-Ops-CFPB-Live-Provider-Smoke](archive/PR-Content-Ops-CFPB-Live-Provider-Smoke.md)
@@ -464,6 +466,9 @@
 - [PR-Content-Ops-Marketer-Stat-Card-Output](archive/PR-Content-Ops-Marketer-Stat-Card-Output.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Marketing-Claim-Audit](archive/PR-Content-Ops-Marketing-Claim-Audit.md) - lane: content-ops/product-positioning | phase: Workflow/process.
 - [PR-Content-Ops-Migration-Dry-Run-Skip-Summary](archive/PR-Content-Ops-Migration-Dry-Run-Skip-Summary.md) - lane: content-ops/faq-generator-io-tests
+- [PR-Content-Ops-Output-Variations-Blog-Only](archive/PR-Content-Ops-Output-Variations-Blog-Only.md) - lane: content-ops/output-variations/blog-only | phase: Vertical slice
+- [PR-Content-Ops-Output-Variations-Landing-Page](archive/PR-Content-Ops-Output-Variations-Landing-Page.md) - lane: content-ops/output-variations/landing-page | phase: Vertical slice
+- [PR-Content-Ops-Output-Variations-Shared-Fanout](archive/PR-Content-Ops-Output-Variations-Shared-Fanout.md) - lane: content-ops/output-variations/shared-fanout | phase: Production hardening
 - [PR-Content-Ops-Persisted-Source-Execute](archive/PR-Content-Ops-Persisted-Source-Execute.md) - lane: content-ops/upload-source-run-handoff | phase: Vertical slice
 - [PR-Content-Ops-Pipeline-LLM-Routing](archive/PR-Content-Ops-Pipeline-LLM-Routing.md) - lane: content-ops/pipeline-llm-routing
 - [PR-Content-Ops-Placeholder-Url-Gate](archive/PR-Content-Ops-Placeholder-Url-Gate.md)
@@ -528,7 +533,11 @@
 - [PR-Content-Ops-Screen-2-Plan-Preview](archive/PR-Content-Ops-Screen-2-Plan-Preview.md)
 - [PR-Content-Ops-Server-File-Ingestion](archive/PR-Content-Ops-Server-File-Ingestion.md) - lane: content-ops/server-file-ingestion
 - [PR-Content-Ops-Signal-Extraction-Result-Summary](archive/PR-Content-Ops-Signal-Extraction-Result-Summary.md)
+- [PR-Content-Ops-Social-Post-Channel-Review-Fixes](archive/PR-Content-Ops-Social-Post-Channel-Review-Fixes.md) - lane: content-ops/brand-voice/social-post-channel-variants | phase: Robust testing
+- [PR-Content-Ops-Social-Post-Channel-Selector-UI](archive/PR-Content-Ops-Social-Post-Channel-Selector-UI.md) - lane: content-ops/brand-voice/social-post-channel-selector-ui | phase: Vertical slice
+- [PR-Content-Ops-Social-Post-Channel-Variants](archive/PR-Content-Ops-Social-Post-Channel-Variants.md) - lane: content-ops/brand-voice/social-post-channel-variants | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-Generated-Assets](archive/PR-Content-Ops-Social-Post-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Social-Post-LLM-Voice](archive/PR-Content-Ops-Social-Post-LLM-Voice.md) - lane: content-ops/brand-voice/social-post-llm | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-Package-Handoff](archive/PR-Content-Ops-Social-Post-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-Review-Assets](archive/PR-Content-Ops-Social-Post-Review-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Source-Adapter-Audit](archive/PR-Content-Ops-Source-Adapter-Audit.md)

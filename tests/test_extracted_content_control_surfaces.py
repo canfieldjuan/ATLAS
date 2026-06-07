@@ -7,6 +7,7 @@ from extracted_content_pipeline.control_surfaces import (
     preview_from_mapping,
     request_from_mapping,
 )
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 
 
 def test_normalize_outputs_accepts_csv_and_dedupes():
@@ -63,6 +64,56 @@ def test_request_normalizes_content_ops_cache_policy():
 
     assert request.content_ops_cache_policy == "exact"
     assert preview["normalized_request"]["content_ops_cache_policy"] == "exact"
+
+
+def test_request_caps_variant_count_to_angle_catalogue():
+    request = request_from_mapping({"variant_count": len(VARIANT_ANGLES) + 10})
+
+    assert request.variant_count == len(VARIANT_ANGLES)
+
+
+def test_request_rejects_zero_variant_count():
+    with pytest.raises(ValueError, match="variant_count must be at least 1; got 0"):
+        request_from_mapping({"variant_count": 0})
+
+
+def test_preview_scales_blog_cost_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["blog_post"],
+        "variant_count": 3,
+        "inputs": {"topic": "Renewal pressure"},
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 2.7
+    assert preview["normalized_request"]["variant_count"] == 3
+
+
+def test_preview_scales_landing_page_cost_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["landing_page"],
+        "variant_count": 2,
+        "inputs": {
+            "offer": "Churn audit",
+            "audience": "B2B SaaS founders",
+        },
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 5.2
+    assert preview["normalized_request"]["variant_count"] == 2
+
+
+def test_preview_does_not_scale_sales_brief_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["sales_brief"],
+        "variant_count": 3,
+        "inputs": {"target_account": "Acme"},
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.7
+    assert preview["normalized_request"]["variant_count"] == 3
 
 
 def test_request_rejects_unsupported_content_ops_cache_policy():
@@ -178,6 +229,96 @@ def test_preview_allows_social_post_when_source_material_present():
     assert preview["missing_inputs"] == []
     assert preview["blocked_outputs"] == []
     assert preview["estimated_cost_usd"] == 0.0
+
+
+def test_preview_charges_brand_voice_social_post_rewrite():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "max_cost_usd": 0.01,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "brand_voice": {"id": "voice-1", "descriptors": ["direct"]},
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["estimated_cost_usd"] == 0.32
+    assert "Estimated cost exceeds max_cost_usd: 0.32 > 0.01" in preview["warnings"]
+
+
+def test_preview_scales_brand_voice_social_post_rewrite_by_channels():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "max_cost_usd": 0.7,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["linkedin", "twitter"],
+                "brand_voice": {"id": "voice-1", "descriptors": ["direct"]},
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.64
+
+
+def test_preview_keeps_deterministic_multi_channel_social_post_at_zero_cost():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["linkedin", "twitter", "facebook"],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.0
+
+
+def test_preview_blocks_unsupported_social_post_channel_without_raising():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["discord"],
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["outputs"] == []
+    assert preview["blocked_outputs"] == ["social_post"]
+    assert preview["estimated_cost_usd"] == 0.0
+    assert any(
+        "Unsupported social channel: unsupported social_post channel: discord"
+        in warning
+        for warning in preview["warnings"]
+    )
+
+
+def test_preview_charges_stored_brand_voice_social_post_rewrite():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 1,
+            "brand_voice_profile_id": "voice-1",
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.16
 
 
 def test_preview_allows_ad_copy_when_source_material_present():
