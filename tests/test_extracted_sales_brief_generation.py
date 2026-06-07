@@ -274,7 +274,9 @@ async def test_generate_persists_one_brief_per_opportunity_via_save_drafts() -> 
     assert llm.calls[0]["metadata"]["asset_type"] == "sales_brief"
     assert llm.calls[0]["metadata"]["target_mode"] == "vendor"
     assert "variant_angle" not in llm.calls[0]["metadata"]
-    assert "Variant angle:" not in llm.calls[0]["messages"][1].content
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Requested brief type:" not in user_prompt
+    assert "Variant angle:" not in user_prompt
     saved_drafts = sales_briefs.saved[0]["drafts"]
     assert len(saved_drafts) == 1
     draft = saved_drafts[0]
@@ -311,6 +313,30 @@ async def test_generate_threads_variant_angle_into_prompt_metadata_and_draft() -
     assert llm.calls[0]["metadata"]["variant_angle"].startswith("Outcome-led")
     draft = sales_briefs.saved[0]["drafts"][0]
     assert draft.metadata["variant_angle"].startswith("Outcome-led")
+
+
+@pytest.mark.asyncio
+async def test_generate_threads_requested_brief_type_with_variant_angle() -> None:
+    service, _intelligence, sales_briefs, llm, _skills, _rp = _service()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        default_brief_type="displacement",
+        variant_angle="Pain-led: open with competitive friction.",
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Requested brief type:" in user_prompt
+    assert "- displacement:" in user_prompt
+    assert "competitive displacement motion" in user_prompt
+    assert "do not invent contract dates" in user_prompt
+    assert "competitor names" in user_prompt
+    assert "Variant angle:" in user_prompt
+    assert "Pain-led: open with competitive friction." in user_prompt
+    saved_drafts = sales_briefs.saved[0]["drafts"]
+    assert saved_drafts[0].brief_type == "displacement"
 
 
 @pytest.mark.asyncio
@@ -694,6 +720,13 @@ async def test_generate_per_call_default_brief_type_wins_over_model_type():
         default_brief_type="renewal",
     )
 
+    user_prompt = _llm.calls[0]["messages"][1].content
+    assert "Requested brief type:" in user_prompt
+    assert "- renewal:" in user_prompt
+    assert "renewal-stage retention" in user_prompt
+    assert "contract timing" in user_prompt
+    assert "renewal windows" in user_prompt
+    assert "timelines that are not in the data" in user_prompt
     saved_drafts = sales_briefs.saved[0]["drafts"]
     assert saved_drafts[0].brief_type == "renewal"
 
