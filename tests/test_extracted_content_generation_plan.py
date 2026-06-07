@@ -372,6 +372,26 @@ def test_plan_includes_landing_page_variant_angle_metadata_when_requested():
     ]
 
 
+def test_plan_includes_sales_brief_variant_angle_metadata_when_requested():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "variant_count": 2,
+            "inputs": {
+                "target_account": "Acme",
+                "brief_type": "renewal",
+            },
+        }
+    )
+
+    config = plan["steps"][0]["config"]
+    assert config["variant_count"] == 2
+    assert config["variant_angles"] == [
+        VARIANT_ANGLES[0].as_dict(),
+        VARIANT_ANGLES[1].as_dict(),
+    ]
+
+
 def test_plan_stays_non_executable_when_preview_fails_budget():
     plan = build_generation_plan_from_mapping(
         {

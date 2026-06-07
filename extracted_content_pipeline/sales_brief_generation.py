@@ -200,8 +200,22 @@ def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
     return isinstance(payload.get("campaign_reasoning_context"), Mapping)
 
 
-def _sales_brief_user_prompt(prior_invalid_response: str = "") -> str:
+def _sales_brief_user_prompt(
+    prior_invalid_response: str = "",
+    *,
+    variant_angle: str | None = None,
+) -> str:
     prompt = "Generate one sales brief from the opportunity above."
+    resolved_variant_angle = str(variant_angle or "").strip()
+    if resolved_variant_angle:
+        prompt = (
+            f"{prompt}\n\n"
+            "Variant angle:\n"
+            f"- {resolved_variant_angle}\n"
+            "Use this angle to change framing and emphasis only. Keep the same "
+            "opportunity facts, supplied evidence, buying context, and "
+            "truthfulness limits."
+        )
     return retry_prompt_with_invalid_response(
         prompt,
         prior_invalid_response=prior_invalid_response,
@@ -261,6 +275,7 @@ class SalesBriefGenerationService:
         quality_gates_enabled: bool | None = None,
         source_material: Any = None,
         brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
+        variant_angle: str | None = None,
     ) -> SalesBriefGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -295,6 +310,7 @@ class SalesBriefGenerationService:
             brand_voice,
             scope=scope,
         )
+        resolved_variant_angle = str(variant_angle or "").strip() or None
 
         requested = int(limit or self._config.limit)
         source_opportunities = _opportunities_from_source_material(
@@ -348,6 +364,7 @@ class SalesBriefGenerationService:
                     parse_retry_attempts=resolved_parse_retry_attempts,
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     brand_voice=resolved_brand_voice,
+                    variant_angle=resolved_variant_angle,
                 )
             except Exception as exc:
                 skipped += 1
@@ -452,6 +469,7 @@ class SalesBriefGenerationService:
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
         brand_voice: BrandVoiceProfile | None = None,
+        variant_angle: str | None = None,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
         # Single source for the opportunity payload: in the system prompt
@@ -466,34 +484,44 @@ class SalesBriefGenerationService:
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}
+        resolved_variant_angle = str(variant_angle or "").strip()
         for attempt_no in range(1, attempts + 1):
+            metadata: dict[str, Any] = {
+                "target_mode": target_mode,
+                "target_id": opportunity_target_id(opportunity),
+                "skill_name": self._config.skill_name,
+                "asset_type": "sales_brief",
+                "attempt_no": attempt_no,
+            }
+            if resolved_variant_angle:
+                metadata["variant_angle"] = resolved_variant_angle
             response = await self._llm.complete(
                 [
                     LLMMessage(role="system", content=system_prompt),
                     LLMMessage(
                         role="user",
-                        content=_sales_brief_user_prompt(last_response),
+                        content=_sales_brief_user_prompt(
+                            last_response,
+                            variant_angle=resolved_variant_angle,
+                        ),
                     ),
                 ],
                 max_tokens=max_tokens,
                 temperature=temperature,
-                metadata={
-                    "target_mode": target_mode,
-                    "target_id": opportunity_target_id(opportunity),
-                    "skill_name": self._config.skill_name,
-                    "asset_type": "sales_brief",
-                    "attempt_no": attempt_no,
-                },
+                metadata=metadata,
             )
             total_usage = accumulate_usage(total_usage, response.usage)
             parsed = parse_sales_brief_response(response.content)
             if parsed:
-                return brand_voice_result_metadata({
+                result_payload = {
                     **parsed,
                     "_model": response.model,
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
-                }, brand_voice)
+                }
+                if resolved_variant_angle:
+                    result_payload["_variant_angle"] = resolved_variant_angle
+                return brand_voice_result_metadata(result_payload, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
                 limit=max(0, int(parse_retry_response_excerpt_chars or 0)),
@@ -573,6 +601,9 @@ class SalesBriefGenerationService:
             "brand_voice_profile": parsed.get("_brand_voice_profile"),
             "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
+        variant_angle = str(parsed.get("_variant_angle") or "").strip()
+        if variant_angle:
+            metadata["variant_angle"] = variant_angle
         if opportunity is not None:
             context = normalize_campaign_reasoning_context(opportunity)
             metadata.update(campaign_reasoning_context_metadata(context))

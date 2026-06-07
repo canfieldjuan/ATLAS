@@ -104,7 +104,7 @@ def test_preview_scales_landing_page_cost_by_variant_count():
     assert preview["normalized_request"]["variant_count"] == 2
 
 
-def test_preview_does_not_scale_sales_brief_by_variant_count():
+def test_preview_scales_sales_brief_cost_by_variant_count():
     preview = preview_from_mapping({
         "outputs": ["sales_brief"],
         "variant_count": 3,
@@ -112,7 +112,7 @@ def test_preview_does_not_scale_sales_brief_by_variant_count():
     })
 
     assert preview["can_run"] is True
-    assert preview["estimated_cost_usd"] == 0.7
+    assert preview["estimated_cost_usd"] == 2.1
     assert preview["normalized_request"]["variant_count"] == 3
 
 

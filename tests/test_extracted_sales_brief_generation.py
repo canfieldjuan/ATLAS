@@ -273,6 +273,8 @@ async def test_generate_persists_one_brief_per_opportunity_via_save_drafts() -> 
     assert len(llm.calls) == 1
     assert llm.calls[0]["metadata"]["asset_type"] == "sales_brief"
     assert llm.calls[0]["metadata"]["target_mode"] == "vendor"
+    assert "variant_angle" not in llm.calls[0]["metadata"]
+    assert "Variant angle:" not in llm.calls[0]["messages"][1].content
     saved_drafts = sales_briefs.saved[0]["drafts"]
     assert len(saved_drafts) == 1
     draft = saved_drafts[0]
@@ -285,6 +287,30 @@ async def test_generate_persists_one_brief_per_opportunity_via_save_drafts() -> 
     assert draft.sections[0].id == "account_context"
     assert draft.metadata["generation_model"] == "test-model"
     assert draft.metadata["confidence"] == 0.82
+    assert "variant_angle" not in draft.metadata
+
+
+@pytest.mark.asyncio
+async def test_generate_threads_variant_angle_into_prompt_metadata_and_draft() -> None:
+    service, _intelligence, sales_briefs, llm, _skills, _rp = _service()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        variant_angle=(
+            "Outcome-led: emphasize measurable business impact while preserving "
+            "the opportunity facts."
+        ),
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Variant angle:" in user_prompt
+    assert "Outcome-led: emphasize measurable business impact" in user_prompt
+    assert "Keep the same opportunity facts" in user_prompt
+    assert llm.calls[0]["metadata"]["variant_angle"].startswith("Outcome-led")
+    draft = sales_briefs.saved[0]["drafts"][0]
+    assert draft.metadata["variant_angle"].startswith("Outcome-led")
 
 
 @pytest.mark.asyncio
