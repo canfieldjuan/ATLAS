@@ -1,8 +1,10 @@
-import yaml
-import re
 import argparse
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
 
 
 SEVERITIES = frozenset({"BLOCKER", "MAJOR", "NIT"})
@@ -290,6 +292,98 @@ def _print_advisory_findings(
     _print_findings(findings)
 
 
+def _exit_code(
+    blocking_findings: list[BrandVoiceFinding],
+    advisory_findings: list[BrandVoiceFinding],
+    *,
+    strict: bool,
+) -> int:
+    if blocking_findings or (strict and advisory_findings):
+        return 1
+    return 0
+
+
+def _result_status(
+    blocking_findings: list[BrandVoiceFinding],
+    advisory_findings: list[BrandVoiceFinding],
+    *,
+    strict: bool,
+) -> str:
+    if blocking_findings or (strict and advisory_findings):
+        return "fail"
+    if advisory_findings:
+        return "warn"
+    return "pass"
+
+
+def _finding_payload(finding: BrandVoiceFinding) -> dict[str, str | None]:
+    return {
+        "rule_id": finding.rule_id,
+        "severity": finding.severity,
+        "category": finding.category,
+        "message": finding.message,
+        "suggestion": finding.suggestion,
+    }
+
+
+def _print_json_result(
+    *,
+    file_path: Path,
+    content_type: str,
+    strict: bool,
+    blocking_findings: list[BrandVoiceFinding],
+    advisory_findings: list[BrandVoiceFinding],
+    exit_code: int,
+) -> None:
+    payload = {
+        "ok": exit_code == 0,
+        "status": _result_status(
+            blocking_findings, advisory_findings, strict=strict
+        ),
+        "file": str(file_path),
+        "content_type": content_type,
+        "strict": strict,
+        "summary": {
+            "total": len(blocking_findings) + len(advisory_findings),
+            "blocking": len(blocking_findings),
+            "advisory": len(advisory_findings),
+        },
+        "findings": [
+            _finding_payload(finding)
+            for finding in [*blocking_findings, *advisory_findings]
+        ],
+    }
+    print(json.dumps(payload, sort_keys=True))
+
+
+def _print_json_error(
+    *,
+    file_path: Path,
+    content_type: str,
+    strict: bool,
+    code: str,
+    message: str,
+) -> None:
+    payload = {
+        "ok": False,
+        "status": "error",
+        "file": str(file_path),
+        "content_type": content_type,
+        "strict": strict,
+        "summary": {
+            "total": 0,
+            "blocking": 0,
+            "advisory": 0,
+        },
+        "findings": [],
+        "error": {
+            "code": code,
+            "message": message,
+        },
+    }
+    print(json.dumps(payload, sort_keys=True))
+
+
 def main():
     """
     Command-line interface for the BrandVoiceValidator.
@@ -321,24 +415,67 @@ def main():
         action="store_true",
         help="Fail on advisory NIT findings instead of warning only.",
     )
+    parser.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format for validation results.",
+    )
 
     args = parser.parse_args()
 
     if not args.file.exists():
-        print(f"Error: File not found at {args.file}")
+        message = f"File not found at {args.file}"
+        if args.format == "json":
+            _print_json_error(
+                file_path=args.file,
+                content_type=args.type,
+                strict=args.strict,
+                code="file_not_found",
+                message=message,
+            )
+        else:
+            print(f"Error: {message}")
         exit(1)
 
     with open(args.file, "r") as f:
         content_to_validate = f.read()
 
-    validator = BrandVoiceValidator(config_path=args.config)
-    findings = validator.validate(content_to_validate, args.type)
+    try:
+        validator = BrandVoiceValidator(config_path=args.config)
+        findings = validator.validate(content_to_validate, args.type)
+    except (ValueError, TypeError, yaml.YAMLError, FileNotFoundError) as exc:
+        if args.format == "json":
+            _print_json_error(
+                file_path=args.file,
+                content_type=args.type,
+                strict=args.strict,
+                code="invalid_config",
+                message=str(exc),
+            )
+        else:
+            print(f"Error: {exc}")
+        exit(1)
     blocking_findings = [
         finding for finding in findings if finding.severity in BLOCKING_SEVERITIES
     ]
     advisory_findings = [
         finding for finding in findings if finding.severity not in BLOCKING_SEVERITIES
     ]
+    exit_code = _exit_code(
+        blocking_findings, advisory_findings, strict=args.strict
+    )
+
+    if args.format == "json":
+        _print_json_result(
+            file_path=args.file,
+            content_type=args.type,
+            strict=args.strict,
+            blocking_findings=blocking_findings,
+            advisory_findings=advisory_findings,
+            exit_code=exit_code,
+        )
+        exit(exit_code)
 
     if blocking_findings:
         print(
@@ -350,13 +487,13 @@ def main():
             _print_advisory_findings(
                 advisory_findings, args.file, strict=args.strict
             )
-        exit(1)
+        exit(exit_code)
     elif advisory_findings:
         _print_advisory_findings(advisory_findings, args.file, strict=args.strict)
-        exit(1 if args.strict else 0)
+        exit(exit_code)
     else:
         print(f"PASS: {args.file} is on-brand.")
-        exit(0)
+        exit(exit_code)
 
 
 if __name__ == "__main__":
