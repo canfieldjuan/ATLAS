@@ -159,6 +159,12 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   assert.match(html, /Customer wording/);
   assert.match(html, /aria-label="Customer wording examples"/);
   assert.match(html, /No keyword volume, ranking, or traffic promise is implied/);
+  assert.match(resultPageSource, /<h2>Help-desk SEO targeting list<\/h2>/);
+  assert.doesNotMatch(resultPageSource, /<h3>Help-desk SEO targeting list<\/h3>/);
+  assert.ok(
+    html.indexOf("<h2>Help-desk SEO targeting list</h2>") < html.indexOf("<h3>Question 1</h3>"),
+    "server-rendered SEO list heading should sit above repeated question headings",
+  );
   const list = html.match(
     /<ul class="customer-wording-list" aria-label="Customer wording examples">([\s\S]*?)<\/ul>/,
   );

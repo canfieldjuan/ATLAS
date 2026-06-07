@@ -84,7 +84,7 @@ function renderSnapshot(report) {
             <div><span>Evidence-backed answers</span><strong>${escapeHtml(formatNumber(summary.drafted_answer_count))}</strong></div>
             <div><span>Needs support proof</span><strong>${escapeHtml(formatNumber(summary.no_proven_answer_count))}</strong></div>
           </div>
-          <h3>Help-desk SEO targeting list</h3>
+          <h2>Help-desk SEO targeting list</h2>
           <p class="muted">Use actual customer phrases from the uploaded tickets for help-center titles, internal-search synonyms, and FAQ wording. No keyword volume, ranking, or traffic promise is implied.</p>
           ${renderCustomerWordingCard(questions)}
           <div class="questions">
