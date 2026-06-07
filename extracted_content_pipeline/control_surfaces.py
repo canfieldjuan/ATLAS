@@ -17,6 +17,7 @@ from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     landing_page_quality_repair_attempts_from_inputs,
 )
+from .social_post_generation import normalize_social_post_channels
 
 SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD = 0.08
 SOCIAL_POST_BRAND_VOICE_PARSE_RETRY_ATTEMPTS = 1
@@ -499,6 +500,19 @@ def _cost_definition_for_output(
     return definition
 
 
+def _item_multiplier_for_output(
+    output_id: str,
+    *,
+    inputs: Mapping[str, Any],
+) -> int:
+    if output_id != "social_post":
+        return 1
+    channels = inputs.get("social_channels")
+    if channels is None:
+        channels = inputs.get("social_post_channels")
+    return max(1, len(normalize_social_post_channels(channels)))
+
+
 def estimate_cost_usd(
     outputs: Sequence[str],
     *,
@@ -539,6 +553,7 @@ def estimate_cost_usd(
                 quality_repair_attempts=repair_attempts,
             )
             * max(1, limit)
+            * _item_multiplier_for_output(output_id, inputs=provided_inputs)
         )
     return total
 

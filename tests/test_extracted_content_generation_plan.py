@@ -524,6 +524,7 @@ def test_plan_maps_social_post_to_social_post_service():
     assert plan["steps"][0]["status"] == "runnable"
     assert plan["steps"][0]["config"] == {
         "skill_name": "digest/social_post_generation",
+        "channels": ["linkedin"],
         "limit": 3,
         "max_text_chars": 300,
         "max_tokens": 700,
@@ -531,6 +532,29 @@ def test_plan_maps_social_post_to_social_post_service():
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
     }
+
+
+def test_plan_threads_social_post_channels_to_social_post_service():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "inputs": {
+                "social_channels": ["linkedin", "twitter"],
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing pressure came up at renewal.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert plan["can_execute"] is True
+    assert plan["steps"][0]["runner"] == "SocialPostGenerationService.generate"
+    assert plan["steps"][0]["config"]["channels"] == ["linkedin", "x"]
 
 
 def test_plan_maps_ad_copy_to_ad_copy_service():

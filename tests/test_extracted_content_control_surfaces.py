@@ -198,6 +198,40 @@ def test_preview_charges_brand_voice_social_post_rewrite():
     assert "Estimated cost exceeds max_cost_usd: 0.32 > 0.01" in preview["warnings"]
 
 
+def test_preview_scales_brand_voice_social_post_rewrite_by_channels():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "max_cost_usd": 0.7,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["linkedin", "twitter"],
+                "brand_voice": {"id": "voice-1", "descriptors": ["direct"]},
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.64
+
+
+def test_preview_keeps_deterministic_multi_channel_social_post_at_zero_cost():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 2,
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["linkedin", "twitter", "facebook"],
+            },
+        }
+    )
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.0
+
+
 def test_preview_charges_stored_brand_voice_social_post_rewrite():
     preview = preview_from_mapping(
         {
