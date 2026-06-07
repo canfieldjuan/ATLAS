@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom'
-import { ArrowRight, Loader2, Palette, Plus, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, Palette, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   fetchContentOpsBrandVoiceProfiles,
@@ -7,8 +7,10 @@ import {
 } from '../api/contentOps'
 import useApiData from '../hooks/useApiData'
 import { PageError } from '../components/ErrorBoundary'
+import { BrandVoiceProfileManager } from '../components/contentOps/BrandVoiceProfileManager'
 
 export default function ContentOpsBrandVoiceSettings() {
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
   const {
     data: profiles,
     loading,
@@ -56,13 +58,6 @@ export default function ContentOpsBrandVoiceSettings() {
             <RefreshCw className={clsx('h-4 w-4', refreshing && 'animate-spin')} />
             Refresh
           </button>
-          <Link
-            to="/content-ops/new"
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400"
-          >
-            <Plus className="h-4 w-4" />
-            New profile
-          </Link>
         </div>
       </header>
 
@@ -72,26 +67,34 @@ export default function ContentOpsBrandVoiceSettings() {
         </div>
       )}
 
+      <BrandVoiceProfileManager
+        profiles={savedProfiles}
+        selectedProfileId={selectedProfileId}
+        loading={loading}
+        refreshing={refreshing}
+        error={error}
+        onRefresh={refresh}
+        onChange={setSelectedProfileId}
+      />
+
       {savedProfiles.length === 0 ? (
         <section className="rounded-lg border border-slate-800 bg-slate-900/60 p-6">
           <h2 className="text-lg font-medium text-slate-100">
             No saved brand voice profiles
           </h2>
           <p className="mt-2 max-w-xl text-sm text-slate-400">
-            Create one from the New Run page, then select it for generation.
+            Create one with the manager above, then select it for generation.
           </p>
-          <Link
-            to="/content-ops/new"
-            className="mt-4 inline-flex items-center justify-center gap-2 rounded-md border border-cyan-500/60 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10"
-          >
-            Open New Run
-            <ArrowRight className="h-4 w-4" />
-          </Link>
         </section>
       ) : (
         <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {savedProfiles.map((profile) => (
-            <BrandVoiceProfileCard key={profile.id} profile={profile} />
+            <BrandVoiceProfileCard
+              key={profile.id}
+              profile={profile}
+              selected={profile.id === selectedProfileId}
+              onSelect={() => setSelectedProfileId(profile.id)}
+            />
           ))}
         </section>
       )}
@@ -101,11 +104,20 @@ export default function ContentOpsBrandVoiceSettings() {
 
 function BrandVoiceProfileCard({
   profile,
+  selected,
+  onSelect,
 }: {
   profile: ContentOpsBrandVoiceProfile
+  selected: boolean
+  onSelect: () => void
 }) {
   return (
-    <article className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+    <article
+      className={clsx(
+        'rounded-lg border bg-slate-900/60 p-4',
+        selected ? 'border-cyan-500/70' : 'border-slate-800',
+      )}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="truncate text-lg font-medium text-slate-100">
@@ -115,13 +127,13 @@ function BrandVoiceProfileCard({
             Updated {formatBrandVoiceDate(profile.updated_at)}
           </p>
         </div>
-        <Link
-          to="/content-ops/new"
+        <button
+          type="button"
+          onClick={onSelect}
           className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
         >
-          Open New Run
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
+          {selected ? 'Selected' : 'Manage'}
+        </button>
       </div>
       <dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
         <BrandVoiceField label="Descriptors" values={profile.descriptors} />
