@@ -1,6 +1,6 @@
 # Plan archive index
 
-899 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+900 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -134,6 +134,7 @@
 - [PR-Blog-Strip-Generic-H2-Generator](archive/PR-Blog-Strip-Generic-H2-Generator.md)
 - [PR-Blog-Strip-Generic-H2-Posts](archive/PR-Blog-Strip-Generic-H2-Posts.md)
 - [PR-Blog-Topic-Per-Call](archive/PR-Blog-Topic-Per-Call.md)
+- [PR-Brand-Voice-Json-Report](archive/PR-Brand-Voice-Json-Report.md) - lane: content-marketing/brand-voice-checks | phase: Vertical slice
 - [PR-Campaign-Channel-Legacy-Cleanup](archive/PR-Campaign-Channel-Legacy-Cleanup.md)
 - [PR-Campaign-Config-V2](archive/PR-Campaign-Config-V2.md)
 - [PR-Checker-Detection-Branch-Discipline](archive/PR-Checker-Detection-Branch-Discipline.md) - lane: workflow/process | phase: Workflow/process
