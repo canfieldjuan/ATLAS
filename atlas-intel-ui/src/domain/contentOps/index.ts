@@ -86,6 +86,15 @@ export type {
 } from './brandVoiceProfileEditor'
 
 export {
+  DEFAULT_SOCIAL_POST_CHANNELS,
+  SOCIAL_POST_CHANNEL_OPTIONS,
+  SOCIAL_POST_OUTPUT,
+  normalizeSocialPostChannels,
+  requestWithSocialPostChannels,
+} from './socialPostChannels'
+export type { SocialPostChannelId } from './socialPostChannels'
+
+export {
   FAQ_CONFIGURATION_OUTPUTS,
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_DOCUMENTATION_TERMS_INPUT,

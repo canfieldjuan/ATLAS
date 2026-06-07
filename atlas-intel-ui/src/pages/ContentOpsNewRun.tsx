@@ -73,6 +73,9 @@ import {
   FAQ_RESOLUTION_EVIDENCE_STATUS,
   FAQ_VOCABULARY_GAP_RULES_INPUT,
   BRAND_VOICE_PROFILE_PRESETS,
+  DEFAULT_SOCIAL_POST_CHANNELS,
+  SOCIAL_POST_CHANNEL_OPTIONS,
+  SOCIAL_POST_OUTPUT,
   applyBrandVoiceProfileEditorPatch,
   blankBrandVoiceProfileEditorState,
   brandVoicePresetEditorPatch,
@@ -80,6 +83,8 @@ import {
   brandVoiceProfileEditorStateFromProfile,
   canSaveBrandVoiceProfileEditor,
   deriveBrandVoiceProfileEditorPatch,
+  normalizeSocialPostChannels,
+  requestWithSocialPostChannels,
   type ContentOpsCatalog,
   type ContentOpsCachePolicy,
   type ContentOpsIngestionDiagnostics,
@@ -100,6 +105,7 @@ import {
   type GenerationPlanStep,
   type ContentOpsUsageBudgetEvaluation,
   type BrandVoiceProfileEditorState,
+  type SocialPostChannelId,
 } from '../domain/contentOps'
 import type {
   ContentOpsBrandVoiceProfile,
@@ -316,6 +322,9 @@ export default function ContentOpsNewRun() {
   const [request, setRequest] = useState<ContentOpsRequest>(() =>
     fromWireRequest({}),
   )
+  const [selectedSocialPostChannels, setSelectedSocialPostChannels] = useState<
+    SocialPostChannelId[]
+  >(() => [...DEFAULT_SOCIAL_POST_CHANNELS])
   // Codex P2 fix v3: keep the max-cost input as a string draft so the
   // user can type `0.` mid-entry without React re-rendering as `0` and
   // swallowing the decimal point. Parsed to a number at submit time.
@@ -383,6 +392,7 @@ export default function ContentOpsNewRun() {
   const sourceMode = sourceModeDraftValue(parsedInputsForControls)
   const landingPageOutputSelected = request.outputs.includes('landing_page')
   const blogPostOutputSelected = request.outputs.includes(BLOG_POST_OUTPUT)
+  const socialPostOutputSelected = request.outputs.includes(SOCIAL_POST_OUTPUT)
   const faqSourceSelectionVisible =
     (landingPageOutputSelected || blogPostOutputSelected) &&
     sourceMode === 'support_ticket'
@@ -555,6 +565,20 @@ export default function ContentOpsNewRun() {
     markStale()
   }
 
+  const handleSocialPostChannelChange = (
+    channelId: SocialPostChannelId,
+    checked: boolean,
+  ) => {
+    setSelectedSocialPostChannels((prev) =>
+      normalizeSocialPostChannels(
+        checked
+          ? [...prev, channelId]
+          : prev.filter((selected) => selected !== channelId),
+      ),
+    )
+    markStale()
+  }
+
   const togglePreset = (presetId: string) => {
     const preset = catalog.presets.find((p) => p.id === presetId)
     if (!preset) return
@@ -673,15 +697,20 @@ export default function ContentOpsNewRun() {
       }
     }
 
-    return {
-      ok: true,
-      domainRequest: {
+    const domainRequest = requestWithSocialPostChannels(
+      {
         ...request,
         inputs: parsedInputs,
         maxCostUsd: normalizedMaxCost,
         accountUsageBudgetUsd: normalizedAccountBudget,
         accountUsageBudgetDays: parsedAccountBudgetDays,
       },
+      selectedSocialPostChannels,
+    )
+
+    return {
+      ok: true,
+      domainRequest,
     }
   }
 
@@ -1174,6 +1203,49 @@ export default function ContentOpsNewRun() {
             })}
           </div>
         </section>
+
+        {socialPostOutputSelected && (
+          <section>
+            <h2 className="mb-2 text-sm font-medium uppercase tracking-wide text-slate-400">
+              Social channels
+            </h2>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+              {SOCIAL_POST_CHANNEL_OPTIONS.map((channel) => {
+                const checked = selectedSocialPostChannels.includes(channel.id)
+                const lastChecked =
+                  checked && selectedSocialPostChannels.length === 1
+                return (
+                  <label
+                    key={channel.id}
+                    className={clsx(
+                      'flex min-h-11 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition',
+                      checked
+                        ? 'border-cyan-500 bg-cyan-500/10 text-cyan-100'
+                        : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500',
+                      lastChecked
+                        ? 'cursor-default'
+                        : 'cursor-pointer',
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={lastChecked}
+                      onChange={(event) =>
+                        handleSocialPostChannelChange(
+                          channel.id,
+                          event.currentTarget.checked,
+                        )
+                      }
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-800 accent-cyan-500 disabled:opacity-80"
+                    />
+                    <span className="min-w-0 truncate">{channel.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Inputs (v0: raw JSON) */}
         <section>

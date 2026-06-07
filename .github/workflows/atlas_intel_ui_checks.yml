@@ -82,6 +82,9 @@ jobs:
       - name: Test Content Ops social post review assets
         run: npm run test:content-ops-social-post-review-assets
 
+      - name: Test Content Ops social post channel selector
+        run: npm run test:content-ops-social-post-channel-selector
+
       - name: Test Content Ops ad copy review assets
         run: npm run test:content-ops-ad-copy-review-assets
 
