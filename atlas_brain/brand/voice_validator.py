@@ -304,6 +304,11 @@ def main():
         default=Path(__file__).parent.parent / "skills/brand/brand_voice.yml",
         help="Path to the brand_voice.yml configuration file.",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail on advisory NIT findings instead of warning only.",
+    )
 
     args = parser.parse_args()
 
@@ -337,12 +342,14 @@ def main():
             _print_findings(advisory_findings)
         exit(1)
     elif advisory_findings:
+        status = "FAIL" if args.strict else "WARN"
+        strict_note = " in strict mode" if args.strict else ""
         print(
-            f"WARN: Found {len(advisory_findings)} advisory brand voice "
-            f"findings in {args.file}:"
+            f"{status}: Found {len(advisory_findings)} advisory brand voice "
+            f"findings{strict_note} in {args.file}:"
         )
         _print_findings(advisory_findings)
-        exit(0)
+        exit(1 if args.strict else 0)
     else:
         print(f"PASS: {args.file} is on-brand.")
         exit(0)

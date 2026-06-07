@@ -29,3 +29,10 @@ No code change is required.
     python atlas_brain/brand/voice_validator.py \
       --file marketing/landing_pages/atlas-platform.md \
       --type landing_page
+
+Use strict mode when advisory `NIT` findings should fail the local run:
+
+    python atlas_brain/brand/voice_validator.py \
+      --file marketing/blog_posts/why-deterministic-checks.md \
+      --type blog_post \
+      --strict
