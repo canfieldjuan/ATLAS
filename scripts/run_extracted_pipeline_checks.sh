@@ -103,6 +103,7 @@ pytest \
   tests/test_extracted_content_ops_execution.py \
   tests/test_extracted_content_ops_execution_smoke.py \
   tests/test_atlas_content_ops_infrastructure.py \
+  tests/test_atlas_content_ops_review_workflow.py \
   tests/test_atlas_content_ops_generated_assets_api.py \
   tests/test_atlas_content_ops_import_admission.py \
   tests/test_atlas_content_ops_input_provider.py \
