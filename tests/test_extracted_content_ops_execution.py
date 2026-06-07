@@ -364,6 +364,38 @@ class _LandingPageService:
         return _Result()
 
 
+class _VariantLandingPageService:
+    def __init__(self, *, fail_on_angle: str = "") -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail_on_angle = fail_on_angle
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        campaign: Any,
+        variant_angle: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "scope": scope,
+            "campaign": campaign,
+            "variant_angle": variant_angle,
+            "kwargs": dict(kwargs),
+        })
+        if self.fail_on_angle and self.fail_on_angle in str(variant_angle or ""):
+            raise RuntimeError("landing variant failed")
+        call_no = len(self.calls)
+        return {
+            "requested": 1,
+            "generated": 1,
+            "skipped": 0,
+            "reasoning_contexts_used": 0,
+            "saved_ids": [f"landing-page-{call_no}"],
+            "errors": [],
+        }
+
+
 class _BarrierOpportunityService:
     def __init__(
         self,
@@ -2051,6 +2083,124 @@ async def test_execute_all_raising_blog_variants_fails_step_with_warning() -> No
     assert step["result"]["skipped"] == 3
     assert step["result"]["warnings"] == [
         "No blog variants generated; all requested variants were blocked or skipped."
+    ]
+    assert [
+        item["variant_angle"]["id"] for item in step["result"]["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+    assert [item["variant_angle"] for item in step["result"]["errors"]] == [
+        "pain_led",
+        "outcome_led",
+        "social_proof",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_fans_out_landing_page_variants_by_angle() -> None:
+    landing = _VariantLandingPageService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "variant_count": 3,
+            "inputs": {
+                "campaign_name": "Q3 retention page",
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert len(landing.calls) == 3
+    assert [call["variant_angle"] for call in landing.calls] == [
+        VARIANT_ANGLES[0].instruction,
+        VARIANT_ANGLES[1].instruction,
+        VARIANT_ANGLES[2].instruction,
+    ]
+    assert [call["campaign"].name for call in landing.calls] == [
+        "Q3 retention page",
+        "Q3 retention page",
+        "Q3 retention page",
+    ]
+    assert step_result["variant_count"] == 3
+    assert step_result["requested"] == 3
+    assert step_result["generated"] == 3
+    assert step_result["skipped"] == 0
+    assert step_result["saved_ids"] == [
+        "landing-page-1",
+        "landing-page-2",
+        "landing-page-3",
+    ]
+    assert [
+        item["variant_angle"]["id"] for item in step_result["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+
+
+@pytest.mark.asyncio
+async def test_execute_landing_page_variant_failure_does_not_abort_batch() -> None:
+    landing = _VariantLandingPageService(fail_on_angle="Outcome-led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "variant_count": 3,
+            "inputs": {
+                "campaign_name": "Q3 retention page",
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert result["errors"] == []
+    assert len(landing.calls) == 3
+    assert step_result["generated"] == 2
+    assert step_result["skipped"] == 1
+    assert step_result["saved_ids"] == ["landing-page-1", "landing-page-3"]
+    assert step_result["errors"] == [{
+        "variant_angle": "outcome_led",
+        "variant_label": "Outcome-led",
+        "reason": "landing variant failed",
+        "error_type": "RuntimeError",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_execute_all_raising_landing_page_variants_fails_step_with_warning() -> None:
+    landing = _VariantLandingPageService(fail_on_angle="led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["landing_page"],
+            "variant_count": 3,
+            "inputs": {
+                "campaign_name": "Q3 retention page",
+                "offer": "Churn audit",
+                "audience": "B2B SaaS founders",
+            },
+        },
+        services=ContentOpsExecutionServices(landing_page=landing),
+    )
+
+    step = result["steps"][0]
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "output": "landing_page",
+        "runner": "LandingPageGenerationService.generate",
+        "error": "all_landing_page_variants_failed",
+        "reason": "all_landing_page_variants_failed",
+    }]
+    assert step["status"] == "failed"
+    assert step["error"] == "all_landing_page_variants_failed"
+    assert step["result"]["generated"] == 0
+    assert step["result"]["skipped"] == 3
+    assert step["result"]["warnings"] == [
+        "No landing-page variants generated; all requested variants were blocked or skipped."
     ]
     assert [
         item["variant_angle"]["id"] for item in step["result"]["variant_results"]

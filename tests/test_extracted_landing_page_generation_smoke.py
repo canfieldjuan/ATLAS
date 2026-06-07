@@ -18,7 +18,8 @@ from extracted_content_pipeline.landing_page_export import (
 from extracted_content_pipeline.landing_page_generation import (
     LandingPageGenerationService,
 )
-from extracted_content_pipeline.landing_page_ports import LandingPageDraft
+from extracted_content_pipeline.landing_page_ports import LandingPageDraft, MarketingCampaign
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 
 
 class _LandingPageStore:
@@ -169,6 +170,38 @@ def _landing_page_response(*, include_description: bool) -> str:
             "help-center answers for small SaaS teams."
         )
     return json.dumps(payload)
+
+
+@pytest.mark.asyncio
+async def test_landing_page_generation_threads_variant_angle_to_prompt_and_metadata() -> None:
+    store = _LandingPageStore()
+    llm = _LLM([_landing_page_response(include_description=True)])
+    service = LandingPageGenerationService(
+        landing_pages=store,
+        llm=llm,
+        skills=_Skills(),
+    )
+    angle = VARIANT_ANGLES[0].instruction
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=MarketingCampaign(
+            name="FAQ Report",
+            persona="Small SaaS support teams",
+            value_prop="Turn repeat tickets into reviewed answers",
+        ),
+        quality_gates_enabled=False,
+        variant_angle=angle,
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Variant angle:" in user_prompt
+    assert angle in user_prompt
+    assert "Keep the same campaign facts" in user_prompt
+    assert llm.calls[0]["metadata"]["variant_angle"] == angle
+    saved_draft = store.saved[0]["drafts"][0]
+    assert saved_draft.metadata["variant_angle"] == angle
 
 
 @pytest.mark.asyncio
