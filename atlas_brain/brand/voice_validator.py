@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 SEVERITIES = frozenset({"BLOCKER", "MAJOR", "NIT"})
+BLOCKING_SEVERITIES = frozenset({"BLOCKER", "MAJOR"})
 
 
 @dataclass(frozen=True)
@@ -270,6 +271,13 @@ class BrandVoiceValidator:
         return findings
 
 
+def _print_findings(findings: list[BrandVoiceFinding]) -> None:
+    for finding in findings:
+        print(f"  - [{finding.severity}] {finding.rule_id}: {finding.message}")
+        if finding.suggestion:
+            print(f"    suggestion: {finding.suggestion}")
+
+
 def main():
     """
     Command-line interface for the BrandVoiceValidator.
@@ -308,14 +316,33 @@ def main():
 
     validator = BrandVoiceValidator(config_path=args.config)
     findings = validator.validate(content_to_validate, args.type)
+    blocking_findings = [
+        finding for finding in findings if finding.severity in BLOCKING_SEVERITIES
+    ]
+    advisory_findings = [
+        finding for finding in findings if finding.severity not in BLOCKING_SEVERITIES
+    ]
 
-    if findings:
-        print(f"FAIL: Found {len(findings)} brand voice violations in {args.file}:")
-        for finding in findings:
-            print(f"  - [{finding.severity}] {finding.rule_id}: {finding.message}")
-            if finding.suggestion:
-                print(f"    suggestion: {finding.suggestion}")
+    if blocking_findings:
+        print(
+            f"FAIL: Found {len(blocking_findings)} blocking brand voice "
+            f"violations in {args.file}:"
+        )
+        _print_findings(blocking_findings)
+        if advisory_findings:
+            print(
+                f"WARN: Found {len(advisory_findings)} advisory brand voice "
+                f"findings in {args.file}:"
+            )
+            _print_findings(advisory_findings)
         exit(1)
+    elif advisory_findings:
+        print(
+            f"WARN: Found {len(advisory_findings)} advisory brand voice "
+            f"findings in {args.file}:"
+        )
+        _print_findings(advisory_findings)
+        exit(0)
     else:
         print(f"PASS: {args.file} is on-brand.")
         exit(0)

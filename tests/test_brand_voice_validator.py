@@ -882,7 +882,7 @@ def test_cli_returns_one_for_brand_voice_violations(tmp_path):
     result = _run_cli("--file", str(content), "--type", "landing_page")
 
     assert result.returncode == 1
-    assert "FAIL: Found" in result.stdout
+    assert "FAIL: Found 3 blocking brand voice violations" in result.stdout
     assert "[BLOCKER] vocabulary.avoid.game-changer" in result.stdout
     assert "Contains forbidden word: 'game-changer'" in result.stdout
     assert "[MAJOR] no_excessive_punctuation" in result.stdout
@@ -898,9 +898,25 @@ def test_cli_prints_suggestion_for_discouraged_vocabulary(tmp_path):
 
     result = _run_cli("--file", str(content), "--type", "blog_post")
 
-    assert result.returncode == 1
+    assert result.returncode == 0
+    assert "WARN: Found 1 advisory brand voice findings" in result.stdout
     assert "[NIT] vocabulary.use.predictable" in result.stdout
     assert "Prefer 'deterministic' over 'predictable'" in result.stdout
+    assert "suggestion: Use 'deterministic' instead of 'predictable'" in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_returns_one_for_mixed_blocking_and_advisory_findings(tmp_path):
+    content = tmp_path / "mixed_blog_post.md"
+    content.write_text("The result is predictable and a game-changer.")
+
+    result = _run_cli("--file", str(content), "--type", "blog_post")
+
+    assert result.returncode == 1
+    assert "FAIL: Found 1 blocking brand voice violations" in result.stdout
+    assert "[BLOCKER] vocabulary.avoid.game-changer" in result.stdout
+    assert "WARN: Found 1 advisory brand voice findings" in result.stdout
+    assert "[NIT] vocabulary.use.predictable" in result.stdout
     assert "suggestion: Use 'deterministic' instead of 'predictable'" in result.stdout
     assert result.stderr == ""
 
