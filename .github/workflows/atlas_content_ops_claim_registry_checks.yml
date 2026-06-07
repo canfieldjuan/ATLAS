@@ -1,0 +1,52 @@
+name: Atlas Content Ops Claim Registry Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_content_ops_claim_registry_checks.yml"
+      - "atlas_brain/_content_ops_claim_registry.py"
+      - "atlas_brain/_content_ops_review_workflow.py"
+      - "atlas_brain/storage/migrations/334_content_ops_claim_registry.sql"
+      - "extracted_content_pipeline/campaign_ports.py"
+      - "extracted_content_pipeline/claims_map.py"
+      - "extracted_content_pipeline/content_pr.py"
+      - "extracted_content_pipeline/review_contract.py"
+      - "tests/test_content_ops_claim_registry.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_content_ops_claim_registry_checks.yml"
+      - "atlas_brain/_content_ops_claim_registry.py"
+      - "atlas_brain/_content_ops_review_workflow.py"
+      - "atlas_brain/storage/migrations/334_content_ops_claim_registry.sql"
+      - "extracted_content_pipeline/campaign_ports.py"
+      - "extracted_content_pipeline/claims_map.py"
+      - "extracted_content_pipeline/content_pr.py"
+      - "extracted_content_pipeline/review_contract.py"
+      - "tests/test_content_ops_claim_registry.py"
+
+jobs:
+  atlas-content-ops-claim-registry-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Run Content Ops claim registry tests
+        run: |
+          python -m pytest \
+            tests/test_content_ops_claim_registry.py \
+            -q
