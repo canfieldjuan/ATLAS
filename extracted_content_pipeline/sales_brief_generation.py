@@ -588,12 +588,13 @@ class SalesBriefGenerationService:
                 v = str(evidence_id).strip()
                 if v and v not in ref_seen:
                     ref_seen.append(v)
-        # Per-call override (when present and non-empty) wins over the
-        # construction-time default. PR-OptionA-1: makes the plan's
-        # step.config["default_brief_type"] load-bearing at dispatch time.
-        # The LLM's own `brief_type` JSON field still wins when present.
-        configured_default = (default_brief_type or "").strip() or self._config.default_brief_type
-        brief_type = str(parsed.get("brief_type") or configured_default)
+        # Per-call override (when present and non-empty) is the requested
+        # output contract from the run plan. The model field remains only a
+        # fallback for callers that did not request a specific brief type.
+        requested_default = (default_brief_type or "").strip()
+        model_brief_type = str(parsed.get("brief_type") or "").strip()
+        configured_default = str(self._config.default_brief_type or "").strip()
+        brief_type = requested_default or model_brief_type or configured_default
         metadata: dict[str, Any] = {
             "generation_model": parsed.get("_model"),
             "generation_usage": parsed.get("_usage") or {},
