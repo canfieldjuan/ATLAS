@@ -958,6 +958,22 @@ def test_cli_returns_one_for_mixed_blocking_and_advisory_findings(tmp_path):
     assert result.stderr == ""
 
 
+def test_cli_strict_labels_mixed_advisory_findings_as_failures(tmp_path):
+    content = tmp_path / "strict_mixed_blog_post.md"
+    content.write_text("The result is predictable and a game-changer.")
+
+    result = _run_cli("--file", str(content), "--type", "blog_post", "--strict")
+
+    assert result.returncode == 1
+    assert "FAIL: Found 1 blocking brand voice violations" in result.stdout
+    assert "[BLOCKER] vocabulary.avoid.game-changer" in result.stdout
+    assert "FAIL: Found 1 advisory brand voice findings in strict mode" in result.stdout
+    assert "[NIT] vocabulary.use.predictable" in result.stdout
+    assert "suggestion: Use 'deterministic' instead of 'predictable'" in result.stdout
+    assert "WARN: Found 1 advisory brand voice findings" not in result.stdout
+    assert result.stderr == ""
+
+
 def test_cli_returns_one_for_missing_file(tmp_path):
     missing = tmp_path / "missing.md"
 

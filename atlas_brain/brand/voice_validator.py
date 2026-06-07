@@ -278,6 +278,18 @@ def _print_findings(findings: list[BrandVoiceFinding]) -> None:
             print(f"    suggestion: {finding.suggestion}")
 
 
+def _print_advisory_findings(
+    findings: list[BrandVoiceFinding], file_path: Path, *, strict: bool
+) -> None:
+    status = "FAIL" if strict else "WARN"
+    strict_note = " in strict mode" if strict else ""
+    print(
+        f"{status}: Found {len(findings)} advisory brand voice "
+        f"findings{strict_note} in {file_path}:"
+    )
+    _print_findings(findings)
+
+
 def main():
     """
     Command-line interface for the BrandVoiceValidator.
@@ -335,20 +347,12 @@ def main():
         )
         _print_findings(blocking_findings)
         if advisory_findings:
-            print(
-                f"WARN: Found {len(advisory_findings)} advisory brand voice "
-                f"findings in {args.file}:"
+            _print_advisory_findings(
+                advisory_findings, args.file, strict=args.strict
             )
-            _print_findings(advisory_findings)
         exit(1)
     elif advisory_findings:
-        status = "FAIL" if args.strict else "WARN"
-        strict_note = " in strict mode" if args.strict else ""
-        print(
-            f"{status}: Found {len(advisory_findings)} advisory brand voice "
-            f"findings{strict_note} in {args.file}:"
-        )
-        _print_findings(advisory_findings)
+        _print_advisory_findings(advisory_findings, args.file, strict=args.strict)
         exit(1 if args.strict else 0)
     else:
         print(f"PASS: {args.file} is on-brand.")
