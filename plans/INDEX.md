@@ -1,6 +1,6 @@
 # Plan archive index
 
-904 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+905 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -515,6 +515,7 @@
 - [PR-Content-Ops-Review-Evidence-Asset-Framing](archive/PR-Content-Ops-Review-Evidence-Asset-Framing.md)
 - [PR-Content-Ops-Review-Evidence-Copy-Framing](archive/PR-Content-Ops-Review-Evidence-Copy-Framing.md)
 - [PR-Content-Ops-Review-Sales-Brief-Handoff](archive/PR-Content-Ops-Review-Sales-Brief-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
+- [PR-Content-Ops-Review-Service-Wiring](archive/PR-Content-Ops-Review-Service-Wiring.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Review-Source-Closeout](archive/PR-Content-Ops-Review-Source-Closeout.md)
 - [PR-Content-Ops-Review-Source-Generation-Smoke](archive/PR-Content-Ops-Review-Source-Generation-Smoke.md)
 - [PR-Content-Ops-Review-Source-Live-Closeout](archive/PR-Content-Ops-Review-Source-Live-Closeout.md)
