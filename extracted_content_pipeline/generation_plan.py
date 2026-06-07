@@ -457,6 +457,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "quality_gates_enabled": request.require_quality_gates,
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
+                **_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },

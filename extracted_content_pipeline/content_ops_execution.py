@@ -622,7 +622,37 @@ async def _dispatch_sales_brief(
         kwargs["brand_voice"] = brand_voice
     if "source_material" in request.inputs:
         kwargs["source_material"] = request.inputs.get("source_material")
+    if request.variant_count > 1:
+        return await _dispatch_sales_brief_variants(
+            service=service,
+            request=request,
+            kwargs=kwargs,
+        )
     return await service.generate(**kwargs)
+
+
+async def _dispatch_sales_brief_variants(
+    *,
+    service: Any,
+    request: ContentOpsRequest,
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    async def generate_variant(angle: VariantAngle) -> Any:
+        return await service.generate(
+            variant_angle=angle.instruction,
+            **kwargs,
+        )
+
+    requested_default = max(1, int(request.limit or 1))
+    return await _dispatch_output_variants(
+        request=request,
+        generate_variant=generate_variant,
+        requested_default=requested_default,
+        failure_label="all_sales_brief_variants_failed",
+        empty_warning=(
+            "No sales-brief variants generated; all requested variants were blocked or skipped."
+        ),
+    )
 
 
 async def _dispatch_landing_page(

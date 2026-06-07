@@ -143,6 +143,46 @@ class _VariantBlogService:
         }
 
 
+class _VariantSalesBriefService:
+    def __init__(self, *, fail_on_angle: str = "") -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail_on_angle = fail_on_angle
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int | None = None,
+        filters: Mapping[str, Any] | None = None,
+        variant_angle: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+            "variant_angle": variant_angle,
+            "kwargs": dict(kwargs),
+        })
+        if self.fail_on_angle and self.fail_on_angle in str(variant_angle or ""):
+            raise RuntimeError("sales brief variant failed")
+        call_no = len(self.calls)
+        return {
+            "requested": int(limit or 1),
+            "generated": 1,
+            "skipped": 0,
+            "reasoning_contexts_used": 1,
+            "consumed_reasoning_contexts": [{
+                "target_id": f"sales-brief-{call_no}",
+                "variant_angle": variant_angle,
+            }],
+            "saved_ids": [f"sales-brief-{call_no}"],
+            "errors": [],
+        }
+
+
 class _ReasoningAwareOpportunityService(_OpportunityService):
     def __init__(self, reasoning_context: Any | None = None) -> None:
         super().__init__()
@@ -2201,6 +2241,125 @@ async def test_execute_all_raising_landing_page_variants_fails_step_with_warning
     assert step["result"]["skipped"] == 3
     assert step["result"]["warnings"] == [
         "No landing-page variants generated; all requested variants were blocked or skipped."
+    ]
+    assert [
+        item["variant_angle"]["id"] for item in step["result"]["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+    assert [item["variant_angle"] for item in step["result"]["errors"]] == [
+        "pain_led",
+        "outcome_led",
+        "social_proof",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_fans_out_sales_brief_variants_by_angle() -> None:
+    sales_brief = _VariantSalesBriefService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "brief_type": "renewal",
+            },
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert len(sales_brief.calls) == 3
+    assert [call["variant_angle"] for call in sales_brief.calls] == [
+        VARIANT_ANGLES[0].instruction,
+        VARIANT_ANGLES[1].instruction,
+        VARIANT_ANGLES[2].instruction,
+    ]
+    assert [call["kwargs"]["default_brief_type"] for call in sales_brief.calls] == [
+        "renewal",
+        "renewal",
+        "renewal",
+    ]
+    assert step_result["variant_count"] == 3
+    assert step_result["requested"] == 3
+    assert step_result["generated"] == 3
+    assert step_result["skipped"] == 0
+    assert step_result["reasoning_contexts_used"] == 3
+    assert step_result["saved_ids"] == [
+        "sales-brief-1",
+        "sales-brief-2",
+        "sales-brief-3",
+    ]
+    assert [
+        item["variant_angle"]["id"] for item in step_result["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+    assert [
+        item["target_id"] for item in step_result["consumed_reasoning_contexts"]
+    ] == ["sales-brief-1", "sales-brief-2", "sales-brief-3"]
+
+
+@pytest.mark.asyncio
+async def test_execute_sales_brief_variant_failure_does_not_abort_batch() -> None:
+    sales_brief = _VariantSalesBriefService(fail_on_angle="Outcome-led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "brief_type": "renewal",
+            },
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert result["errors"] == []
+    assert len(sales_brief.calls) == 3
+    assert step_result["generated"] == 2
+    assert step_result["skipped"] == 1
+    assert step_result["saved_ids"] == ["sales-brief-1", "sales-brief-3"]
+    assert step_result["errors"] == [{
+        "variant_angle": "outcome_led",
+        "variant_label": "Outcome-led",
+        "reason": "sales brief variant failed",
+        "error_type": "RuntimeError",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_execute_all_raising_sales_brief_variants_fails_step_with_warning() -> None:
+    sales_brief = _VariantSalesBriefService(fail_on_angle="led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["sales_brief"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "brief_type": "renewal",
+            },
+        },
+        services=ContentOpsExecutionServices(sales_brief=sales_brief),
+    )
+
+    step = result["steps"][0]
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "output": "sales_brief",
+        "runner": "SalesBriefGenerationService.generate",
+        "error": "all_sales_brief_variants_failed",
+        "reason": "all_sales_brief_variants_failed",
+    }]
+    assert step["status"] == "failed"
+    assert step["error"] == "all_sales_brief_variants_failed"
+    assert step["result"]["generated"] == 0
+    assert step["result"]["skipped"] == 3
+    assert step["result"]["warnings"] == [
+        "No sales-brief variants generated; all requested variants were blocked or skipped."
     ]
     assert [
         item["variant_angle"]["id"] for item in step["result"]["variant_results"]
