@@ -24,6 +24,7 @@
     "test:content-ops-upload-source-run-handoff": "node --test scripts/content-ops-upload-source-run-handoff.test.mjs",
     "test:content-ops-blog-review-public-link": "node --test scripts/content-ops-blog-review-public-link.test.mjs",
     "test:content-ops-social-post-review-assets": "node --test scripts/content-ops-social-post-review-assets.test.mjs",
+    "test:content-ops-social-post-channel-selector": "node --test scripts/content-ops-social-post-channel-selector.test.mjs",
     "test:content-ops-ad-copy-review-assets": "node --test scripts/content-ops-ad-copy-review-assets.test.mjs",
     "test:content-ops-quote-card-review-assets": "node --test scripts/content-ops-quote-card-review-assets.test.mjs",
     "test:content-ops-stat-card-review-assets": "node --test scripts/content-ops-stat-card-review-assets.test.mjs",
