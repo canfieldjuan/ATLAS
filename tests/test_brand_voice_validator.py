@@ -82,6 +82,27 @@ def test_forbidden_vocabulary_finding_has_structured_fields():
     assert finding.message == "Contains forbidden word: 'game-changer'"
 
 
+def test_suggested_vocabulary_finding_has_replacement_metadata():
+    validator = _real_validator()
+    finding = _only_finding(
+        validator.validate("The result is predictable for operators.", "blog_post")
+    )
+    assert finding.rule_id == "vocabulary.use.predictable"
+    assert finding.severity == "NIT"
+    assert finding.category == "vocabulary"
+    assert finding.message == "Prefer 'deterministic' over 'predictable'"
+    assert finding.suggestion == "Use 'deterministic' instead of 'predictable'"
+
+
+def test_preferred_vocabulary_terms_are_clean():
+    validator = _real_validator()
+    findings = validator.validate(
+        "A deterministic capability dispatch system gives operators a clear path.",
+        "blog_post",
+    )
+    assert findings == []
+
+
 def test_clean_content_has_no_forbidden_vocabulary_false_positive():
     """On-brand prose containing no whole avoid-word yields no vocab violation."""
     validator = _real_validator()
@@ -401,7 +422,7 @@ def test_isolated_content_rule_must_mention_bites_when_absent(tmp_path):
     )
     validator = BrandVoiceValidator(config_path=config)
     assert _messages(
-        validator.validate("A feature-rich landing page.", "landing_page")
+        validator.validate("A capability-rich landing page.", "landing_page")
     ) == [
         "Content rule violation: Landing pages must mention pricing."
     ]
@@ -470,6 +491,82 @@ def test_rule_invalid_severity_raises_value_error_at_load(tmp_path):
         """,
     )
     with pytest.raises(ValueError, match="no_caps_yell.*invalid severity"):
+        BrandVoiceValidator(config_path=config)
+
+
+def test_vocabulary_use_non_list_raises_value_error_at_load(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          use: predictable
+          avoid: []
+        tone_rules: []
+        content_rules: []
+        """,
+    )
+    with pytest.raises(ValueError, match="vocabulary.use must be a list"):
+        BrandVoiceValidator(config_path=config)
+
+
+def test_vocabulary_use_empty_string_raises_value_error_at_load(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          use: ""
+          avoid: []
+        tone_rules: []
+        content_rules: []
+        """,
+    )
+    with pytest.raises(ValueError, match="vocabulary.use must be a list"):
+        BrandVoiceValidator(config_path=config)
+
+
+def test_vocabulary_non_mapping_raises_value_error_at_load(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary: []
+        tone_rules: []
+        content_rules: []
+        """,
+    )
+    with pytest.raises(ValueError, match="vocabulary must be a mapping"):
+        BrandVoiceValidator(config_path=config)
+
+
+def test_vocabulary_use_requires_one_item_mapping_at_load(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          use:
+            - deterministic: predictable
+              capability: feature
+          avoid: []
+        tone_rules: []
+        content_rules: []
+        """,
+    )
+    with pytest.raises(ValueError, match=r"vocabulary.use\[0\].*one-item mapping"):
+        BrandVoiceValidator(config_path=config)
+
+
+def test_vocabulary_use_empty_discouraged_term_raises_value_error(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          use:
+            - deterministic: ""
+          avoid: []
+        tone_rules: []
+        content_rules: []
+        """,
+    )
+    with pytest.raises(ValueError, match=r"vocabulary.use\[0\].*discouraged"):
         BrandVoiceValidator(config_path=config)
 
 
@@ -792,6 +889,19 @@ def test_cli_returns_one_for_brand_voice_violations(tmp_path):
     assert _EXCLAMATION_TONE_MSG in result.stdout
     assert "[BLOCKER] landing_page_extensibility_mention" in result.stdout
     assert _LANDING_MUST_MENTION_MSG in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_prints_suggestion_for_discouraged_vocabulary(tmp_path):
+    content = tmp_path / "discouraged_blog_post.md"
+    content.write_text("The result is predictable for operators.")
+
+    result = _run_cli("--file", str(content), "--type", "blog_post")
+
+    assert result.returncode == 1
+    assert "[NIT] vocabulary.use.predictable" in result.stdout
+    assert "Prefer 'deterministic' over 'predictable'" in result.stdout
+    assert "suggestion: Use 'deterministic' instead of 'predictable'" in result.stdout
     assert result.stderr == ""
 
 

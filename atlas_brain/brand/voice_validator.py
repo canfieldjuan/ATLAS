@@ -14,6 +14,7 @@ class BrandVoiceFinding:
     severity: str
     category: str
     message: str
+    suggestion: str | None = None
 
     def __str__(self) -> str:
         return self.message
@@ -49,6 +50,7 @@ class BrandVoiceValidator:
         KeyError/re.error part-way through validate() -- silently disabling every
         rule after it. Surface it clearly at construction instead.
         """
+        self._validate_vocabulary_use_shape()
         for section in ("tone_rules", "content_rules"):
             for index, rule in enumerate(self.config.get(section) or []):
                 if not isinstance(rule, dict):
@@ -90,6 +92,49 @@ class BrandVoiceValidator:
                         f"{section}[{index}] (id={rule_id!r}) has an invalid "
                         f"regex pattern: {exc}"
                     ) from exc
+
+    def _vocabulary_config(self) -> dict:
+        vocabulary = self.config.get("vocabulary")
+        if vocabulary is None:
+            return {}
+        if not isinstance(vocabulary, dict):
+            raise ValueError("vocabulary must be a mapping")
+        return vocabulary
+
+    def _vocabulary_use_entries(self) -> list[object]:
+        vocabulary = self._vocabulary_config()
+        if "use" not in vocabulary or vocabulary["use"] is None:
+            return []
+        use_entries = vocabulary["use"]
+        if not isinstance(use_entries, list):
+            raise ValueError("vocabulary.use must be a list of preferred-term mappings")
+        return use_entries
+
+    def _validate_vocabulary_use_shape(self) -> None:
+        use_entries = self._vocabulary_use_entries()
+        for index, entry in enumerate(use_entries):
+            self._vocabulary_use_pair(entry, index)
+
+    @staticmethod
+    def _vocabulary_use_pair(entry: object, index: int) -> tuple[str, str]:
+        if not isinstance(entry, dict) or len(entry) != 1:
+            raise ValueError(
+                f"vocabulary.use[{index}] must be a one-item mapping of "
+                "preferred term to discouraged term"
+            )
+        preferred, discouraged = next(iter(entry.items()))
+        if not isinstance(preferred, str) or not preferred.strip():
+            raise ValueError(f"vocabulary.use[{index}] has an empty preferred term")
+        if not isinstance(discouraged, str) or not discouraged.strip():
+            raise ValueError(f"vocabulary.use[{index}] has an empty discouraged term")
+        return preferred, discouraged
+
+    def _vocabulary_use_pairs(self) -> list[tuple[str, str]]:
+        use_entries = self._vocabulary_use_entries()
+        return [
+            self._vocabulary_use_pair(entry, index)
+            for index, entry in enumerate(use_entries)
+        ]
 
     @staticmethod
     def _default_severity(section: str) -> str:
@@ -149,7 +194,7 @@ class BrandVoiceValidator:
         #    'Transformer', 'disrupt' in 'non-disruptive', 'leverage' in
         #    'deleverage'); \b...\b anchors to word boundaries (the hyphen in
         #    'non-disruptive' is itself a boundary, so 'disrupt' no longer fires).
-        for word in (self.config.get("vocabulary") or {}).get("avoid") or []:
+        for word in self._vocabulary_config().get("avoid") or []:
             if re.search(r"\b" + re.escape(word) + r"\b", lower_text):
                 findings.append(
                     BrandVoiceFinding(
@@ -157,6 +202,18 @@ class BrandVoiceValidator:
                         severity="BLOCKER",
                         category="vocabulary",
                         message=f"Contains forbidden word: '{word}'",
+                    )
+                )
+
+        for preferred, discouraged in self._vocabulary_use_pairs():
+            if re.search(r"\b" + re.escape(discouraged) + r"\b", text, re.IGNORECASE):
+                findings.append(
+                    BrandVoiceFinding(
+                        rule_id=f"vocabulary.use.{discouraged}",
+                        severity="NIT",
+                        category="vocabulary",
+                        message=f"Prefer '{preferred}' over '{discouraged}'",
+                        suggestion=f"Use '{preferred}' instead of '{discouraged}'",
                     )
                 )
 
@@ -256,6 +313,8 @@ def main():
         print(f"FAIL: Found {len(findings)} brand voice violations in {args.file}:")
         for finding in findings:
             print(f"  - [{finding.severity}] {finding.rule_id}: {finding.message}")
+            if finding.suggestion:
+                print(f"    suggestion: {finding.suggestion}")
         exit(1)
     else:
         print(f"PASS: {args.file} is on-brand.")
