@@ -59,15 +59,6 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex Gate A live output-quality proof
 - Found during: PR-Gate-A-Live-Output-Quality-Proof review
 
-### Blog post variants collapse to one persisted draft id
-- File/location: `extracted_content_pipeline/blog_post_postgres.py` / blog-post save path used by `BlogPostGenerationService.generate`.
-- Description: Gate A live validation generated two successful blog variants, but both returned `9c2cdf6c-9fbf-42db-8af8-6a59e850cf16`; the exact export contained one approved row, not distinct persisted variant rows.
-- Why it matters: `variant_count > 1` does not prove usable blog variants if the review/export surface collapses them into one draft by slug or blueprint identity.
-- Effort: M
-- Category: correctness
-- Owner/session: Codex Gate A live output-quality proof
-- Found during: PR-Gate-A-Live-Output-Quality-Proof
-
 ### Brand-voice second-person guidance is not consistently honored
 - File/location: `extracted_content_pipeline/brand_voice.py` audit surfaced from live blog and sales-brief exports.
 - Description: The Gate A profile requested `preferred_pov=second_person`. The exported blog draft and one sales brief had `brand_voice_audit.passed=false` with `preferred_pov_second_person_not_detected`.
