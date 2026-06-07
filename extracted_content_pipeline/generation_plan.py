@@ -21,6 +21,7 @@ from .control_surfaces import (
     preview_control_surface,
     request_from_mapping,
 )
+from .output_variations import selected_variant_angles
 from .landing_page_generation import LandingPageGenerationConfig
 from .landing_page_repair_contract import (
     landing_page_quality_repair_attempts_from_inputs,
@@ -201,6 +202,16 @@ def _sales_brief_config_for_request(request: ContentOpsRequest) -> SalesBriefGen
 
 def _blog_post_config_for_request(request: ContentOpsRequest) -> BlogPostGenerationConfig:
     return BlogPostGenerationConfig(limit=request.limit)
+
+
+def _blog_variant_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
+    if request.variant_count <= 1:
+        return {}
+    angles = selected_variant_angles(request.variant_count)
+    return {
+        "variant_count": len(angles),
+        "variant_angles": [angle.as_dict() for angle in angles],
+    }
 
 
 def _brand_voice_config_for_request(request: ContentOpsRequest) -> dict[str, Any]:
@@ -465,6 +476,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
                 "parse_retry_attempts": config.parse_retry_attempts,
                 "parse_retry_response_excerpt_chars": config.parse_retry_response_excerpt_chars,
                 "topic": request.inputs.get("topic"),
+                **_blog_variant_config_for_request(request),
                 **_brand_voice_config_for_request(request),
                 **_reasoning_config_for_output(output, request),
             },

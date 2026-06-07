@@ -7,6 +7,7 @@ from extracted_content_pipeline.control_surfaces import (
     preview_from_mapping,
     request_from_mapping,
 )
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 
 
 def test_normalize_outputs_accepts_csv_and_dedupes():
@@ -63,6 +64,41 @@ def test_request_normalizes_content_ops_cache_policy():
 
     assert request.content_ops_cache_policy == "exact"
     assert preview["normalized_request"]["content_ops_cache_policy"] == "exact"
+
+
+def test_request_caps_variant_count_to_angle_catalogue():
+    request = request_from_mapping({"variant_count": len(VARIANT_ANGLES) + 10})
+
+    assert request.variant_count == len(VARIANT_ANGLES)
+
+
+def test_request_rejects_zero_variant_count():
+    with pytest.raises(ValueError, match="variant_count must be at least 1; got 0"):
+        request_from_mapping({"variant_count": 0})
+
+
+def test_preview_scales_blog_cost_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["blog_post"],
+        "variant_count": 3,
+        "inputs": {"topic": "Renewal pressure"},
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 2.7
+    assert preview["normalized_request"]["variant_count"] == 3
+
+
+def test_preview_does_not_scale_non_blog_outputs_by_variant_count():
+    preview = preview_from_mapping({
+        "outputs": ["sales_brief"],
+        "variant_count": 3,
+        "inputs": {"target_account": "Acme"},
+    })
+
+    assert preview["can_run"] is True
+    assert preview["estimated_cost_usd"] == 0.7
+    assert preview["normalized_request"]["variant_count"] == 3
 
 
 def test_request_rejects_unsupported_content_ops_cache_policy():

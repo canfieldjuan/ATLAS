@@ -485,6 +485,7 @@ class BlogPostGenerationService:
         topic: str | None = None,
         data_context: Mapping[str, Any] | None = None,
         brand_voice: Mapping[str, Any] | BrandVoiceProfile | None = None,
+        variant_angle: str | None = None,
     ) -> BlogPostGenerationResult:
         prompt_template = self._skills.get_prompt(self._config.skill_name)
         if not prompt_template:
@@ -525,6 +526,7 @@ class BlogPostGenerationService:
         # PR-Blog-Topic-Per-Call: operator-supplied topic for this run.
         # Empty string when None so prompt substitution is a clean no-op.
         resolved_topic = (topic or "").strip()
+        resolved_variant_angle = (variant_angle or "").strip()
         trusted_data_context = _mapping_dict(data_context)
         resolved_brand_voice = brand_voice_profile_from_mapping(
             brand_voice,
@@ -563,6 +565,7 @@ class BlogPostGenerationService:
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     topic=resolved_topic,
                     brand_voice=resolved_brand_voice,
+                    variant_angle=resolved_variant_angle,
                 )
             except Exception as exc:
                 skipped += 1
@@ -596,6 +599,7 @@ class BlogPostGenerationService:
                             quality_repair_attempt_no=repair_attempt_no,
                             topic=resolved_topic,
                             brand_voice=resolved_brand_voice,
+                            variant_angle=resolved_variant_angle,
                         )
                     except Exception as exc:
                         skipped += 1
@@ -705,12 +709,14 @@ class BlogPostGenerationService:
         parse_retry_response_excerpt_chars: int,
         topic: str = "",
         brand_voice: BrandVoiceProfile | None = None,
+        variant_angle: str = "",
     ) -> dict[str, Any] | None:
         system_prompt, base_user_prompt = _blog_generation_prompts(
             prompt_template,
             blueprint=blueprint,
             topic=topic,
             brand_voice=brand_voice,
+            variant_angle=variant_angle,
         )
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
@@ -735,6 +741,7 @@ class BlogPostGenerationService:
                     "skill_name": self._config.skill_name,
                     "asset_type": "blog_post",
                     "attempt_no": attempt_no,
+                    **({"variant_angle": variant_angle} if variant_angle else {}),
                 },
             )
             total_usage = accumulate_usage(total_usage, response.usage)
@@ -746,6 +753,7 @@ class BlogPostGenerationService:
                     "_usage": total_usage,
                     "_parse_attempts": attempt_no,
                     "_quality_repair_attempts": 0,
+                    **({"_variant_angle": variant_angle} if variant_angle else {}),
                 }, brand_voice)
             last_response = clip_invalid_response(
                 response.content,
@@ -766,6 +774,7 @@ class BlogPostGenerationService:
         quality_repair_attempt_no: int,
         topic: str = "",
         brand_voice: BrandVoiceProfile | None = None,
+        variant_angle: str = "",
     ) -> dict[str, Any] | None:
         blockers = tuple(str(item) for item in quality.get("blockers") or () if item)
         if not blockers:
@@ -776,6 +785,7 @@ class BlogPostGenerationService:
             blueprint=blueprint,
             topic=topic,
             brand_voice=brand_voice,
+            variant_angle=variant_angle,
         )
         response = await self._llm.complete(
             [
@@ -798,6 +808,7 @@ class BlogPostGenerationService:
                 "asset_type": "blog_post",
                 "attempt_no": parse_attempts_used + quality_repair_attempt_no,
                 "quality_repair_attempt_no": quality_repair_attempt_no,
+                **({"variant_angle": variant_angle} if variant_angle else {}),
             },
         )
         repaired = parse_blog_post_response(response.content)
@@ -812,6 +823,7 @@ class BlogPostGenerationService:
             ),
             "_parse_attempts": parse_attempts_used,
             "_quality_repair_attempts": int(parsed.get("_quality_repair_attempts") or 0) + 1,
+            **({"_variant_angle": variant_angle} if variant_angle else {}),
         }, brand_voice)
 
     def _quality_check(
@@ -874,6 +886,9 @@ class BlogPostGenerationService:
             "brand_voice_profile": parsed.get("_brand_voice_profile"),
             "brand_voice_audit": parsed.get("_brand_voice_audit"),
         }
+        variant_angle = str(parsed.get("_variant_angle") or "").strip()
+        if variant_angle:
+            metadata["variant_angle"] = variant_angle
         # PR-Blog-Reasoning-Parity: surface reasoning audit fields on
         # the draft metadata when the blueprint carried merged context.
         # Mirrors campaign / report / sales_brief metadata threading.
@@ -1279,6 +1294,7 @@ def _blog_generation_prompts(
     blueprint: Mapping[str, Any],
     topic: str = "",
     brand_voice: BrandVoiceProfile | None = None,
+    variant_angle: str = "",
 ) -> tuple[str, str]:
     blueprint_json = json.dumps(dict(blueprint), separators=(",", ":"), default=str)
     system_prompt = (
@@ -1295,6 +1311,17 @@ def _blog_generation_prompts(
         base_user_prompt_parts.extend((
             "",
             f"Operator-supplied topic focus: {topic}",
+        ))
+    variant_angle = (variant_angle or "").strip()
+    if variant_angle:
+        base_user_prompt_parts.extend((
+            "",
+            f"Variant angle: {variant_angle}",
+            (
+                "Write this as one alternative rendering of the same blueprint. "
+                "Keep the factual claims, evidence, and measurements grounded in "
+                "the supplied blueprint."
+            ),
         ))
     base_user_prompt = "\n".join(base_user_prompt_parts)
     base_user_prompt = _with_support_ticket_descriptive_prompt_addendum(

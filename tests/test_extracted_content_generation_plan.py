@@ -1,6 +1,7 @@
 import pytest
 
 from extracted_content_pipeline.generation_plan import build_generation_plan_from_mapping
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 from extracted_content_pipeline.reasoning_policy import (
     PACKAGED_REASONING_RUNTIME_OUTPUTS,
     packaged_reasoning_runtime_presets_for_output,
@@ -330,6 +331,25 @@ def test_plan_maps_blog_to_blog_generation_service():
         "parse_retry_response_excerpt_chars": 800,
         "topic": "Churn pressure",
     }
+
+
+def test_plan_includes_blog_variant_angle_metadata_when_requested():
+    plan = build_generation_plan_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "variant_count": 2,
+            "inputs": {
+                "topic": "Churn pressure",
+            },
+        }
+    )
+
+    config = plan["steps"][0]["config"]
+    assert config["variant_count"] == 2
+    assert config["variant_angles"] == [
+        VARIANT_ANGLES[0].as_dict(),
+        VARIANT_ANGLES[1].as_dict(),
+    ]
 
 
 def test_plan_stays_non_executable_when_preview_fails_budget():

@@ -740,6 +740,27 @@ async def test_generate_persists_blog_drafts_via_ports() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_threads_variant_angle_to_prompt_and_metadata() -> None:
+    service, _blueprints, blog_posts, llm, _skills = _service()
+    angle = "Pain-led: open with the buyer friction."
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=1,
+        variant_angle=angle,
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert f"Variant angle: {angle}" in user_prompt
+    assert "same blueprint" in user_prompt
+    assert llm.calls[0]["metadata"]["variant_angle"] == angle
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["variant_angle"] == angle
+
+
+@pytest.mark.asyncio
 async def test_generate_attaches_optional_blog_cover_image_before_save() -> None:
     image_provider = _ImageProvider(
         ContentImageAsset(
