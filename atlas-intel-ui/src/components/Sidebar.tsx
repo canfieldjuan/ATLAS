@@ -18,6 +18,7 @@ import {
   FileText,
   Megaphone,
   ClipboardCheck,
+  Palette,
   Sparkles,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -62,6 +63,7 @@ const b2bRetentionLinks: NavItem[] = [
   { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
   { to: '/b2b/campaigns', icon: Megaphone, label: 'Campaigns', minPlan: 'b2b_growth' },
   { to: '/content-ops/new', icon: Sparkles, label: 'Content Ops', minPlan: 'b2b_growth' },
+  { to: '/content-ops/brand-voice', icon: Palette, label: 'Brand Voice', minPlan: 'b2b_growth' },
   { to: '/content-ops/assets', icon: ClipboardCheck, label: 'Asset Review', minPlan: 'b2b_growth' },
 ]
 
@@ -74,6 +76,7 @@ const b2bChallengerLinks: NavItem[] = [
   { to: '/b2b/reports', icon: FileText, label: 'Reports', minPlan: 'b2b_starter' },
   { to: '/b2b/reviews', icon: MessageSquareText, label: 'Reviews' },
   { to: '/content-ops/new', icon: Sparkles, label: 'Content Ops', minPlan: 'b2b_growth' },
+  { to: '/content-ops/brand-voice', icon: Palette, label: 'Brand Voice', minPlan: 'b2b_growth' },
   { to: '/content-ops/assets', icon: ClipboardCheck, label: 'Asset Review', minPlan: 'b2b_growth' },
 ]
 
