@@ -632,6 +632,13 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
             blocked.append(output_id)
             warnings.append(f"Output not implemented yet: {output_id}")
 
+    if "social_post" in outputs and "social_post" not in blocked:
+        try:
+            _item_multiplier_for_output("social_post", inputs=request.inputs)
+        except ValueError as exc:
+            blocked.append("social_post")
+            warnings.append(f"Unsupported social channel: {exc}")
+
     selected_outputs = tuple(output for output in outputs if output not in blocked)
     missing = missing_required_inputs(selected_outputs, request.inputs)
     estimated_cost = estimate_cost_usd(

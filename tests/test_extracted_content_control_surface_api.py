@@ -906,6 +906,33 @@ async def test_preview_generation_route_returns_preflight_plan():
 
 
 @pytest.mark.asyncio
+async def test_preview_generation_route_blocks_unsupported_social_channel():
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
+    )
+
+    route = _route(router, "/ops/preview", "POST")
+    payload = await route.endpoint(
+        {
+            "outputs": ["social_post"],
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["discord"],
+            },
+        }
+    )
+
+    assert payload["can_run"] is False
+    assert payload["blocked_outputs"] == ["social_post"]
+    assert payload["estimated_cost_usd"] == 0.0
+    assert any(
+        "Unsupported social channel: unsupported social_post channel: discord"
+        in warning
+        for warning in payload["warnings"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_preview_generation_route_normalizes_cache_policy_field():
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),

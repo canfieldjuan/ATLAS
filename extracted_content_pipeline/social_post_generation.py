@@ -598,7 +598,8 @@ def _post_body_for_channel(
             f'{hook} "{evidence}" Keep the takeaway conversational and grounded '
             "in the customer proof."
         )
-    return f'{hook} Source note: "{evidence}"'
+    # Channels are normalized before this helper; reaching this branch is drift.
+    raise ValueError(f"unsupported social_post channel: {channel}")
 
 
 def _drafts_from_posts(

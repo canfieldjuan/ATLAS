@@ -232,6 +232,28 @@ def test_preview_keeps_deterministic_multi_channel_social_post_at_zero_cost():
     assert preview["estimated_cost_usd"] == 0.0
 
 
+def test_preview_blocks_unsupported_social_post_channel_without_raising():
+    preview = preview_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "inputs": {
+                "source_material": [{"source_type": "review", "text": "Pricing pressure"}],
+                "social_channels": ["discord"],
+            },
+        }
+    )
+
+    assert preview["can_run"] is False
+    assert preview["outputs"] == []
+    assert preview["blocked_outputs"] == ["social_post"]
+    assert preview["estimated_cost_usd"] == 0.0
+    assert any(
+        "Unsupported social channel: unsupported social_post channel: discord"
+        in warning
+        for warning in preview["warnings"]
+    )
+
+
 def test_preview_charges_stored_brand_voice_social_post_rewrite():
     preview = preview_from_mapping(
         {
