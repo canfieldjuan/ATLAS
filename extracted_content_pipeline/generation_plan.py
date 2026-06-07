@@ -35,7 +35,10 @@ from .reasoning_policy import (
 from .report_generation import ReportGenerationConfig
 from .sales_brief_generation import SalesBriefGenerationConfig
 from .signal_extraction import SignalExtractionConfig
-from .social_post_generation import SocialPostGenerationConfig
+from .social_post_generation import (
+    SocialPostGenerationConfig,
+    normalize_social_post_channels,
+)
 from .stat_card_generation import StatCardGenerationConfig
 from .ticket_faq_markdown import (
     DEFAULT_INTENT_RULES,
@@ -222,12 +225,19 @@ def _signal_extraction_config_for_request(
 
 
 def _social_post_config_for_request(request: ContentOpsRequest) -> SocialPostGenerationConfig:
-    config = SocialPostGenerationConfig(limit=request.limit)
+    channels = request.inputs.get("social_channels")
+    if channels is None:
+        channels = request.inputs.get("social_post_channels")
+    config = SocialPostGenerationConfig(
+        limit=request.limit,
+        channels=normalize_social_post_channels(channels),
+    )
     max_text_chars = _positive_int_input(request.inputs, "source_max_text_chars")
     if max_text_chars is None:
         return config
     return SocialPostGenerationConfig(
         limit=config.limit,
+        channels=config.channels,
         max_text_chars=max_text_chars,
     )
 
@@ -478,6 +488,7 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             status="runnable",
             config={
                 "skill_name": config.skill_name,
+                "channels": list(config.channels),
                 "limit": config.limit,
                 "max_text_chars": config.max_text_chars,
                 "max_tokens": config.max_tokens,

@@ -752,6 +752,7 @@ async def test_execute_runs_social_post_service_from_source_material() -> None:
     assert "Pricing is a problem" in post["text"]
     assert result["plan"]["steps"][0]["config"] == {
         "skill_name": "digest/social_post_generation",
+        "channels": ["linkedin"],
         "limit": 1,
         "max_text_chars": 20,
         "max_tokens": 700,
@@ -759,6 +760,36 @@ async def test_execute_runs_social_post_service_from_source_material() -> None:
         "parse_retry_attempts": 1,
         "parse_retry_response_excerpt_chars": 800,
     }
+
+
+@pytest.mark.asyncio
+async def test_execute_threads_social_post_channels_from_request() -> None:
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["social_post"],
+            "limit": 1,
+            "inputs": {
+                "social_channels": ["linkedin", "twitter"],
+                "source_material": [
+                    {
+                        "review_id": "review-1",
+                        "company": "Acme",
+                        "vendor": "HubSpot",
+                        "review_text": "Pricing is a problem after renewal.",
+                    }
+                ],
+            },
+        },
+        services=ContentOpsExecutionServices(
+            social_post=SocialPostGenerationService()
+        ),
+    )
+
+    assert result["status"] == "completed"
+    step = result["steps"][0]
+    assert step["result"]["generated"] == 2
+    assert [post["channel"] for post in step["result"]["posts"]] == ["linkedin", "x"]
+    assert result["plan"]["steps"][0]["config"]["channels"] == ["linkedin", "x"]
 
 
 @pytest.mark.asyncio

@@ -711,6 +711,7 @@ async def _dispatch_social_post(
         "target_mode": request.target_mode,
         "source_material": request.inputs.get("source_material"),
         "limit": request.limit,
+        "channels": _step_config_sequence(step.config, "channels"),
         "max_text_chars": _step_config_int(step.config, "max_text_chars"),
         "temperature": _step_config_float(step.config, "temperature"),
         "max_tokens": _step_config_int(step.config, "max_tokens"),
