@@ -1,6 +1,6 @@
 # Plan archive index
 
-882 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+889 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -12,6 +12,7 @@
 - [PR-Agents-No-Wait-After-Open](archive/PR-Agents-No-Wait-After-Open.md) - lane: workflow/agents-contract | phase: Workflow/process
 - [PR-Agents-Session-Map-Guard](archive/PR-Agents-Session-Map-Guard.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
 - [PR-Agents-Session-PR-Map](archive/PR-Agents-Session-PR-Map.md) - lane: repo-workflow/session-discipline | phase: Workflow/process
+- [PR-Archive-On-Merge-Ritual](archive/PR-Archive-On-Merge-Ritual.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Atlas-Brain-Test-CI-Enrollment-Audit](archive/PR-Atlas-Brain-Test-CI-Enrollment-Audit.md) - lane: content-ops/faq-deflection | phase: Workflow/process
 - [PR-Atlas-Local-PR-Body-Preflight](archive/PR-Atlas-Local-PR-Body-Preflight.md) - lane: atlas-workflow | phase: Workflow/process.
 - [PR-Atlas-Local-Review-CI](archive/PR-Atlas-Local-Review-CI.md) - lane: atlas-workflow | phase: Workflow/process.
@@ -198,12 +199,14 @@
 - [PR-Content-Ops-Card-PNG-Export](archive/PR-Content-Ops-Card-PNG-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
 - [PR-Content-Ops-Card-Visual-Export-UI](archive/PR-Content-Ops-Card-Visual-Export-UI.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
 - [PR-Content-Ops-Card-Visual-Export](archive/PR-Content-Ops-Card-Visual-Export.md) - lane: content-ops/marketer-reviews-as-input | phase: Product polish
+- [PR-Content-Ops-Claims-Map](archive/PR-Content-Ops-Claims-Map.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Clear-Stale-Inflight](archive/PR-Content-Ops-Clear-Stale-Inflight.md)
 - [PR-Content-Ops-Competitive-Input-Provider](archive/PR-Content-Ops-Competitive-Input-Provider.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Competitive-Sales-Brief-Handoff](archive/PR-Content-Ops-Competitive-Sales-Brief-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Consumed-Reasoning-Campaign-Blog](archive/PR-Content-Ops-Consumed-Reasoning-Campaign-Blog.md)
 - [PR-Content-Ops-Consumed-Reasoning-Execution](archive/PR-Content-Ops-Consumed-Reasoning-Execution.md)
 - [PR-Content-Ops-Consumed-Reasoning-Remaining-Assets](archive/PR-Content-Ops-Consumed-Reasoning-Remaining-Assets.md)
+- [PR-Content-Ops-Content-PR](archive/PR-Content-Ops-Content-PR.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Contract-Tests](archive/PR-Content-Ops-Contract-Tests.md)
 - [PR-Content-Ops-DB-Reasoning-Hardening](archive/PR-Content-Ops-DB-Reasoning-Hardening.md)
 - [PR-Content-Ops-DB-Reasoning-Smoke](archive/PR-Content-Ops-DB-Reasoning-Smoke.md)
@@ -514,6 +517,7 @@
 - [PR-Content-Ops-Review-Source-Quote-Grade-Prefilter](archive/PR-Content-Ops-Review-Source-Quote-Grade-Prefilter.md)
 - [PR-Content-Ops-Review-Source-Readiness](archive/PR-Content-Ops-Review-Source-Readiness.md)
 - [PR-Content-Ops-Review-Source-Schema-Preflight](archive/PR-Content-Ops-Review-Source-Schema-Preflight.md)
+- [PR-Content-Ops-Review-Vocabulary](archive/PR-Content-Ops-Review-Vocabulary.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Reviews-Input-Provider](archive/PR-Content-Ops-Reviews-Input-Provider.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Route-Reasoning-Payload-Regression](archive/PR-Content-Ops-Route-Reasoning-Payload-Regression.md)
 - [PR-Content-Ops-Run-Usage-Route-Isolation](archive/PR-Content-Ops-Run-Usage-Route-Isolation.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -551,6 +555,7 @@
 - [PR-Content-Ops-Tenant-Usage-Summary](archive/PR-Content-Ops-Tenant-Usage-Summary.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Content-Ops-Ticket-FAQ-Markdown](archive/PR-Content-Ops-Ticket-FAQ-Markdown.md)
 - [PR-Content-Ops-Ticket-Thread-Adapter](archive/PR-Content-Ops-Ticket-Thread-Adapter.md)
+- [PR-Content-Ops-Triage-Experiment](archive/PR-Content-Ops-Triage-Experiment.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-UI-File-Ingestion-Tests](archive/PR-Content-Ops-UI-File-Ingestion-Tests.md) - lane: content-ops/ui-file-ingestion-tests
 - [PR-Content-Ops-UI-File-Ingestion](archive/PR-Content-Ops-UI-File-Ingestion.md) - lane: content-ops/ui-file-ingestion
 - [PR-Content-Ops-Upload-Limits-UI](archive/PR-Content-Ops-Upload-Limits-UI.md) - lane: content-ops/upload-limits-ui
@@ -726,6 +731,7 @@
 - [PR-Generated-Asset-Repair-Summary](archive/PR-Generated-Asset-Repair-Summary.md)
 - [PR-Generated-Asset-Repair-Telemetry](archive/PR-Generated-Asset-Repair-Telemetry.md)
 - [PR-Gitignore-Secret-Env-Hardening](archive/PR-Gitignore-Secret-Env-Hardening.md) - lane: workflow/process | phase: Workflow/process
+- [PR-Hardening-Drain](archive/PR-Hardening-Drain.md) - lane: governance/hardening-drain | phase: Workflow/process
 - [PR-Intel-UI-CI-Enrollment-Close-Hole](archive/PR-Intel-UI-CI-Enrollment-Close-Hole.md) - lane: intel-ui/ci-enrollment | phase: Workflow/process
 - [PR-Invoice-Email-Signature](archive/PR-Invoice-Email-Signature.md) - lane: invoicing/cover-email-signature | phase: Product polish
 - [PR-Invoicing-Approval-Blockers-Import-Cycles](archive/PR-Invoicing-Approval-Blockers-Import-Cycles.md) - lane: invoicing | phase: Production hardening
@@ -806,6 +812,7 @@
 - [PR-OptionA-5](archive/PR-OptionA-5.md)
 - [PR-Orphan-Detector-Question-Stacked](archive/PR-Orphan-Detector-Question-Stacked.md) - lane: `content-ops/blog-orphan-detector`
 - [PR-Plans-Archive-Tooling](archive/PR-Plans-Archive-Tooling.md) - lane: governance/plans-archive | phase: Workflow/process
+- [PR-Plans-Check-Wiring](archive/PR-Plans-Check-Wiring.md) - lane: governance/plans-archive | phase: Workflow/process
 - [PR-Post-575-Extraction-State-Closeout](archive/PR-Post-575-Extraction-State-Closeout.md)
 - [PR-Post-586-Content-Ops-Closeout](archive/PR-Post-586-Content-Ops-Closeout.md)
 - [PR-Public-Landing-Page-Renderer-V1](archive/PR-Public-Landing-Page-Renderer-V1.md) - lane: content-ops/public-landing-page-renderer-v1
