@@ -1,53 +1,18 @@
-"""Failure-detection suite for BrandVoiceValidator (AGENTS.md 3i).
+"""Failure-detection suite for BrandVoiceValidator (AGENTS.md 3i)."""
 
-This suite PROVES the validator's detection branches bite. For every rule
-type there is:
-
-  * a "bites" test that asserts the SPECIFIC violation fires, and
-  * a "clean" test that asserts on-brand text yields [] (no false positive).
-
-Per the AGENTS.md 3i dead-alternation lesson, every regex ALTERNATION arm
-gets its own focused test (the two excessive-punctuation arms !! and ??,
-each casual-phrase token, each future-tense token, each landing-page
-must-mention synonym), so a dead arm cannot hide behind a sibling arm.
-
-Where the audited code is DEFECTIVE (substring false positives, the
-content_rule fail_on_match inversion, and the crash-on-malformed-input
-cluster), the test asserts the INTENDED / correct behavior and is marked
-xfail(strict=True) with a reason naming the fix that flips it. The suite
-therefore stays green today (each xfail genuinely fails now) AND records
-the known defect: once the reviewer applies the named fix the strict xfail
-turns into an XPASS-failure that forces them to delete the marker.
-
-Confirmed-correct behaviors (empty text, a content_type with no matching
-content_rules) are asserted as plain green == [] -- no xfail -- because the
-audit found them functionally correct.
-
-Run as:
-    PYTHONPATH=/tmp/wt-mktg python -m pytest \
-        /tmp/wt-mktg/tests/test_brand_voice_validator.py
-
-ASCII-only by project convention (CLAUDE.md / check_ascii_python.sh).
-"""
-
+import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from atlas_brain.services.brand_voice_validator import BrandVoiceValidator
+from atlas_brain.brand.voice_validator import BrandVoiceValidator
 
 
-# Path to the real shipped config (resolved relative to the repo root, two
-# levels up from this tests/ directory). At least one test below exercises
-# this file directly, per the task requirement.
-REAL_CONFIG_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "atlas_brain"
-    / "skills"
-    / "brand"
-    / "brand_voice.yml"
-)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REAL_CONFIG_PATH = REPO_ROOT / "atlas_brain" / "skills" / "brand" / "brand_voice.yml"
+VALIDATOR_CLI = REPO_ROOT / "atlas_brain" / "brand" / "voice_validator.py"
 
 
 def _write_config(tmp_path: Path, body: str, name: str = "brand_voice.yml") -> Path:
@@ -60,6 +25,16 @@ def _write_config(tmp_path: Path, body: str, name: str = "brand_voice.yml") -> P
 def _real_validator() -> BrandVoiceValidator:
     """Build a validator backed by the real shipped brand_voice.yml."""
     return BrandVoiceValidator(config_path=REAL_CONFIG_PATH)
+
+
+def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(VALIDATOR_CLI), *args],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -345,6 +320,27 @@ def test_isolated_tone_rule_bites_and_reports_description(tmp_path):
     ]
 
 
+def test_tone_rule_fail_on_match_false_is_rejected_at_load(tmp_path):
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          avoid: []
+        tone_rules:
+          - id: "must_say_trusted"
+            description: "Tone rules cannot require a phrase."
+            pattern: "trusted"
+            fail_on_match: false
+        content_rules: []
+        """,
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"tone_rules\[0\].*must_say_trusted.*fail_on_match",
+    ):
+        BrandVoiceValidator(config_path=config)
+
+
 def test_isolated_content_rule_must_mention_bites_when_absent(tmp_path):
     config = _write_config(
         tmp_path,
@@ -391,22 +387,14 @@ def test_isolated_content_rule_fail_on_match_true_bites_when_present(tmp_path):
 
 
 # ===========================================================================
-# KNOWN-DEFECT GUARD: substring footgun (the substring vs word-boundary FP).
+# REGRESSION GUARD: substring footgun (the substring vs word-boundary FP).
 #
-# brand_voice_validator.py line 40 uses `if word in lower_text` -- an
-# unanchored substring test -- so a shipped avoid-word embedded in a larger
-# legitimate word raises a FALSE POSITIVE. Reproduced empirically against the
-# real config:
+# A shipped avoid-word embedded in a larger legitimate word must not raise a
+# false positive. The old unanchored substring matcher flagged clean prose:
 #   'transform' flags "Transformer", 'leverage' flags "deleverage",
 #   'disrupt' flags "non-disruptive".
 #
-# Each test below asserts the INTENDED behavior (no false positive). The fix
-# is whole-word matching, e.g. compile each avoid entry as
-#   re.compile(r"\b" + re.escape(word) + r"\b", re.IGNORECASE)
-# and match with re.search. Verified that \bword\b flips ALL THREE examples
-# below (the hyphen/word-start in each case is a \b boundary, so the inner
-# substring is no longer a whole-word match). xfail(strict=True): once the
-# word-boundary fix lands these XPASS and the marker must be removed.
+# Each test below asserts the locked-in whole-word behavior.
 # ===========================================================================
 
 
@@ -447,19 +435,10 @@ def test_substring_word_boundary_still_catches_the_true_positive_standalone():
 
 
 # ===========================================================================
-# KNOWN-DEFECT GUARD: content_rule fail_on_match default inversion.
+# REGRESSION GUARD: content_rule fail_on_match default.
 #
-# tone_rules read the flag as rule.get('fail_on_match', True) (line 45) but
-# content_rules read it as bare rule.get('fail_on_match') (lines 54/58,
-# default None -> falsy). So a content_rule author who omits fail_on_match
-# gets the OPPOSITE of the tone-rule default: a must-not-contain rule silently
-# inverts into a must-contain rule. Reproduced: with the key omitted, CLEAN
-# text (no banned phrase) is flagged and BAD text (has the phrase) passes.
-#
-# Intended behavior (assessment lead fix): default fail_on_match to True so a
-# forgotten key BANS on match rather than requiring the phrase. Both asserts
-# below currently fail (inverted), so xfail(strict=True) -- flip after the
-# default is made explicit and consistent with tone_rules.
+# A content_rule author who omits fail_on_match gets the fail-closed default:
+# the pattern is banned on match rather than inverted into a must-contain rule.
 # ===========================================================================
 
 
@@ -488,16 +467,12 @@ def test_content_rule_missing_fail_on_match_key_bans_on_match_not_inverts(tmp_pa
 # ===========================================================================
 # RULE TYPE 4: robustness.
 #
-# Per the assessment + advisor split:
-#   * malformed config (missing required keys, None sections, None config,
-#     non-str text) are DEFECTS -> assert intended graceful behavior,
-#     xfail(strict=True).
-#   * empty text and a content_type with no matching content_rules are
-#     CONFIRMED-CORRECT -> plain green == [].
+# Malformed config is caught at load time with clear errors. Empty text, empty
+# sections, and unmatched content types return clean results without crashing.
 # ===========================================================================
 
 
-# --- Confirmed-correct robustness (plain green, no xfail) ------------------
+# --- Robust clean paths -----------------------------------------------------
 
 
 def test_empty_text_yields_no_violations(tmp_path):
@@ -566,7 +541,7 @@ def test_unknown_content_type_only_applies_global_rules(tmp_path):
     ]
 
 
-# --- Malformed config -> DEFECT (intended: graceful, xfail strict) ---------
+# --- Malformed config guards -----------------------------------------------
 
 
 def test_tone_rule_missing_pattern_raises_value_error_at_load(tmp_path):
@@ -581,8 +556,6 @@ def test_tone_rule_missing_pattern_raises_value_error_at_load(tmp_path):
         content_rules: []
         """,
     )
-    # Intended: malformed shape is caught with a clear ValueError (load-time
-    # validation). Today this raises KeyError lazily from validate() instead.
     with pytest.raises(ValueError):
         validator = BrandVoiceValidator(config_path=config)
         validator.validate("any text", "blog_post")
@@ -602,7 +575,6 @@ def test_tone_rule_missing_description_raises_value_error_at_load(tmp_path):
     )
     with pytest.raises(ValueError):
         validator = BrandVoiceValidator(config_path=config)
-        # 'boom' present so the (missing) description would be indexed today.
         validator.validate("this goes boom", "blog_post")
 
 
@@ -667,3 +639,41 @@ def test_missing_config_file_raises_file_not_found(tmp_path):
     missing = tmp_path / "does_not_exist.yml"
     with pytest.raises(FileNotFoundError):
         BrandVoiceValidator(config_path=missing)
+
+
+# --- CLI regression tests ---------------------------------------------------
+
+
+def test_cli_returns_zero_for_clean_file(tmp_path):
+    content = tmp_path / "clean_landing_page.md"
+    content.write_text("Atlas is built around extensibility from day one.")
+
+    result = _run_cli("--file", str(content), "--type", "landing_page")
+
+    assert result.returncode == 0
+    assert "PASS:" in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_returns_one_for_brand_voice_violations(tmp_path):
+    content = tmp_path / "bad_landing_page.md"
+    content.write_text("This is a game-changer!!")
+
+    result = _run_cli("--file", str(content), "--type", "landing_page")
+
+    assert result.returncode == 1
+    assert "FAIL: Found" in result.stdout
+    assert "Contains forbidden word: 'game-changer'" in result.stdout
+    assert _EXCLAMATION_TONE_MSG in result.stdout
+    assert _LANDING_MUST_MENTION_MSG in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_returns_one_for_missing_file(tmp_path):
+    missing = tmp_path / "missing.md"
+
+    result = _run_cli("--file", str(missing), "--type", "blog_post")
+
+    assert result.returncode == 1
+    assert f"Error: File not found at {missing}" in result.stdout
+    assert result.stderr == ""

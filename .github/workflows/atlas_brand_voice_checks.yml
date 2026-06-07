@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_brand_voice_checks.yml"
-      - "atlas_brain/services/brand_voice_validator.py"
+      - "atlas_brain/brand/**"
       - "atlas_brain/skills/brand/brand_voice.yml"
       - "tests/test_brand_voice_validator.py"
   push:
@@ -12,7 +12,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_brand_voice_checks.yml"
-      - "atlas_brain/services/brand_voice_validator.py"
+      - "atlas_brain/brand/**"
       - "atlas_brain/skills/brand/brand_voice.yml"
       - "tests/test_brand_voice_validator.py"
 

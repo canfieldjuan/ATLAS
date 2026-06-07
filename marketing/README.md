@@ -24,6 +24,6 @@ No code change is required.
 
 ## Checking locally
 
-    python atlas_brain/services/brand_voice_validator.py \
+    python atlas_brain/brand/voice_validator.py \
       --file marketing/landing_pages/atlas-platform.md \
       --type landing_page

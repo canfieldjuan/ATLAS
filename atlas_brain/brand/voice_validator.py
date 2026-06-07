@@ -48,6 +48,13 @@ class BrandVoiceValidator:
                         f"{section}[{index}] (id={rule_id!r}) missing required "
                         f"keys: {sorted(missing)}"
                     )
+                if section == "tone_rules" and rule.get("fail_on_match", True) is not True:
+                    rule_id = rule.get("id", "<unnamed>")
+                    raise ValueError(
+                        f"{section}[{index}] (id={rule_id!r}) must omit "
+                        "fail_on_match or set it to true; tone rules only fail "
+                        "on matches"
+                    )
                 try:
                     re.compile(rule["pattern"])
                 except re.error as exc:
@@ -86,9 +93,7 @@ class BrandVoiceValidator:
 
         # 2. Tone rules (regex-based).
         for rule in self.config.get("tone_rules") or []:
-            if re.search(rule["pattern"], text, re.IGNORECASE) and rule.get(
-                "fail_on_match", True
-            ):
+            if re.search(rule["pattern"], text, re.IGNORECASE):
                 violations.append(f"Tone violation: {rule['description']}")
 
         # 3. Content-specific rules.

@@ -4,17 +4,17 @@ name: Marketing Content Voice Check
 on:
   pull_request:
     paths:
-      - 'marketing/landing_pages/**'
-      - 'marketing/blog_posts/**'
-      - 'marketing/release_notes/**'
-      - 'marketing/tweets/**'
+      - 'marketing/**'
+      - 'atlas_brain/brand/voice_validator.py'
+      - 'atlas_brain/skills/brand/brand_voice.yml'
+      - '.github/workflows/marketing_content_check.yml'
 
 jobs:
   validate-voice:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           # Need the base SHA so the diff below can resolve; the default
           # shallow (fetch-depth 1) checkout makes `git diff base head` error
@@ -22,16 +22,14 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install PyYAML
-          # In a real project, you'd install your full requirements.txt
-          # pip install -r requirements.txt
 
       - name: Validate brand voice on all changed marketing files
         run: |
@@ -39,7 +37,29 @@ jobs:
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
 
-          files="$(git diff --name-only "$base" "$head" -- 'marketing/**')"
+          changed_marketing_files="$(git diff --name-only "$base" "$head" -- 'marketing/**')"
+          gate_files="$(
+            git diff --name-only "$base" "$head" -- \
+              '.github/workflows/marketing_content_check.yml' \
+              'atlas_brain/brand/voice_validator.py' \
+              'atlas_brain/skills/brand/brand_voice.yml'
+          )"
+
+          if [ -n "$gate_files" ]; then
+            echo "Brand voice gate inputs changed; validating full marketing corpus."
+            corpus_files="$(
+              find \
+                marketing/landing_pages \
+                marketing/blog_posts \
+                marketing/release_notes \
+                marketing/tweets \
+                -type f \( -name '*.md' -o -name '*.txt' \) 2>/dev/null | sort
+            )"
+            files="$(printf '%s\n%s\n' "$changed_marketing_files" "$corpus_files" | sed '/^$/d' | sort -u)"
+          else
+            files="$changed_marketing_files"
+          fi
+
           if [ -z "$files" ]; then
             echo "No marketing content changed; nothing to validate."
             exit 0
@@ -56,15 +76,22 @@ jobs:
               marketing/blog_posts/*)    type="blog_post" ;;
               marketing/release_notes/*) type="release_notes" ;;
               marketing/tweets/*)        type="tweet" ;;
+              marketing/README.md)
+                # Documentation in the marketing directory is intentionally not
+                # content copy, so it has no validator content type.
+                echo "Skipping marketing guide: $file"
+                continue
+                ;;
               *)
                 # Surface, never silently pass an unrecognized marketing path.
-                echo "Skipping unrecognized marketing path: $file"
+                echo "Unrecognized marketing path (no validator type mapped): $file"
+                status=1
                 continue
                 ;;
             esac
 
             echo "Validating $file (type=$type)"
-            if ! python atlas_brain/services/brand_voice_validator.py --file "$file" --type "$type"; then
+            if ! python atlas_brain/brand/voice_validator.py --file "$file" --type "$type"; then
               status=1
             fi
           done <<< "$files"
