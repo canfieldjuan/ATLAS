@@ -1,6 +1,6 @@
 # Plan archive index
 
-901 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+902 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -829,6 +829,7 @@
 - [PR-Public-Landing-Page-Renderer-V1](archive/PR-Public-Landing-Page-Renderer-V1.md) - lane: content-ops/public-landing-page-renderer-v1
 - [PR-Ready-Review-PR-Docs](archive/PR-Ready-Review-PR-Docs.md)
 - [PR-Real-Snapshot-Customer-Wording](archive/PR-Real-Snapshot-Customer-Wording.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
+- [PR-Real-Snapshot-Heading-Hierarchy](archive/PR-Real-Snapshot-Heading-Hierarchy.md) - lane: portfolio-ui/faq-deflection | phase: Product polish
 - [PR-Reasoning-Core-Checks-Wrapper](archive/PR-Reasoning-Core-Checks-Wrapper.md)
 - [PR-Reasoning-Core-Current-State](archive/PR-Reasoning-Core-Current-State.md)
 - [PR-Reasoning-Core-Graph-Boundary-Closeout-2026-05-17](archive/PR-Reasoning-Core-Graph-Boundary-Closeout-2026-05-17.md)
