@@ -22,9 +22,11 @@ Slice phase: Production hardening
    user prompt.
 2. Add brief-type-specific guidance for the known motions:
    `pre_call`, `renewal`, `displacement`, and `discovery`.
-3. Keep no-request behavior unchanged: when no per-call brief type is supplied,
+3. Add a grounding guard so the motion-specific guidance does not invite
+   invented contract dates, renewal windows, competitor names, or timelines.
+4. Keep no-request behavior unchanged: when no per-call brief type is supplied,
    the prompt stays at its existing generic/default shape.
-4. Add focused tests proving renewal prompt steering and no-request backward
+5. Add focused tests proving renewal prompt steering and no-request backward
    compatibility.
 
 ### Review Contract
@@ -34,6 +36,8 @@ Slice phase: Production hardening
         explicit requested brief-type block in the user prompt.
   - [ ] The renewal prompt guidance mentions renewal-stage concerns such as
         retention, expansion, contract timing, or renewal risk.
+  - [ ] The brief-type guidance tells the model to use only supplied
+        opportunity evidence and not invent contract/timeline details.
   - [ ] A generation call without a per-call `default_brief_type` keeps the
         existing prompt free of a requested brief-type block.
   - [ ] Variant-angle prompt steering still works alongside brief-type
@@ -65,6 +69,8 @@ brief type:
 Requested brief type:
 - renewal: write for renewal-stage retention, expansion, contract timing, and
   renewal-risk discussion.
+Use only the supplied opportunity evidence; do not invent contract dates,
+renewal windows, competitor names, or timelines that are not in the data.
 ```
 
 Unknown values still get a generic "match this requested sales motion" line so
@@ -86,6 +92,9 @@ per-call requested brief type -> model brief_type -> service config default
   wiring with focused unit coverage; live acceptance belongs after the remaining
   Gate A quality slices.
 - This does not change persisted `brief_type` precedence from #1364.
+- This adds the review-requested grounding guard in the user prompt instead of
+  weakening the motion-specific guidance; the prompt can still steer toward a
+  motion, but only from supplied opportunity evidence.
 - Cross-layer caller hints were inspected for `SalesBriefGenerationService`.
   The changed parameters are optional keyword/defaulted prompt inputs, so
   existing constructor/generate callers keep the old behavior; the no-request
@@ -105,7 +114,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_extracted_sales_brief_generation.py -q` -
-  31 passed in 0.12s.
+  31 passed in 0.11s after adding the grounding-guard assertion.
 - `bash scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline`
   - passed.
@@ -120,7 +129,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/sales_brief_generation.py` | 41 |
-| `plans/PR-Gate-A-Sales-Brief-Type-Prompt-Steering.md` | 126 |
-| `tests/test_extracted_sales_brief_generation.py` | 31 |
-| **Total** | **198** |
+| `extracted_content_pipeline/sales_brief_generation.py` | 44 |
+| `plans/PR-Gate-A-Sales-Brief-Type-Prompt-Steering.md` | 135 |
+| `tests/test_extracted_sales_brief_generation.py` | 36 |
+| **Total** | **215** |
