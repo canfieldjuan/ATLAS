@@ -214,9 +214,9 @@ def _sales_brief_user_prompt(
             "Requested brief type:\n"
             f"- {resolved_brief_type}: "
             f"{_brief_type_prompt_guidance(resolved_brief_type)}\n"
-            "Use only the supplied opportunity evidence; do not invent contract "
-            "dates, renewal windows, competitor names, or timelines that are not "
-            "in the data."
+            "Use only the supplied opportunity evidence; do not invent "
+            "contract dates, renewal windows, competitor names, or timelines "
+            "that are not in the data."
         )
     resolved_variant_angle = str(variant_angle or "").strip()
     if resolved_variant_angle:
