@@ -1,6 +1,6 @@
 # Plan archive index
 
-886 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+887 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -177,6 +177,7 @@
 - [PR-Content-Ops-Brand-Voice-Profile-Storage](archive/PR-Content-Ops-Brand-Voice-Profile-Storage.md) - lane: content-ops/brand-voice-profile-storage | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Profile](archive/PR-Content-Ops-Brand-Voice-Profile.md) - lane: content-ops/brand-voice-profile | phase: Vertical slice
 - [PR-Content-Ops-Brand-Voice-Scrape-Onboarding](archive/PR-Content-Ops-Brand-Voice-Scrape-Onboarding.md) - lane: content-ops/brand-voice/scrape-onboarding | phase: Vertical slice
+- [PR-Content-Ops-Brand-Voice-Settings-Page](archive/PR-Content-Ops-Brand-Voice-Settings-Page.md) - lane: content-ops/brand-voice/settings-page | phase: Product polish
 - [PR-Content-Ops-CFPB-FAQ-Live-Smoke](archive/PR-Content-Ops-CFPB-FAQ-Live-Smoke.md)
 - [PR-Content-Ops-CFPB-Live-Fetch-Compat](archive/PR-Content-Ops-CFPB-Live-Fetch-Compat.md)
 - [PR-Content-Ops-CFPB-Live-Provider-Smoke](archive/PR-Content-Ops-CFPB-Live-Provider-Smoke.md)
