@@ -7,7 +7,9 @@ On-brand marketing copy, checked automatically on every pull request.
 Each file under `marketing/<type>/` is validated against the codified Atlas
 brand voice in `atlas_brain/skills/brand/brand_voice.yml` by the
 `Marketing Content Voice Check` workflow. A pull request that introduces a
-brand-voice violation fails the check and names the specific rule that fired.
+`BLOCKER` or `MAJOR` brand-voice violation fails the check and names the
+specific rule that fired. `NIT` findings print as advisory warnings with
+suggested fixes, but do not fail the workflow.
 
 | Directory | Type | Extra rule |
 |---|---|---|
