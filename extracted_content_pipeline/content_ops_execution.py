@@ -19,6 +19,7 @@ from .control_surfaces import OUTPUT_CATALOG, ContentOpsRequest, request_from_ma
 from .generation_plan import GenerationPlan, GenerationPlanStep, build_generation_plan
 from .landing_page_input_contract import LANDING_PAGE_CONTEXT_INPUT_KEYS
 from .landing_page_ports import MarketingCampaign
+from .output_variations import VariantAngle, selected_variant_angles
 from .reasoning_signals import REASONING_VALIDATION_BLOCKED
 from .support_ticket_context_contract import (
     SUPPORT_TICKET_CATEGORY,
@@ -58,6 +59,14 @@ _COMPETITIVE_SOURCE_TYPES = frozenset({
     "displacement_edge",
     "displacement_edges",
 })
+
+
+class _ContentOpsStepResultFailure(RuntimeError):
+    """Failure that still carries partial step diagnostics."""
+
+    def __init__(self, message: str, result: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.result = dict(result)
 
 
 @dataclass(frozen=True)
@@ -390,6 +399,18 @@ async def _execute_step(
             brand_voice=brand_voice,
             filters=filters,
         )
+    except _ContentOpsStepResultFailure as exc:
+        error = _step_error_dict(step, str(exc))
+        return (
+            _failed_step(
+                step,
+                str(exc),
+                service=service,
+                reasoning_provider_configured=reasoning_provider_configured,
+                result=exc.result,
+            ),
+            error,
+        )
     except Exception as exc:
         error = _step_error_dict(step, str(exc))
         return (
@@ -667,6 +688,14 @@ async def _dispatch_blog_post(
     )
     if data_context:
         kwargs["data_context"] = data_context
+    if request.variant_count > 1:
+        return await _dispatch_blog_post_variants(
+            service=service,
+            request=request,
+            scope=scope,
+            filters=filters,
+            kwargs=kwargs,
+        )
     return await service.generate(
         scope=scope,
         target_mode=request.target_mode,
@@ -674,6 +703,126 @@ async def _dispatch_blog_post(
         filters=filters,
         **kwargs,
     )
+
+
+async def _dispatch_blog_post_variants(
+    *,
+    service: Any,
+    request: ContentOpsRequest,
+    scope: TenantScope,
+    filters: Mapping[str, Any] | None,
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    variant_results: list[dict[str, Any]] = []
+    saved_ids: list[str] = []
+    errors: list[dict[str, Any]] = []
+    consumed_reasoning: list[dict[str, Any]] = []
+    requested = 0
+    generated = 0
+    skipped = 0
+    reasoning_contexts_used = 0
+    caught_exceptions = 0
+
+    for angle in selected_variant_angles(request.variant_count):
+        angle_data = angle.as_dict()
+        try:
+            result = await service.generate(
+                scope=scope,
+                target_mode=request.target_mode,
+                limit=request.limit,
+                filters=filters,
+                variant_angle=angle.instruction,
+                **kwargs,
+            )
+            result_data = _result_dict(result)
+        except Exception as exc:
+            caught_exceptions += 1
+            error = _blog_variant_error(angle, str(exc), type(exc).__name__)
+            result_data = {
+                "requested": max(1, int(request.limit or 1)),
+                "generated": 0,
+                "skipped": max(1, int(request.limit or 1)),
+                "saved_ids": [],
+                "errors": [error],
+            }
+
+        variant_result = dict(result_data)
+        variant_result["variant_angle"] = angle_data
+        variant_results.append(variant_result)
+        requested += _result_int(result_data, "requested", default=max(1, request.limit))
+        generated += _result_int(result_data, "generated")
+        skipped += _result_int(result_data, "skipped")
+        reasoning_contexts_used += _result_int(result_data, "reasoning_contexts_used")
+        saved_ids.extend(_result_strings(result_data, "saved_ids"))
+        for error in _result_mappings(result_data, "errors"):
+            tagged = dict(error)
+            tagged.setdefault("variant_angle", angle.id)
+            tagged.setdefault("variant_label", angle.label)
+            errors.append(tagged)
+        consumed_reasoning.extend(
+            _result_mappings(result_data, "consumed_reasoning_contexts")
+        )
+
+    aggregate: dict[str, Any] = {
+        "requested": requested,
+        "generated": generated,
+        "skipped": skipped,
+        "reasoning_contexts_used": reasoning_contexts_used,
+        "saved_ids": saved_ids,
+        "errors": errors,
+        "variant_count": len(variant_results),
+        "variant_results": variant_results,
+    }
+    if consumed_reasoning:
+        aggregate["consumed_reasoning_contexts"] = consumed_reasoning
+    if generated == 0:
+        aggregate["warnings"] = [
+            "No blog variants generated; all requested variants were blocked or skipped."
+        ]
+        if caught_exceptions:
+            raise _ContentOpsStepResultFailure("all_blog_variants_failed", aggregate)
+    return aggregate
+
+
+def _blog_variant_error(
+    angle: VariantAngle,
+    reason: str,
+    error_type: str,
+) -> dict[str, str]:
+    return {
+        "variant_angle": angle.id,
+        "variant_label": angle.label,
+        "reason": reason,
+        "error_type": error_type,
+    }
+
+
+def _result_int(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    default: int = 0,
+) -> int:
+    try:
+        return int(data.get(key) if data.get(key) is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _result_strings(data: Mapping[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [str(item) for item in value if str(item)]
+    return []
+
+
+def _result_mappings(data: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
+    value = data.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
 
 
 async def _dispatch_signal_extraction(
@@ -1315,11 +1464,13 @@ def _failed_step(
     *,
     service: Any | None,
     reasoning_provider_configured: bool,
+    result: Mapping[str, Any] | None = None,
 ) -> ContentOpsStepExecution:
     return ContentOpsStepExecution(
         output=step.output,
         runner=step.runner,
         status="failed",
+        result=dict(result or {}),
         error=error,
         reasoning=_step_reasoning_audit(
             step,

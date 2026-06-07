@@ -409,6 +409,9 @@
       "target": "extracted_content_pipeline/generation_plan.py"
     },
     {
+      "target": "extracted_content_pipeline/output_variations.py"
+    },
+    {
       "target": "extracted_content_pipeline/reasoning_policy.py"
     },
     {

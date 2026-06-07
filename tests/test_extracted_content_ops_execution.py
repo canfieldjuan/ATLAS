@@ -19,6 +19,7 @@ from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
 )
+from extracted_content_pipeline.output_variations import VARIANT_ANGLES
 from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
 from extracted_content_pipeline.quote_card_generation import QuoteCardGenerationService
 from extracted_content_pipeline.signal_extraction import SignalExtractionService
@@ -104,6 +105,42 @@ class _OpportunityService:
             "extras": dict(extras),
         })
         return _Result()
+
+
+class _VariantBlogService:
+    def __init__(self, *, fail_on_angle: str = "") -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail_on_angle = fail_on_angle
+
+    async def generate(
+        self,
+        *,
+        scope: TenantScope,
+        target_mode: str,
+        limit: int | None = None,
+        filters: Mapping[str, Any] | None = None,
+        variant_angle: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "scope": scope,
+            "target_mode": target_mode,
+            "limit": limit,
+            "filters": dict(filters or {}),
+            "variant_angle": variant_angle,
+            "kwargs": dict(kwargs),
+        })
+        if self.fail_on_angle and self.fail_on_angle in str(variant_angle or ""):
+            raise RuntimeError("variant failed")
+        call_no = len(self.calls)
+        return {
+            "requested": int(limit or 1),
+            "generated": 1,
+            "skipped": 0,
+            "reasoning_contexts_used": 0,
+            "saved_ids": [f"draft-{call_no}"],
+            "errors": [],
+        }
 
 
 class _ReasoningAwareOpportunityService(_OpportunityService):
@@ -1917,6 +1954,112 @@ async def test_execute_threads_topic_into_blog_post_dispatcher() -> None:
     assert call["topic"] == "Renewal pricing pressure"
     assert call["quality_repair_attempts"] == 2
     assert call["extras"] == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_fans_out_blog_variants_by_angle() -> None:
+    blog = _VariantBlogService()
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "topic": "Renewal pricing pressure",
+            },
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert len(blog.calls) == 3
+    assert [call["variant_angle"] for call in blog.calls] == [
+        VARIANT_ANGLES[0].instruction,
+        VARIANT_ANGLES[1].instruction,
+        VARIANT_ANGLES[2].instruction,
+    ]
+    assert step_result["variant_count"] == 3
+    assert step_result["requested"] == 3
+    assert step_result["generated"] == 3
+    assert step_result["skipped"] == 0
+    assert step_result["saved_ids"] == ["draft-1", "draft-2", "draft-3"]
+    assert [
+        item["variant_angle"]["id"] for item in step_result["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+
+
+@pytest.mark.asyncio
+async def test_execute_blog_variant_failure_does_not_abort_batch() -> None:
+    blog = _VariantBlogService(fail_on_angle="Outcome-led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "topic": "Renewal pricing pressure",
+            },
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    step_result = result["steps"][0]["result"]
+    assert result["status"] == "completed"
+    assert result["errors"] == []
+    assert len(blog.calls) == 3
+    assert step_result["generated"] == 2
+    assert step_result["skipped"] == 1
+    assert step_result["saved_ids"] == ["draft-1", "draft-3"]
+    assert step_result["errors"] == [{
+        "variant_angle": "outcome_led",
+        "variant_label": "Outcome-led",
+        "reason": "variant failed",
+        "error_type": "RuntimeError",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_execute_all_raising_blog_variants_fails_step_with_warning() -> None:
+    blog = _VariantBlogService(fail_on_angle="led")
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["blog_post"],
+            "variant_count": 3,
+            "inputs": {
+                "target_account": "Acme",
+                "topic": "Renewal pricing pressure",
+            },
+        },
+        services=ContentOpsExecutionServices(blog_post=blog),
+    )
+
+    step = result["steps"][0]
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "output": "blog_post",
+        "runner": "BlogPostGenerationService.generate",
+        "error": "all_blog_variants_failed",
+        "reason": "all_blog_variants_failed",
+    }]
+    assert step["status"] == "failed"
+    assert step["error"] == "all_blog_variants_failed"
+    assert step["result"]["generated"] == 0
+    assert step["result"]["skipped"] == 3
+    assert step["result"]["warnings"] == [
+        "No blog variants generated; all requested variants were blocked or skipped."
+    ]
+    assert [
+        item["variant_angle"]["id"] for item in step["result"]["variant_results"]
+    ] == ["pain_led", "outcome_led", "social_proof"]
+    assert [item["variant_angle"] for item in step["result"]["errors"]] == [
+        "pain_led",
+        "outcome_led",
+        "social_proof",
+    ]
 
 
 # -----------------------

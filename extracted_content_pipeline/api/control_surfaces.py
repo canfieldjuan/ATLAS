@@ -518,6 +518,7 @@ if BaseModel is not None:
         reasoning_preset: ReasoningPreset | None = Field(default=None)
         outputs: tuple[str, ...] = Field(default_factory=tuple, max_length=20)
         limit: int = Field(1, ge=1, le=1000)
+        variant_count: int = Field(1, ge=1)
         max_cost_usd: float | None = Field(default=None, gt=0)
         account_usage_budget_usd: float | None = Field(default=None, gt=0)
         account_usage_budget_days: int = Field(7, ge=1, le=90)

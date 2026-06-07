@@ -17,6 +17,7 @@ from .landing_page_repair_contract import (
     LANDING_PAGE_QUALITY_REPAIR_ATTEMPTS_DEFAULT,
     landing_page_quality_repair_attempts_from_inputs,
 )
+from .output_variations import normalize_variant_count
 from .social_post_generation import normalize_social_post_channels
 
 SOCIAL_POST_BRAND_VOICE_UNIT_COST_USD = 0.08
@@ -61,6 +62,7 @@ class ContentOpsRequest:
     reasoning_preset: str | None = None
     outputs: tuple[str, ...] = ()
     limit: int = 1
+    variant_count: int = 1
     max_cost_usd: float | None = None
     account_usage_budget_usd: float | None = None
     account_usage_budget_days: int = 7
@@ -100,6 +102,7 @@ class ControlSurfacePreview:
                 "reasoning_preset": self.normalized_request.reasoning_preset,
                 "outputs": list(self.normalized_request.outputs),
                 "limit": self.normalized_request.limit,
+                "variant_count": self.normalized_request.variant_count,
                 "max_cost_usd": self.normalized_request.max_cost_usd,
                 "account_usage_budget_usd": (
                     self.normalized_request.account_usage_budget_usd
@@ -346,6 +349,7 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
     limit = int(payload.get("limit") if payload.get("limit") is not None else 1)
     if limit < 1:
         raise ValueError(f"limit must be at least 1; got {limit}")
+    variant_count = normalize_variant_count(payload.get("variant_count"))
 
     max_cost_usd = (
         float(payload["max_cost_usd"])
@@ -392,6 +396,7 @@ def request_from_mapping(payload: Mapping[str, Any]) -> ContentOpsRequest:
         else None,
         outputs=normalize_outputs(payload.get("outputs")),
         limit=limit,
+        variant_count=variant_count,
         max_cost_usd=max_cost_usd,
         account_usage_budget_usd=account_usage_budget_usd,
         account_usage_budget_days=account_usage_budget_days,
@@ -504,7 +509,10 @@ def _item_multiplier_for_output(
     output_id: str,
     *,
     inputs: Mapping[str, Any],
+    variant_count: int = 1,
 ) -> int:
+    if output_id == "blog_post":
+        return normalize_variant_count(variant_count)
     if output_id != "social_post":
         return 1
     channels = inputs.get("social_channels")
@@ -518,6 +526,7 @@ def estimate_cost_usd(
     *,
     limit: int,
     inputs: Mapping[str, Any] | None = None,
+    variant_count: int = 1,
     require_quality_gates: bool = True,
     brand_voice_profile_id: str | None = None,
 ) -> float:
@@ -553,7 +562,11 @@ def estimate_cost_usd(
                 quality_repair_attempts=repair_attempts,
             )
             * max(1, limit)
-            * _item_multiplier_for_output(output_id, inputs=provided_inputs)
+            * _item_multiplier_for_output(
+                output_id,
+                inputs=provided_inputs,
+                variant_count=variant_count,
+            )
         )
     return total
 
@@ -634,7 +647,11 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
 
     if "social_post" in outputs and "social_post" not in blocked:
         try:
-            _item_multiplier_for_output("social_post", inputs=request.inputs)
+            _item_multiplier_for_output(
+                "social_post",
+                inputs=request.inputs,
+                variant_count=request.variant_count,
+            )
         except ValueError as exc:
             blocked.append("social_post")
             warnings.append(f"Unsupported social channel: {exc}")
@@ -645,6 +662,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         selected_outputs,
         limit=request.limit,
         inputs=request.inputs,
+        variant_count=request.variant_count,
         require_quality_gates=request.require_quality_gates,
         brand_voice_profile_id=request.brand_voice_profile_id,
     )
@@ -677,6 +695,7 @@ def preview_control_surface(request: ContentOpsRequest) -> ControlSurfacePreview
         reasoning_preset=request.reasoning_preset,
         outputs=selected_outputs,
         limit=request.limit,
+        variant_count=request.variant_count,
         max_cost_usd=request.max_cost_usd,
         account_usage_budget_usd=request.account_usage_budget_usd,
         account_usage_budget_days=request.account_usage_budget_days,
