@@ -1,0 +1,216 @@
+{
+  "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+  "budget": {
+    "account_usage_budget_days": 7,
+    "account_usage_budget_usd": null,
+    "max_cost_usd": 20.0,
+    "messages": [],
+    "triggered": false
+  },
+  "configured_outputs": [
+    "email_campaign",
+    "blog_post",
+    "report",
+    "landing_page",
+    "sales_brief",
+    "social_post",
+    "ad_copy",
+    "quote_card",
+    "stat_card",
+    "signal_extraction",
+    "faq_markdown",
+    "faq_deflection_report"
+  ],
+  "errors": [
+    "blog_post variant persistence collapsed: 2 successful variant(s), 2 saved id entries, 1 unique saved id(s), 1 exported row(s)"
+  ],
+  "export_counts": {
+    "blog_post": 1,
+    "landing_page": 3,
+    "sales_brief": 3
+  },
+  "issue": 1357,
+  "ok": false,
+  "output_dir": "tmp/content_ops_gate_a_brand_voice_variants_20260607",
+  "required_outputs": [
+    "landing_page",
+    "blog_post",
+    "sales_brief"
+  ],
+  "review": {
+    "blog_post": {
+      "missing_ids": [],
+      "requested_ids": [
+        "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16",
+        "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16"
+      ],
+      "updated_ids": [
+        "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16"
+      ]
+    },
+    "landing_page": {
+      "missing_ids": [],
+      "requested_ids": [
+        "a04230f4-54b1-4929-aa3f-98c763844335",
+        "f5746d35-502d-44ac-8c92-737fb4ab53ec",
+        "998f8272-f077-4e82-97f0-afbb27512f1d"
+      ],
+      "updated_ids": [
+        "a04230f4-54b1-4929-aa3f-98c763844335",
+        "f5746d35-502d-44ac-8c92-737fb4ab53ec",
+        "998f8272-f077-4e82-97f0-afbb27512f1d"
+      ]
+    },
+    "sales_brief": {
+      "missing_ids": [],
+      "requested_ids": [
+        "9d41714b-d3d7-4951-b3c2-7a4f0a9b6a8d",
+        "7843150e-413c-48f7-b06f-fed8f58db90a",
+        "6451290c-ffd6-4019-bd22-b55626b21002"
+      ],
+      "updated_ids": [
+        "6451290c-ffd6-4019-bd22-b55626b21002",
+        "7843150e-413c-48f7-b06f-fed8f58db90a",
+        "9d41714b-d3d7-4951-b3c2-7a4f0a9b6a8d"
+      ]
+    }
+  },
+  "saved_ids": {
+    "blog_post": [
+      "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16",
+      "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16"
+    ],
+    "landing_page": [
+      "a04230f4-54b1-4929-aa3f-98c763844335",
+      "f5746d35-502d-44ac-8c92-737fb4ab53ec",
+      "998f8272-f077-4e82-97f0-afbb27512f1d"
+    ],
+    "sales_brief": [
+      "9d41714b-d3d7-4951-b3c2-7a4f0a9b6a8d",
+      "7843150e-413c-48f7-b06f-fed8f58db90a",
+      "6451290c-ffd6-4019-bd22-b55626b21002"
+    ]
+  },
+  "seeded_blog_blueprint": {
+    "saved_ids": [
+      "0da54d85-706c-43e9-aa59-036b182b2d87"
+    ],
+    "slug": "content-ops-support-ticket-live-smoke-2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    "target_mode": "vendor_retention",
+    "topic": "Support-ticket questions customers keep asking",
+    "topic_type": "content_ops_support_ticket_faq"
+  },
+  "status": "failed",
+  "support_ticket_csv": "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv",
+  "variant_count": 3,
+  "variant_summary": {
+    "blog_post": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [
+            {
+              "blockers": [
+                "aeo_structure_missing",
+                "geo_answer_first_sections_missing",
+                "geo_citable_section_structure_missing"
+              ],
+              "blueprint_id": "0da54d85-706c-43e9-aa59-036b182b2d87",
+              "failed_candidate": {
+                "content_excerpt_head": "## What the uploaded support tickets show\n\nThe uploaded support ticket faq gaps analysis covers 36 support-ticket rows. 36 rows were included for generation. 35 rows include direct customer questions. The tickets reveal 9 repeated question clusters: **reporting export** (4 tickets), **dashboard freshness** (4 tickets), **sso setup** (4 tickets), **permissions and seats** (4 tickets), **api and webhooks** (4 tickets), **integration sync** (4 tickets), **data import** (4 tickets), **workflow automation** (4 tickets), and **billing and plan management** (4 tickets). Each cluster represents a question pattern that appeared multiple times in the uploaded sample. The customer wording shows how users phrase the same underlying question in different ways.\n\nFor example, the **reporting export** cluster includes:\n\n> \"Attribution export blocked How do I export attribution reports before our board meeting?\" -- saas-demo-001\n\n> \"CSV export missing fields Why is the campaign CSV export missing source and owner columns?\" -- saas-demo-002\n\n> \"Export scheduled report Can I schedule a weekly attribution report export for finance?\" -- saas-demo-003\n\nThe **dashboard freshness** cluster includes:\n\n> \"Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?\" -- saas-demo-005\n\n> \"Warehouse sync lag How do we check whether the warehouse sync is delayed?\" -- saas-demo-006\n\nThese examples preserve the customer's original language. That wording should guide the draft FAQ quest",
+                "content_excerpt_tail": "n\n- Approved customer-facing wording\n- Support owner review\n\nWithout resolution evidence in the uploaded tickets, the answer content must stay as a placeholder. The support team adds the verified resolution, UI paths, setup steps, and exact fix instructions before the FAQ entry goes live.\n\n## What to measure after publishing\n\nAfter the support team publishes verified FAQ entries, track these signals:\n\n**New tickets by cluster label.** Tag incoming tickets with the same cluster labels used in this analysis. Compare future ticket counts against the observed baseline. The comparison shows whether the same question patterns continue to appear in new tickets.\n\n**FAQ page traffic.** Check page views and time-on-page for each published FAQ entry. Traffic shows which entries are visited.\n\n**Customer feedback.** Add a \"Was this helpful?\" prompt to each FAQ entry. Collect feedback as a signal to inspect.\n\n**Future tickets against observed clusters.** Compare new tickets against the 9 observed clusters. If a cluster's ticket count stays flat or rises after publishing, the FAQ entry may need revision or the question may have a deeper root cause. The comparison is observational.\n\nThe uploaded tickets are undated. The support team should set the measurement window based on their own ticket volume and review cadence.\n\nThe uploaded sample shows repeated questions. Measurement should stay observational: watch the signals, compare the counts, and adjust the FAQ content if the pattern persists.",
+                "content_truncated": true,
+                "generation_parse_attempts": 1,
+                "generation_quality_repair_attempts": 2,
+                "seo_title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal",
+                "slug": "",
+                "target_keyword": "support ticket faq gaps",
+                "title": "Support-Ticket Questions Customers Keep Asking",
+                "topic_type": "",
+                "word_count": 924
+              },
+              "reason": "quality_blocked"
+            }
+          ],
+          "generated": 0,
+          "saved_ids": [],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "9c2cdf6c-9fbf-42db-8af8-6a59e850cf16"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    },
+    "landing_page": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "a04230f4-54b1-4929-aa3f-98c763844335"
+          ],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "f5746d35-502d-44ac-8c92-737fb4ab53ec"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "998f8272-f077-4e82-97f0-afbb27512f1d"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    },
+    "sales_brief": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "9d41714b-d3d7-4951-b3c2-7a4f0a9b6a8d"
+          ],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "7843150e-413c-48f7-b06f-fed8f58db90a"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "6451290c-ffd6-4019-bd22-b55626b21002"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    }
+  }
+}
