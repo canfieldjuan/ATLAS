@@ -203,9 +203,18 @@ def _has_prompt_reasoning_context(payload: Mapping[str, Any]) -> bool:
 def _sales_brief_user_prompt(
     prior_invalid_response: str = "",
     *,
+    brief_type: str | None = None,
     variant_angle: str | None = None,
 ) -> str:
     prompt = "Generate one sales brief from the opportunity above."
+    resolved_brief_type = str(brief_type or "").strip()
+    if resolved_brief_type:
+        prompt = (
+            f"{prompt}\n\n"
+            "Requested brief type:\n"
+            f"- {resolved_brief_type}: "
+            f"{_brief_type_prompt_guidance(resolved_brief_type)}"
+        )
     resolved_variant_angle = str(variant_angle or "").strip()
     if resolved_variant_angle:
         prompt = (
@@ -223,6 +232,34 @@ def _sales_brief_user_prompt(
             "The previous response could not be parsed as the required JSON object. "
             "Return one JSON object with non-empty title and sections."
         ),
+    )
+
+
+def _brief_type_prompt_guidance(brief_type: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(brief_type or "").lower()).strip("_")
+    guidance = {
+        "pre_call": (
+            "write for the 30 seconds before a sales call: account context, "
+            "why now, questions to ask, objections, and next actions."
+        ),
+        "renewal": (
+            "write for renewal-stage retention, expansion, contract timing, "
+            "renewal risk, and the account-specific reason to act before the "
+            "renewal window closes."
+        ),
+        "displacement": (
+            "write for a competitive displacement motion: incumbent pain, "
+            "switching trigger, competitor risk, proof points, and the safest "
+            "next step."
+        ),
+        "discovery": (
+            "write for discovery: unknowns to validate, buyer pain hypotheses, "
+            "questions to ask, and evidence that should shape qualification."
+        ),
+    }
+    return guidance.get(
+        normalized,
+        "write the brief so its substance matches this requested sales motion.",
     )
 
 
@@ -311,6 +348,7 @@ class SalesBriefGenerationService:
             scope=scope,
         )
         resolved_variant_angle = str(variant_angle or "").strip() or None
+        requested_brief_type = str(default_brief_type or "").strip() or None
 
         requested = int(limit or self._config.limit)
         source_opportunities = _opportunities_from_source_material(
@@ -364,6 +402,7 @@ class SalesBriefGenerationService:
                     parse_retry_attempts=resolved_parse_retry_attempts,
                     parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
                     brand_voice=resolved_brand_voice,
+                    brief_type=requested_brief_type,
                     variant_angle=resolved_variant_angle,
                 )
             except Exception as exc:
@@ -469,6 +508,7 @@ class SalesBriefGenerationService:
         parse_retry_attempts: int,
         parse_retry_response_excerpt_chars: int,
         brand_voice: BrandVoiceProfile | None = None,
+        brief_type: str | None = None,
         variant_angle: str | None = None,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
@@ -502,6 +542,7 @@ class SalesBriefGenerationService:
                         role="user",
                         content=_sales_brief_user_prompt(
                             last_response,
+                            brief_type=brief_type,
                             variant_angle=resolved_variant_angle,
                         ),
                     ),
