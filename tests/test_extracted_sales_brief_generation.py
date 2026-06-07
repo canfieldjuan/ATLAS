@@ -680,8 +680,8 @@ async def test_generate_per_call_default_brief_type_override_when_llm_omits_type
 
 
 @pytest.mark.asyncio
-async def test_generate_llm_supplied_brief_type_still_wins_over_per_call_override():
-    """The per-call override only fills in when the LLM omits `brief_type`."""
+async def test_generate_per_call_default_brief_type_wins_over_model_type():
+    """The requested plan brief_type is authoritative when the model drifts."""
 
     service, _intel, sales_briefs, _llm, _skills, _rp = _service(
         responses=[_valid_brief_json(brief_type="pre_call")],
@@ -691,7 +691,25 @@ async def test_generate_llm_supplied_brief_type_still_wins_over_per_call_overrid
     await service.generate(
         scope=TenantScope(account_id="acct-1"),
         target_mode="vendor",
-        default_brief_type="renewal",  # ignored: LLM supplied pre_call
+        default_brief_type="renewal",
+    )
+
+    saved_drafts = sales_briefs.saved[0]["drafts"]
+    assert saved_drafts[0].brief_type == "renewal"
+
+
+@pytest.mark.asyncio
+async def test_generate_llm_supplied_brief_type_still_wins_without_per_call_override():
+    """When no requested brief_type is supplied, the model field remains a fallback."""
+
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(
+        responses=[_valid_brief_json(brief_type="pre_call")],
+        config=SalesBriefGenerationConfig(default_brief_type="discovery"),
+    )
+
+    await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
     )
 
     saved_drafts = sales_briefs.saved[0]["drafts"]

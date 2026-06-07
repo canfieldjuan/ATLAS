@@ -68,15 +68,6 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex Gate A live output-quality proof
 - Found during: PR-Gate-A-Live-Output-Quality-Proof
 
-### Sales brief live generation drifts from requested renewal brief type
-- File/location: `extracted_content_pipeline/sales_brief_generation.py`
-- Description: Gate A requested `inputs.brief_type=renewal`; all three exported sales briefs stored `brief_type=pre_call` because the model's parsed JSON won over the configured default.
-- Why it matters: review/export proves persistence, but the output contract can ignore the operator's requested sales-brief mode.
-- Effort: S
-- Category: correctness
-- Owner/session: Codex Gate A live output-quality proof
-- Found during: PR-Gate-A-Live-Output-Quality-Proof
-
 ## 2026-05-29
 
 ### atlas-intel-ui npm audit vulnerabilities
