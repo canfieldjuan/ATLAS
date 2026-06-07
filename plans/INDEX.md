@@ -1,6 +1,6 @@
 # Plan archive index
 
-883 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+885 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -524,6 +524,8 @@
 - [PR-Content-Ops-Screen-2-Plan-Preview](archive/PR-Content-Ops-Screen-2-Plan-Preview.md)
 - [PR-Content-Ops-Server-File-Ingestion](archive/PR-Content-Ops-Server-File-Ingestion.md) - lane: content-ops/server-file-ingestion
 - [PR-Content-Ops-Signal-Extraction-Result-Summary](archive/PR-Content-Ops-Signal-Extraction-Result-Summary.md)
+- [PR-Content-Ops-Social-Post-Channel-Review-Fixes](archive/PR-Content-Ops-Social-Post-Channel-Review-Fixes.md) - lane: content-ops/brand-voice/social-post-channel-variants | phase: Robust testing
+- [PR-Content-Ops-Social-Post-Channel-Variants](archive/PR-Content-Ops-Social-Post-Channel-Variants.md) - lane: content-ops/brand-voice/social-post-channel-variants | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-Generated-Assets](archive/PR-Content-Ops-Social-Post-Generated-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-LLM-Voice](archive/PR-Content-Ops-Social-Post-LLM-Voice.md) - lane: content-ops/brand-voice/social-post-llm | phase: Vertical slice
 - [PR-Content-Ops-Social-Post-Package-Handoff](archive/PR-Content-Ops-Social-Post-Package-Handoff.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
