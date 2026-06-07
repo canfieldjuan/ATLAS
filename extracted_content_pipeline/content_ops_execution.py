@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
@@ -665,87 +665,21 @@ async def _dispatch_landing_page_variants(
     request: ContentOpsRequest,
     kwargs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    variant_results: list[dict[str, Any]] = []
-    saved_ids: list[str] = []
-    errors: list[dict[str, Any]] = []
-    consumed_reasoning: list[dict[str, Any]] = []
-    requested = 0
-    generated = 0
-    skipped = 0
-    reasoning_contexts_used = 0
-    caught_exceptions = 0
-
-    for angle in selected_variant_angles(request.variant_count):
-        angle_data = angle.as_dict()
-        try:
-            result = await service.generate(
-                variant_angle=angle.instruction,
-                **kwargs,
-            )
-            result_data = _result_dict(result)
-        except Exception as exc:
-            caught_exceptions += 1
-            error = _landing_page_variant_error(angle, str(exc), type(exc).__name__)
-            result_data = {
-                "requested": 1,
-                "generated": 0,
-                "skipped": 1,
-                "saved_ids": [],
-                "errors": [error],
-            }
-
-        variant_result = dict(result_data)
-        variant_result["variant_angle"] = angle_data
-        variant_results.append(variant_result)
-        requested += _result_int(result_data, "requested", default=1)
-        generated += _result_int(result_data, "generated")
-        skipped += _result_int(result_data, "skipped")
-        reasoning_contexts_used += _result_int(result_data, "reasoning_contexts_used")
-        saved_ids.extend(_result_strings(result_data, "saved_ids"))
-        for error in _result_mappings(result_data, "errors"):
-            tagged = dict(error)
-            tagged.setdefault("variant_angle", angle.id)
-            tagged.setdefault("variant_label", angle.label)
-            errors.append(tagged)
-        consumed_reasoning.extend(
-            _result_mappings(result_data, "consumed_reasoning_contexts")
+    async def generate_variant(angle: VariantAngle) -> Any:
+        return await service.generate(
+            variant_angle=angle.instruction,
+            **kwargs,
         )
 
-    aggregate: dict[str, Any] = {
-        "requested": requested,
-        "generated": generated,
-        "skipped": skipped,
-        "reasoning_contexts_used": reasoning_contexts_used,
-        "saved_ids": saved_ids,
-        "errors": errors,
-        "variant_count": len(variant_results),
-        "variant_results": variant_results,
-    }
-    if consumed_reasoning:
-        aggregate["consumed_reasoning_contexts"] = consumed_reasoning
-    if generated == 0:
-        aggregate["warnings"] = [
+    return await _dispatch_output_variants(
+        request=request,
+        generate_variant=generate_variant,
+        requested_default=1,
+        failure_label="all_landing_page_variants_failed",
+        empty_warning=(
             "No landing-page variants generated; all requested variants were blocked or skipped."
-        ]
-        if caught_exceptions:
-            raise _ContentOpsStepResultFailure(
-                "all_landing_page_variants_failed",
-                aggregate,
-            )
-    return aggregate
-
-
-def _landing_page_variant_error(
-    angle: VariantAngle,
-    reason: str,
-    error_type: str,
-) -> dict[str, str]:
-    return {
-        "variant_angle": angle.id,
-        "variant_label": angle.label,
-        "reason": reason,
-        "error_type": error_type,
-    }
+        ),
+    )
 
 
 async def _dispatch_blog_post(
@@ -809,6 +743,36 @@ async def _dispatch_blog_post_variants(
     filters: Mapping[str, Any] | None,
     kwargs: Mapping[str, Any],
 ) -> dict[str, Any]:
+    async def generate_variant(angle: VariantAngle) -> Any:
+        return await service.generate(
+            scope=scope,
+            target_mode=request.target_mode,
+            limit=request.limit,
+            filters=filters,
+            variant_angle=angle.instruction,
+            **kwargs,
+        )
+
+    requested_default = max(1, int(request.limit or 1))
+    return await _dispatch_output_variants(
+        request=request,
+        generate_variant=generate_variant,
+        requested_default=requested_default,
+        failure_label="all_blog_variants_failed",
+        empty_warning=(
+            "No blog variants generated; all requested variants were blocked or skipped."
+        ),
+    )
+
+
+async def _dispatch_output_variants(
+    *,
+    request: ContentOpsRequest,
+    generate_variant: Callable[[VariantAngle], Awaitable[Any]],
+    requested_default: int,
+    failure_label: str,
+    empty_warning: str,
+) -> dict[str, Any]:
     variant_results: list[dict[str, Any]] = []
     saved_ids: list[str] = []
     errors: list[dict[str, Any]] = []
@@ -822,22 +786,15 @@ async def _dispatch_blog_post_variants(
     for angle in selected_variant_angles(request.variant_count):
         angle_data = angle.as_dict()
         try:
-            result = await service.generate(
-                scope=scope,
-                target_mode=request.target_mode,
-                limit=request.limit,
-                filters=filters,
-                variant_angle=angle.instruction,
-                **kwargs,
-            )
+            result = await generate_variant(angle)
             result_data = _result_dict(result)
         except Exception as exc:
             caught_exceptions += 1
-            error = _blog_variant_error(angle, str(exc), type(exc).__name__)
+            error = _variant_error(angle, str(exc), type(exc).__name__)
             result_data = {
-                "requested": max(1, int(request.limit or 1)),
+                "requested": requested_default,
                 "generated": 0,
-                "skipped": max(1, int(request.limit or 1)),
+                "skipped": requested_default,
                 "saved_ids": [],
                 "errors": [error],
             }
@@ -845,7 +802,7 @@ async def _dispatch_blog_post_variants(
         variant_result = dict(result_data)
         variant_result["variant_angle"] = angle_data
         variant_results.append(variant_result)
-        requested += _result_int(result_data, "requested", default=max(1, request.limit))
+        requested += _result_int(result_data, "requested", default=requested_default)
         generated += _result_int(result_data, "generated")
         skipped += _result_int(result_data, "skipped")
         reasoning_contexts_used += _result_int(result_data, "reasoning_contexts_used")
@@ -872,15 +829,13 @@ async def _dispatch_blog_post_variants(
     if consumed_reasoning:
         aggregate["consumed_reasoning_contexts"] = consumed_reasoning
     if generated == 0:
-        aggregate["warnings"] = [
-            "No blog variants generated; all requested variants were blocked or skipped."
-        ]
+        aggregate["warnings"] = [empty_warning]
         if caught_exceptions:
-            raise _ContentOpsStepResultFailure("all_blog_variants_failed", aggregate)
+            raise _ContentOpsStepResultFailure(failure_label, aggregate)
     return aggregate
 
 
-def _blog_variant_error(
+def _variant_error(
     angle: VariantAngle,
     reason: str,
     error_type: str,
