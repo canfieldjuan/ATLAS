@@ -42,6 +42,30 @@ function formatNumber(value) {
   return Number.isFinite(value) ? String(value) : "0";
 }
 
+function customerWordingExamples(questions) {
+  return questions
+    .map((question) => clean(question && question.customer_wording))
+    .filter((phrase) => phrase.length > 0)
+    .slice(0, 5);
+}
+
+function renderCustomerWordingCard(questions) {
+  const examples = customerWordingExamples(questions);
+  return `<div class="customer-wording-card">
+            <div class="customer-wording-header">
+              <p>Customer wording</p>
+              <span>Actual ticket phrases only</span>
+            </div>
+            ${
+              examples.length > 0
+                ? `<ul class="customer-wording-list" aria-label="Customer wording examples">
+                    ${examples.map((phrase) => `<li>${escapeHtml(phrase)}</li>`).join("")}
+                  </ul>`
+                : `<p class="muted">No customer wording examples are shown because this snapshot did not include real ticket phrases. No invented SEO terms are displayed.</p>`
+            }
+          </div>`;
+}
+
 function renderSnapshot(report) {
   if (!report || !report.ok || !report.snapshot) {
     return `<section class="snapshot" aria-labelledby="snapshot-title">
@@ -60,6 +84,9 @@ function renderSnapshot(report) {
             <div><span>Evidence-backed answers</span><strong>${escapeHtml(formatNumber(summary.drafted_answer_count))}</strong></div>
             <div><span>Needs support proof</span><strong>${escapeHtml(formatNumber(summary.no_proven_answer_count))}</strong></div>
           </div>
+          <h3>Help-desk SEO targeting list</h3>
+          <p class="muted">Use actual customer phrases from the uploaded tickets for help-center titles, internal-search synonyms, and FAQ wording. No keyword volume, ranking, or traffic promise is implied.</p>
+          ${renderCustomerWordingCard(questions)}
           <div class="questions">
             ${questions
               .map(
@@ -191,6 +218,12 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .metrics div { border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 14px; background: rgba(2, 6, 23, .35); }
     .metrics span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
     .metrics strong { display: block; margin-top: 8px; font-size: 28px; }
+    .customer-wording-card { margin: 18px 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .35); padding: 18px; }
+    .customer-wording-header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
+    .customer-wording-header p { margin: 0; font-weight: 700; }
+    .customer-wording-header span { color: #86efac; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .customer-wording-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+    .customer-wording-list li { border: 1px solid rgba(30, 41, 59, .9); border-radius: 6px; background: rgba(15, 23, 42, .62); padding: 9px 11px; color: #f8fafc; line-height: 1.45; }
     .questions { display: grid; gap: 14px; }
     .questions article { border-top: 1px solid rgba(30, 41, 59, .9); padding-top: 14px; }
     .questions h3 { margin: 6px 0; font-size: 17px; }
@@ -200,7 +233,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
     .success { color: #bbf7d0; background: rgba(34, 197, 94, .1); border-color: rgba(34, 197, 94, .28); }
     .muted { color: rgba(226, 232, 240, .68); line-height: 1.65; }
-    @media (max-width: 820px) { .grid, .metrics { grid-template-columns: 1fr; } .shell { padding-top: 32px; } }
+    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>

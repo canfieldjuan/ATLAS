@@ -167,6 +167,14 @@ export default function FaqDeflectionResult() {
     ];
   }, [snapshotState]);
 
+  const customerWordingExamples = useMemo(() => {
+    if (snapshotState.status !== "available") return [];
+    return snapshotState.snapshot.top_questions
+      .map((question) => question.customer_wording.trim())
+      .filter((phrase) => phrase.length > 0)
+      .slice(0, 5);
+  }, [snapshotState]);
+
   const startCheckout = async () => {
     if (!requestId) return;
     setCheckout({ status: "submitting" });
@@ -279,7 +287,46 @@ export default function FaqDeflectionResult() {
 
             {snapshotState.status === "available" && (
               <div className="mt-10">
-                <h2 className="text-xl font-semibold text-white">Top repeated questions</h2>
+                <h2 className="text-xl font-semibold text-white">
+                  Help-desk SEO targeting list
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-surface-200/75">
+                  Use actual customer phrases from the uploaded tickets for
+                  help-center titles, internal-search synonyms, and FAQ wording.
+                  No keyword volume, ranking, or traffic promise is implied.
+                </p>
+                <div className="mt-5 rounded-lg border border-surface-700/60 bg-surface-800/40 p-5">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+                    <p className="text-sm font-semibold text-white">Customer wording</p>
+                    <p className="text-xs font-medium uppercase tracking-[0.14em] text-primary-300">
+                      Actual ticket phrases only
+                    </p>
+                  </div>
+                  {customerWordingExamples.length > 0 ? (
+                    <ul
+                      aria-label="Customer wording examples"
+                      className="mt-4 grid gap-2 text-sm leading-6 text-surface-100 sm:grid-cols-2"
+                    >
+                      {customerWordingExamples.map((phrase, index) => (
+                        <li
+                          key={`${phrase}-${index}`}
+                          className="rounded-md border border-surface-700/60 bg-surface-900/35 px-3 py-2"
+                        >
+                          {phrase}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-4 text-sm leading-6 text-surface-200/75">
+                      No customer wording examples are shown because this
+                      snapshot did not include real ticket phrases. No invented
+                      SEO terms are displayed.
+                    </p>
+                  )}
+                </div>
+                <h3 className="mt-8 text-lg font-semibold text-white">
+                  Top repeated questions
+                </h3>
                 <div className="mt-4 divide-y divide-surface-700/60 rounded-lg border border-surface-700/60 bg-surface-800/30">
                   {snapshotState.snapshot.top_questions.map((item) => (
                     <article key={`${item.rank}-${item.question}`} className="p-5">

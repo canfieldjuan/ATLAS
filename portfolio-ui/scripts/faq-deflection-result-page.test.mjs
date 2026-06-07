@@ -121,6 +121,70 @@ await test("snapshot guard names paid report fields that must not render pre-pay
   assert.match(pageSource, /collectForbiddenKeys/);
 });
 
+await test("real snapshot page groups bounded customer wording examples", () => {
+  const compactPageSource = pageSource.replace(/\s+/g, " ");
+  for (const source of [pageSource, resultPageSource]) {
+    assert.match(source, /Customer wording/);
+    assert.match(source, /Help-desk SEO targeting list/);
+    assert.match(source, /aria-label="Customer wording examples"/);
+    assert.match(source, /No invented\s+SEO terms are displayed/);
+    assert.doesNotMatch(source, /guaranteed (keyword|ranking|traffic|search)/i);
+  }
+  assert.match(pageSource, /customerWordingExamples/);
+  assert.match(
+    compactPageSource,
+    /top_questions\s*\.map\(\(question\) => question\.customer_wording\.trim\(\)\)/,
+  );
+  assert.match(pageSource, /\.slice\(0, 5\)/);
+
+  const topQuestions = Array.from({ length: 6 }, (_, index) => ({
+    rank: index + 1,
+    question: `Question ${index + 1}`,
+    weighted_frequency: 6 - index,
+    customer_wording: `customer phrase ${index + 1}`,
+  }));
+  const html = renderResultPage({
+    requestId: "content-ops-abc123",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: { generated: 6, drafted_answer_count: 2, no_proven_answer_count: 4 },
+        top_questions: topQuestions,
+      },
+      artifact_status: "locked",
+    },
+  });
+  assert.match(html, /Help-desk SEO targeting list/);
+  assert.match(html, /Customer wording/);
+  assert.match(html, /aria-label="Customer wording examples"/);
+  assert.match(html, /No keyword volume, ranking, or traffic promise is implied/);
+  const list = html.match(
+    /<ul class="customer-wording-list" aria-label="Customer wording examples">([\s\S]*?)<\/ul>/,
+  );
+  assert.ok(list, "customer wording examples list must render");
+  assert.match(list[1], /customer phrase 1/);
+  assert.match(list[1], /customer phrase 5/);
+  assert.doesNotMatch(list[1], /customer phrase 6/);
+  assert.match(html, /customer phrase 6/);
+
+  const emptyHtml = renderResultPage({
+    requestId: "content-ops-abc123",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: { generated: 0, drafted_answer_count: 0, no_proven_answer_count: 0 },
+        top_questions: [],
+      },
+      artifact_status: "locked",
+    },
+  });
+  assert.match(emptyHtml, /No customer wording examples are shown/);
+  assert.match(emptyHtml, /No invented SEO terms are displayed/);
+  assert.doesNotMatch(emptyHtml, /aria-label="Customer wording examples"/);
+});
+
 await test("checkout endpoint validates request and configured account identifiers", async () => {
   const env = { ATLAS_ACCOUNT_ID: "2b2b950d-f64b-4852-bc30-f92a34cdf169" };
   const valid = validatePayload({
