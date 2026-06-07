@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
@@ -13,7 +15,7 @@ from extracted_content_pipeline.social_post_ports import SocialPostDraft
 
 
 class _LLM:
-    def __init__(self, *responses: str) -> None:
+    def __init__(self, *responses: str | Exception) -> None:
         self.responses = list(responses)
         self.calls: list[dict[str, object]] = []
 
@@ -25,6 +27,8 @@ class _LLM:
             "metadata": dict(metadata or {}),
         })
         content = self.responses.pop(0) if self.responses else "{}"
+        if isinstance(content, Exception):
+            raise content
         return LLMResponse(
             content=content,
             model="test-model",
@@ -270,6 +274,73 @@ async def test_social_post_service_generates_requested_channel_variants() -> Non
 
 
 @pytest.mark.asyncio
+async def test_social_post_service_applies_limit_to_source_rows_for_channel_variants() -> None:
+    service = SocialPostGenerationService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=2,
+        channels=("linkedin", "x"),
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            },
+            {
+                "review_id": "review-2",
+                "vendor": "Zendesk",
+                "review_text": "Support queues took too long to triage.",
+            },
+            {
+                "review_id": "review-3",
+                "vendor": "Intercom",
+                "review_text": "Reporting did not explain where leads came from.",
+            },
+        ],
+    )
+
+    payload = result.as_dict()
+    assert payload["generated"] == 4
+    assert [post["source_id"] for post in payload["posts"]] == [
+        "review-1",
+        "review-1",
+        "review-2",
+        "review-2",
+    ]
+    assert [post["channel"] for post in payload["posts"]] == [
+        "linkedin",
+        "x",
+        "linkedin",
+        "x",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_social_post_service_generates_threads_variant_body() -> None:
+    service = SocialPostGenerationService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        channels=("threads",),
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            }
+        ],
+    )
+
+    payload = result.as_dict()
+    assert payload["generated"] == 1
+    assert payload["posts"][0]["channel"] == "threads"
+    assert "Keep the takeaway conversational" in payload["posts"][0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_social_post_service_rejects_unknown_channel() -> None:
     service = SocialPostGenerationService()
 
@@ -399,6 +470,75 @@ async def test_social_post_service_rewrites_brand_voice_per_requested_channel() 
     assert "channel=linkedin" in llm.calls[0]["messages"][1].content
     assert "channel=x" in llm.calls[1]["messages"][1].content
     assert 'Return channel exactly "x".' in llm.calls[1]["messages"][1].content
+
+
+@pytest.mark.asyncio
+async def test_social_post_service_keeps_sibling_channel_when_one_rewrite_fails() -> None:
+    llm = _LLM(
+        RuntimeError("provider down"),
+        '{"channel":"linkedin","text":"LinkedIn rewrite survived the sibling failure."}',
+    )
+    service = SocialPostGenerationService(llm=llm, skills=_Skills())
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        channels=("x", "linkedin"),
+        brand_voice={
+            "id": "voice-1",
+            "account_id": "acct-1",
+            "descriptors": ["direct"],
+        },
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            }
+        ],
+    )
+
+    payload = result.as_dict()
+    assert payload["generated"] == 1
+    assert payload["posts"][0]["channel"] == "linkedin"
+    assert payload["posts"][0]["text"] == (
+        "LinkedIn rewrite survived the sibling failure."
+    )
+    assert "Source note" not in payload["posts"][0]["text"]
+    assert [warning["code"] for warning in payload["warnings"]] == [
+        "social_post_llm_error"
+    ]
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_social_post_service_caps_x_brand_voice_rewrite_at_280_chars() -> None:
+    llm = _LLM(json.dumps({"channel": "x", "text": "x" * 350}))
+    service = SocialPostGenerationService(llm=llm, skills=_Skills())
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        channels=("x",),
+        brand_voice={
+            "id": "voice-1",
+            "account_id": "acct-1",
+            "descriptors": ["direct"],
+        },
+        source_material=[
+            {
+                "review_id": "review-1",
+                "vendor": "HubSpot",
+                "review_text": "Pricing became hard to justify after renewal.",
+            }
+        ],
+    )
+
+    payload = result.as_dict()
+    assert payload["generated"] == 1
+    assert payload["posts"][0]["channel"] == "x"
+    assert len(payload["posts"][0]["text"]) == 280
+    assert payload["posts"][0]["text"].endswith("...")
 
 
 @pytest.mark.asyncio
