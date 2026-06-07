@@ -1,6 +1,6 @@
 # Plan archive index
 
-890 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+891 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -465,6 +465,7 @@
 - [PR-Content-Ops-Migration-Dry-Run-Skip-Summary](archive/PR-Content-Ops-Migration-Dry-Run-Skip-Summary.md) - lane: content-ops/faq-generator-io-tests
 - [PR-Content-Ops-Output-Variations-Blog-Only](archive/PR-Content-Ops-Output-Variations-Blog-Only.md) - lane: content-ops/output-variations/blog-only | phase: Vertical slice
 - [PR-Content-Ops-Output-Variations-Landing-Page](archive/PR-Content-Ops-Output-Variations-Landing-Page.md) - lane: content-ops/output-variations/landing-page | phase: Vertical slice
+- [PR-Content-Ops-Output-Variations-Shared-Fanout](archive/PR-Content-Ops-Output-Variations-Shared-Fanout.md) - lane: content-ops/output-variations/shared-fanout | phase: Production hardening
 - [PR-Content-Ops-Persisted-Source-Execute](archive/PR-Content-Ops-Persisted-Source-Execute.md) - lane: content-ops/upload-source-run-handoff | phase: Vertical slice
 - [PR-Content-Ops-Pipeline-LLM-Routing](archive/PR-Content-Ops-Pipeline-LLM-Routing.md) - lane: content-ops/pipeline-llm-routing
 - [PR-Content-Ops-Placeholder-Url-Gate](archive/PR-Content-Ops-Placeholder-Url-Gate.md)
