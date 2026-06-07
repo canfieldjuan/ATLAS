@@ -1,5 +1,6 @@
 """Failure-detection suite for BrandVoiceValidator (AGENTS.md 3i)."""
 
+import json
 import subprocess
 import sys
 import textwrap
@@ -44,6 +45,10 @@ def _messages(findings: list[BrandVoiceFinding]) -> list[str]:
 def _only_finding(findings: list[BrandVoiceFinding]) -> BrandVoiceFinding:
     assert len(findings) == 1
     return findings[0]
+
+
+def _json_stdout(result: subprocess.CompletedProcess[str]) -> dict:
+    return json.loads(result.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -981,4 +986,229 @@ def test_cli_returns_one_for_missing_file(tmp_path):
 
     assert result.returncode == 1
     assert f"Error: File not found at {missing}" in result.stdout
+    assert result.stderr == ""
+
+
+def test_cli_json_returns_clean_result_envelope(tmp_path):
+    content = tmp_path / "clean_landing_page.md"
+    content.write_text("Atlas is built around extensibility from day one.")
+
+    result = _run_cli(
+        "--file", str(content), "--type", "landing_page", "--format", "json"
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 0
+    assert payload == {
+        "content_type": "landing_page",
+        "file": str(content),
+        "findings": [],
+        "ok": True,
+        "status": "pass",
+        "strict": False,
+        "summary": {
+            "advisory": 0,
+            "blocking": 0,
+            "total": 0,
+        },
+    }
+    assert result.stderr == ""
+
+
+def test_cli_json_reports_advisory_findings_without_failing_by_default(tmp_path):
+    content = tmp_path / "discouraged_blog_post.md"
+    content.write_text("The result is predictable for operators.")
+
+    result = _run_cli(
+        "--file", str(content), "--type", "blog_post", "--format", "json"
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 0
+    assert payload["ok"] is True
+    assert payload["status"] == "warn"
+    assert payload["strict"] is False
+    assert payload["summary"] == {
+        "advisory": 1,
+        "blocking": 0,
+        "total": 1,
+    }
+    assert payload["findings"] == [
+        {
+            "category": "vocabulary",
+            "message": "Prefer 'deterministic' over 'predictable'",
+            "rule_id": "vocabulary.use.predictable",
+            "severity": "NIT",
+            "suggestion": "Use 'deterministic' instead of 'predictable'",
+        }
+    ]
+    assert result.stderr == ""
+
+
+def test_cli_json_strict_reports_advisory_findings_as_failure(tmp_path):
+    content = tmp_path / "strict_discouraged_blog_post.md"
+    content.write_text("The result is predictable for operators.")
+
+    result = _run_cli(
+        "--file",
+        str(content),
+        "--type",
+        "blog_post",
+        "--strict",
+        "--format",
+        "json",
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "fail"
+    assert payload["strict"] is True
+    assert payload["summary"] == {
+        "advisory": 1,
+        "blocking": 0,
+        "total": 1,
+    }
+    assert payload["findings"][0]["rule_id"] == "vocabulary.use.predictable"
+    assert payload["findings"][0]["suggestion"] == (
+        "Use 'deterministic' instead of 'predictable'"
+    )
+    assert result.stderr == ""
+
+
+def test_cli_json_reports_mixed_blocking_and_advisory_findings(tmp_path):
+    content = tmp_path / "mixed_blog_post.md"
+    content.write_text("The result is predictable and a game-changer.")
+
+    result = _run_cli(
+        "--file", str(content), "--type", "blog_post", "--format", "json"
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "fail"
+    assert payload["summary"] == {
+        "advisory": 1,
+        "blocking": 1,
+        "total": 2,
+    }
+    assert payload["findings"] == [
+        {
+            "category": "vocabulary",
+            "message": "Contains forbidden word: 'game-changer'",
+            "rule_id": "vocabulary.avoid.game-changer",
+            "severity": "BLOCKER",
+            "suggestion": None,
+        },
+        {
+            "category": "vocabulary",
+            "message": "Prefer 'deterministic' over 'predictable'",
+            "rule_id": "vocabulary.use.predictable",
+            "severity": "NIT",
+            "suggestion": "Use 'deterministic' instead of 'predictable'",
+        },
+    ]
+    assert result.stderr == ""
+
+
+def test_cli_json_reports_missing_file_as_error_envelope(tmp_path):
+    missing = tmp_path / "missing.md"
+
+    result = _run_cli(
+        "--file", str(missing), "--type", "blog_post", "--format", "json"
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 1
+    assert payload == {
+        "content_type": "blog_post",
+        "error": {
+            "code": "file_not_found",
+            "message": f"File not found at {missing}",
+        },
+        "file": str(missing),
+        "findings": [],
+        "ok": False,
+        "status": "error",
+        "strict": False,
+        "summary": {
+            "advisory": 0,
+            "blocking": 0,
+            "total": 0,
+        },
+    }
+    assert result.stderr == ""
+
+
+def test_cli_json_reports_bad_config_shape_as_error_envelope(tmp_path):
+    content = tmp_path / "clean_blog_post.md"
+    content.write_text("A deterministic capability dispatch system.")
+    config = _write_config(
+        tmp_path,
+        """
+        vocabulary:
+          avoid: []
+        tone_rules:
+          - id: "bad"
+        content_rules: []
+        """,
+        name="bad_shape.yml",
+    )
+
+    result = _run_cli(
+        "--file",
+        str(content),
+        "--type",
+        "blog_post",
+        "--config",
+        str(config),
+        "--format",
+        "json",
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "invalid_config"
+    assert "tone_rules[0]" in payload["error"]["message"]
+    assert "missing required" in payload["error"]["message"]
+    assert payload["findings"] == []
+    assert payload["summary"] == {
+        "advisory": 0,
+        "blocking": 0,
+        "total": 0,
+    }
+    assert result.stderr == ""
+
+
+def test_cli_json_reports_bad_config_yaml_as_error_envelope(tmp_path):
+    content = tmp_path / "clean_blog_post.md"
+    content.write_text("A deterministic capability dispatch system.")
+    config = tmp_path / "bad_syntax.yml"
+    config.write_text("vocabulary:\n  avoid: [unterminated\n")
+
+    result = _run_cli(
+        "--file",
+        str(content),
+        "--type",
+        "blog_post",
+        "--config",
+        str(config),
+        "--format",
+        "json",
+    )
+
+    payload = _json_stdout(result)
+    assert result.returncode == 1
+    assert payload["ok"] is False
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "invalid_config"
+    assert payload["findings"] == []
+    assert payload["summary"] == {
+        "advisory": 0,
+        "blocking": 0,
+        "total": 0,
+    }
     assert result.stderr == ""

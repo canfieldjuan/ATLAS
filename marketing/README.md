@@ -36,3 +36,10 @@ Use strict mode when advisory `NIT` findings should fail the local run:
       --file marketing/blog_posts/why-deterministic-checks.md \
       --type blog_post \
       --strict
+
+For structured counts and finding metadata:
+
+    python atlas_brain/brand/voice_validator.py \
+      --file marketing/blog_posts/why-deterministic-checks.md \
+      --type blog_post \
+      --format json
