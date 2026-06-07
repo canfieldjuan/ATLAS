@@ -1,5 +1,5 @@
 """Lightweight brand utilities."""
 
-from .voice_validator import BrandVoiceValidator
+from .voice_validator import BrandVoiceFinding, BrandVoiceValidator
 
-__all__ = ["BrandVoiceValidator"]
+__all__ = ["BrandVoiceFinding", "BrandVoiceValidator"]
