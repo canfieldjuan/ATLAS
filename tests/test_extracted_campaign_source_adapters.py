@@ -10,6 +10,7 @@ import pytest
 from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
+    load_source_rows_from_file,
     parse_default_fields,
     parse_default_fields_with_booking_url_or_exit,
     parse_default_fields_or_exit,
@@ -221,6 +222,49 @@ def test_source_rows_normalize_and_warn_for_missing_text() -> None:
     assert first["target_mode"] == "vendor_retention"
     assert first["evidence"][0]["source_type"] == "transcript"
     assert "missing_source_text" in [warning.code for warning in loaded.warnings]
+
+
+def test_load_source_rows_from_semicolon_csv_detects_support_ticket_export(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id;subject;message",
+            "ticket-1;Export help;How do I export attribution reports?",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export attribution reports?",
+    }]
+
+
+def test_load_source_rows_preserves_quoted_commas_and_multiline_text(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            'ticket-1,Export help,"How do I export, then download',
+            'the attribution report?"',
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export, then download\nthe attribution report?",
+    }]
 
 
 def test_source_row_maps_provider_complaint_narrative_aliases() -> None:

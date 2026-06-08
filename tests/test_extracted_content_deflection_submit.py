@@ -103,6 +103,44 @@ def _install_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_module.socket, "getaddrinfo", _getaddrinfo)
 
 
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_parses_bom_semicolon_csv() -> None:
+    data = (
+        "\ufeffticket_id;subject;message\n"
+        "ticket-1;Export help;How do I export attribution reports?\n"
+    ).encode("utf-8")
+
+    rows, byte_count = await api_module._load_deflection_submit_upload_rows(
+        _Upload(data),
+        max_bytes=1024,
+    )
+
+    assert byte_count == len(data)
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export attribution reports?",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_fails_loud_on_metadata_header() -> None:
+    data = _csv_bytes([
+        "Zendesk ticket export",
+        "ticket_id,subject,message",
+        "ticket-1,Export help,How do I export attribution reports?",
+    ])
+
+    with pytest.raises(api_module.HTTPException) as excinfo:
+        await api_module._load_deflection_submit_upload_rows(
+            _Upload(data),
+            max_bytes=1024,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Uploaded CSV could not be parsed."
+
+
 def _router(
     store: InMemoryDeflectionReportArtifactStore,
 ):
