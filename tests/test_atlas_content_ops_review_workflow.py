@@ -9,6 +9,7 @@ from atlas_brain._content_ops_review_workflow import (
     ContentOpsReviewRequest,
     TenantClaimRegistryReadError,
     run_content_ops_review,
+    run_content_ops_review_for_bound_tenant,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import ClaimStatus, ExtractedClaim, RegistryClaim
@@ -55,6 +56,25 @@ class _FailingRegistryReader:
     async def list_registry_claims(self, *, scope: TenantScope):
         self.scopes.append(scope)
         raise TenantClaimRegistryReadError("claim registry read failed")
+
+
+@dataclass
+class _AccountResolver:
+    account_id: object
+    calls: int = 0
+
+    async def resolve_account_id(self):
+        self.calls += 1
+        return self.account_id
+
+
+@dataclass
+class _FailingAccountResolver:
+    calls: int = 0
+
+    async def resolve_account_id(self):
+        self.calls += 1
+        raise RuntimeError("oauth token lookup failed")
 
 
 def _reader() -> _RegistryReader:
@@ -139,6 +159,62 @@ async def test_registry_reader_receives_tenant_scope_not_request_account_id() ->
     assert reader.scopes == [scope]
     assert result.content_pr.asset_id == "asset-1"
     assert result.mapped_claims[0].status == ClaimStatus.MATCH
+
+
+@pytest.mark.asyncio
+async def test_bound_tenant_review_uses_resolved_account_scope() -> None:
+    reader = _reader()
+    resolver = _AccountResolver(" acct-1 ")
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert resolver.calls == 1
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+    assert result.mapped_claims[0].status == ClaimStatus.MATCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_id", [None, "", " ", 123])
+async def test_bound_tenant_review_blocks_missing_or_malformed_binding(
+    account_id: object,
+) -> None:
+    reader = _reader()
+    resolver = _AccountResolver(account_id)
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("tenant scope required",)
+    assert result.mapped_claims == ()
+    assert resolver.calls == 1
+    assert reader.scopes == []
+
+
+@pytest.mark.asyncio
+async def test_bound_tenant_review_blocks_resolver_failure_before_registry() -> None:
+    reader = _reader()
+    resolver = _FailingAccountResolver()
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("tenant binding resolution failed",)
+    assert result.mapped_claims == ()
+    assert resolver.calls == 1
+    assert reader.scopes == []
 
 
 @pytest.mark.asyncio
