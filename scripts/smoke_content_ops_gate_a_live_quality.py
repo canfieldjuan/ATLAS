@@ -31,8 +31,16 @@ from smoke_content_ops_live_generation import (  # noqa: E402
 )
 
 
-DEFAULT_OUTPUTS = ("email_campaign", "landing_page", "blog_post", "sales_brief")
+DEFAULT_OUTPUTS = (
+    "email_campaign",
+    "landing_page",
+    "blog_post",
+    "sales_brief",
+    "report",
+)
 SEQUENCE_OUTPUTS = frozenset({"email_campaign"})
+SINGLE_RUN_OUTPUTS = frozenset({"report"})
+OPPORTUNITY_BACKED_OUTPUTS = frozenset({"email_campaign", "report"})
 SEQUENCE_REQUIRED_CHANNELS = {"email_campaign": ("email_cold", "email_followup")}
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_saas_demo_sources.csv"
@@ -158,6 +166,17 @@ def _default_brand_voice(account_id: str) -> dict[str, Any]:
     }
 
 
+def _report_opportunity_id_from_rows(
+    support_ticket_rows: Sequence[Mapping[str, Any]],
+) -> str:
+    for row in support_ticket_rows:
+        for key in ("target_id", "Ticket ID", "ticket_id", "id"):
+            value = str(row.get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
 def _resolve_outputs(raw_outputs: str | Sequence[str]) -> tuple[str, ...]:
     if isinstance(raw_outputs, str):
         candidates = raw_outputs.split(",")
@@ -226,6 +245,10 @@ def build_gate_a_payload(
         "cta_label": "Upload Ticket CSV -- Get the Gap Audit",
         "cta_url": "/systems/ai-content-ops/intake",
     }
+    if "report" in selected_outputs:
+        report_opportunity_id = _report_opportunity_id_from_rows(support_ticket_rows)
+        if report_opportunity_id:
+            inputs["opportunity_id"] = report_opportunity_id
     payload: dict[str, Any] = {
         "outputs": list(selected_outputs),
         "target_mode": target_mode,
@@ -404,7 +427,7 @@ async def prepare_gate_a_output_dependencies(
         _align_blog_payload_to_seed(prepared_payload, seeded_blog_blueprint)
 
     opportunity_import: Mapping[str, Any] | None = None
-    if "email_campaign" in selected_outputs:
+    if any(output in OPPORTUNITY_BACKED_OUTPUTS for output in selected_outputs):
         opportunity_import = await seed_email_campaign_opportunities(
             pool,
             scope,
@@ -414,6 +437,8 @@ async def prepare_gate_a_output_dependencies(
             filters=_payload_filters(prepared_payload),
         )
         _write_json(output_dir / "opportunity-import.json", opportunity_import)
+        if "report" in selected_outputs:
+            _bind_report_opportunity(prepared_payload, opportunity_import)
     return prepared_payload, seeded_blog_blueprint, opportunity_import
 
 
@@ -423,6 +448,42 @@ def _payload_filters(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
         return None
     filters = inputs.get("filters")
     return filters if isinstance(filters, Mapping) else None
+
+
+def _bind_report_opportunity(
+    payload: dict[str, Any],
+    opportunity_import: Mapping[str, Any],
+) -> None:
+    inputs = payload.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        raise ValueError("payload inputs must remain an object before report binding")
+    requested_target_id = str(inputs.get("opportunity_id") or "").strip()
+    target_ids = opportunity_import.get("target_ids") or ()
+    if isinstance(target_ids, (str, bytes)) or not isinstance(target_ids, Sequence):
+        target_ids = ()
+    imported_target_ids = tuple(
+        dict.fromkeys(str(item).strip() for item in target_ids if str(item).strip())
+    )
+    if requested_target_id:
+        if requested_target_id not in imported_target_ids:
+            raise ValueError(
+                "report opportunity_id was not imported: " + requested_target_id
+            )
+        target_id = requested_target_id
+    elif len(imported_target_ids) == 1:
+        target_id = imported_target_ids[0]
+    elif not imported_target_ids:
+        raise ValueError("report opportunity import returned no target_ids")
+    else:
+        raise ValueError(
+            "report opportunity import returned multiple target_ids without "
+            "an explicit opportunity_id"
+        )
+    filters = inputs.get("filters")
+    filters = dict(filters) if isinstance(filters, Mapping) else {}
+    filters["target_id"] = target_id
+    inputs["filters"] = filters
+    inputs["opportunity_id"] = target_id
 
 
 async def seed_email_campaign_opportunities(
@@ -586,6 +647,12 @@ async def export_saved_drafts(
     from extracted_content_pipeline.landing_page_postgres import (  # noqa: PLC0415
         PostgresLandingPageRepository,
     )
+    from extracted_content_pipeline.report_export import (  # noqa: PLC0415
+        export_report_drafts,
+    )
+    from extracted_content_pipeline.report_postgres import (  # noqa: PLC0415
+        PostgresReportRepository,
+    )
     from extracted_content_pipeline.sales_brief_export import (  # noqa: PLC0415
         export_sales_brief_drafts,
     )
@@ -646,6 +713,19 @@ async def export_saved_drafts(
             export.as_dict(),
             sales_ids,
         )
+    report_ids = saved_ids.get("report") or ()
+    if report_ids:
+        export = await export_report_drafts(
+            PostgresReportRepository(pool),
+            scope=scope,
+            status=None,
+            target_mode=target_mode,
+            limit=max(100, len(report_ids)),
+        )
+        exports["report"] = _filter_saved_draft_export_rows(
+            export.as_dict(),
+            report_ids,
+        )
     return exports
 
 
@@ -670,7 +750,11 @@ def _execution_errors(
         if not saved_ids.get(output):
             errors.append(f"{output} returned no saved_ids")
         payload = _step_payload(result, output)
-        if output not in SEQUENCE_OUTPUTS and int(payload.get("variant_count") or 0) <= 1:
+        if (
+            output not in SEQUENCE_OUTPUTS
+            and output not in SINGLE_RUN_OUTPUTS
+            and int(payload.get("variant_count") or 0) <= 1
+        ):
             errors.append(f"{output} did not report multiple variants")
     return errors
 

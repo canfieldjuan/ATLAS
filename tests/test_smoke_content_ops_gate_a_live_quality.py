@@ -69,10 +69,12 @@ def test_build_gate_a_payload_sets_top_level_variants_and_brand_voice() -> None:
         "landing_page",
         "blog_post",
         "sales_brief",
+        "report",
     ]
     assert payload["variant_count"] == 3
     assert payload["max_cost_usd"] == 1.25
     assert payload["inputs"]["target_account"] == "SaaS support team with repeat ticket backlog"
+    assert payload["inputs"]["opportunity_id"] == "ticket-1"
     assert payload["inputs"]["selling"] == {
         "product_name": "Support Ticket FAQ Gap Audit",
         "affiliate_url": "https://finetunelab.ai/systems/ai-content-ops/intake",
@@ -92,10 +94,32 @@ def test_build_gate_a_payload_accepts_selected_outputs() -> None:
         target_mode="vendor_retention",
         variant_count=3,
         quality_repair_attempts=1,
-        outputs=("landing_page", "blog_post", "sales_brief"),
+        outputs=("landing_page", "blog_post", "sales_brief", "report"),
     )
 
-    assert payload["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+    assert payload["outputs"] == ["landing_page", "blog_post", "sales_brief", "report"]
+
+
+def test_bind_report_opportunity_fails_when_requested_id_was_not_imported() -> None:
+    payload = {
+        "inputs": {
+            "opportunity_id": "ticket-2",
+            "filters": {"topic_type": "support_ticket_faq_gap_live_gate_a"},
+        }
+    }
+
+    with pytest.raises(ValueError, match="was not imported"):
+        smoke._bind_report_opportunity(payload, {"target_ids": ["ticket-1"]})
+
+
+def test_bind_report_opportunity_requires_explicit_id_for_multiple_targets() -> None:
+    payload = {"inputs": {"filters": {"topic_type": "support_ticket_faq_gap_live_gate_a"}}}
+
+    with pytest.raises(ValueError, match="multiple target_ids"):
+        smoke._bind_report_opportunity(
+            payload,
+            {"target_ids": ["ticket-1", "ticket-2"]},
+        )
 
 
 @pytest.mark.asyncio
@@ -211,6 +235,107 @@ async def test_prepare_gate_a_output_dependencies_imports_after_blog_alignment(
         "topic_type": "content_ops_support_ticket_faq",
         "slug": "support-ticket-faq-blueprint",
     }
+
+
+@pytest.mark.asyncio
+async def test_prepare_gate_a_output_dependencies_imports_report_opportunity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _fake_provider(payload: Any, *, scope: Any) -> dict[str, Any]:
+        del scope
+        return dict(payload)
+
+    async def _fake_seed(pool: Any, scope: Any, **kwargs: Any) -> dict[str, Any]:
+        captured["pool"] = pool
+        captured["scope"] = scope
+        captured["kwargs"] = kwargs
+        return {"inserted": 1, "skipped": 0, "target_ids": ["ticket-1"]}
+
+    monkeypatch.setattr(smoke, "_payload_with_support_ticket_provider", _fake_provider)
+    monkeypatch.setattr(smoke, "seed_email_campaign_opportunities", _fake_seed)
+    monkeypatch.setattr(smoke, "_write_json", lambda *args, **kwargs: None)
+
+    args = SimpleNamespace(
+        account_id="acct-gate-a",
+        target_mode="vendor_retention",
+        variant_count=3,
+    )
+    payload = smoke.build_gate_a_payload(
+        account_id="acct-gate-a",
+        support_ticket_rows=[],
+        target_mode="vendor_retention",
+        variant_count=3,
+        quality_repair_attempts=1,
+        outputs=("report",),
+    )
+    prepared, seeded_blog, imported = await smoke.prepare_gate_a_output_dependencies(
+        args,
+        "scope",
+        pool="pool",
+        payload=payload,
+        selected_outputs=("report",),
+        source_rows=({"Ticket ID": "ticket-1"},),
+        output_dir=tmp_path,
+    )
+
+    assert seeded_blog is None
+    assert imported == {"inserted": 1, "skipped": 0, "target_ids": ["ticket-1"]}
+    assert captured["pool"] == "pool"
+    assert captured["scope"] == "scope"
+    assert captured["kwargs"]["filters"] == {
+        "topic_type": "support_ticket_faq_gap_live_gate_a"
+    }
+    assert prepared["inputs"]["opportunity_id"] == "ticket-1"
+    assert prepared["inputs"]["filters"] == {
+        "topic_type": "support_ticket_faq_gap_live_gate_a",
+        "target_id": "ticket-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_gate_a_output_dependencies_fails_closed_for_report_without_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    async def _fake_provider(payload: Any, *, scope: Any) -> dict[str, Any]:
+        del scope
+        return dict(payload)
+
+    async def _fake_seed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        return {"inserted": 0, "skipped": 1, "target_ids": []}
+
+    monkeypatch.setattr(smoke, "_payload_with_support_ticket_provider", _fake_provider)
+    monkeypatch.setattr(smoke, "seed_email_campaign_opportunities", _fake_seed)
+    monkeypatch.setattr(smoke, "_write_json", lambda *args, **kwargs: None)
+
+    args = SimpleNamespace(
+        account_id="acct-gate-a",
+        target_mode="vendor_retention",
+        variant_count=3,
+    )
+    payload = smoke.build_gate_a_payload(
+        account_id="acct-gate-a",
+        support_ticket_rows=[],
+        target_mode="vendor_retention",
+        variant_count=3,
+        quality_repair_attempts=1,
+        outputs=("report",),
+    )
+
+    with pytest.raises(ValueError, match="returned no target_ids"):
+        await smoke.prepare_gate_a_output_dependencies(
+            args,
+            "scope",
+            pool="pool",
+            payload=payload,
+            selected_outputs=("report",),
+            source_rows=(),
+            output_dir=tmp_path,
+        )
 
 
 @pytest.mark.asyncio
@@ -334,6 +459,7 @@ def test_saved_ids_by_output_reads_aggregate_variant_saved_ids() -> None:
         "landing_page": ["lp-1", "lp-2", "lp-3"],
         "blog_post": ["blog-1"],
         "sales_brief": ["brief-1"],
+        "report": [],
     }
     assert smoke.variant_summary(result)["landing_page"]["variants"][0][
         "variant_angle"
@@ -364,6 +490,32 @@ def test_execution_errors_respect_selected_outputs() -> None:
     assert smoke._execution_errors(result, saved_ids, outputs=("blog_post",)) == []
     assert smoke.variant_summary(result, outputs=("blog_post",)) == {
         "blog_post": {"variant_count": 3, "variants": []}
+    }
+
+
+def test_execution_errors_allow_single_report_run_without_variants() -> None:
+    result = {
+        "status": "completed",
+        "steps": [
+            {
+                "output": "report",
+                "status": "completed",
+                "result": {
+                    "requested": 1,
+                    "generated": 1,
+                    "skipped": 0,
+                    "saved_ids": ["report-1"],
+                },
+            },
+        ],
+    }
+
+    saved_ids = smoke.saved_ids_by_output(result, outputs=("report",))
+
+    assert saved_ids == {"report": ["report-1"]}
+    assert smoke._execution_errors(result, saved_ids, outputs=("report",)) == []
+    assert smoke.variant_summary(result, outputs=("report",)) == {
+        "report": {"variant_count": 0, "variants": []}
     }
 
 
@@ -535,6 +687,44 @@ async def test_export_saved_drafts_exports_email_campaign_sequence(
     assert [row["id"] for row in exports["email_campaign"]["rows"]] == [
         "campaign-1",
         "campaign-2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_export_saved_drafts_exports_report_by_saved_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_export_report_drafts(repository: Any, **kwargs: Any) -> _ExportResult:
+        calls.append({"repository": repository, **kwargs})
+        return _ExportResult([
+            {"id": "report-1", "title": "Ticket Gap Report"},
+            {"id": "other-report", "title": "Other"},
+        ])
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.report_export.export_report_drafts",
+        _fake_export_report_drafts,
+    )
+
+    pool = object()
+    scope = object()
+    exports = await smoke.export_saved_drafts(
+        pool,
+        scope=scope,
+        target_mode="vendor_retention",
+        saved_ids={"report": ["report-1"]},
+    )
+
+    assert calls[0]["repository"].pool is pool
+    assert calls[0]["scope"] is scope
+    assert calls[0]["status"] is None
+    assert calls[0]["target_mode"] == "vendor_retention"
+    assert calls[0]["limit"] == 100
+    assert exports["report"]["count"] == 1
+    assert exports["report"]["rows"] == [
+        {"id": "report-1", "title": "Ticket Gap Report"}
     ]
 
 

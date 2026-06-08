@@ -1,0 +1,84 @@
+{
+  "count": 1,
+  "filters": {
+    "account_id": "7d9c8e6a-5f42-4c91-9237-1394a0f2b681",
+    "id": [
+      "c8b7105a-392e-4641-90a2-bb9110ae580e"
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "limit": 100,
+  "rows": [
+    {
+      "generation_input_tokens": 1204,
+      "generation_output_tokens": 684,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "id": "c8b7105a-392e-4641-90a2-bb9110ae580e",
+      "metadata": {
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 15,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1189,
+          "input_tokens": 1204,
+          "output_tokens": 684,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "7d9c8e6a-5f42-4c91-9237-1394a0f2b681",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "saas-demo-001",
+        "target_mode": "vendor_retention"
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "saas-demo-001"
+      ],
+      "report_type": "vendor_retention",
+      "section_count": 3,
+      "sections": [
+        {
+          "body_markdown": "Support evidence from Atlas Supply reveals a blocking issue with FlowPilot's attribution report export functionality. The inquiry \"How do I export attribution reports before our board meeting?\" indicates an urgent operational need tied to executive reporting deadlines. This service ticket surfaces a capability gap at a critical business moment when reporting deliverables are required for board-level presentations. The timing constraint (\"before our board meeting\") elevates the severity of this limitation beyond routine reporting needs.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "export_limitation_context",
+          "metadata": {},
+          "title": "Export Limitation Context"
+        },
+        {
+          "body_markdown": "The export limitation directly affects Morgan Reyes's ability to fulfill Revenue Operations responsibilities during a high-stakes business cycle. Attribution reporting serves as a foundational analytics capability for revenue operations teams, enabling performance measurement, channel analysis, and strategic planning discussions. The inability to extract this data for board presentations creates workflow friction and potentially undermines the value realization from FlowPilot's platform. This gap between product capability and operational requirements represents a retention risk factor, particularly when the limitation surfaces during executive visibility moments.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "operational_impact",
+          "metadata": {},
+          "title": "Operational Impact on Revenue Operations"
+        },
+        {
+          "body_markdown": "Service evidence points to a product capability gap that intersects with executive reporting requirements, creating a potential retention vulnerability. When core reporting functions fail to meet operational needs during board cycles, customers may evaluate alternative solutions that provide more robust export and reporting capabilities. The support ticket's urgency suggests this is not a training gap but a product limitation that blocks critical workflows. Revenue operations teams typically require flexible data export capabilities across multiple reporting dimensions, and limitations in this area can accelerate vendor evaluation cycles when alternatives offer superior reporting infrastructure.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "retention_considerations",
+          "metadata": {},
+          "title": "Retention Risk Considerations"
+        }
+      ],
+      "status": "approved",
+      "summary": "Atlas Supply's Revenue Operations Lead, Morgan Reyes, has encountered a critical limitation in FlowPilot's reporting capabilities that is blocking time-sensitive board meeting preparation. The support ticket reveals an inability to export attribution reports, a fundamental reporting function required for executive presentations. This service evidence points to a gap in FlowPilot's export functionality that directly impacts operational workflows during high-stakes business cycles. The limitation surfaces during a critical business moment when reporting deliverables are non-negotiable, suggesting potential friction in the customer relationship. This represents a retention risk area where product capability gaps intersect with executive visibility requirements.",
+      "target_id": "saas-demo-001",
+      "target_mode": "vendor_retention",
+      "title": "FlowPilot Attribution Export Limitation Impacting Atlas Supply Operations"
+    }
+  ]
+}
