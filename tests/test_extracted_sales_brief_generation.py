@@ -511,6 +511,60 @@ async def test_generate_skips_when_quality_pack_blocks_no_references() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_blocks_second_person_brand_voice_miss_without_saving() -> None:
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(
+        responses=[_valid_brief_json()]
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        brand_voice={
+            "account_id": "acct-1",
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert "brand_voice:preferred_pov_second_person_not_detected" in result.errors[0]["blockers"]
+    assert sales_briefs.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_persists_second_person_brand_voice_compliant_brief() -> None:
+    response = json.dumps({
+        "title": "Your Acme renewal brief",
+        "headline": "Your renewal window needs a precise next step",
+        "brief_type": "renewal",
+        "sections": [
+            {
+                "id": "account_context",
+                "title": "Your Account Context",
+                "body_markdown": "You have renewal pressure to address this week.",
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, sales_briefs, _llm, _skills, _rp = _service(responses=[response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        brand_voice={
+            "account_id": "acct-1",
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 1
+    draft = sales_briefs.saved[0]["drafts"][0]
+    assert draft.metadata["brand_voice_audit"]["passed"] is True
+
+
+@pytest.mark.asyncio
 async def test_generate_blocks_when_response_omits_headline() -> None:
     """End-to-end: parser accepts the candidate, quality pack fires no_headline."""
     response = json.dumps({

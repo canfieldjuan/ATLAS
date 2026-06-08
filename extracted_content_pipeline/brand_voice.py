@@ -187,6 +187,24 @@ def brand_voice_audit(parsed: Mapping[str, Any], profile: BrandVoiceProfile) -> 
     }
 
 
+def brand_voice_quality_blockers(parsed: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return fail-visible blocker codes for failed brand-voice audits."""
+
+    audit = parsed.get("_brand_voice_audit")
+    if not isinstance(audit, Mapping) or audit.get("passed") is True:
+        return ()
+    blockers: list[str] = []
+    for warning in audit.get("warnings") or ():
+        warning_text = _clean(warning)
+        if warning_text:
+            blockers.append(f"brand_voice:{warning_text}")
+    for term in audit.get("banned_terms") or ():
+        term_text = _clean(term)
+        if term_text:
+            blockers.append(f"brand_voice:banned_term:{term_text}")
+    return tuple(dict.fromkeys(blockers))
+
+
 def _validate_scope(profile: BrandVoiceProfile, scope: TenantScope | None) -> None:
     expected = _clean(getattr(scope, "account_id", ""))
     if expected and profile.account_id and expected != profile.account_id:
@@ -254,7 +272,11 @@ def _flatten_text(value: Any) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, Mapping):
-        return " ".join(_flatten_text(item) for item in value.values())
+        return " ".join(
+            _flatten_text(item)
+            for key, item in value.items()
+            if not str(key).startswith("_")
+        )
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
         return " ".join(_flatten_text(item) for item in value)
     return ""
@@ -298,6 +320,7 @@ __all__ = [
     "BrandVoiceProfile",
     "apply_brand_voice_to_system_prompt",
     "brand_voice_audit",
+    "brand_voice_quality_blockers",
     "brand_voice_profile_from_mapping",
     "brand_voice_profile_metadata",
     "brand_voice_prompt_block",

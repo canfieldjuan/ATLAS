@@ -6,6 +6,7 @@ from extracted_content_pipeline.brand_voice import (
     apply_brand_voice_to_system_prompt,
     brand_voice_profile_from_mapping,
     brand_voice_prompt_block,
+    brand_voice_quality_blockers,
     brand_voice_result_metadata,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
@@ -121,3 +122,46 @@ def test_brand_voice_audit_flags_reading_level_band() -> None:
 
     assert parsed["_brand_voice_audit"]["passed"] is False
     assert "reading_level_concise_exceeded" in parsed["_brand_voice_audit"]["warnings"]
+
+
+def test_brand_voice_audit_ignores_private_generation_metadata() -> None:
+    profile = brand_voice_profile_from_mapping(
+        {"id": "acme-main", "preferred_pov": "second_person"},
+        scope=TenantScope(account_id="acct-1"),
+    )
+
+    parsed = brand_voice_result_metadata(
+        {
+            "title": "Renewal risk brief",
+            "body": "The renewal risk is visible in repeated pricing complaints.",
+            "_variant_angle": "your renewal risk",
+        },
+        profile,
+    )
+
+    assert parsed["_brand_voice_audit"]["passed"] is False
+    assert "preferred_pov_second_person_not_detected" in parsed["_brand_voice_audit"]["warnings"]
+
+
+def test_brand_voice_quality_blockers_surface_failed_audit_fields() -> None:
+    parsed = {
+        "_brand_voice_audit": {
+            "passed": False,
+            "warnings": [
+                "preferred_pov_second_person_not_detected",
+                "preferred_pov_second_person_not_detected",
+                "",
+            ],
+            "banned_terms": ["synergy", "synergy", ""],
+        }
+    }
+
+    assert brand_voice_quality_blockers(parsed) == (
+        "brand_voice:preferred_pov_second_person_not_detected",
+        "brand_voice:banned_term:synergy",
+    )
+
+
+def test_brand_voice_quality_blockers_ignore_passed_or_missing_audits() -> None:
+    assert brand_voice_quality_blockers({}) == ()
+    assert brand_voice_quality_blockers({"_brand_voice_audit": {"passed": True}}) == ()
