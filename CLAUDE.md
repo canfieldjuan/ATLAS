@@ -640,6 +640,11 @@ ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL=<public-issuer-url> \
 ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL=<public-resource-url>/mcp \
 ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN=<long-operator-token> \
 python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
+
+# OAuth public-discovery smoke (metadata + 401 challenge; no draft reads)
+.venv/bin/python scripts/check_content_ops_marketer_verify_oauth_discovery.py \
+  --issuer-url <public-issuer-url> \
+  --resource-url <public-resource-url>/mcp
 ```
 
 Tools: `verify_draft`
