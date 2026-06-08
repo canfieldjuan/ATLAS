@@ -879,6 +879,8 @@ async def test_generate_keeps_dynamic_blueprint_out_of_system_prompt() -> None:
     system_prompt = llm.calls[0]["messages"][0].content
     user_prompt = llm.calls[0]["messages"][1].content
     assert "the blueprint JSON supplied in the user message" in system_prompt
+    assert "## Grounding contract" in system_prompt
+    assert "Never introduce counts, percentages, statistics" in system_prompt
     assert "HubSpot pricing pressure" not in system_prompt
     assert '"topic":"HubSpot pricing pressure"' in user_prompt
 

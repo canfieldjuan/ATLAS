@@ -103,7 +103,12 @@ Return a JSON object with the generated content. The structure depends on the ch
    - `champion` / `evaluator`: Technical tone, focus on features, integrations, migration ease
    - `end_user`: Casual, focus on daily productivity gains and frustration relief
 
-4. **Use specific numbers** when available: seat count, pricing context from quotes, contract timing. E.g., "For a team of 200, that adds up fast" rather than "For large teams".
+4. **Follow the shared grounding contract**: use campaign-specific proof only
+   when it comes directly from the input JSON, `campaign_proof_terms`, or
+   reasoning proof points. Do not weaken the shared grounding contract to make
+   the email more persuasive.
+
+   **Sparse support-ticket mode**: When the only evidence is one `support_ticket`, use this pattern: reference the exact question or a close paraphrase, say it "points to a possible FAQ gap" or "looks like a missing help-center answer", and offer to map that specific question into a draft answer. Use singular language only. The only allowed claims are the ticket question, the possible FAQ/help-center gap, and that FineTune Lab can map this question against the help center to identify whether an answer is missing or hard to find. Do not add any other factual assertion, consequence, trend, recurrence, queue/support-team behavior, timing, impact, count, ranking, pattern, source-volume, or product-result claim.
 
 5. **CTA varies by buying_stage**:
    - `active_purchase`: Direct -- "Let's schedule a call this week"

@@ -1,0 +1,61 @@
+{
+  "count": 2,
+  "filters": {
+    "account_id": "5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901",
+    "id": [
+      "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+      "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
+    ],
+    "statuses": [
+      "approved"
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "limit": 100,
+  "rows": [
+    {
+      "body": "<p>Reese Morgan,</p><p>Following up on the question your team asked: <strong>How do I see which workspace caused a usage overage?</strong></p><p>That question points to a possible FAQ gap.</p><p>FineTune Lab can map this question against your help center and identify whether an answer is missing or hard to find. <a href=\"https://finetunelab.ai/systems/ai-content-ops/intake\">See how the audit works</a>.</p>",
+      "channel": "email_followup",
+      "company_name": "Silverline Studio",
+      "created_at": "2026-06-08 22:08:40.264319+00:00",
+      "cta": "Worth a look?",
+      "generation_input_tokens": null,
+      "generation_output_tokens": null,
+      "generation_parse_attempts": 0,
+      "generation_total_tokens": null,
+      "id": "b26be0f8-6c54-4519-8b26-a2debb0a6f9d",
+      "llm_model": "deterministic/single-support-ticket",
+      "metadata": "{\"cta\": \"Worth a look?\", \"scope\": {\"user_id\": \"11111111-1111-4111-8111-111111111111\", \"account_id\": \"5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901\"}, \"target_id\": \"saas-demo-036\", \"target_mode\": \"vendor_retention\", \"review_status\": \"approved\", \"generation_model\": \"deterministic/single-support-ticket\", \"source_opportunity\": {\"id\": \"saas-demo-036\", \"channel\": \"email_followup\", \"selling\": {\"sender_name\": \"FineTune Lab\", \"product_name\": \"Support Ticket FAQ Gap Audit\", \"sender_title\": \"Content Ops Team\", \"affiliate_url\": \"https://finetunelab.ai/systems/ai-content-ops/intake\", \"sender_company\": \"FineTune Lab\"}, \"evidence\": [{\"text\": \"How do I see which workspace caused a usage overage?\", \"source_id\": \"saas-demo-036\", \"source_type\": \"support_ticket\", \"source_title\": \"Usage overage\"}], \"Ticket ID\": \"saas-demo-036\", \"source_id\": \"saas-demo-036\", \"target_id\": \"saas-demo-036\", \"Source URL\": \"https://example.com/support/saas-demo-036\", \"account_id\": \"5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901\", \"topic_type\": \"support_ticket_faq_gap_live_gate_a\", \"Description\": \"How do I see which workspace caused a usage overage?\", \"Source Type\": \"support_ticket\", \"Vendor Name\": \"FlowPilot\", \"pain_points\": [\"billing and plan management\"], \"source_type\": \"support_ticket\", \"target_mode\": \"vendor_retention\", \"vendor_name\": \"FlowPilot\", \"Account Name\": \"Silverline Studio\", \"Contact Name\": \"Reese Morgan\", \"company_name\": \"Silverline Studio\", \"contact_name\": \"Reese Morgan\", \"source_title\": \"Usage overage\", \"Contact Email\": \"billing@silverline.example\", \"Contact Title\": \"Operations Lead\", \"Dataset Label\": \"synthetic_b2b_saas_demo\", \"Pain Category\": \"billing and plan management\", \"contact_email\": \"billing@silverline.example\", \"contact_title\": \"Operations Lead\", \"cold_email_context\": {\"body\": \"<p>Reese Morgan,</p><p>Your team asked: <strong>How do I see which workspace caused a usage overage?</strong></p><p>That question points to a possible FAQ gap.</p><p>FineTune Lab can map this question against your help center and identify whether an answer is missing or hard to find. <a href=\\\"https://finetunelab.ai/systems/ai-content-ops/intake\\\">See how the audit works</a>.</p>\", \"subject\": \"Usage overage question from your team\"}}, \"campaign_revalidation\": {\"audit\": {\"status\": \"pass\", \"boundary\": \"generation\", \"warnings\": [], \"cause_type\": null, \"matched_groups\": [], \"missing_groups\": [], \"missing_inputs\": [], \"blocking_issues\": [], \"context_sources\": [], \"primary_blocker\": null, \"available_groups\": [], \"used_proof_terms\": [], \"unused_proof_terms\": [], \"failure_explanation\": {\"boundary\": \"generation\", \"cause_type\": null, \"anchor_count\": 0, \"context_sources\": [], \"matched_anchor_count\": 0}, \"campaign_proof_terms\": [], \"unsupported_scan_claims\": [], \"unsupported_numeric_claims\": [], \"unsupported_aggregate_claims\": []}, \"metadata\": {\"cta\": \"Worth a look?\", \"channel\": \"email_followup\", \"target_mode\": \"vendor_retention\", \"latest_specificity_audit\": {\"status\": \"pass\", \"boundary\": \"generation\", \"warnings\": [], \"cause_type\": null, \"matched_groups\": [], \"missing_groups\": [], \"missing_inputs\": [], \"blocking_issues\": [], \"context_sources\": [], \"primary_blocker\": null, \"available_groups\": [], \"used_proof_terms\": [], \"unused_proof_terms\": [], \"failure_explanation\": {\"boundary\": \"generation\", \"cause_type\": null, \"anchor_count\": 0, \"context_sources\": [], \"matched_anchor_count\": 0}, \"campaign_proof_terms\": [], \"unsupported_scan_claims\": [], \"unsupported_numeric_claims\": [], \"unsupported_aggregate_claims\": []}}, \"specificity_context\": {}}, \"generation_parse_attempts\": 0}",
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "recipient_email": "billing@silverline.example",
+      "status": "approved",
+      "subject": "Follow-up: usage overage question",
+      "target_mode": "vendor_retention",
+      "vendor_name": "FlowPilot"
+    },
+    {
+      "body": "<p>Reese Morgan,</p><p>Your team asked: <strong>How do I see which workspace caused a usage overage?</strong></p><p>That question points to a possible FAQ gap.</p><p>FineTune Lab can map this question against your help center and identify whether an answer is missing or hard to find. <a href=\"https://finetunelab.ai/systems/ai-content-ops/intake\">See how the audit works</a>.</p>",
+      "channel": "email_cold",
+      "company_name": "Silverline Studio",
+      "created_at": "2026-06-08 22:08:40.261973+00:00",
+      "cta": "Worth a look?",
+      "generation_input_tokens": null,
+      "generation_output_tokens": null,
+      "generation_parse_attempts": 0,
+      "generation_total_tokens": null,
+      "id": "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+      "llm_model": "deterministic/single-support-ticket",
+      "metadata": "{\"cta\": \"Worth a look?\", \"scope\": {\"user_id\": \"11111111-1111-4111-8111-111111111111\", \"account_id\": \"5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901\"}, \"target_id\": \"saas-demo-036\", \"target_mode\": \"vendor_retention\", \"review_status\": \"approved\", \"generation_model\": \"deterministic/single-support-ticket\", \"source_opportunity\": {\"id\": \"saas-demo-036\", \"channel\": \"email_cold\", \"selling\": {\"sender_name\": \"FineTune Lab\", \"product_name\": \"Support Ticket FAQ Gap Audit\", \"sender_title\": \"Content Ops Team\", \"affiliate_url\": \"https://finetunelab.ai/systems/ai-content-ops/intake\", \"sender_company\": \"FineTune Lab\"}, \"evidence\": [{\"text\": \"How do I see which workspace caused a usage overage?\", \"source_id\": \"saas-demo-036\", \"source_type\": \"support_ticket\", \"source_title\": \"Usage overage\"}], \"Ticket ID\": \"saas-demo-036\", \"source_id\": \"saas-demo-036\", \"target_id\": \"saas-demo-036\", \"Source URL\": \"https://example.com/support/saas-demo-036\", \"account_id\": \"5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901\", \"topic_type\": \"support_ticket_faq_gap_live_gate_a\", \"Description\": \"How do I see which workspace caused a usage overage?\", \"Source Type\": \"support_ticket\", \"Vendor Name\": \"FlowPilot\", \"pain_points\": [\"billing and plan management\"], \"source_type\": \"support_ticket\", \"target_mode\": \"vendor_retention\", \"vendor_name\": \"FlowPilot\", \"Account Name\": \"Silverline Studio\", \"Contact Name\": \"Reese Morgan\", \"company_name\": \"Silverline Studio\", \"contact_name\": \"Reese Morgan\", \"source_title\": \"Usage overage\", \"Contact Email\": \"billing@silverline.example\", \"Contact Title\": \"Operations Lead\", \"Dataset Label\": \"synthetic_b2b_saas_demo\", \"Pain Category\": \"billing and plan management\", \"contact_email\": \"billing@silverline.example\", \"contact_title\": \"Operations Lead\"}, \"campaign_revalidation\": {\"audit\": {\"status\": \"pass\", \"boundary\": \"generation\", \"warnings\": [], \"cause_type\": null, \"matched_groups\": [], \"missing_groups\": [], \"missing_inputs\": [], \"blocking_issues\": [], \"context_sources\": [], \"primary_blocker\": null, \"available_groups\": [], \"used_proof_terms\": [], \"unused_proof_terms\": [], \"failure_explanation\": {\"boundary\": \"generation\", \"cause_type\": null, \"anchor_count\": 0, \"context_sources\": [], \"matched_anchor_count\": 0}, \"campaign_proof_terms\": [], \"unsupported_scan_claims\": [], \"unsupported_numeric_claims\": [], \"unsupported_aggregate_claims\": []}, \"metadata\": {\"cta\": \"Worth a look?\", \"channel\": \"email_cold\", \"target_mode\": \"vendor_retention\", \"latest_specificity_audit\": {\"status\": \"pass\", \"boundary\": \"generation\", \"warnings\": [], \"cause_type\": null, \"matched_groups\": [], \"missing_groups\": [], \"missing_inputs\": [], \"blocking_issues\": [], \"context_sources\": [], \"primary_blocker\": null, \"available_groups\": [], \"used_proof_terms\": [], \"unused_proof_terms\": [], \"failure_explanation\": {\"boundary\": \"generation\", \"cause_type\": null, \"anchor_count\": 0, \"context_sources\": [], \"matched_anchor_count\": 0}, \"campaign_proof_terms\": [], \"unsupported_scan_claims\": [], \"unsupported_numeric_claims\": [], \"unsupported_aggregate_claims\": []}}, \"specificity_context\": {}}, \"generation_parse_attempts\": 0}",
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "recipient_email": "billing@silverline.example",
+      "status": "approved",
+      "subject": "Usage overage question from your team",
+      "target_mode": "vendor_retention",
+      "vendor_name": "FlowPilot"
+    }
+  ]
+}

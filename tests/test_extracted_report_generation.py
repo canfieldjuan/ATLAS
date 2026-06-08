@@ -479,6 +479,9 @@ async def test_generate_substitutes_template_placeholders_in_system_prompt_only(
     # Opportunity JSON must appear in the system prompt (via the substituted placeholder)
     assert '"target_id":"vendor-acme"' in system_msg
     assert "MODE=vendor" in system_msg
+    assert "## Grounding contract" in system_msg
+    assert "Never introduce counts, percentages, statistics" in system_msg
+    assert "scan or research claims" in system_msg
     # And NOT appear in the user message (no duplication)
     assert '"target_id":"vendor-acme"' not in user_msg
     assert "vendor-acme" not in user_msg

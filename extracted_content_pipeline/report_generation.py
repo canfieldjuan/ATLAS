@@ -31,6 +31,7 @@ from .campaign_opportunities import (
     normalize_campaign_opportunity,
     opportunity_target_id,
 )
+from .brand_voice import apply_brand_voice_to_system_prompt
 from .campaign_ports import (
     CampaignReasoningContextProvider,
     IntelligenceRepository,
@@ -402,6 +403,7 @@ class ReportGenerationService:
             .replace("{target_mode}", target_mode)
             .replace("{opportunity_json}", opportunity_json)
         )
+        system_prompt = apply_brand_voice_to_system_prompt(system_prompt, None)
         attempts = parse_attempt_limit(parse_retry_attempts)
         last_response = ""
         total_usage: dict[str, Any] = {}

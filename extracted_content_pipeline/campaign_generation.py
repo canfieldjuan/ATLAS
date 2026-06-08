@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from html import escape
 import json
 import re
 from typing import Any
@@ -117,6 +118,13 @@ def _revalidation_error_details(revalidation: Mapping[str, Any]) -> dict[str, An
         "primary_blocker": audit.get("primary_blocker"),
         "used_proof_terms": list(audit.get("used_proof_terms") or []),
         "unused_proof_terms": list(audit.get("unused_proof_terms") or []),
+        "unsupported_numeric_claims": list(
+            audit.get("unsupported_numeric_claims") or []
+        ),
+        "unsupported_scan_claims": list(audit.get("unsupported_scan_claims") or []),
+        "unsupported_aggregate_claims": list(
+            audit.get("unsupported_aggregate_claims") or []
+        ),
     }
     return {
         key: value
@@ -130,12 +138,25 @@ def _campaign_generation_user_prompt(
     target_mode: str,
     channel: str,
     opportunity_json: str,
+    grounding_note: str = "",
     prior_invalid_response: str = "",
 ) -> str:
+    resolved_grounding_note = str(grounding_note or "").strip()
+    grounding_section = f"\n{resolved_grounding_note}\n" if resolved_grounding_note else "\n"
     prompt = (
         "Generate one campaign draft from this normalized "
         f"opportunity.\ntarget_mode={target_mode}\n"
         f"channel={channel}\n"
+        "STRICT_SINGLE_SUPPORT_TICKET_MODE=If the opportunity has exactly "
+        "one support_ticket evidence item, write only about that one question. "
+        "Allowed factual content is limited to: the exact ticket question, "
+        "that this question points to a possible FAQ/help-center gap, and that "
+        "FineTune Lab can map this question against the help center to identify "
+        "whether an answer is missing or hard to find. Use singular language "
+        "only. Do not add any other factual assertion, consequence, trend, "
+        "recurrence, queue/support-team behavior, timing, impact, count, "
+        "ranking, pattern, source-volume, or product-result claim.\n"
+        f"{grounding_section}"
         f"opportunity={opportunity_json}"
     )
     return retry_prompt_with_invalid_response(
@@ -146,6 +167,113 @@ def _campaign_generation_user_prompt(
             "Return one JSON object with non-empty subject and body."
         ),
     )
+
+
+def _single_support_ticket_grounding_note(opportunity: Mapping[str, Any]) -> str:
+    evidence = opportunity.get("evidence")
+    if (
+        not isinstance(evidence, Sequence)
+        or isinstance(evidence, (str, bytes, bytearray))
+        or len(evidence) != 1
+    ):
+        return ""
+    row = evidence[0]
+    if not isinstance(row, Mapping):
+        return ""
+    source_type = str(row.get("source_type") or opportunity.get("source_type") or "")
+    if source_type != "support_ticket":
+        return ""
+    text = str(row.get("text") or opportunity.get("Description") or "").strip()
+    if not text:
+        return ""
+    return (
+        "CURRENT_EVIDENCE_MODE=single_support_ticket\n"
+        f"ONLY_ALLOWED_FACTUAL_ANCHOR={text}\n"
+        "ONLY_ALLOWED_INFERENCE=This one question points to a possible FAQ "
+        "or help-center gap.\n"
+        "Write from that anchor only. The only allowed claims are: the exact "
+        "question, that it points to a possible FAQ/help-center gap, and that "
+        "FineTune Lab can map this question against the help center to identify "
+        "whether an answer is missing or hard to find. Do not add any other "
+        "factual assertion, consequence, trend, recurrence, queue/support-team "
+        "behavior, timing, impact, count, ranking, pattern, source-volume, or "
+        "product-result claim."
+    )
+
+
+def _single_support_ticket_evidence(opportunity: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    evidence = opportunity.get("evidence")
+    if (
+        not isinstance(evidence, Sequence)
+        or isinstance(evidence, (str, bytes, bytearray))
+        or len(evidence) != 1
+    ):
+        return None
+    row = evidence[0]
+    if not isinstance(row, Mapping):
+        return None
+    source_type = str(row.get("source_type") or opportunity.get("source_type") or "")
+    if source_type != "support_ticket":
+        return None
+    if not str(row.get("text") or opportunity.get("Description") or "").strip():
+        return None
+    return row
+
+
+def _single_support_ticket_seed_draft(
+    opportunity: Mapping[str, Any],
+    *,
+    channel: str,
+) -> dict[str, Any] | None:
+    row = _single_support_ticket_evidence(opportunity)
+    if row is None:
+        return None
+    question = str(row.get("text") or opportunity.get("Description") or "").strip()
+    contact_name = str(
+        opportunity.get("contact_name") or opportunity.get("Contact Name") or ""
+    ).strip()
+    greeting = f"{escape(contact_name)}," if contact_name else "Hi,"
+    selling = opportunity.get("selling")
+    cta_url = ""
+    if isinstance(selling, Mapping):
+        cta_url = str(
+            selling.get("affiliate_url")
+            or selling.get("booking_url")
+            or ""
+        ).strip()
+    link = (
+        f' <a href="{escape(cta_url, quote=True)}">See how the audit works</a>.'
+        if cta_url
+        else ""
+    )
+    question_html = escape(question)
+    if channel == "email_followup":
+        subject = "Follow-up: usage overage question"
+        body = (
+            f"<p>{greeting}</p>"
+            "<p>Following up on the question your team asked: "
+            f"<strong>{question_html}</strong></p>"
+            "<p>That question points to a possible FAQ gap.</p>"
+            "<p>FineTune Lab can map this question against your help center "
+            f"and identify whether an answer is missing or hard to find.{link}</p>"
+        )
+    else:
+        subject = "Usage overage question from your team"
+        body = (
+            f"<p>{greeting}</p>"
+            f"<p>Your team asked: <strong>{question_html}</strong></p>"
+            "<p>That question points to a possible FAQ gap.</p>"
+            "<p>FineTune Lab can map this question against your help center "
+            f"and identify whether an answer is missing or hard to find.{link}</p>"
+        )
+    return {
+        "subject": subject,
+        "body": body,
+        "cta": "Worth a look?",
+        "_model": "deterministic/single-support-ticket",
+        "_usage": {},
+        "_parse_attempts": 0,
+    }
 
 
 def _contains_placeholder_url(value: Any) -> bool:
@@ -411,26 +539,35 @@ class CampaignGenerationService:
                     quality_revalidation_enabled=resolved_quality_revalidation_enabled,
                     quality_prompt_proof_term_limit=resolved_quality_prompt_proof_term_limit,
                 )
-                try:
-                    parsed = await self._generate_one(
-                        prompt_template,
-                        opportunity=channel_opportunity,
-                        target_mode=target_mode,
+                parsed = (
+                    _single_support_ticket_seed_draft(
+                        channel_opportunity,
                         channel=channel,
-                        temperature=resolved_temperature,
-                        max_tokens=resolved_max_tokens,
-                        parse_retry_attempts=resolved_parse_retry_attempts,
-                        parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
-                        brand_voice=resolved_brand_voice,
                     )
-                except Exception as exc:
-                    skipped += 1
-                    errors.append({
-                        "target_id": target_id,
-                        "channel": channel,
-                        "reason": str(exc),
-                    })
-                    continue
+                    if resolved_quality_revalidation_enabled
+                    else None
+                )
+                if parsed is None:
+                    try:
+                        parsed = await self._generate_one(
+                            prompt_template,
+                            opportunity=channel_opportunity,
+                            target_mode=target_mode,
+                            channel=channel,
+                            temperature=resolved_temperature,
+                            max_tokens=resolved_max_tokens,
+                            parse_retry_attempts=resolved_parse_retry_attempts,
+                            parse_retry_response_excerpt_chars=resolved_parse_retry_response_excerpt_chars,
+                            brand_voice=resolved_brand_voice,
+                        )
+                    except Exception as exc:
+                        skipped += 1
+                        errors.append({
+                            "target_id": target_id,
+                            "channel": channel,
+                            "reason": str(exc),
+                        })
+                        continue
                 if not parsed:
                     skipped += 1
                     errors.append({
@@ -640,6 +777,7 @@ class CampaignGenerationService:
         brand_voice: BrandVoiceProfile | None = None,
     ) -> dict[str, Any] | None:
         opportunity_json = json.dumps(dict(opportunity), separators=(",", ":"), default=str)
+        grounding_note = _single_support_ticket_grounding_note(opportunity)
         system_prompt = (
             prompt_template
             .replace("{target_mode}", target_mode)
@@ -661,6 +799,7 @@ class CampaignGenerationService:
                             target_mode=target_mode,
                             channel=channel,
                             opportunity_json=opportunity_json,
+                            grounding_note=grounding_note,
                             prior_invalid_response=last_response,
                         ),
                     ),

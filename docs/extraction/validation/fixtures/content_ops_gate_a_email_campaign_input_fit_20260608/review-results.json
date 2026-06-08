@@ -1,0 +1,13 @@
+{
+  "email_campaign": {
+    "missing_ids": [],
+    "requested_ids": [
+      "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+      "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
+    ],
+    "updated_ids": [
+      "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+      "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
+    ]
+  }
+}
