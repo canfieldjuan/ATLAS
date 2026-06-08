@@ -5215,6 +5215,37 @@ class MCPConfig(BaseSettings):
             "resolution."
         ),
     )
+    content_ops_marketer_verify_auth_mode: str = Field(
+        default="bearer",
+        description=(
+            "HTTP auth mode for verify-only Content Ops marketer MCP: bearer "
+            "for direct clients or oauth for remote connector clients."
+        ),
+    )
+    content_ops_marketer_verify_oauth_issuer_url: str = Field(
+        default="",
+        description="OAuth issuer URL for verify-only Content Ops marketer MCP.",
+    )
+    content_ops_marketer_verify_oauth_resource_url: str = Field(
+        default="",
+        description=(
+            "OAuth protected resource URL for verify-only Content Ops marketer MCP."
+        ),
+    )
+    content_ops_marketer_verify_oauth_approval_token: str = Field(
+        default="",
+        description=(
+            "Operator approval token for verify-only Content Ops marketer MCP "
+            "OAuth connector authorization."
+        ),
+    )
+    content_ops_marketer_verify_oauth_state_file: str = Field(
+        default="",
+        description=(
+            "Optional local OAuth state file for verify-only Content Ops "
+            "marketer MCP client registrations and refresh tokens."
+        ),
+    )
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
     scraper_enabled: bool = Field(default=True, description="Enable Universal Scraper MCP server")

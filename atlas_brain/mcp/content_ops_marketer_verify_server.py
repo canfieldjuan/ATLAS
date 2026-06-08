@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
@@ -34,6 +35,8 @@ from ..config_defaults import (
 
 logger = logging.getLogger("atlas.mcp.content_ops.marketer_verify")
 
+_AUTH_MODE_BEARER = "bearer"
+_AUTH_MODE_OAUTH = "oauth"
 _MIN_HTTP_AUTH_TOKEN_LENGTH = 24
 _PLACEHOLDER_HTTP_AUTH_TOKENS = {
     "<token>",
@@ -47,6 +50,7 @@ _PLACEHOLDER_HTTP_AUTH_TOKENS = {
 _MALFORMED_COVERAGE_RULE_PREFIX = "MALFORMED-COVERAGE"
 _registry_reader_override: TenantClaimRegistryReader | None = None
 _account_resolver_override: "StaticContentOpsMarketerAccountResolver | None" = None
+_oauth_provider = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +93,18 @@ mcp = FastMCP(
     ),
     lifespan=_lifespan,
 )
+
+
+@mcp.custom_route("/oauth/approve", methods=["GET", "POST"], include_in_schema=False)
+async def _oauth_approve(request):
+    """Operator approval page for remote OAuth connectors."""
+    if _oauth_provider is None:
+        from starlette.responses import HTMLResponse
+
+        return HTMLResponse("<h1>OAuth mode is not enabled</h1>", status_code=404)
+    from .content_ops_marketer_verify_oauth import handle_approval_request
+
+    return await handle_approval_request(_oauth_provider, request)
 
 
 @mcp.tool(structured_output=True)
@@ -146,12 +162,28 @@ def _review_request_from_tool_args(
 
 def _streamable_http_app():
     """Build the authenticated streamable HTTP app for verify-only tools."""
+    if _http_auth_mode() == _AUTH_MODE_OAUTH:
+        _configure_oauth_auth()
+        return mcp.streamable_http_app()
+
     from .auth import BearerAuthMiddleware
 
     return BearerAuthMiddleware(
         mcp.streamable_http_app(),
         token=_require_http_auth_token(),
     )
+
+
+def _http_auth_mode() -> str:
+    from ..config import settings
+
+    mode = _clean(settings.mcp.content_ops_marketer_verify_auth_mode).lower() or _AUTH_MODE_BEARER
+    if mode not in {_AUTH_MODE_BEARER, _AUTH_MODE_OAUTH}:
+        raise RuntimeError(
+            "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_AUTH_MODE must be either "
+            "'bearer' or 'oauth'"
+        )
+    return mode
 
 
 def _require_http_auth_token() -> str:
@@ -176,6 +208,91 @@ def _require_http_auth_token() -> str:
             "verify HTTP mode."
         )
     return token
+
+
+def _configure_oauth_auth():
+    """Configure FastMCP OAuth auth for remote connector clients."""
+    global _oauth_provider
+
+    from mcp.server.auth.provider import ProviderTokenVerifier
+    from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
+
+    from ..config import settings
+    from .content_ops_marketer_verify_oauth import (
+        DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
+        ContentOpsMarketerVerifyOAuthProvider,
+        as_any_http_url,
+        validate_oauth_settings,
+    )
+
+    issuer_url = _clean(settings.mcp.content_ops_marketer_verify_oauth_issuer_url)
+    resource_url = _clean(settings.mcp.content_ops_marketer_verify_oauth_resource_url)
+    approval_token = _clean(settings.mcp.content_ops_marketer_verify_oauth_approval_token)
+    state_file = _clean(settings.mcp.content_ops_marketer_verify_oauth_state_file) or None
+    validate_oauth_settings(
+        issuer_url=issuer_url,
+        resource_server_url=resource_url,
+        approval_token=approval_token,
+    )
+    mcp.settings.transport_security = _oauth_transport_security_settings(
+        issuer_url=issuer_url,
+        resource_url=resource_url,
+    )
+
+    if _oauth_provider is not None:
+        return _oauth_provider
+
+    provider = ContentOpsMarketerVerifyOAuthProvider(
+        issuer_url=issuer_url,
+        approval_token=approval_token,
+        scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        state_file=state_file,
+    )
+    mcp.settings.auth = AuthSettings(
+        issuer_url=as_any_http_url(issuer_url),
+        resource_server_url=as_any_http_url(resource_url),
+        required_scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+            default_scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        ),
+    )
+    mcp._auth_server_provider = provider
+    mcp._token_verifier = ProviderTokenVerifier(provider)
+    _oauth_provider = provider
+    return provider
+
+
+def _oauth_transport_security_settings(*, issuer_url: str, resource_url: str):
+    """Allow configured OAuth hosts while keeping DNS rebinding protection on."""
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    allowed_hosts = {
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    }
+    for url in (issuer_url, resource_url):
+        allowed_hosts.update(_host_header_variants(url))
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=sorted(allowed_hosts),
+    )
+
+
+def _host_header_variants(url: str) -> set[str]:
+    parsed = urlparse(url.strip())
+    if not parsed.hostname:
+        return set()
+    variants = {parsed.netloc}
+    if parsed.port is None:
+        variants.add(parsed.hostname)
+        if parsed.scheme == "https":
+            variants.add(f"{parsed.hostname}:443")
+        elif parsed.scheme == "http":
+            variants.add(f"{parsed.hostname}:80")
+    return {variant for variant in variants if variant}
 
 
 def _get_account_resolver():
@@ -340,9 +457,10 @@ if __name__ == "__main__":
 
         mcp.settings.host = host
         mcp.settings.port = port
-        mcp.settings.transport_security = TransportSecuritySettings(
-            enable_dns_rebinding_protection=False,
-        )
+        if _http_auth_mode() == _AUTH_MODE_BEARER:
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False,
+            )
 
         async def _serve():
             config = uvicorn.Config(
