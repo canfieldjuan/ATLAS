@@ -20,6 +20,7 @@ pytest \
   tests/test_extracted_content_triage_experiment.py \
   tests/test_extracted_content_claims_map.py \
   tests/test_extracted_content_pr.py \
+  tests/test_extracted_content_coverage_rows.py \
   tests/test_extracted_campaign_visibility.py \
   tests/test_extracted_campaign_visibility_reader_cli.py \
   tests/test_extracted_campaign_manifest.py \
