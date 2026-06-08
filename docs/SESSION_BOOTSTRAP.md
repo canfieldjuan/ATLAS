@@ -37,15 +37,22 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >      scaffolds the 7-section `plans/PR-<Slice>.md` → implement →
 >      `python scripts/sync_pr_plan.py plans/PR-<Slice>.md` rewrites
 >      `### Files touched` + the diff-size table from the real diff →
->      `bash scripts/push_pr.sh <pr-body-file> -u origin HEAD` runs
->      `local_pr_review.sh` and pushes with `ATLAS_CURRENT_PR_BODY_FILE`
->      exported so the pre-push hook validates the same body. Reconstructing
->      the plan shape by hand or pushing without the body env is what burns
->      the formatting/failed-push loop. See AGENTS.md §3a.2.
+>      `bash scripts/push_pr.sh <pr-body-file> -u origin HEAD` pushes with
+>      `ATLAS_CURRENT_PR_BODY_FILE` exported so the managed pre-push hook can
+>      run `local_pr_review.sh` once with the same body context. If the managed
+>      hook is missing or intentionally skipped, the wrapper runs local review
+>      before pushing. Reconstructing the plan shape by hand or pushing
+>      without the body env is what burns the formatting/failed-push loop. See
+>      AGENTS.md §3a.2.
 >
 > 6. **Context discipline (keeps the session from compacting mid-work):**
 >    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
 >    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
+>    - Before pushing, use `scripts/push_pr.sh` as the single local-review entry
+>      point. Do **not** run `local_pr_review.sh` manually and then immediately
+>      run `push_pr.sh`; the wrapper/hook path is responsible for exactly one
+>      mechanical local review. Manual local review is for triage when you are
+>      not pushing yet.
 >    - Keep the session short. If you've been alive across several PRs, expect to compact soon; finish the current slice, then let the operator restart you fresh with this bootstrap rather than running on.
 >
 > 7. **Teardown on merge (AGENTS.md §1g):** when your PR merges, tear down its worktree and branch the same session — **worktree first, then branch** (`git worktree remove <dir>` then `git branch -D <branch>`; deleting a branch still checked out in a worktree fails). `origin/main` is the only source of truth; local branches/worktrees are disposable. Leftover branches/worktrees drift behind main and turn into stale dirty state that mirrors already-landed PRs. Never `git clean -f` without a `git clean -nd` dry-run first — untracked secret files (`.env.bak-*`, `*.production.env`) live in the tree and a blanket clean deletes them.

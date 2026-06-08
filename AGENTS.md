@@ -269,14 +269,18 @@ rather than hand-formatting:
   `git diff` (tracked vs merge-base plus untracked). Run after
   implementation; `--check` mode fails if the plan is out of sync
   (CI-gateable).
-- `bash scripts/push_pr.sh <pr-body-file> [git-push-args]` — runs
-  `local_pr_review.sh` with the body file, then pushes with
+- `bash scripts/push_pr.sh <pr-body-file> [git-push-args]` — pushes with
   `ATLAS_CURRENT_PR_BODY_FILE` exported so the installed pre-push hook
-  validates the same body. The wrapper does **not** add `--no-verify`;
-  callers must not pass `--no-verify` through the forwarded push args.
+  validates the same body. With the managed Atlas hook installed, the hook is
+  the **single** local-review runner; if the managed hook is missing or
+  intentionally skipped, the wrapper runs `local_pr_review.sh` before pushing.
+  The wrapper rejects `--no-verify`.
 
 Flow: `bash scripts/new_pr_plan.sh` -> implement ->
 `python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh`.
+Do **not** run a separate manual `local_pr_review.sh` immediately before
+`push_pr.sh`; that duplicates the same mechanical bundle and burns context.
+Use manual local review for ad hoc triage or when you are not about to push.
 
 ### 3b. Per-package guardrails
 
@@ -297,7 +301,7 @@ to triage.
 ### 3c. Local review before PR
 
 Before opening or updating a PR, the builder runs the mechanical local
-review bundle:
+review bundle exactly once:
 
 ```bash
 bash scripts/local_pr_review.sh
@@ -319,6 +323,9 @@ bash scripts/install_local_pr_hook.sh
 The installer refuses to overwrite unmanaged hooks unless `--force` is
 passed. The installed hook can be bypassed intentionally with
 `ATLAS_SKIP_LOCAL_PR_REVIEW=1 git push`.
+When using `scripts/push_pr.sh`, that skip does not drop local review
+entirely: the wrapper runs the bundle before the push because the hook will
+skip.
 
 After the mechanical bundle passes, hand the branch to a separate local
 reviewer session for judgment review. The reviewer should read the plan
