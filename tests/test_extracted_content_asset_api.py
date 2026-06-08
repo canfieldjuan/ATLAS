@@ -26,6 +26,7 @@ from extracted_content_pipeline.faq_macro_writeback import (
     MacroPublishResult,
     MacroPublishStatus,
 )
+from extracted_content_pipeline.review_contract import ReviewDecision
 
 
 BATCH_REPORT_ID_1 = "11111111-1111-1111-1111-111111111111"
@@ -2619,6 +2620,124 @@ def test_generated_asset_router_rejects_empty_review_status() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "status is required"
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_status"),
+    [
+        (ReviewDecision.APPROVED, "approved"),
+        (ReviewDecision.APPROVED_WITH_EXCEPTION, "approved"),
+        (ReviewDecision.REVISION_REQUIRED, "rejected"),
+        (ReviewDecision.BLOCKED, "queued"),
+        (ReviewDecision.ESCALATED, "queued"),
+        ("approved", "approved"),
+        ("revision_required", "rejected"),
+    ],
+)
+def test_generated_asset_status_for_review_decision_maps_lifecycle_status(
+    decision: object,
+    expected_status: str,
+) -> None:
+    assert (
+        asset_api.generated_asset_status_for_review_decision(decision)
+        == expected_status
+    )
+
+
+def test_generated_asset_status_for_review_decision_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError, match="review_decision must be one of"):
+        asset_api.generated_asset_status_for_review_decision("ship_it")
+
+
+@pytest.mark.parametrize(
+    ("decision_key", "decision", "expected_status"),
+    [
+        ("review_decision", "approved", "approved"),
+        ("review_decision", "approved_with_exception", "approved"),
+        ("review_decision", "revision_required", "rejected"),
+        ("review_decision", "blocked", "queued"),
+        ("review_decision", "escalated", "queued"),
+        ("decision", "revision_required", "rejected"),
+    ],
+)
+def test_generated_asset_router_maps_review_decision_to_status(
+    decision_key: str,
+    decision: str,
+    expected_status: str,
+) -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review",
+        json={"id": "report-uuid-1", decision_key: decision},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == expected_status
+    query, args = pool.execute_calls[0]
+    assert "UPDATE reports" in query
+    assert args == ("report-uuid-1", expected_status, "acct_1")
+
+
+def test_generated_asset_router_status_payload_wins_over_review_decision() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review",
+        json={
+            "id": "report-uuid-1",
+            "status": "published",
+            "review_decision": "revision_required",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "published"
+    assert pool.execute_calls[0][1] == ("report-uuid-1", "published", "acct_1")
+
+
+def test_generated_asset_router_rejects_unknown_review_decision() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review",
+        json={"id": "report-uuid-1", "review_decision": "ship_it"},
+    )
+
+    assert response.status_code == 400
+    assert "review_decision must be one of" in response.json()["detail"]
+    assert pool.execute_calls == []
+
+
+def test_generated_asset_router_requires_status_or_review_decision() -> None:
+    pool = _Pool()
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review",
+        json={"id": "report-uuid-1"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "status or review_decision is required"
+    assert pool.execute_calls == []
+
+
+def test_generated_asset_router_batch_maps_review_decision_to_status() -> None:
+    pool = _Pool(rows=[{"id": BATCH_REPORT_ID_1}, {"id": BATCH_REPORT_ID_2}])
+
+    response = _client(pool, scope={"account_id": "acct_1"}).post(
+        "/content-assets/report/drafts/review-batch",
+        json={
+            "ids": [BATCH_REPORT_ID_1, BATCH_REPORT_ID_2],
+            "review_decision": "revision_required",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"
+    query, args = pool.fetch_calls[0]
+    assert "UPDATE reports" in query
+    assert args == ([BATCH_REPORT_ID_1, BATCH_REPORT_ID_2], "rejected", "acct_1")
 
 
 def test_generated_asset_router_rejects_unknown_export_format() -> None:
