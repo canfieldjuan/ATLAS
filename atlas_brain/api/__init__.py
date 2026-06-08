@@ -233,7 +233,17 @@ try:
         ).strip()
         return policy or None
 
-    content_ops_config = ContentOpsControlSurfaceApiConfig()
+    content_ops_config = ContentOpsControlSurfaceApiConfig(
+        deflection_checkout_amount_cents=(
+            settings.saas_auth.stripe_content_ops_deflection_report_amount_cents
+        ),
+        deflection_checkout_currency=(
+            settings.saas_auth.stripe_content_ops_deflection_report_currency
+        ),
+        deflection_checkout_price_id=(
+            settings.saas_auth.stripe_content_ops_deflection_report_price_id
+        ),
+    )
     content_ops_router = create_content_ops_control_surface_router(
         config=content_ops_config,
         dependencies=[Depends(_capture_content_ops_auth_user)],

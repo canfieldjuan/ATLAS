@@ -353,6 +353,9 @@ class ContentOpsControlSurfaceApiConfig:
     deflection_snapshot_teaser_preview_count: int = (
         DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT
     )
+    deflection_checkout_amount_cents: int = 150000
+    deflection_checkout_currency: str = "usd"
+    deflection_checkout_price_id: str = ""
     ingestion_import_max_concurrency: int = 8
 
     def __post_init__(self) -> None:
@@ -406,6 +409,8 @@ class ContentOpsControlSurfaceApiConfig:
             raise ValueError(
                 "deflection_snapshot_teaser_preview_count must be non-negative"
             )
+        if self.deflection_checkout_amount_cents < 0:
+            raise ValueError("deflection_checkout_amount_cents cannot be negative")
         if self.ingestion_import_max_concurrency <= 0:
             raise ValueError("ingestion_import_max_concurrency must be positive")
         if not isinstance(
@@ -801,6 +806,35 @@ def create_content_ops_control_surface_router(
         if not record.paid:
             raise HTTPException(status_code=403, detail="Deflection report is locked.")
         return dict(record.artifact or {})
+
+    @router.post("/deflection-reports/{request_id}/checkout-authorization")
+    async def deflection_report_checkout_authorization(
+        request_id: str = PathParam(..., min_length=1, max_length=200),
+    ) -> dict[str, Any]:
+        checkout = _deflection_checkout_terms(resolved_config)
+        store = await _resolve_deflection_report_store(deflection_report_store_provider)
+        scope = await _resolve_scope(scope_provider)
+        record = await store.get_artifact_record(
+            account_id=_required_scope_account_id(scope),
+            request_id=request_id,
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="Deflection report not found.")
+        if record.paid:
+            raise HTTPException(
+                status_code=409,
+                detail="Deflection report is already paid.",
+            )
+        if not record.artifact:
+            raise HTTPException(
+                status_code=409,
+                detail="Deflection report artifact is not available.",
+            )
+        return {
+            "request_id": request_id,
+            "status": "authorized",
+            "checkout": checkout,
+        }
 
     @router.post(
         "/deflection-reports/{request_id}/paid",
@@ -1734,6 +1768,40 @@ def _deflection_submit_rows_with_defaults(
 
 def _deflection_submit_title(data: Mapping[str, Any]) -> str:
     return f"{data['company_name']} Support Deflection Report"
+
+
+def _deflection_checkout_terms(
+    config: ContentOpsControlSurfaceApiConfig,
+) -> dict[str, Any]:
+    try:
+        amount_cents = int(config.deflection_checkout_amount_cents)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection checkout amount is not configured.",
+        ) from exc
+    currency = (_clean(config.deflection_checkout_currency) or "").lower()
+    price_id = _clean(config.deflection_checkout_price_id)
+    if amount_cents <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection checkout amount is not configured.",
+        )
+    if len(currency) != 3 or not currency.isalpha():
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection checkout currency is not configured.",
+        )
+    if not price_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection checkout price is not configured.",
+        )
+    return {
+        "amount_cents": amount_cents,
+        "currency": currency,
+        "price_id": price_id,
+    }
 
 
 def _with_deflection_submit_diagnostics(
