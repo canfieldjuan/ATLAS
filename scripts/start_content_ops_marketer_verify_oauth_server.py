@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -39,6 +40,7 @@ class LaunchConfig:
     host: str
     port: str
     dry_run: bool
+    approval_token_file: str | None = None
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -217,6 +219,7 @@ def _build_launch_config(args: argparse.Namespace) -> LaunchConfig:
         host=env["ATLAS_MCP_HOST"],
         port=env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT"],
         dry_run=args.dry_run,
+        approval_token_file=args.approval_token_file,
     )
 
 
@@ -275,7 +278,15 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
     print("Planned next-slice OAuth e2e smoke:")
     print(".venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \\")
     print(f"  --issuer-url {issuer_url} \\")
-    print(f"  --resource-url {resource_url}")
+    print(f"  --resource-url {resource_url} \\")
+    token_file = config.approval_token_file or "/path/to/local-approval-token"
+    print(f"  --approval-token-file {shlex.quote(token_file)}")
+    if config.approval_token_file is None:
+        print(
+            "If the approval token came from .env/--env-file, write it to a local token "
+            "file or export ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN "
+            "and pass --approval-token."
+        )
 
 
 def _main(argv: list[str] | None = None) -> int:

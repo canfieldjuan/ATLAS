@@ -255,6 +255,27 @@ def test_guidance_masks_secrets_and_prints_content_ops_smokes(capsys) -> None:
     assert "--set-path /.well-known/oauth-protected-resource/content-ops-marketer" in captured.out
     assert "check_content_ops_marketer_verify_oauth_discovery.py" in captured.out
     assert "check_content_ops_marketer_verify_oauth_e2e.py" in captured.out
+    assert "--approval-token-file /path/to/local-approval-token" in captured.out
+    assert "pass --approval-token" in captured.out
+
+
+def test_guidance_prints_e2e_approval_token_file_path(capsys) -> None:
+    module = _load_script_module()
+    config = module.LaunchConfig(
+        env=_valid_env(),
+        python="/venv/bin/python",
+        host="0.0.0.0",
+        port="9000",
+        dry_run=True,
+        approval_token_file="/tmp/content ops token",
+    )
+
+    module._print_operator_guidance(config)
+
+    captured = capsys.readouterr()
+    assert "--approval-token-file '/tmp/content ops token'" in captured.out
+    assert "approval-token-with-enough-entropy" not in captured.out
+    assert "pass --approval-token" not in captured.out
 
 
 def test_main_dry_run_does_not_start_subprocess(monkeypatch, tmp_path, capsys) -> None:
