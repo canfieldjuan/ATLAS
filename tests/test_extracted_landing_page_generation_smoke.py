@@ -198,10 +198,42 @@ async def test_landing_page_generation_threads_variant_angle_to_prompt_and_metad
     user_prompt = llm.calls[0]["messages"][1].content
     assert "Variant angle:" in user_prompt
     assert angle in user_prompt
+    assert "whole landing page meaningfully distinct" in user_prompt
+    assert "not just the hero headline" in user_prompt
+    assert "title, hero, section order or emphasis" in user_prompt
+    assert "metadata.answer_summary, body lead paragraphs" in user_prompt
+    assert "FAQ or objection framing" in user_prompt
     assert "Keep the same campaign facts" in user_prompt
     assert llm.calls[0]["metadata"]["variant_angle"] == angle
     saved_draft = store.saved[0]["drafts"][0]
     assert saved_draft.metadata["variant_angle"] == angle
+
+
+@pytest.mark.asyncio
+async def test_landing_page_generation_omits_variant_distinctness_without_angle() -> None:
+    store = _LandingPageStore()
+    llm = _LLM([_landing_page_response(include_description=True)])
+    service = LandingPageGenerationService(
+        landing_pages=store,
+        llm=llm,
+        skills=_Skills(),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        campaign=MarketingCampaign(
+            name="FAQ Report",
+            persona="Small SaaS support teams",
+            value_prop="Turn repeat tickets into reviewed answers",
+        ),
+        quality_gates_enabled=False,
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "Variant angle:" not in user_prompt
+    assert "whole landing page meaningfully distinct" not in user_prompt
+    assert "not just the hero headline" not in user_prompt
 
 
 @pytest.mark.asyncio

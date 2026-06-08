@@ -209,9 +209,12 @@ def _landing_page_user_prompt(
             f"{prompt}\n\n"
             "Variant angle:\n"
             f"- {resolved_variant_angle}\n"
-            "Use this angle to change framing and emphasis only. Keep the same "
-            "campaign facts, supplied evidence, CTA intent, and truthfulness "
-            "limits."
+            "Use this angle to make the whole landing page meaningfully distinct, "
+            "not just the hero headline. Let the angle shape the title, hero, "
+            "section order or emphasis, section titles, metadata.answer_summary, "
+            "body lead paragraphs, FAQ or objection framing, and CTA support "
+            "copy. Keep the same campaign facts, supplied evidence, CTA intent, "
+            "and truthfulness limits."
         )
     if quality_blockers:
         blockers = "\n".join(f"- {str(item)}" for item in quality_blockers)
