@@ -641,6 +641,9 @@ ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL=<public-resource-url>/m
 ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN=<long-operator-token> \
 python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
 
+# Operator launcher (loads .env/.env.local, validates OAuth config, prints smokes)
+.venv/bin/python scripts/start_content_ops_marketer_verify_oauth_server.py --dry-run
+
 # OAuth public-discovery smoke (metadata + 401 challenge; no draft reads)
 .venv/bin/python scripts/check_content_ops_marketer_verify_oauth_discovery.py \
   --issuer-url <public-issuer-url> \
