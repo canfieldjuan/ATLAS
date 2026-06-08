@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,6 +26,12 @@ class _MockFastMCP:
 
         return _register
 
+    def custom_route(self, *args, **kwargs):
+        def _register(fn):
+            return fn
+
+        return _register
+
     def streamable_http_app(self):
         return object()
 
@@ -32,15 +39,75 @@ class _MockFastMCP:
         return None
 
 
+class _OAuthBase:
+    def __class_getitem__(cls, item):
+        return cls
+
+
+class _OAuthRecord:
+    def __init__(self, **kwargs) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _OAuthException(Exception):
+    pass
+
+
+class _ProviderTokenVerifier:
+    def __init__(self, provider) -> None:
+        self.provider = provider
+
+
+class _ClientRegistrationOptions:
+    def __init__(self, **kwargs) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _AuthSettings:
+    def __init__(self, **kwargs) -> None:
+        self.__dict__.update(kwargs)
+
+
+class _TransportSecuritySettings:
+    def __init__(self, **kwargs) -> None:
+        self.__dict__.update(kwargs)
+
+
 sys.modules.setdefault("mcp", MagicMock())
 sys.modules.setdefault("mcp.server", MagicMock())
 _fastmcp_mod = MagicMock()
 _fastmcp_mod.FastMCP = _MockFastMCP
 sys.modules.setdefault("mcp.server.fastmcp", _fastmcp_mod)
+_auth_provider_mod = MagicMock()
+_auth_provider_mod.AccessToken = _OAuthRecord
+_auth_provider_mod.AuthorizationCode = _OAuthRecord
+_auth_provider_mod.AuthorizationParams = _OAuthRecord
+_auth_provider_mod.AuthorizeError = _OAuthException
+_auth_provider_mod.OAuthAuthorizationServerProvider = _OAuthBase
+_auth_provider_mod.ProviderTokenVerifier = _ProviderTokenVerifier
+_auth_provider_mod.RefreshToken = _OAuthRecord
+_auth_provider_mod.TokenError = _OAuthException
+_auth_provider_mod.construct_redirect_uri = lambda redirect_uri, **params: redirect_uri
+sys.modules.setdefault("mcp.server.auth.provider", _auth_provider_mod)
+_auth_settings_mod = MagicMock()
+_auth_settings_mod.AuthSettings = _AuthSettings
+_auth_settings_mod.ClientRegistrationOptions = _ClientRegistrationOptions
+sys.modules.setdefault("mcp.server.auth.settings", _auth_settings_mod)
+_transport_security_mod = MagicMock()
+_transport_security_mod.TransportSecuritySettings = _TransportSecuritySettings
+sys.modules.setdefault("mcp.server.transport_security", _transport_security_mod)
+_shared_auth_mod = MagicMock()
+_shared_auth_mod.OAuthClientInformationFull = _OAuthRecord
+_shared_auth_mod.OAuthToken = _OAuthRecord
+sys.modules.setdefault("mcp.shared.auth", _shared_auth_mod)
 
 from atlas_brain.config import settings
 from atlas_brain.mcp import content_ops_marketer_verify_server as verify
 from atlas_brain.mcp.auth import BearerAuthMiddleware
+from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
+    DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
+    validate_oauth_settings,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import RegistryClaim
 from extracted_content_pipeline.review_contract import RiskTier
@@ -78,6 +145,16 @@ class _RegistryReader:
 def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify, "_registry_reader_override", None)
     monkeypatch.setattr(verify, "_account_resolver_override", None)
+    monkeypatch.setattr(verify, "_oauth_provider", None)
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "bearer")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_issuer_url", "")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_resource_url", "")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_approval_token", "")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_state_file", "")
+    verify.mcp.settings.auth = None
+    verify.mcp.settings.transport_security = None
+    verify.mcp._auth_server_provider = None
+    verify.mcp._token_verifier = None
 
 
 def _tool_names() -> set[str]:
@@ -256,3 +333,78 @@ def test_content_ops_marketer_verify_http_rejects_bad_tokens(
 
     with pytest.raises(RuntimeError):
         verify._streamable_http_app()
+
+
+def test_content_ops_marketer_verify_rejects_unknown_http_auth_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "wat")
+
+    with pytest.raises(RuntimeError, match="AUTH_MODE"):
+        verify._streamable_http_app()
+
+
+def test_content_ops_marketer_verify_oauth_settings_require_approval_token() -> None:
+    with pytest.raises(RuntimeError, match="OAUTH_APPROVAL_TOKEN"):
+        validate_oauth_settings(
+            issuer_url="https://atlas.example.com/content-ops-marketer",
+            resource_server_url="https://atlas.example.com/content-ops-marketer/mcp",
+            approval_token="short",
+        )
+
+
+def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "content-ops-marketer-oauth-state.json"
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "oauth")
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_issuer_url",
+        "https://atlas.example.com/content-ops-marketer",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_resource_url",
+        "https://atlas.example.com/content-ops-marketer/mcp",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_approval_token",
+        "approval-token-with-enough-entropy",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_state_file",
+        str(state_file),
+    )
+
+    app = verify._streamable_http_app()
+    provider = verify._oauth_provider
+
+    assert not isinstance(app, BearerAuthMiddleware)
+    assert provider is not None
+    assert provider.scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
+    assert provider.state_file == state_file
+    assert verify.mcp.settings.auth.required_scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
+    assert verify.mcp.settings.auth.client_registration_options.enabled is True
+    assert verify.mcp.settings.auth.client_registration_options.valid_scopes == [
+        DEFAULT_CONTENT_OPS_VERIFY_SCOPE
+    ]
+    assert verify.mcp._auth_server_provider is provider
+    assert verify.mcp._token_verifier.provider is provider
+
+
+def test_content_ops_marketer_verify_oauth_transport_security_allows_configured_hosts() -> None:
+    transport = verify._oauth_transport_security_settings(
+        issuer_url="https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer",
+        resource_url="https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer/mcp",
+    )
+
+    assert transport.enable_dns_rebinding_protection is True
+    assert "atlas-brain.tailc7bd29.ts.net" in transport.allowed_hosts
+    assert "atlas-brain.tailc7bd29.ts.net:443" in transport.allowed_hosts
+    assert "localhost:*" in transport.allowed_hosts
+    assert "127.0.0.1:*" in transport.allowed_hosts
+    assert "evil.example.com" not in transport.allowed_hosts

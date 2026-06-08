@@ -633,6 +633,13 @@ python -m atlas_brain.mcp.content_ops_marketer_verify_server
 
 # SSE HTTP mode (port 8068, requires ATLAS_MCP_AUTH_TOKEN)
 ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
+
+# OAuth mode for remote connector transport
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_AUTH_MODE=oauth \
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL=<public-issuer-url> \
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL=<public-resource-url>/mcp \
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN=<long-operator-token> \
+python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
 ```
 
 Tools: `verify_draft`
@@ -640,8 +647,10 @@ Tools: `verify_draft`
 This verify-only marketer surface accepts structured draft evidence for one
 configured tenant binding and returns the deterministic Content Ops review
 verdict. It deliberately omits generation, publishing, approval, checkout,
-search/fetch adapters, and registry mutation. OAuth connector binding and
-dual-client public route smokes are deferred to the rollout slice.
+search/fetch adapters, and registry mutation. OAuth mode adds the server-side
+connector auth boundary and operator approval gate; public launcher scripts,
+dual-client route smokes, and token-derived tenant binding are deferred to the
+rollout slice.
 
 ### Intelligence MCP Server (33 tools)
 ```bash
