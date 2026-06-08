@@ -62,8 +62,10 @@ review-service reader port:
 ### Files touched
 
 - `atlas_brain/_content_ops_claim_registry.py`
+- `atlas_brain/_content_ops_review_workflow.py`
 - `atlas_brain/storage/migrations/334_content_ops_claim_registry.sql`
 - `.github/workflows/atlas_content_ops_claim_registry_checks.yml`
+- `tests/test_atlas_content_ops_review_workflow.py`
 - `tests/test_content_ops_claim_registry.py`
 - `scripts/run_extracted_pipeline_checks.sh`
 - `plans/PR-Content-Ops-Claim-Registry-Persistence.md`
@@ -82,6 +84,12 @@ scope in every mutation query. The reader method accepts a `TenantScope`,
 validates the account id, reads only active rows for that tenant, and converts
 them into the extracted package's `RegistryClaim` values without importing any
 transport layer.
+
+Post-review update: invalid or malformed tenant scope now raises a typed
+registry-read error, and the review-service boundary converts that into a
+blocked verdict instead of treating it as an empty registry. Registry ids are
+canonicalized to lowercased, trimmed values on write and read so the Python
+lookup key matches the database uniqueness contract.
 
 ## Intentional
 
@@ -110,7 +118,7 @@ transport layer.
 ## Verification
 
 - Focused pytest command for the claim-registry persistence and review-service
-  workflow tests -- 28 passed.
+  workflow tests -- 31 passed.
 - Extracted pipeline CI enrollment audit command -- 155 matching tests are
   enrolled.
 - Focused pytest command for the CI-enrollment audit regression tests -- 18
@@ -123,9 +131,11 @@ transport layer.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_content_ops_claim_registry_checks.yml` | 52 |
-| `atlas_brain/_content_ops_claim_registry.py` | 337 |
+| `atlas_brain/_content_ops_claim_registry.py` | 348 |
+| `atlas_brain/_content_ops_review_workflow.py` | 9 |
 | `atlas_brain/storage/migrations/334_content_ops_claim_registry.sql` | 36 |
-| `tests/test_content_ops_claim_registry.py` | 367 |
+| `tests/test_atlas_content_ops_review_workflow.py` | 31 |
+| `tests/test_content_ops_claim_registry.py` | 431 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `plans/PR-Content-Ops-Claim-Registry-Persistence.md` | 128 |
-| **Total** | **921** |
+| `plans/PR-Content-Ops-Claim-Registry-Persistence.md` | 141 |
+| **Total** | **1050** |

@@ -10,6 +10,7 @@ import pytest
 from atlas_brain import _content_ops_claim_registry as registry
 from atlas_brain._content_ops_review_workflow import (
     ContentOpsReviewRequest,
+    TenantClaimRegistryReadError,
     run_content_ops_review,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
@@ -45,6 +46,12 @@ class _Pool:
     async def fetch(self, query, *args):
         self.fetch_calls.append({"query": str(query), "args": args})
         return self.fetch_rows
+
+
+class _FailingFetchPool(_Pool):
+    async def fetch(self, query, *args):
+        self.fetch_calls.append({"query": str(query), "args": args})
+        raise RuntimeError("database unavailable")
 
 
 def _row(**overrides):
@@ -104,7 +111,11 @@ async def test_create_registry_claim_normalizes_and_inserts_claim() -> None:
     record = await registry.create_registry_claim(
         pool,
         account_id=account_id,
-        payload=_payload(risk_tier="HIGH", expires_on="2026-12-31"),
+        payload=_payload(
+            registry_id=" Feature.SSO ",
+            risk_tier="HIGH",
+            expires_on="2026-12-31",
+        ),
     )
 
     call = pool.fetchrow_calls[0]
@@ -208,11 +219,12 @@ async def test_update_registry_claim_returns_none_for_missing_row() -> None:
 @pytest.mark.asyncio
 async def test_list_registry_claim_records_returns_display_records() -> None:
     account_id = uuid.uuid4()
-    pool = _Pool(fetch_rows=[_row(account_id=account_id)])
+    pool = _Pool(fetch_rows=[_row(account_id=account_id, registry_id=" Feature.SSO ")])
 
     records = await registry.list_registry_claim_records(pool, account_id=account_id)
 
     assert records[0].account_id == account_id
+    assert records[0].registry_id == "feature.sso"
     assert records[0].metadata == {"source": "operator"}
     assert records[0].as_registry_claim().approved_wording == (
         "SSO is included on every plan"
@@ -290,10 +302,20 @@ async def test_repository_reader_fails_closed_on_invalid_tenant_scope(
     pool = _Pool(fetch_rows=[_row()])
     repository = registry.ContentOpsClaimRegistryRepository(pool)
 
-    claims = await repository.list_registry_claims(scope=scope)
+    with pytest.raises(TenantClaimRegistryReadError, match="valid tenant scope required"):
+        await repository.list_registry_claims(scope=scope)
 
-    assert claims == {}
     assert pool.fetch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_repository_reader_wraps_database_read_failure() -> None:
+    repository = registry.ContentOpsClaimRegistryRepository(_FailingFetchPool())
+
+    with pytest.raises(TenantClaimRegistryReadError, match="claim registry read failed"):
+        await repository.list_registry_claims(
+            scope=TenantScope(account_id=str(uuid.uuid4()))
+        )
 
 
 @pytest.mark.asyncio
@@ -304,7 +326,7 @@ async def test_repository_reader_returns_registry_claim_mapping() -> None:
         fetch_rows=[
             _row(
                 account_id=account_id,
-                registry_id="pricing.discount",
+                registry_id="Pricing.Discount",
                 approved_wording="Save up to 30% on eligible annual plans",
                 risk_tier="high",
                 expires_on=expiration,
@@ -328,7 +350,7 @@ async def test_repository_reader_returns_registry_claim_mapping() -> None:
 @pytest.mark.asyncio
 async def test_review_service_consumes_repository_reader() -> None:
     account_id = uuid.uuid4()
-    pool = _Pool(fetch_rows=[_row(account_id=account_id)])
+    pool = _Pool(fetch_rows=[_row(account_id=account_id, registry_id="Feature.SSO")])
     repository = registry.ContentOpsClaimRegistryRepository(pool)
 
     result = await run_content_ops_review(
@@ -365,3 +387,45 @@ async def test_review_service_consumes_repository_reader() -> None:
     assert result.decision == ReviewDecision.APPROVED
     assert result.mapped_claims[0].approved_wording == "SSO is included on every plan"
     assert pool.fetch_calls[0]["args"] == (account_id,)
+
+
+@pytest.mark.asyncio
+async def test_review_service_blocks_invalid_repository_scope() -> None:
+    pool = _Pool(fetch_rows=[_row()])
+    repository = registry.ContentOpsClaimRegistryRepository(pool)
+
+    result = await run_content_ops_review(
+        ContentOpsReviewRequest(
+            asset_id="asset-1",
+            rule_packet=RulePacketVersions(
+                brief="brief-v1",
+                brand_voice="voice-v1",
+                claim_registry="claims-db-v1",
+                compliance="compliance-v1",
+                channel_schema="channel-v1",
+            ),
+            coverage=(
+                CoverageRow(
+                    rule_id="CLAIM-01",
+                    requirement="Claim is registered",
+                    status=CoverageStatus.PASS,
+                    evidence="registry row",
+                ),
+            ),
+            extracted_claims=(
+                ExtractedClaim(
+                    text="SSO is included on every plan",
+                    location="hero",
+                    registry_id="feature.sso",
+                ),
+            ),
+            as_of=date(2026, 6, 7),
+        ),
+        scope=TenantScope(account_id="not-a-uuid"),
+        registry_reader=repository,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("valid tenant scope required",)
+    assert result.mapped_claims == ()
+    assert pool.fetch_calls == []

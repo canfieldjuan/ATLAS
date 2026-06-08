@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional
 
+from atlas_brain._content_ops_review_workflow import TenantClaimRegistryReadError
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import RegistryClaim
 from extracted_content_pipeline.review_contract import RiskTier
@@ -63,9 +64,13 @@ class ContentOpsClaimRegistryRepository:
         account_id = _scope_account_uuid(scope)
         if account_id is None:
             logger.warning("claim registry read: invalid tenant scope")
-            return {}
+            raise TenantClaimRegistryReadError("valid tenant scope required")
 
-        records = await list_registry_claim_records(self._pool, account_id=account_id)
+        try:
+            records = await list_registry_claim_records(self._pool, account_id=account_id)
+        except Exception as exc:
+            logger.exception("claim registry read failed")
+            raise TenantClaimRegistryReadError("claim registry read failed") from exc
         claims: dict[str, RegistryClaim] = {}
         for record in records:
             if not record.registry_id or record.registry_id in claims:
@@ -216,7 +221,7 @@ def _validated_claim(payload: Mapping[str, Any]) -> _ValidatedClaim:
     if not isinstance(payload, Mapping):
         raise ValueError("Claim registry payload must be an object")
 
-    registry_id = _clean(payload.get("registry_id"))
+    registry_id = _clean_registry_id(payload.get("registry_id"))
     if not registry_id:
         raise ValueError("Claim registry id is required")
 
@@ -237,7 +242,7 @@ def _display_record(row: Any) -> ContentOpsClaimRegistryRecord:
     return ContentOpsClaimRegistryRecord(
         id=row["id"],
         account_id=row["account_id"],
-        registry_id=_clean(row["registry_id"]),
+        registry_id=_clean_registry_id(row["registry_id"]),
         approved_wording=_clean(row["approved_wording"]),
         risk_tier=_optional_risk_tier(row["risk_tier"]),
         expires_on=_optional_date(row["expires_on"]),
@@ -324,6 +329,12 @@ def _clean(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())
+
+
+def _clean_registry_id(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
 
 
 __all__ = [

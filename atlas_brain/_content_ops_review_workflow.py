@@ -33,6 +33,10 @@ from extracted_content_pipeline.content_pr import (
 from extracted_content_pipeline.review_contract import ReviewDecision
 
 
+class TenantClaimRegistryReadError(RuntimeError):
+    """Raised when tenant registry data cannot be read safely."""
+
+
 class TenantClaimRegistryReader(Protocol):
     """Read approved marketing claims for one tenant scope."""
 
@@ -99,7 +103,10 @@ async def run_content_ops_review(
     if not _scope_account_id(scope):
         return _blocked_result(request, "tenant scope required")
 
-    registry = await registry_reader.list_registry_claims(scope=scope)
+    try:
+        registry = await registry_reader.list_registry_claims(scope=scope)
+    except TenantClaimRegistryReadError as exc:
+        return _blocked_result(request, str(exc) or "claim registry read failed")
     mapped_claims = build_claims_map(
         request.extracted_claims,
         registry,
@@ -184,6 +191,7 @@ def _value(value: Any) -> Any:
 __all__ = [
     "ContentOpsReviewRequest",
     "ContentOpsReviewResult",
+    "TenantClaimRegistryReadError",
     "TenantClaimRegistryReader",
     "run_content_ops_review",
 ]
