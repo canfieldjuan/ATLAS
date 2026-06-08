@@ -79,8 +79,8 @@ Resolved generation route:
 Shared prompt prevention:
 
 - `apply_brand_voice_to_system_prompt(...)` now injects a shared
-  `## Grounding contract` for campaign, landing page, blog post, sales brief,
-  and social-post rewrite prompts, even when no brand voice profile is
+  `## Grounding contract` for campaign, report, landing page, blog post, sales
+  brief, and social-post rewrite prompts, even when no brand voice profile is
   selected.
 - The broad no-fabrication rule is no longer campaign-only; focused tests
   assert the shared system prompt prevents invented counts, percentages,
@@ -121,6 +121,14 @@ python -m pytest tests/test_extracted_brand_voice.py tests/test_extracted_campai
 ```
 
 Result: `280 passed in 0.57s`.
+
+Report seam check:
+
+```bash
+python -m pytest tests/test_extracted_report_generation.py tests/test_extracted_brand_voice.py -q
+```
+
+Result: `33 passed in 0.12s`.
 
 Artifact JSON validation:
 
@@ -166,4 +174,4 @@ Full extracted package checks:
 bash scripts/run_extracted_pipeline_checks.sh
 ```
 
-Result: `3433 passed, 10 skipped, 1 warning in 52.02s`.
+Result: `3433 passed, 10 skipped, 1 warning in 51.09s`.

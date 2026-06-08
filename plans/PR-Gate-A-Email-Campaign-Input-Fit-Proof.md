@@ -58,7 +58,8 @@ Slice phase: Functional validation
 5. Keep this as validation. Do not self-certify product acceptance; the
    reviewer owns the GOOD-bar judgment against the exported campaign drafts.
 6. Prevent generator fabrication at the shared system-prompt seam used by
-   campaign, landing page, blog post, sales brief, and social-post rewrite.
+   campaign, report, landing page, blog post, sales brief, and social-post
+   rewrite.
 7. Prevent sparse one-ticket `email_campaign` fabrication by using a
    deterministic scaffold for exactly-one `support_ticket` evidence rows and
    by failing closed on unsupported LLM proof/volume claims when the normal
@@ -96,6 +97,7 @@ Slice phase: Functional validation
 - `atlas_brain/skills/digest/b2b_campaign_generation.md`
 - `extracted_content_pipeline/brand_voice.py`
 - `extracted_content_pipeline/campaign_generation.py`
+- `extracted_content_pipeline/report_generation.py`
 - `extracted_content_pipeline/sales_brief_generation.py`
 - `extracted_content_pipeline/services/campaign_quality.py`
 - `extracted_content_pipeline/skills/digest/b2b_campaign_generation.md`
@@ -105,6 +107,7 @@ Slice phase: Functional validation
 - `tests/test_extracted_campaign_generation_seams.py`
 - `tests/test_extracted_campaign_skill_registry.py`
 - `tests/test_extracted_landing_page_generation.py`
+- `tests/test_extracted_report_generation.py`
 - `tests/test_extracted_sales_brief_generation.py`
 - `tests/test_extracted_social_post_generation.py`
 - `tests/test_smoke_content_ops_gate_a_live_quality.py`
@@ -149,9 +152,11 @@ applied even when no brand voice profile is selected, so campaign, landing,
 blog, sales brief, and social rewrite prompts all inherit the same instruction:
 use only supplied input facts, never invent counts/percentages/statistics,
 scan or research claims, entity names, comparative claims, timelines, source
-volume, outcomes, or proof points. The campaign and sales-brief user prompts
-no longer carry duplicate broad no-fabrication rules; campaign keeps only the
-sparse support-ticket mode because that is source-shape-specific.
+volume, outcomes, or proof points. `ReportGenerationService` also routes its
+system prompt through the same seam with no brand-voice profile, so report is
+not a parallel no-coverage exception. The campaign and sales-brief user
+prompts no longer carry duplicate broad no-fabrication rules; campaign keeps
+only the sparse support-ticket mode because that is source-shape-specific.
 
 For sparse support-ticket evidence, `CampaignGenerationService` now detects the
 exactly-one `support_ticket` shape before calling the LLM. That path renders a
@@ -223,6 +228,8 @@ Parked hardening:
 
 - `python -m pytest tests/test_extracted_brand_voice.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_extracted_landing_page_generation.py tests/test_extracted_blog_generation.py tests/test_extracted_sales_brief_generation.py tests/test_extracted_social_post_generation.py -q`
   - Result: `280 passed in 0.57s`.
+- `python -m pytest tests/test_extracted_report_generation.py tests/test_extracted_brand_voice.py -q`
+  - Result: `33 passed in 0.12s`.
 - `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false python scripts/smoke_content_ops_gate_a_live_quality.py --account-id 5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901 --user-id 11111111-1111-4111-8111-111111111111 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --output-dir tmp/content_ops_gate_a_email_campaign_input_fit_20260608 --outputs email_campaign --variant-count 3 --quality-repair-attempts 1 --max-cost-usd 20.00 --json`
   - Result: `status=passed`, `inserted=36`, `generated=2`, `saved_ids=2`,
     `export_counts.email_campaign=2`, `llm_model=deterministic/single-support-ticket`.
@@ -233,7 +240,7 @@ Parked hardening:
   - Result: `rows=2`, `models=['deterministic/single-support-ticket']`,
     `channels=['email_cold', 'email_followup']`, `parse_attempts=[0]`.
 - `bash scripts/run_extracted_pipeline_checks.sh`
-  - Result: `3433 passed, 10 skipped, 1 warning in 52.02s`.
+  - Result: `3433 passed, 10 skipped, 1 warning in 51.09s`.
 - `scripts/push_pr.sh` will run the repo's required local PR checks once
   before push.
 
@@ -241,6 +248,6 @@ Parked hardening:
 
 | Area | Diff |
 |---|---:|
-| Code/tests | ~1,280 LOC |
-| Validation report/artifacts | ~780 LOC |
-| **Total** | **2,060 LOC (23 files, +2012 / -48)** |
+| Code/tests | ~1,285 LOC |
+| Validation report/artifacts | ~795 LOC |
+| **Total** | **2,080 LOC (25 files, +2032 / -48)** |
