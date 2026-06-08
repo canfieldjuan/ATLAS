@@ -35,32 +35,17 @@ Slice phase: Production hardening
 
 ### Review Contract
 
-Acceptance criteria:
+Acceptance criteria: async success updates the report, queues delivery when an
+email exists, and records the async event type; unpaid completed or async-success
+events return 200 with only an observed-but-unfulfilled `billing_events` row;
+async failure logs/audits without unlock or delivery; already processed event IDs
+still skip before paid-update side effects.
 
-- Async success: a signed
-  `checkout.session.async_payment_succeeded` webhook with
-  `source=content_ops_deflection_report`, valid amount/currency, and paid
-  `payment_status` updates `content_ops_deflection_reports`, queues delivery
-  when an email exists, and records the async event type.
-- Pending completed: a `checkout.session.completed` deflection webhook whose
-  session is still unpaid returns 200 after inserting an observed-but-unfulfilled
-  `billing_events` row, and does not update the report or queue delivery.
-- Async failure: `checkout.session.async_payment_failed` logs the failed
-  deflection payment context and does not update the report or queue delivery.
-- Existing idempotency remains intact for fulfilled events: already processed
-  event IDs skip before paid-update side effects.
+Affected surfaces: `atlas_brain/api/billing.py` and
+`tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`.
 
-Affected surfaces:
-
-- Stripe webhook routing in `atlas_brain/api/billing.py`.
-- Deflection paid-funnel webhook tests in
-  `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`.
-
-Risk areas:
-
-- Do not change subscription/vendor billing behavior.
-- Do not weaken amount/currency/account/request validation.
-- Do not log Stripe secrets or customer ticket contents.
+Risk areas: no subscription/vendor behavior change, no weaker amount/currency or
+account/request validation, and no Stripe secret or ticket-content logging.
 
 Reviewer rules triggered: R1 Requirements match; R2 Test evidence; R3 Security/auth; R5 Backward compatibility; R6 Error handling/fail-closed behavior; R8 Idempotency/payment state; R12 Deployment safety.
 
@@ -126,6 +111,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/api/billing.py` | 56 |
-| `plans/PR-Deflection-Async-Payment-Fulfillment.md` | 131 |
+| `plans/PR-Deflection-Async-Payment-Fulfillment.md` | 116 |
 | `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 223 |
-| **Total** | **410** |
+| **Total** | **395** |
