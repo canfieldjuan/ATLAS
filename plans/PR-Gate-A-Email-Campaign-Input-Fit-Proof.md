@@ -23,10 +23,12 @@ first live attempt exposed two harness input-fit failures:
 Review on #1394 then exposed a correctness failure in the first committed
 sample: the model fabricated source-volume/count claims such as "40+ queues"
 and unsupported percentages. This update keeps the slice in the same lane but
-closes that proof gap inline because a fabricated proof artifact cannot satisfy
-Gate A. The fix adds an upstream sparse-support-ticket grounding path for the
-exact one-ticket fixture and expands fail-closed validation for unsupported
-numeric, scan, aggregate, timing, recurrence, and queue/support-traffic claims.
+closes that proof gap inline because a fabricated proof artifact cannot
+satisfy Gate A. The fix hoists a shared grounding contract into the prompt
+layer used by the generators, adds an upstream sparse-support-ticket grounding
+path for the exact one-ticket fixture, and expands fail-closed validation for
+unsupported numeric, scan, aggregate, timing, recurrence, and
+queue/support-traffic claims.
 
 This PR keeps the slice narrow: fix harness input fit, make sparse one-ticket
 campaign output grounded by construction, commit the live proof artifacts, and
@@ -55,7 +57,9 @@ Slice phase: Functional validation
    pointers.
 5. Keep this as validation. Do not self-certify product acceptance; the
    reviewer owns the GOOD-bar judgment against the exported campaign drafts.
-6. Prevent sparse one-ticket `email_campaign` fabrication by using a
+6. Prevent generator fabrication at the shared system-prompt seam used by
+   campaign, landing page, blog post, sales brief, and social-post rewrite.
+7. Prevent sparse one-ticket `email_campaign` fabrication by using a
    deterministic scaffold for exactly-one `support_ticket` evidence rows and
    by failing closed on unsupported LLM proof/volume claims when the normal
    campaign path is used.
@@ -76,8 +80,11 @@ Slice phase: Functional validation
         behavior is reported explicitly rather than hidden behind `ok=true`.
   - [ ] The run excludes `landing_page`, `blog_post`, and `sales_brief` so
         campaign input fit is not diluted by the already-proven generators.
-- Affected surfaces: Gate A live-quality harness, focused harness tests,
-  validation artifacts, and support-ticket live proof documentation.
+  - [ ] The shared prompt layer, not the campaign generator alone, carries the
+        no-fabrication grounding contract.
+- Affected surfaces: shared generation prompt grounding, Gate A live-quality
+  harness, focused harness tests, validation artifacts, and support-ticket
+  live proof documentation.
 - Risk areas: accidental local model fallback, over-claiming campaign quality,
   mistaking a non-empty sequence for useful copy, weakening placeholder guards,
   and importing campaign opportunities under filters different from execution.
@@ -87,12 +94,19 @@ Slice phase: Functional validation
 
 - `scripts/smoke_content_ops_gate_a_live_quality.py`
 - `atlas_brain/skills/digest/b2b_campaign_generation.md`
+- `extracted_content_pipeline/brand_voice.py`
 - `extracted_content_pipeline/campaign_generation.py`
+- `extracted_content_pipeline/sales_brief_generation.py`
 - `extracted_content_pipeline/services/campaign_quality.py`
 - `extracted_content_pipeline/skills/digest/b2b_campaign_generation.md`
+- `tests/test_extracted_blog_generation.py`
+- `tests/test_extracted_brand_voice.py`
 - `tests/test_extracted_campaign_generation.py`
 - `tests/test_extracted_campaign_generation_seams.py`
 - `tests/test_extracted_campaign_skill_registry.py`
+- `tests/test_extracted_landing_page_generation.py`
+- `tests/test_extracted_sales_brief_generation.py`
+- `tests/test_extracted_social_post_generation.py`
 - `tests/test_smoke_content_ops_gate_a_live_quality.py`
 - `docs/extraction/validation/content_ops_gate_a_email_campaign_input_fit_2026-06-08.md`
 - `docs/extraction/validation/fixtures/content_ops_gate_a_email_campaign_input_fit_20260608/execution-result.json`
@@ -128,6 +142,16 @@ The Gate A payload also includes a real selling context:
 `selling.affiliate_url = https://finetunelab.ai/systems/ai-content-ops/intake`.
 This gives the campaign prompt a valid CTA URL while preserving the existing
 `example.com` placeholder URL rejection.
+
+`apply_brand_voice_to_system_prompt(...)` now injects a shared
+`## Grounding contract` before optional brand-voice guidance. The contract is
+applied even when no brand voice profile is selected, so campaign, landing,
+blog, sales brief, and social rewrite prompts all inherit the same instruction:
+use only supplied input facts, never invent counts/percentages/statistics,
+scan or research claims, entity names, comparative claims, timelines, source
+volume, outcomes, or proof points. The campaign and sales-brief user prompts
+no longer carry duplicate broad no-fabrication rules; campaign keeps only the
+sparse support-ticket mode because that is source-shape-specific.
 
 For sparse support-ticket evidence, `CampaignGenerationService` now detects the
 exactly-one `support_ticket` shape before calling the LLM. That path renders a
@@ -167,6 +191,10 @@ saved ids, and write the same artifact envelope used by #1383/#1392.
 - Do not add a quality-repair LLM pass for this slice. The sparse one-ticket
   path is deterministic to avoid billing a second generation and to prevent
   fabricated claims from entering the proof artifact.
+- Put the broad no-fabrication contract in the shared prompt layer rather than
+  keeping campaign-only and sales-brief-only copies. Generator-specific prompt
+  text remains only where it constrains a specific source shape or variant
+  rewrite.
 - Keep the deterministic scaffold scoped to exactly-one `support_ticket`
   evidence rows. Broader email campaigns still use the existing LLM generator
   and fail closed if unsupported claims appear.
@@ -182,6 +210,9 @@ saved ids, and write the same artifact envelope used by #1383/#1392.
 - Cheaper-model readiness remains separate after Sonnet behavior is reviewed.
 - Richer sparse-ticket copy is separate. This slice chooses a conservative
   grounded scaffold over marketing polish.
+- The explicit evidence ledger direction (`extracted_evidence_to_story`) stays
+  deferred; the shared prompt contract is the upstream prevention layer that
+  can ship in this slice.
 
 Parked hardening:
 
@@ -190,8 +221,8 @@ Parked hardening:
 
 ## Verification
 
-- `python -m pytest tests/test_extracted_campaign_generation_seams.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_smoke_content_ops_gate_a_live_quality.py -q`
-  - Result: `115 passed, 1 warning in 1.19s`.
+- `python -m pytest tests/test_extracted_brand_voice.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_extracted_landing_page_generation.py tests/test_extracted_blog_generation.py tests/test_extracted_sales_brief_generation.py tests/test_extracted_social_post_generation.py -q`
+  - Result: `280 passed in 0.57s`.
 - `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false python scripts/smoke_content_ops_gate_a_live_quality.py --account-id 5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901 --user-id 11111111-1111-4111-8111-111111111111 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --output-dir tmp/content_ops_gate_a_email_campaign_input_fit_20260608 --outputs email_campaign --variant-count 3 --quality-repair-attempts 1 --max-cost-usd 20.00 --json`
   - Result: `status=passed`, `inserted=36`, `generated=2`, `saved_ids=2`,
     `export_counts.email_campaign=2`, `llm_model=deterministic/single-support-ticket`.
@@ -202,7 +233,7 @@ Parked hardening:
   - Result: `rows=2`, `models=['deterministic/single-support-ticket']`,
     `channels=['email_cold', 'email_followup']`, `parse_attempts=[0]`.
 - `bash scripts/run_extracted_pipeline_checks.sh`
-  - Result: `3433 passed, 10 skipped, 1 warning in 51.31s`.
+  - Result: `3433 passed, 10 skipped, 1 warning in 52.02s`.
 - `scripts/push_pr.sh` will run the repo's required local PR checks once
   before push.
 
@@ -210,6 +241,6 @@ Parked hardening:
 
 | Area | Diff |
 |---|---:|
-| Code/tests | ~1,150 LOC |
+| Code/tests | ~1,280 LOC |
 | Validation report/artifacts | ~780 LOC |
-| **Total** | **1,957 LOC (16 files, +1923 / -34)** |
+| **Total** | **2,060 LOC (23 files, +2012 / -48)** |

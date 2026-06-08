@@ -595,15 +595,15 @@ async def test_generate_includes_opportunity_payload_when_skill_has_no_placehold
     )
 
     assert result.generated == 1
-    assert "opportunity=" not in llm.calls[0]["messages"][0].content
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "opportunity=" not in system_prompt
+    assert "## Grounding contract" in system_prompt
+    assert "Never introduce counts, percentages, statistics" in system_prompt
+    assert "scan or research claims" in system_prompt
     user_prompt = llm.calls[0]["messages"][1].content
     assert "target_mode=vendor_retention" in user_prompt
     assert "channel=email" in user_prompt
-    assert "Use only the supplied opportunity evidence" in user_prompt
-    assert "Keep the same opportunity facts" in user_prompt
-    assert "grounding_constraints=Use only facts" in user_prompt
-    assert "single support_ticket evidence item" in user_prompt
-    assert "repeat-question claims" in user_prompt
+    assert "one support_ticket evidence item" in user_prompt
     assert "STRICT_SINGLE_SUPPORT_TICKET_MODE" in user_prompt
     assert "Allowed factual content is limited to" in user_prompt
     assert "Use singular language only" in user_prompt

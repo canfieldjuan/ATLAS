@@ -76,6 +76,17 @@ Resolved generation route:
   `unsupported_numeric_claims`, `unsupported_scan_claims`, and
   `unsupported_aggregate_claims`.
 
+Shared prompt prevention:
+
+- `apply_brand_voice_to_system_prompt(...)` now injects a shared
+  `## Grounding contract` for campaign, landing page, blog post, sales brief,
+  and social-post rewrite prompts, even when no brand voice profile is
+  selected.
+- The broad no-fabrication rule is no longer campaign-only; focused tests
+  assert the shared system prompt prevents invented counts, percentages,
+  statistics, scan/research claims, unsupported entity names, and ungrounded
+  proof points across the generator seam.
+
 Placeholder URL guard:
 
 - The first attempted run proved the placeholder guard still blocks
@@ -106,10 +117,10 @@ Grounding sample:
 Focused tests:
 
 ```bash
-python -m pytest tests/test_extracted_campaign_generation_seams.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_smoke_content_ops_gate_a_live_quality.py -q
+python -m pytest tests/test_extracted_brand_voice.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_extracted_landing_page_generation.py tests/test_extracted_blog_generation.py tests/test_extracted_sales_brief_generation.py tests/test_extracted_social_post_generation.py -q
 ```
 
-Result: `115 passed, 1 warning in 1.19s`.
+Result: `280 passed in 0.57s`.
 
 Artifact JSON validation:
 
@@ -155,4 +166,4 @@ Full extracted package checks:
 bash scripts/run_extracted_pipeline_checks.sh
 ```
 
-Result: `3433 passed, 10 skipped, 1 warning in 51.31s`.
+Result: `3433 passed, 10 skipped, 1 warning in 52.02s`.

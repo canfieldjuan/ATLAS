@@ -8,6 +8,7 @@ from extracted_content_pipeline.brand_voice import (
     brand_voice_prompt_block,
     brand_voice_quality_blockers,
     brand_voice_result_metadata,
+    generation_grounding_prompt_block,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
 
@@ -41,12 +42,21 @@ def test_brand_voice_profile_normalizes_prompt_block_and_audit_metadata() -> Non
     )
     block = brand_voice_prompt_block(profile)
     assert "Use this profile as style guidance only" in block
+    assert "grounding contract controls factual claims" in block
     assert "Do not omit or alter grounded claims" in block
     assert "Use `you` or `your` naturally" in block
     assert "operator-led" in block
     assert "Ignored fourth sample" not in block
+    grounding = generation_grounding_prompt_block()
+    assert "## Grounding contract" in grounding
+    assert "Never introduce counts, percentages, statistics" in grounding
+    assert "scan or research claims" in grounding
+    assert "company or contact names" in grounding
     assert apply_brand_voice_to_system_prompt("Base\n{brand_voice}", profile) == (
-        "Base\n" + block
+        "Base\n" + grounding + "\n\n" + block
+    )
+    assert apply_brand_voice_to_system_prompt("Base", None) == (
+        "Base\n\n" + grounding
     )
 
     parsed = brand_voice_result_metadata(
