@@ -23,7 +23,7 @@ EOF
 has_managed_pre_push_hook() {
     local hook_path
     hook_path="$(git rev-parse --git-path hooks/pre-push)"
-    [ -f "$hook_path" ] && grep -q "ATLAS_LOCAL_PR_REVIEW_HOOK" "$hook_path"
+    [ -x "$hook_path" ] && grep -q "ATLAS_LOCAL_PR_REVIEW_HOOK" "$hook_path"
 }
 
 if [ "$#" -lt 1 ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then

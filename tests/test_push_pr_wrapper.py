@@ -79,6 +79,29 @@ def test_push_pr_dry_run_with_skip_env_keeps_wrapper_review(tmp_path: Path) -> N
     assert "managed pre-push hook will run local PR review once" not in result.stdout
 
 
+def test_push_pr_dry_run_with_non_executable_managed_hook_keeps_wrapper_review(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fixture_repo(tmp_path)
+    body = _write_body(repo)
+    _write_managed_hook(repo, executable=False)
+    env = {**os.environ, "ATLAS_PUSH_PR_DRY_RUN": "1"}
+
+    result = subprocess.run(
+        ["bash", "scripts/push_pr.sh", str(body), "-u", "origin", "HEAD"],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert f"ATLAS_CURRENT_PR_BODY_FILE={body}" in result.stdout
+    assert f"--current-pr-body-file {body}" in result.stdout
+    assert "managed pre-push hook will run local PR review once" not in result.stdout
+
+
 def test_push_pr_rejects_no_verify(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path)
     body = _write_body(repo)
@@ -125,9 +148,11 @@ def _write_body(repo: Path) -> Path:
     return body
 
 
-def _write_managed_hook(repo: Path) -> None:
+def _write_managed_hook(repo: Path, *, executable: bool = True) -> None:
     hook = repo / ".git" / "hooks" / "pre-push"
     hook.write_text(
         "#!/usr/bin/env bash\n# ATLAS_LOCAL_PR_REVIEW_HOOK\n",
         encoding="utf-8",
     )
+    if executable:
+        hook.chmod(0o755)

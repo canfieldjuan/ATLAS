@@ -29,6 +29,9 @@ Slice phase: Workflow/process
   - [ ] With a managed Atlas pre-push hook present and not skipped,
         `push_pr.sh` does not run `local_pr_review.sh` before `git push`; the
         hook is the only runner.
+  - [ ] A marker-only but non-executable hook is not treated as managed; the
+        wrapper keeps the local-review fallback instead of letting Git ignore
+        the hook into a zero-review push.
   - [ ] With no managed hook, `push_pr.sh` still runs `local_pr_review.sh`
         before pushing, so local review is not silently lost.
   - [ ] With `ATLAS_SKIP_LOCAL_PR_REVIEW=1`, `push_pr.sh` runs local review
@@ -56,9 +59,9 @@ Slice phase: Workflow/process
 the managed `ATLAS_LOCAL_PR_REVIEW_HOOK` marker installed by
 `scripts/install_local_pr_hook.sh`.
 
-If that managed hook is present and `ATLAS_SKIP_LOCAL_PR_REVIEW` is not set,
-the wrapper exports `ATLAS_CURRENT_PR_BODY_FILE` and goes straight to
-`git push`; the hook runs `local_pr_review.sh` once with that body context.
+If that managed hook is present, executable, and `ATLAS_SKIP_LOCAL_PR_REVIEW`
+is not set, the wrapper exports `ATLAS_CURRENT_PR_BODY_FILE` and goes straight
+to `git push`; the hook runs `local_pr_review.sh` once with that body context.
 
 If the hook is missing, unmanaged, or would skip, the wrapper runs
 `local_pr_review.sh --current-pr-body-file <body>` itself before pushing. That
@@ -85,7 +88,7 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_push_pr_wrapper.py tests/test_install_local_pr_hook.py -q` -- 10 passed.
+- `python -m pytest tests/test_push_pr_wrapper.py tests/test_install_local_pr_hook.py -q` -- 11 passed.
 - `ATLAS_PUSH_PR_DRY_RUN=1 bash scripts/push_pr.sh plans/PR-Workflow-Single-Push-Review.md -u origin HEAD` -- printed the managed-hook single-run path without a wrapper-side `local_pr_review.sh` command.
 - `bash scripts/push_pr.sh tmp/workflow-single-push-review-pr-body.md -u origin claude/pr-workflow-single-push-review` -- runs the managed pre-push hook once before pushing.
 
@@ -95,7 +98,7 @@ Parked hardening: none.
 |---|---:|
 | `AGENTS.md` | 17 |
 | `docs/SESSION_BOOTSTRAP.md` | 17 |
-| `plans/PR-Workflow-Single-Push-Review.md` | 101 |
+| `plans/PR-Workflow-Single-Push-Review.md` | 104 |
 | `scripts/push_pr.sh` | 42 |
-| `tests/test_push_pr_wrapper.py` | 98 |
-| **Total** | **275** |
+| `tests/test_push_pr_wrapper.py` | 123 |
+| **Total** | **303** |
