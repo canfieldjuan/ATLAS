@@ -2864,13 +2864,18 @@ async def test_deflection_checkout_authorization_returns_canonical_terms_only():
         account_id="acct-gate",
         request_id="request-ready",
         snapshot={"summary": {"generated": 1}},
-        artifact={"markdown": "# Full report", "faq_result": {"items": []}},
+        artifact={
+            "markdown": "# Full report",
+            "faq_result": {"items": []},
+            "ticket_text": "Customer ticket text",
+        },
         delivery_email="buyer@example.com",
     )
     route = _checkout_authorization_route(
         store,
         config_kwargs={
             "deflection_checkout_amount_cents": 150000,
+            "deflection_checkout_allowed_amount_cents": "149000,150000",
             "deflection_checkout_currency": "USD",
             "deflection_checkout_price_id": " price_deflection_report ",
         },
@@ -2887,6 +2892,7 @@ async def test_deflection_checkout_authorization_returns_canonical_terms_only():
         },
     }
     assert "Full report" not in str(payload)
+    assert "Customer ticket text" not in str(payload)
     assert "buyer@example.com" not in str(payload)
 
 
@@ -2950,6 +2956,35 @@ async def test_deflection_checkout_authorization_fails_closed_for_report_state(
                 "deflection_checkout_price_id": "price_deflection_report",
             },
             "Deflection checkout currency is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_amount_cents": 150000,
+                "deflection_checkout_allowed_amount_cents": "149000",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout amount is not accepted by the payment gate.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "150000,",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "not-cents",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "0",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
         ),
     ],
 )

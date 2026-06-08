@@ -354,6 +354,7 @@ class ContentOpsControlSurfaceApiConfig:
         DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT
     )
     deflection_checkout_amount_cents: int = 150000
+    deflection_checkout_allowed_amount_cents: str = ""
     deflection_checkout_currency: str = "usd"
     deflection_checkout_price_id: str = ""
     ingestion_import_max_concurrency: int = 8
@@ -1787,6 +1788,12 @@ def _deflection_checkout_terms(
             status_code=503,
             detail="Deflection checkout amount is not configured.",
         )
+    allowed_amounts = _deflection_checkout_allowed_amounts(config, amount_cents)
+    if amount_cents not in allowed_amounts:
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection checkout amount is not accepted by the payment gate.",
+        )
     if len(currency) != 3 or not currency.isalpha():
         raise HTTPException(
             status_code=503,
@@ -1802,6 +1809,37 @@ def _deflection_checkout_terms(
         "currency": currency,
         "price_id": price_id,
     }
+
+
+def _deflection_checkout_allowed_amounts(
+    config: ContentOpsControlSurfaceApiConfig,
+    default_amount_cents: int,
+) -> tuple[int, ...]:
+    configured = _clean(config.deflection_checkout_allowed_amount_cents)
+    if not configured:
+        return (default_amount_cents,)
+    amounts: list[int] = []
+    for raw_part in configured.split(","):
+        part = raw_part.strip()
+        if not part:
+            raise HTTPException(
+                status_code=503,
+                detail="Deflection checkout allowed amounts are not configured.",
+            )
+        try:
+            amount_cents = int(part)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Deflection checkout allowed amounts are not configured.",
+            ) from exc
+        if amount_cents <= 0:
+            raise HTTPException(
+                status_code=503,
+                detail="Deflection checkout allowed amounts are not configured.",
+            )
+        amounts.append(amount_cents)
+    return tuple(dict.fromkeys(amounts))
 
 
 def _with_deflection_submit_diagnostics(

@@ -10,6 +10,10 @@ the source of truth before any Checkout Session is created.
 
 This slice adds the ATLAS-side authorization contract only. It gives the
 portfolio repo a single backend preflight to call before it talks to Stripe.
+The final diff is above the 400 LOC soft cap because review surfaced a
+payment-boundary contract gap: the authorization amount also has to reconcile
+with the webhook's accepted amount set before the portfolio repo can safely
+consume this contract.
 
 ## Scope (this PR)
 
@@ -23,8 +27,12 @@ Slice phase: Production hardening
 3. Return canonical `{amount_cents, currency, price_id}` from ATLAS so the
    portfolio route can build Stripe Checkout without its own price/currency
    judgment.
-4. Add focused negative tests proving missing, paid, artifactless, and
-   misconfigured states fail before a charge can be attempted.
+4. Reconcile the returned amount with the same allowed amount list the Stripe
+   webhook uses, so authorization cannot approve a charge amount the unlock
+   gate will later reject.
+5. Add focused negative tests proving missing, paid, artifactless,
+   amount-mismatched, and misconfigured states fail before a charge can be
+   attempted.
 
 ### Files touched
 
@@ -40,10 +48,14 @@ Acceptance criteria:
 - `POST /content-ops/deflection-reports/{request_id}/checkout-authorization`
   returns 200 only for a scoped report that exists, is unpaid, has an artifact,
   and has non-empty configured `amount_cents`, `currency`, and `price_id`.
+- `amount_cents` must be a member of the configured allowed amount set when an
+  allow-list exists; otherwise the default amount remains the single accepted
+  amount.
 - Missing report returns 404.
 - Already-paid report returns 409.
 - Missing/empty artifact returns 409.
-- Missing price ID / invalid amount / invalid currency returns 503.
+- Missing price ID / invalid amount / invalid currency / malformed allowed
+  amount list / amount not accepted by the payment gate returns 503.
 - Response contains no full report artifact, ticket text, delivery email, or
   Stripe secret.
 
@@ -66,7 +78,10 @@ Reviewer rules triggered: R1 Requirements match; R2 Test evidence; R3 Security/a
 
 Add `stripe_content_ops_deflection_report_price_id` to `SaaSAuthConfig`, then
 pass the deflection checkout terms from `atlas_brain/api/__init__.py` into
-`ContentOpsControlSurfaceApiConfig`.
+`ContentOpsControlSurfaceApiConfig`. The existing
+`stripe_content_ops_deflection_report_allowed_amount_cents` setting is passed
+through the same config so the authorization route can reject any
+`amount_cents` that the webhook's amount gate would not accept.
 
 The new route resolves the existing `DeflectionReportArtifactStore` and scoped
 account, loads the access record, and checks only lock/availability state. If
@@ -97,6 +112,10 @@ portfolio checkout route can consume in the next repo slice.
 - The route fails closed when no ATLAS price ID is configured. A portfolio
   fallback `price_data` path would preserve the two-decider class this issue is
   trying to remove.
+- `price_id` is the authoritative charge input for the future portfolio
+  Checkout Session. `amount_cents` is still returned for UI/display and
+  contract checks, but this route now verifies that value against the same
+  accepted amount set the webhook uses.
 
 ## Deferred
 
@@ -111,9 +130,9 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_returns_canonical_terms_only tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_fails_closed_for_report_state tests/test_extracted_content_control_surface_api.py::test_deflection_checkout_authorization_fails_when_terms_misconfigured tests/test_extracted_content_control_surface_api.py::test_deflection_report_paid_route_uses_trusted_dependency -q`
-  - 8 passed.
+  - 12 passed.
 - `python -m pytest tests/test_extracted_content_control_surface_api.py -q`
-  - 139 passed, 1 skipped.
+  - 143 passed, 1 skipped.
 - `bash scripts/validate_extracted_content_pipeline.sh`
   - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline`
@@ -129,9 +148,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/__init__.py` | 12 |
+| `atlas_brain/api/__init__.py` | 15 |
 | `atlas_brain/config.py` | 4 |
-| `extracted_content_pipeline/api/control_surfaces.py` | 68 |
-| `plans/PR-Deflection-Checkout-Authorization.md` | 137 |
-| `tests/test_extracted_content_control_surface_api.py` | 145 |
-| **Total** | **366** |
+| `extracted_content_pipeline/api/control_surfaces.py` | 106 |
+| `plans/PR-Deflection-Checkout-Authorization.md` | 156 |
+| `tests/test_extracted_content_control_surface_api.py` | 180 |
+| **Total** | **461** |

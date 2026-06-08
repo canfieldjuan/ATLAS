@@ -237,6 +237,9 @@ try:
         deflection_checkout_amount_cents=(
             settings.saas_auth.stripe_content_ops_deflection_report_amount_cents
         ),
+        deflection_checkout_allowed_amount_cents=(
+            settings.saas_auth.stripe_content_ops_deflection_report_allowed_amount_cents
+        ),
         deflection_checkout_currency=(
             settings.saas_auth.stripe_content_ops_deflection_report_currency
         ),
