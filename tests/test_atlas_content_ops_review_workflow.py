@@ -7,6 +7,7 @@ import pytest
 
 from atlas_brain._content_ops_review_workflow import (
     ContentOpsReviewRequest,
+    TenantClaimRegistryReadError,
     run_content_ops_review,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
@@ -41,6 +42,15 @@ class _RegistryReader:
         return self.registry
 
 
+@dataclass
+class _FailingRegistryReader:
+    scopes: list[TenantScope]
+
+    async def list_registry_claims(self, *, scope: TenantScope):
+        self.scopes.append(scope)
+        raise TenantClaimRegistryReadError("claim registry read failed")
+
+
 def _reader() -> _RegistryReader:
     return _RegistryReader(
         registry={
@@ -58,6 +68,10 @@ def _reader() -> _RegistryReader:
         },
         scopes=[],
     )
+
+
+def _failing_reader() -> _FailingRegistryReader:
+    return _FailingRegistryReader(scopes=[])
 
 
 def _pass_row(rule_id: str = "VOICE-01") -> CoverageRow:
@@ -119,6 +133,23 @@ async def test_registry_reader_receives_tenant_scope_not_request_account_id() ->
     assert reader.scopes == [scope]
     assert result.content_pr.asset_id == "asset-1"
     assert result.mapped_claims[0].status == ClaimStatus.MATCH
+
+
+@pytest.mark.asyncio
+async def test_registry_reader_failure_blocks_review() -> None:
+    reader = _failing_reader()
+    scope = TenantScope(account_id="acct-1")
+
+    result = await run_content_ops_review(
+        _request(),
+        scope=scope,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("claim registry read failed",)
+    assert result.mapped_claims == ()
+    assert reader.scopes == [scope]
 
 
 @pytest.mark.asyncio
