@@ -117,6 +117,33 @@ def test_quality_gate_missing_malformed_and_unknown_inputs_block() -> None:
         assert _verdict(rows) is ReviewDecision.BLOCKED
 
 
+def test_quality_gate_contradictory_blocking_envelopes_block() -> None:
+    cases = (
+        {"passed": True, "decision": "rejected"},
+        {"passed": True, "decision": "blocked"},
+        {"passed": True, "findings": [], "decision": "block"},
+        {"passed": True, "verdict": "blocked"},
+        {"passed": True, "outcome": "fail"},
+        QualityReport(passed=True, decision=GateDecision.BLOCK),
+    )
+
+    for report in cases:
+        rows = quality_gate_coverage_rows(report)
+        assert rows[0].rule_id.startswith("QUALITY-GATE:contradictory-")
+        assert rows[0].status == CoverageStatus.UNRESOLVED
+        assert _verdict(rows) is ReviewDecision.BLOCKED
+
+
+def test_quality_gate_nonblocking_decision_near_miss_still_passes() -> None:
+    rows = quality_gate_coverage_rows(
+        {"passed": True, "decision": "warn", "findings": []}
+    )
+
+    assert rows[0].rule_id == "QUALITY-GATE:report"
+    assert rows[0].status == CoverageStatus.PASS
+    assert _verdict(rows) is ReviewDecision.APPROVED
+
+
 def test_brand_voice_pass_emits_required_pass_row() -> None:
     for key in ("_brand_voice_audit", "brand_voice_audit"):
         rows = brand_voice_coverage_rows({key: {"passed": True}})

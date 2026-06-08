@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import (
@@ -29,6 +29,10 @@ from extracted_content_pipeline.content_pr import (
     RulePacketVersions,
     review_verdict,
     verdict_reasons,
+)
+from extracted_content_pipeline.coverage_rows import (
+    brand_voice_coverage_rows,
+    quality_gate_coverage_rows,
 )
 from extracted_content_pipeline.review_contract import ReviewDecision
 
@@ -55,6 +59,8 @@ class ContentOpsReviewRequest:
     asset_id: str = ""
     rule_packet: RulePacketVersions = RulePacketVersions()
     coverage: tuple[CoverageRow, ...] = ()
+    quality_reports: tuple[Any, ...] = ()
+    brand_voice_payload: Mapping[str, Any] | None = None
     extracted_claims: tuple[ExtractedClaim, ...] = ()
     comments: tuple[ReviewComment, ...] = ()
     as_of: date | None = None
@@ -112,10 +118,11 @@ async def run_content_ops_review(
         registry,
         as_of=request.as_of or date.today(),
     )
+    coverage = _coverage_rows_for_request(request)
     content_pr = ContentPR(
         asset_id=request.asset_id,
         rule_packet=request.rule_packet,
-        coverage=request.coverage,
+        coverage=coverage,
         claims=mapped_claims,
         comments=request.comments,
     )
@@ -135,7 +142,7 @@ def _blocked_result(
     content_pr = ContentPR(
         asset_id=request.asset_id,
         rule_packet=request.rule_packet,
-        coverage=request.coverage,
+        coverage=_coverage_rows_for_request(request),
         claims=(),
         comments=request.comments,
     )
@@ -152,6 +159,25 @@ def _scope_account_id(scope: TenantScope | None) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _coverage_rows_for_request(request: ContentOpsReviewRequest) -> tuple[CoverageRow, ...]:
+    rows = list(request.coverage or ())
+    for report in _items(request.quality_reports):
+        rows.extend(quality_gate_coverage_rows(report))
+    if request.brand_voice_payload is not None:
+        rows.extend(brand_voice_coverage_rows(request.brand_voice_payload))
+    return tuple(rows)
+
+
+def _items(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, Mapping) or isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return tuple(value)
+    return (value,)
 
 
 def _mapped_claim_as_dict(claim: MappedClaim) -> dict[str, Any]:
