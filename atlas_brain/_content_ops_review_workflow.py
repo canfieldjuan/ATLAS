@@ -52,6 +52,13 @@ class TenantClaimRegistryReader(Protocol):
         """Return registry claims keyed by registry id."""
 
 
+class ContentOpsAccountResolver(Protocol):
+    """Resolve the connector-bound tenant account for one service call."""
+
+    async def resolve_account_id(self) -> Any:
+        """Return the bound account ID, or a missing value when unavailable."""
+
+
 @dataclass(frozen=True)
 class ContentOpsReviewRequest:
     """Structured request a future marketer MCP tool can pass through."""
@@ -64,6 +71,26 @@ class ContentOpsReviewRequest:
     extracted_claims: tuple[ExtractedClaim, ...] = ()
     comments: tuple[ReviewComment, ...] = ()
     as_of: date | None = None
+
+
+async def run_content_ops_review_for_bound_tenant(
+    request: ContentOpsReviewRequest,
+    *,
+    account_resolver: ContentOpsAccountResolver,
+    registry_reader: TenantClaimRegistryReader,
+) -> ContentOpsReviewResult:
+    """Resolve connector tenant binding before running the review service."""
+
+    try:
+        account_id = await account_resolver.resolve_account_id()
+    except Exception:
+        return _blocked_result(request, "tenant binding resolution failed")
+
+    return await run_content_ops_review(
+        request,
+        scope=_tenant_scope_from_account_binding(account_id),
+        registry_reader=registry_reader,
+    )
 
 
 @dataclass(frozen=True)
@@ -161,6 +188,13 @@ def _scope_account_id(scope: TenantScope | None) -> str:
     return value.strip()
 
 
+def _tenant_scope_from_account_binding(account_id: Any) -> TenantScope | None:
+    account = account_id.strip() if isinstance(account_id, str) else ""
+    if not account:
+        return None
+    return TenantScope(account_id=account)
+
+
 def _coverage_rows_for_request(request: ContentOpsReviewRequest) -> tuple[CoverageRow, ...]:
     rows = list(request.coverage or ())
     for report in _items(request.quality_reports):
@@ -215,9 +249,11 @@ def _value(value: Any) -> Any:
 
 
 __all__ = [
+    "ContentOpsAccountResolver",
     "ContentOpsReviewRequest",
     "ContentOpsReviewResult",
     "TenantClaimRegistryReadError",
     "TenantClaimRegistryReader",
     "run_content_ops_review",
+    "run_content_ops_review_for_bound_tenant",
 ]
