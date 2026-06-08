@@ -394,6 +394,229 @@ async def test_stripe_webhook_routes_deflection_checkout_to_paid_gate(
 
 
 @pytest.mark.asyncio
+async def test_stripe_webhook_routes_deflection_async_success_to_paid_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(
+        account_id=account_id,
+        session_id="cs_test_deflection_async_success",
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_async_success",
+        type="checkout.session.async_payment_succeeded",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.stripe_webhook(request)
+
+    assert response == {"status": "ok"}
+    update_query, update_args = pool.execute_calls[0]
+    delivery_query, delivery_args = pool.execute_calls[1]
+    insert_query, insert_args = pool.execute_calls[2]
+    assert "UPDATE content_ops_deflection_reports" in update_query
+    assert update_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection_async_success",
+    )
+    assert "INSERT INTO content_ops_deflection_report_deliveries" in delivery_query
+    assert delivery_args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection_async_success",
+    )
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_async_success"
+    assert insert_args[2] == "checkout.session.async_payment_succeeded"
+    assert pool.processed_event_ids == {"evt_deflection_async_success"}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_deflection_completed_unpaid_stays_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, payment_status="unpaid")
+    event = SimpleNamespace(
+        id="evt_deflection_pending_payment",
+        type="checkout.session.completed",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.stripe_webhook(request)
+
+    assert response == {"status": "ok"}
+    assert "checkout event arrived before funds were available" in caplog.text
+    assert len(pool.execute_calls) == 1
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_pending_payment"
+    assert insert_args[2] == "checkout.session.completed"
+    assert pool.processed_event_ids == {"evt_deflection_pending_payment"}
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    assert pool.delivery_rows == {}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_deflection_async_success_unpaid_stays_pending(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, payment_status="unpaid")
+    event = SimpleNamespace(
+        id="evt_deflection_async_success_unpaid",
+        type="checkout.session.async_payment_succeeded",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.stripe_webhook(request)
+
+    assert response == {"status": "ok"}
+    assert "checkout event arrived before funds were available" in caplog.text
+    assert len(pool.execute_calls) == 1
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_async_success_unpaid"
+    assert insert_args[2] == "checkout.session.async_payment_succeeded"
+    assert pool.processed_event_ids == {"evt_deflection_async_success_unpaid"}
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    assert pool.delivery_rows == {}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_deflection_async_failure_is_observed_without_unlock(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    account_id = str(uuid.uuid4())
+    session = _session(
+        account_id=account_id,
+        session_id="cs_test_deflection_async_failed",
+        payment_status="failed",
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_async_failed",
+        type="checkout.session.async_payment_failed",
+        data=SimpleNamespace(object=session),
+    )
+
+    class _Webhook:
+        @staticmethod
+        def construct_event(_body: bytes, _sig: str, _secret: str) -> Any:
+            return event
+
+    fake_stripe = SimpleNamespace(Webhook=_Webhook, api_key="")
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+    request = SimpleNamespace(
+        headers={"stripe-signature": "valid"},
+        body=lambda: _body(),
+    )
+
+    async def _body() -> bytes:
+        return b"{}"
+
+    monkeypatch.setitem(sys.modules, "stripe", fake_stripe)
+    monkeypatch.setattr(billing.settings.saas_auth, "stripe_secret_key", "sk_test")
+    monkeypatch.setattr(
+        billing.settings.saas_auth,
+        "stripe_webhook_secret",
+        "whsec_test",
+    )
+    monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
+
+    response = await billing.stripe_webhook(request)
+
+    assert response == {"status": "ok"}
+    assert "async payment failed" in caplog.text
+    assert len(pool.execute_calls) == 1
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_async_failed"
+    assert insert_args[2] == "checkout.session.async_payment_failed"
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    assert pool.delivery_rows == {}
+
+
+@pytest.mark.asyncio
 async def test_stripe_webhook_skips_processed_deflection_checkout_before_paid_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
