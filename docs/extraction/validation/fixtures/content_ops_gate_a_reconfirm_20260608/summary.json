@@ -1,0 +1,197 @@
+{
+  "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+  "budget": {
+    "account_usage_budget_days": 7,
+    "account_usage_budget_usd": null,
+    "max_cost_usd": 20.0,
+    "messages": [],
+    "triggered": false
+  },
+  "configured_outputs": [
+    "email_campaign",
+    "blog_post",
+    "report",
+    "landing_page",
+    "sales_brief",
+    "social_post",
+    "ad_copy",
+    "quote_card",
+    "stat_card",
+    "signal_extraction",
+    "faq_markdown",
+    "faq_deflection_report"
+  ],
+  "errors": [],
+  "export_counts": {
+    "blog_post": 3,
+    "landing_page": 3,
+    "sales_brief": 3
+  },
+  "issue": 1357,
+  "ok": true,
+  "output_dir": "tmp/content_ops_gate_a_reconfirm_20260608",
+  "required_outputs": [
+    "landing_page",
+    "blog_post",
+    "sales_brief"
+  ],
+  "review": {
+    "blog_post": {
+      "missing_ids": [],
+      "requested_ids": [
+        "0501c17f-90c9-4318-9d15-e3253160a4e5",
+        "2f9ec4e3-475a-4046-9e01-182757d1de20",
+        "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+      ],
+      "updated_ids": [
+        "44d56e20-d9c8-4626-8e39-e894cb8fd085",
+        "2f9ec4e3-475a-4046-9e01-182757d1de20",
+        "0501c17f-90c9-4318-9d15-e3253160a4e5"
+      ]
+    },
+    "landing_page": {
+      "missing_ids": [],
+      "requested_ids": [
+        "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+        "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+        "104b8793-9015-4aac-abab-41917dd38309"
+      ],
+      "updated_ids": [
+        "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+        "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+        "104b8793-9015-4aac-abab-41917dd38309"
+      ]
+    },
+    "sales_brief": {
+      "missing_ids": [],
+      "requested_ids": [
+        "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+        "490247f3-19bf-4c0e-b532-e78c369cf989",
+        "2689157c-2473-44e9-bc75-3f786b105aae"
+      ],
+      "updated_ids": [
+        "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+        "490247f3-19bf-4c0e-b532-e78c369cf989",
+        "2689157c-2473-44e9-bc75-3f786b105aae"
+      ]
+    }
+  },
+  "saved_ids": {
+    "blog_post": [
+      "0501c17f-90c9-4318-9d15-e3253160a4e5",
+      "2f9ec4e3-475a-4046-9e01-182757d1de20",
+      "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+    ],
+    "landing_page": [
+      "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+      "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+      "104b8793-9015-4aac-abab-41917dd38309"
+    ],
+    "sales_brief": [
+      "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+      "490247f3-19bf-4c0e-b532-e78c369cf989",
+      "2689157c-2473-44e9-bc75-3f786b105aae"
+    ]
+  },
+  "seeded_blog_blueprint": {
+    "saved_ids": [
+      "0da54d85-706c-43e9-aa59-036b182b2d87"
+    ],
+    "slug": "content-ops-support-ticket-live-smoke-2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    "target_mode": "vendor_retention",
+    "topic": "Support-ticket questions customers keep asking",
+    "topic_type": "content_ops_support_ticket_faq"
+  },
+  "status": "passed",
+  "support_ticket_csv": "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv",
+  "variant_count": 3,
+  "variant_summary": {
+    "blog_post": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "0501c17f-90c9-4318-9d15-e3253160a4e5"
+          ],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "2f9ec4e3-475a-4046-9e01-182757d1de20"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    },
+    "landing_page": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "d8b20a0d-44c5-42ee-ae7a-b29251426db8"
+          ],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "067c7531-b8c7-4b88-acaf-4f7643cd43f6"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "104b8793-9015-4aac-abab-41917dd38309"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    },
+    "sales_brief": {
+      "variant_count": 3,
+      "variants": [
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "3fc2cbe9-eca0-42ee-8804-2b63c9af9057"
+          ],
+          "variant_angle": "pain_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "490247f3-19bf-4c0e-b532-e78c369cf989"
+          ],
+          "variant_angle": "outcome_led"
+        },
+        {
+          "errors": [],
+          "generated": 1,
+          "saved_ids": [
+            "2689157c-2473-44e9-bc75-3f786b105aae"
+          ],
+          "variant_angle": "social_proof"
+        }
+      ]
+    }
+  }
+}

@@ -498,7 +498,7 @@ async def test_support_ticket_provider_feeds_real_blog_post_generation() -> None
         "customer support FAQ",
         "repeat support questions",
     ]
-    assert draft.data_context["source_period"] == "Uploaded support tickets"
+    assert draft.data_context["source_period"] == "observed support-ticket sample"
     assert draft.data_context["source"] == "support_ticket_provider"
     assert draft.data_context["included_ticket_row_count"] == 4
     assert draft.data_context["top_clusters"]

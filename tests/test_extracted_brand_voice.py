@@ -42,6 +42,7 @@ def test_brand_voice_profile_normalizes_prompt_block_and_audit_metadata() -> Non
     block = brand_voice_prompt_block(profile)
     assert "Use this profile as style guidance only" in block
     assert "Do not omit or alter grounded claims" in block
+    assert "Use `you` or `your` naturally" in block
     assert "operator-led" in block
     assert "Ignored fourth sample" not in block
     assert apply_brand_voice_to_system_prompt("Base\n{brand_voice}", profile) == (

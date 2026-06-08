@@ -8,10 +8,12 @@ from extracted_content_pipeline.blog_generation import (
     BlogPostGenerationConfig,
     BlogPostGenerationService,
     _blog_failure_candidate_snapshot,
+    _blog_generation_prompts,
     _blog_quality_repair_guidance,
     _is_support_ticket_blog_context,
     _normalize_blog_metadata,
     _quality_policy_for_context,
+    _support_ticket_blog_public_data_context,
     _support_ticket_debug_source_narration_blockers,
     parse_blog_post_response,
     support_ticket_descriptive_blog_contract,
@@ -496,7 +498,7 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "Compare future tickets against the observed clusters without claiming causality.",
         (
             "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-            "checkpoints unless the provided tickets include a dated source window."
+            "checkpoints unless `data_context.has_dated_window` is true."
         ),
     ]
     assert support_ticket_descriptive_blog_contract({
@@ -1201,6 +1203,23 @@ async def test_generate_blocks_support_ticket_debug_source_narration_without_sav
     "Looking at the uploaded records, 36 tickets cluster into account questions.",
     "The uploaded CSV reveals nine clusters across 36 rows.",
     "This export of 36 support tickets surfaces nine themes.",
+    (
+        "Your uploaded tickets contain 36 support-ticket rows; 36 rows were "
+        "included for generation. 35 rows include direct customer questions."
+    ),
+    "In uploaded tickets, 35 of 36 rows include direct customer questions.",
+    (
+        "The uploaded ticket CSV can produce up to 6 first-pass FAQ entries "
+        "from observed customer wording."
+    ),
+    "Our support ticket export holds 36 rows; 35 carry direct questions.",
+    "Across the 36 tickets we ingested, nine question clusters recur.",
+    "From the 36 records you sent, nine repeat themes emerge.",
+    "The uploaded tickets include 36 source rows and 36 usable ticket rows.",
+    "Support-ticket source rows reveal nine recurring themes.",
+    "Each cluster appeared four times in the uploaded ticket set.",
+    "The uploaded tickets do not include calendar dates.",
+    "The uploaded tickets in this sample do not include calendar dates.",
 ])
 def test_support_ticket_debug_source_narration_blocks_varied_openings(opening: str) -> None:
     parsed = json.loads(
@@ -1218,6 +1237,8 @@ def test_support_ticket_debug_source_narration_blocks_varied_openings(opening: s
     "Support tickets show repeated account and reporting questions.",
     "In 36 support tickets, account and reporting questions repeat.",
     "Customers keep asking account and reporting questions in support tickets.",
+    "Support tickets include 35 direct customer questions across 36 rows.",
+    "The ticket set supports six first-pass FAQ shells for team review.",
 ])
 def test_support_ticket_debug_source_narration_allows_publishable_evidence(
     opening: str,
@@ -1368,15 +1389,55 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
     assert '"draft_faq_shells":' in user_prompt
     assert '"measurement_guidance":' in user_prompt
     assert "Support-ticket descriptive mode instructions:" in user_prompt
+    assert "Support-ticket customer-facing prose instructions:" in user_prompt
     assert "publishable customer-facing article prose" in user_prompt
     assert "Do not open by narrating the upload, CSV, export, rows" in user_prompt
-    assert "Do not rank tied clusters by business impact" in user_prompt
+    assert "source rows, usable rows, or included rows" in user_prompt
+    assert "Never write the phrase `uploaded tickets`" in user_prompt
+    assert "include the exact `target_keyword` phrase naturally" in user_prompt
+    assert "does not support ranking one tied cluster above another" in user_prompt
     assert (
         "Use `data_context.required_section_outline` as the H2 section order"
         in user_prompt
     )
     assert "Measurement language must be observational only" in user_prompt
     assert "metadata, FAQ metadata, tags, and chart copy" in user_prompt
+
+
+def test_support_ticket_prose_prompt_addendum_fires_without_descriptive_contract() -> None:
+    blueprint = _support_ticket_blueprint()
+    blueprint["data_context"]["has_measured_outcomes"] = True
+    for key in (
+        "support_ticket_blog_mode",
+        "allowed_claims",
+        "forbidden_claims",
+        "draft_answer_guidance",
+        "required_section_outline",
+        "draft_faq_shells",
+        "measurement_guidance",
+    ):
+        blueprint["data_context"].pop(key, None)
+
+    _system_prompt, user_prompt = _blog_generation_prompts(
+        "Generate from {blueprint_json} about {topic}.",
+        blueprint=blueprint,
+    )
+
+    assert "Support-ticket customer-facing prose instructions:" in user_prompt
+    assert "publishable customer-facing article prose" in user_prompt
+    assert "source rows, usable rows, or included rows" in user_prompt
+    assert "Support-ticket descriptive mode instructions:" not in user_prompt
+
+
+def test_support_ticket_blog_public_context_renames_upload_period_labels() -> None:
+    normalized = _support_ticket_blog_public_data_context({
+        "source": "support_ticket_provider",
+        "source_period": "Uploaded support tickets",
+        "review_period": "uploaded tickets",
+    })
+
+    assert normalized["source_period"] == "observed support-ticket sample"
+    assert normalized["review_period"] == "observed support-ticket sample"
 
 
 @pytest.mark.asyncio
@@ -1484,7 +1545,7 @@ async def test_quality_repair_prompt_keeps_support_ticket_descriptive_contract()
     assert '"support_ticket_blog_mode":"descriptive_no_outcome"' in retry_prompt
     assert "follow its `allowed_claims`, `forbidden_claims`, and `draft_answer_guidance`" in retry_prompt
     assert "Support-ticket descriptive mode instructions:" in retry_prompt
-    assert "Do not rank tied clusters by business impact" in retry_prompt
+    assert "does not support ranking one tied cluster above another" in retry_prompt
     assert (
         "Use `data_context.required_section_outline` as the H2 section order"
         in retry_prompt

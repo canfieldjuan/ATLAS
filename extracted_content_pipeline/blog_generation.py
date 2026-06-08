@@ -86,7 +86,7 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
         "fixed calendar windows, rolling periods, or future tracking intervals "
         "when provided tickets are undated"
     ),
-    "prioritization by business impact, activation delay, workflow blocking, or friction reduction without evidence",
+    "unsupported priority rankings or operational-impact rankings when observed counts are tied",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
 )
 _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
@@ -111,7 +111,8 @@ _SUPPORT_TICKET_REQUIRED_SECTION_OUTLINE = (
         "heading": "Which FAQ gaps should be reviewed first",
         "allowed_source_fields": ("top_clusters", "draft_faq_shells"),
         "claim_boundary": (
-            "Order by observed ticket count only; do not infer business impact."
+            "Order by observed ticket count only; when counts tie, say no "
+            "evidence-based rank is available."
         ),
     },
     {
@@ -137,7 +138,7 @@ _SUPPORT_TICKET_MEASUREMENT_GUIDANCE = (
     "Compare future tickets against the observed clusters without claiming causality.",
     (
         "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-        "checkpoints unless the provided tickets include a dated source window."
+        "checkpoints unless `data_context.has_dated_window` is true."
     ),
 )
 _SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS = 6
@@ -151,6 +152,11 @@ _SUPPORT_TICKET_GENERIC_LABEL_WORDS = frozenset({
     "ticket",
     "tickets",
 })
+_SUPPORT_TICKET_UPLOAD_CONTEXT_LABELS = frozenset({
+    "uploaded support tickets",
+    "uploaded tickets",
+})
+_SUPPORT_TICKET_OBSERVED_SAMPLE_LABEL = "observed support-ticket sample"
 _SUPPORT_TICKET_SYNTHETIC_CLUSTER_LABELS = frozenset({"remaining", "uncategorized"})
 _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
     "support_ticket_blog_mode",
@@ -163,10 +169,24 @@ _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
 )
 _SUPPORT_TICKET_DEBUG_SOURCE_NARRATION_PATTERNS = (
     re.compile(
-        r"\bthe uploaded (?:\d+\s+)?"
-        r"(?:csv|file|support[- ]tickets?|support[- ]ticket rows?|"
-        r"ticket rows?|records?|data|dataset) "
-        r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
+        r"\b(?:the|your|these) uploaded (?:\d+\s+)?"
+        r"(?:csv|ticket\s+csv|file|support[- ]tickets?|support[- ]ticket rows?|"
+        r"ticket\s+set|tickets?|ticket rows?|records?|data|dataset|set) "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?|produces?|"
+        r"appears?|can\s+produce|do(?:es)?\s+not\s+include)\b"
+    ),
+    re.compile(
+        r"\buploaded tickets?(?:\s+in\s+this\s+sample)?\s+"
+        r"do(?:es)?\s+not\s+include\b"
+    ),
+    re.compile(r"\b(?:the|your|these)?\s*uploaded (?:ticket\s+)?set\b"),
+    re.compile(
+        r"\b\d+\s+rows?\s+(?:were\s+)?"
+        r"(?:included|used|loaded|ingested)\s+for\s+generation\b"
+    ),
+    re.compile(
+        r"\bin (?:your |the )?uploaded tickets?,?\s+\d+\s+of\s+\d+\s+rows? "
+        r"(?:contains?|shows?|includes?|included)\b"
     ),
     re.compile(
         r"\b(?:analysis of|looking at) (?:the )?(?:uploaded )?(?:\d+\s+)?"
@@ -186,6 +206,19 @@ _SUPPORT_TICKET_DEBUG_SOURCE_NARRATION_PATTERNS = (
         r"\bthis export of (?:\d+\s+)?support[- ]tickets? "
         r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
     ),
+    re.compile(
+        r"\b(?:the|our|your|this) support[- ]ticket export "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?|holds|has|carries)\b"
+    ),
+    re.compile(r"\b(?:source|usable|included)\s+(?:ticket\s+)?rows?\b"),
+    re.compile(
+        r"\b(?:across|from)\s+(?:the\s+)?\d+\s+(?:tickets?|records?) "
+        r"(?:we\s+)?(?:ingested|uploaded|loaded|received)\b"
+    ),
+    re.compile(
+        r"\bfrom\s+(?:the\s+)?\d+\s+(?:records?|tickets?)\s+you\s+sent\b"
+    ),
+    re.compile(r"\b(?:records?|tickets?)\s+you\s+sent\b"),
 )
 
 
@@ -1184,7 +1217,20 @@ def _merged_blog_data_context(
 ) -> dict[str, Any]:
     data_context = _mapping_dict(parsed.get("data_context"))
     data_context.update(_mapping_dict(blueprint.get("data_context")))
+    if _is_support_ticket_blog_context(data_context):
+        data_context = _support_ticket_blog_public_data_context(data_context)
     return data_context
+
+
+def _support_ticket_blog_public_data_context(
+    data_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(data_context)
+    for key in ("source_period", "review_period"):
+        value = str(normalized.get(key) or "").strip().lower()
+        if value in _SUPPORT_TICKET_UPLOAD_CONTEXT_LABELS:
+            normalized[key] = _SUPPORT_TICKET_OBSERVED_SAMPLE_LABEL
+    return normalized
 
 
 def _blueprint_with_data_context(
@@ -1435,23 +1481,39 @@ def _with_support_ticket_descriptive_prompt_addendum(
     blueprint: Mapping[str, Any],
 ) -> str:
     data_context = _mapping_dict(blueprint.get("data_context"))
-    if not support_ticket_descriptive_blog_contract(data_context):
+    if not _is_support_ticket_blog_context(data_context):
         return prompt
-    return (
+    support_ticket_prompt = (
         f"{prompt}\n\n"
+        "Support-ticket customer-facing prose instructions:\n"
+        "- Write publishable customer-facing article prose from the first "
+        "sentence. Do not open by narrating the upload, CSV, export, rows, "
+        "records, dataset, analysis process, or source mechanics. Do not "
+        "describe tickets as uploaded, ingested, sent, source rows, usable "
+        "rows, or included rows in customer-facing copy. Never write the phrase "
+        "`uploaded tickets`; frame observed counts and clusters as evidence for "
+        "the reader.\n"
+        "- When counts matter, say what support tickets show in plain customer "
+        "language, such as `In 36 support tickets, 35 direct customer "
+        "questions repeated across nine clusters.`\n"
+        "- For each H2 section, write a 40-120 word paragraph immediately after "
+        "the heading and include the exact `target_keyword` phrase naturally in "
+        "that paragraph.\n"
+        "- Apply this prose rule to the title, description, metadata, H2 "
+        "sections, FAQ metadata, tags, and chart copy."
+    )
+    if not support_ticket_descriptive_blog_contract(data_context):
+        return support_ticket_prompt
+    return (
+        f"{support_ticket_prompt}\n\n"
         "Support-ticket descriptive mode instructions:\n"
         "- Write a descriptive support-ticket FAQ planning brief, not a "
         "persuasive ROI article.\n"
-        "- Write publishable customer-facing article prose from the first "
-        "sentence. Do not open by narrating the upload, CSV, export, rows, "
-        "records, dataset, analysis process, or source mechanics; frame "
-        "observed counts and clusters as evidence for the reader.\n"
         "- Use only observed ticket counts, observed clusters, copied customer "
         "wording, and review-needed FAQ shells from the blueprint.\n"
-        "- If clusters have the same count, say they are tied. Do not rank tied "
-        "clusters by business impact, activation risk, workflow blocking, "
-        "friction reduction, deal impact, or customer value unless the blueprint "
-        "contains measured outcome evidence for that ranking.\n"
+        "- If clusters have the same count, say they are tied and that the "
+        "provided evidence does not support ranking one tied cluster above "
+        "another.\n"
         "- If the blueprint lacks resolution evidence, keep answer content as "
         "draft placeholders for support-team review. Do not invent UI paths, "
         "setup steps, feature behavior, or exact resolutions.\n"

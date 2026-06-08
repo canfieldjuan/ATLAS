@@ -1,0 +1,379 @@
+{
+  "count": 3,
+  "filters": {
+    "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    "id": [
+      "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+      "490247f3-19bf-4c0e-b532-e78c369cf989",
+      "2689157c-2473-44e9-bc75-3f786b105aae"
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "limit": 100,
+  "rows": [
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1842,
+      "generation_output_tokens": 782,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "RevOps lead blocked on attribution exports days before board meeting. Support ticket shows renewal-risk friction.",
+      "id": "2689157c-2473-44e9-bc75-3f786b105aae",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.78,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1698,
+          "input_tokens": 1842,
+          "output_tokens": 782,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "saas-demo-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "saas-demo-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Morgan Reyes is the Revenue Operations Lead. Your account uses FlowPilot. Morgan reached out through support, not through their account team.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Morgan filed a support ticket asking how to export attribution reports before a board meeting. The ticket title is \"Attribution export blocked.\" The question is direct: \"How do I export attribution reports before our board meeting?\" This is a time-sensitive ask tied to executive visibility.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {
+            "order": 2
+          },
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the board deadline. Morgan is under pressure to deliver attribution data to executives. If your product blocks a basic export workflow, that friction becomes a renewal conversation. Ask what reporting Morgan needs to deliver and when. Confirm whether the export limitation is a product gap or a configuration issue. If it is a gap, own it and give Morgan a workaround or timeline. If it is a config issue, fix it before the board meeting.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "talking_points",
+          "metadata": {
+            "order": 3
+          },
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "Morgan went to support, not to you. That means the relationship is transactional, not strategic. If the export issue is not resolved before the board meeting, Morgan will present incomplete data or explain why FlowPilot could not deliver. Either outcome damages your renewal position. Expect Morgan to ask whether competitors offer better reporting exports. Do not promise features you cannot ship before renewal.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "risks_and_objections",
+          "metadata": {
+            "order": 4
+          },
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Reach out to Morgan today. Reference the support ticket. Offer to walk through the export workflow or escalate to product if the limitation is real. Ask when the board meeting is scheduled. If you cannot solve the export issue before the meeting, give Morgan a manual workaround and a timeline for the permanent fix. Use this conversation to move from support-ticket relationship to renewal-stage partnership.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "next_actions",
+          "metadata": {
+            "order": 5
+          },
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "saas-demo-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Board reporting pressure"
+    },
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1842,
+      "generation_output_tokens": 794,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "Your RevOps lead needs attribution exports before the board meeting. Renewal window is your leverage to fix the blocker.",
+      "id": "490247f3-19bf-4c0e-b532-e78c369cf989",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.88,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1698,
+          "input_tokens": 1842,
+          "output_tokens": 794,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "saas-demo-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "saas-demo-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Morgan Reyes is the Revenue Operations Lead. Your point of contact. The account is using FlowPilot for attribution tracking.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Support ticket filed: \"How do I export attribution reports before our board meeting?\" The export function is blocked. Morgan needs the data before the board convenes. This is not a feature request. This is a blocker with a deadline.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {
+            "order": 2
+          },
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the board deadline. Ask Morgan what format the board expects and when they present. Confirm whether the export blocker is a permissions issue, a product gap, or a configuration miss. If it is a product gap, you need to decide whether to escalate for a workaround or acknowledge the limitation. Do not promise a fix you cannot deliver before the board meeting. If you can unblock the export, do it now. If you cannot, tell Morgan what the alternative is and what you will do after the meeting.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "talking_points",
+          "metadata": {
+            "order": 3
+          },
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "If the export stays blocked and Morgan cannot present attribution data to the board, you have handed the account a renewal objection. Board-level visibility failures stick. Morgan will remember that FlowPilot could not deliver the report when it mattered. If a competitor can export attribution data without friction, Morgan will evaluate them.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "risks_and_objections",
+          "metadata": {
+            "order": 4
+          },
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Call Morgan today. Get the board meeting date. Confirm the export blocker with support or product. If you can fix it, fix it before the meeting. If you cannot, offer a manual export, a screen-share walkthrough, or another path to get Morgan the data. Document what you deliver. Follow up after the board meeting to confirm Morgan presented successfully. Use this interaction to tee up the renewal conversation with proof that you respond when it matters.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "next_actions",
+          "metadata": {
+            "order": 5
+          },
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "saas-demo-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Board reporting pressure"
+    },
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1842,
+      "generation_output_tokens": 682,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "Your RevOps lead hit a wall exporting attribution data right before a board meeting. That's your renewal conversation starter.",
+      "id": "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.78,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1698,
+          "input_tokens": 1842,
+          "output_tokens": 682,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "saas-demo-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "saas-demo-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Morgan Reyes runs Revenue Operations. Your product is FlowPilot. Morgan's title signals they own reporting pipelines and board-level data delivery.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Morgan opened a support ticket asking how to export attribution reports before a board meeting. The ticket describes the export as blocked. That means your product stood between Morgan and a high-stakes deadline.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {
+            "order": 2
+          },
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the export friction. Ask Morgan what happened in that board meeting. Ask if the attribution gap is still open. Then ask what other reporting deadlines are coming. If Morgan had to work around your product once, they will work around it again or replace it.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "talking_points",
+          "metadata": {
+            "order": 3
+          },
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "Morgan may say the export issue was resolved. If so, ask how long the workaround took and whether it scales. If the fix required manual steps, the friction is still there. RevOps leads do not tolerate repeated manual export loops.",
+          "claim_ids": [],
+          "evidence_ids": [],
+          "id": "risks_and_objections",
+          "metadata": {
+            "order": 4
+          },
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Reference the support ticket by ID. Ask Morgan to walk you through the export blocker and the board meeting outcome. Offer a product review focused on reporting workflows. If Morgan describes other attribution gaps, map those to your renewal conversation. If Morgan does not see the friction as urgent, you have a renewal risk.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "saas-demo-001"
+          ],
+          "id": "next_actions",
+          "metadata": {
+            "order": 5
+          },
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "saas-demo-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Export friction before board"
+    }
+  ]
+}

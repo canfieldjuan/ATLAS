@@ -1311,8 +1311,8 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
     assert "42%" not in serialized
     assert payload["data_context"]["source_row_count"] == 2
     assert payload["data_context"]["question_like_ticket_count"] == 2
-    assert payload["data_context"]["review_period"] == "uploaded tickets"
-    assert payload["data_context"]["source_period"] == "Uploaded support tickets"
+    assert payload["data_context"]["review_period"] == "observed support-ticket sample"
+    assert payload["data_context"]["source_period"] == "observed support-ticket sample"
     assert payload["data_context"]["has_dated_window"] is False
     assert payload["data_context"]["has_measured_outcomes"] is False
     assert payload["data_context"]["measured_outcome_count"] == 0
@@ -1354,7 +1354,7 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "Compare future tickets against the observed clusters without claiming causality.",
         (
             "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-            "checkpoints unless the provided tickets include a dated source window."
+            "checkpoints unless `data_context.has_dated_window` is true."
         ),
     ]
     assert "report_date" not in payload["data_context"]
@@ -1372,11 +1372,19 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "question_like_rows": 2,
         "cluster_count": 2,
     }
-    assert "2 support-ticket rows" in first_section["data_summary"]
-    assert "2 rows were included for generation" in first_section["data_summary"]
+    assert "In 2 support tickets" in first_section["data_summary"]
+    assert "2 include direct customer questions" in first_section["data_summary"]
+    assert "2 source rows" not in first_section["data_summary"]
+    assert "2 usable ticket rows" not in first_section["data_summary"]
+    assert "rows were included for generation" not in first_section["data_summary"]
+    assert "uploaded" not in first_section["goal"].lower()
     process_section = payload["sections"][2]
     assert "source_window_days" not in process_section["key_stats"]
     assert process_section["heading"] == "How should old tickets become review-ready FAQ shells?"
+    assert "observed ticket set supports" in process_section["data_summary"]
+    assert "uploaded ticket CSV can produce" not in process_section["data_summary"]
+    assert "In this CSV" not in payload["sections"][1]["data_summary"]
+    assert "In this sample" in payload["sections"][1]["data_summary"]
     assert "review-needed shell" in process_section["data_summary"]
 
 

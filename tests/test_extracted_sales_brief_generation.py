@@ -565,6 +565,39 @@ async def test_generate_persists_second_person_brand_voice_compliant_brief() -> 
 
 
 @pytest.mark.asyncio
+async def test_generate_prompts_second_person_brand_voice_explicitly() -> None:
+    response = json.dumps({
+        "title": "Your Acme renewal brief",
+        "headline": "Your renewal window needs a precise next step",
+        "brief_type": "renewal",
+        "sections": [
+            {
+                "id": "account_context",
+                "title": "Your Account Context",
+                "body_markdown": "You have renewal pressure to address this week.",
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, _sales_briefs, llm, _skills, _rp = _service(responses=[response])
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor",
+        brand_voice={
+            "account_id": "acct-1",
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "Preferred POV: second_person" in system_prompt
+    assert "Use `you` or `your` naturally" in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_generate_blocks_when_response_omits_headline() -> None:
     """End-to-end: parser accepts the candidate, quality pack fires no_headline."""
     response = json.dumps({

@@ -128,6 +128,22 @@ def brand_voice_prompt_block(profile: BrandVoiceProfile | None) -> str:
         lines.append("Descriptors: " + ", ".join(profile.descriptors))
     if profile.preferred_pov:
         lines.append(f"Preferred POV: {profile.preferred_pov}")
+        if profile.preferred_pov == "second_person":
+            lines.append(
+                "POV instruction: write reader-facing copy in second person. "
+                "Use `you` or `your` naturally in the title, headline, body, "
+                "sections, and FAQ copy where those fields exist."
+            )
+        elif profile.preferred_pov == "first_person":
+            lines.append(
+                "POV instruction: write reader-facing copy in first person when "
+                "a direct company or team perspective is appropriate."
+            )
+        elif profile.preferred_pov == "third_person":
+            lines.append(
+                "POV instruction: avoid direct address; keep reader-facing copy "
+                "in third person where possible."
+            )
     if profile.reading_level:
         lines.append(f"Reading level: {profile.reading_level}")
     if profile.banned_terms:
