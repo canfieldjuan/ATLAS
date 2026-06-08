@@ -1,0 +1,1258 @@
+{
+  "count": 3,
+  "filters": {
+    "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    "id": [
+      "49e324c1-f331-404d-bfa4-dcbcb5387027",
+      "2b09400f-a8b9-4787-86dd-ca655686d246",
+      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+    ],
+    "ids": [
+      "49e324c1-f331-404d-bfa4-dcbcb5387027",
+      "2b09400f-a8b9-4787-86dd-ca655686d246",
+      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+    ]
+  },
+  "limit": 3,
+  "rows": [
+    {
+      "campaign_name": "Support Ticket FAQ Gap Audit",
+      "cta": {
+        "label": "Upload Ticket CSV \u2014 Get the Gap Audit",
+        "url": "/systems/ai-content-ops/intake",
+        "variant": "primary"
+      },
+      "generation_input_tokens": 3797,
+      "generation_output_tokens": 2664,
+      "generation_parse_attempts": 1,
+      "generation_quality_repair_attempts": 0,
+      "generation_quality_repair_history": [
+        {
+          "attempt": 0,
+          "blockers": [],
+          "passed": true,
+          "repair_issues": []
+        }
+      ],
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_extractability": true,
+          "audience_entity_clarity": true,
+          "claim_safety": true,
+          "conversion_path_clarity": true,
+          "offer_entity_clarity": true,
+          "section_semantics": true,
+          "trust_signal_visibility": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "hero": {
+        "cta_label": "Upload Ticket CSV \u2014 Get the Gap Audit",
+        "cta_url": "/systems/ai-content-ops/intake",
+        "headline": "Your repeat tickets already told you what's missing",
+        "subheadline": "Upload 90 days of support CSV and get a review-ready FAQ audit showing which questions cost you the most repeat volume."
+      },
+      "id": "a1181e5e-91e3-49d0-9ad1-1c5494783330",
+      "meta": {
+        "description": "Upload 90 days of support tickets and get a prioritized FAQ audit showing which repeat questions cost you the most volume. Draft shells included.",
+        "og_image_url": "",
+        "title_tag": "Support Ticket FAQ Gap Audit \u2014 Find Repeat Questions"
+      },
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "campaign_name": "Support Ticket FAQ Gap Audit",
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 0,
+        "generation_quality_repair_history": [
+          {
+            "attempt": 0,
+            "blockers": [],
+            "passed": true,
+            "repair_issues": []
+          }
+        ],
+        "generation_usage": {
+          "billable_input_tokens": 126,
+          "cache_write_tokens": 0,
+          "cached_tokens": 3671,
+          "input_tokens": 3797,
+          "output_tokens": 2664,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source_context": {
+          "customer_wording_examples": [
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-001",
+              "source_title": "Attribution export blocked",
+              "text": "Attribution export blocked How do I export attribution reports before our board meeting?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-002",
+              "source_title": "CSV export missing fields",
+              "text": "CSV export missing fields Why is the campaign CSV export missing source and owner columns?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-003",
+              "source_title": "Export scheduled report",
+              "text": "Export scheduled report Can I schedule a weekly attribution report export for finance?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-004",
+              "source_title": "Dashboard export permissions",
+              "text": "Dashboard export permissions Why can analysts view dashboards but not export reports?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-005",
+              "source_title": "Dashboard stale data",
+              "text": "Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-006",
+              "source_title": "Warehouse sync lag",
+              "text": "Warehouse sync lag How do we check whether the warehouse sync is delayed?"
+            }
+          ],
+          "has_dated_window": false,
+          "has_measured_outcomes": false,
+          "included_ticket_row_count": 36,
+          "measured_outcome_count": 0,
+          "question_like_ticket_count": 35,
+          "skipped_ticket_row_count": 0,
+          "source_row_count": 36,
+          "support_ticket_resolution_evidence_count": 0,
+          "support_ticket_resolution_evidence_present": false,
+          "top_ticket_clusters": [
+            {
+              "count": 4,
+              "label": "reporting export"
+            },
+            {
+              "count": 4,
+              "label": "dashboard freshness"
+            },
+            {
+              "count": 4,
+              "label": "sso setup"
+            },
+            {
+              "count": 4,
+              "label": "permissions and seats"
+            },
+            {
+              "count": 4,
+              "label": "api and webhooks"
+            },
+            {
+              "count": 4,
+              "label": "integration sync"
+            },
+            {
+              "count": 4,
+              "label": "data import"
+            },
+            {
+              "count": 4,
+              "label": "workflow automation"
+            },
+            {
+              "count": 4,
+              "label": "billing and plan management"
+            }
+          ],
+          "truncated_ticket_row_count": 0
+        },
+        "variant_angle": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials."
+      },
+      "output_checks": {
+        "answer_first_hero": true,
+        "audience_specificity": true,
+        "meta_description": true,
+        "metadata_consistency": true,
+        "objection_coverage": true,
+        "problem_solution_clarity": true,
+        "slug_quality": true,
+        "title_tag": true
+      },
+      "passed_output_checks": 8,
+      "persona": "SaaS support leaders carrying a repeat-ticket backlog",
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 0,
+      "reference_ids": [],
+      "section_count": 8,
+      "sections": [
+        {
+          "body_markdown": "In the uploaded tickets, 35 out of 36 were question-shaped and clustered into 9 repeat patterns including reporting export, dashboard freshness, SSO setup, and permissions. When the same question appears four times in one quarter, you're carrying FAQ debt that costs another reply each time.\n\nIn the uploaded tickets, 35 out of 36 were question-shaped, and they clustered into 9 repeat patterns: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). When the same question appears four times in one quarter, you're carrying FAQ debt. Each repeat costs another reply, another context switch, and another chance the customer gives up before asking.\n\nThe audit shows you which clusters represent the highest repeat risk and gives you draft FAQ shells for each one. You decide which answers to write first.",
+          "id": "observed_ticket_pattern",
+          "metadata": {
+            "answer_summary": "In the uploaded tickets, 35 out of 36 were question-shaped and clustered into 9 repeat patterns including reporting export, dashboard freshness, SSO setup, and permissions. When the same question appears four times in one quarter, you're carrying FAQ debt that costs another reply each time.",
+            "kind": "problem",
+            "order": 1,
+            "primary_question": "What did the uploaded support tickets show about repeat questions?"
+          },
+          "title": "What 36 uploaded tickets revealed about repeat support load"
+        },
+        {
+          "body_markdown": "Uploaded tickets show exact customer phrasing such as \"Attribution export blocked \u2014 How do I export attribution reports before our board meeting?\" and \"Dashboard stale data \u2014 Why has our pipeline dashboard not refreshed since yesterday?\" The audit preserves this wording so FAQ answers match the search terms customers already use.\n\nSupport leaders know that help-center language rarely matches the way customers phrase the problem. Here's what the uploaded tickets said:\n\n- \"Attribution export blocked \u2014 How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields \u2014 Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report \u2014 Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions \u2014 Why can analysts view dashboards but not export reports?\"\n- \"Dashboard stale data \u2014 Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag \u2014 How do we check whether the warehouse sync is delayed?\"\n\nThe audit preserves this wording so you can write FAQ answers that match the search terms customers already use. You're not guessing what they'll type \u2014 you're seeing what they typed.",
+          "id": "customer_wording_examples",
+          "metadata": {
+            "answer_summary": "Uploaded tickets show exact customer phrasing such as \"Attribution export blocked \u2014 How do I export attribution reports before our board meeting?\" and \"Dashboard stale data \u2014 Why has our pipeline dashboard not refreshed since yesterday?\" The audit preserves this wording so FAQ answers match the search terms customers already use.",
+            "kind": "proof",
+            "order": 2,
+            "primary_question": "How do customers phrase the repeat questions in their own words?"
+          },
+          "title": "How customers actually asked the questions"
+        },
+        {
+          "body_markdown": "The audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell with the customer's original question wording, the ticket count, and a placeholder for the verified answer. You add the procedural steps and route the draft to your review queue.\n\nThe Support Ticket FAQ Gap Audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell that includes the customer's original question wording, the ticket count, and a placeholder for the verified answer. The shell says \"Draft answer \u2014 support team should add the verified resolution before publishing\" because the uploaded tickets contain customer questions but not verified support resolutions.\n\nYou decide which clusters to write first, add the procedural steps your team already knows, and route the draft to your review queue. The audit does not publish automatically. It gives you the structure so you can focus on writing the answer instead of hunting for the pattern.",
+          "id": "solution_faq_audit_output",
+          "metadata": {
+            "answer_summary": "The audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell with the customer's original question wording, the ticket count, and a placeholder for the verified answer. You add the procedural steps and route the draft to your review queue.",
+            "kind": "solution",
+            "order": 3,
+            "primary_question": "What does the FAQ Gap Audit deliver?"
+          },
+          "title": "What you get: draft FAQ shells tied to repeat ticket clusters"
+        },
+        {
+          "body_markdown": "Export your support tickets as CSV, upload at the intake link, and get an audit report showing repeat clusters ranked by ticket count. Review the clusters, write the verified answers with procedural steps your team knows, and route to your review queue. The audit does not publish automatically.\n\n1. Export your support tickets as CSV. Include ticket ID, subject line, and body text. The audit needs at least 30 days of tickets; 90 days gives better cluster confidence.\n2. Upload the CSV at the intake link. The system reads the ticket text, identifies question-shaped tickets, and groups them by topic similarity.\n3. Get the audit report. It shows repeat clusters ranked by ticket count, preserves customer wording, and generates draft FAQ shells for each cluster.\n4. Review the clusters. Decide which FAQ gaps represent the highest repeat risk or the easiest wins.\n5. Write the verified answers. Add the procedural steps, UI paths, or policy details your support team already knows.\n6. Route to your review queue. The audit does not publish automatically. You control what goes live and when.\n\nThe whole process takes the time it takes to export a CSV and decide which clusters to write first. Writing the answers is on you.",
+          "id": "how_it_works_upload_to_audit",
+          "metadata": {
+            "answer_summary": "Export your support tickets as CSV, upload at the intake link, and get an audit report showing repeat clusters ranked by ticket count. Review the clusters, write the verified answers with procedural steps your team knows, and route to your review queue. The audit does not publish automatically.",
+            "kind": "how_it_works",
+            "order": 4,
+            "primary_question": "How does the Support Ticket FAQ Gap Audit process work?"
+          },
+          "title": "How the audit process works"
+        },
+        {
+          "body_markdown": "No. The audit generates draft FAQ shells with customer question wording and a placeholder for the verified answer. You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center without your approval.\n\nNo. The audit generates draft FAQ shells with customer question wording and a placeholder that says \"Draft answer \u2014 support team should add the verified resolution before publishing.\" You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center, CMS, or knowledge base without your approval.\n\nThis matters because uploaded tickets show repeated questions but not verified support resolutions. The audit can tell you which questions cost you the most repeat volume, but it cannot write the procedural steps, permission rules, or UI paths that make the answer useful. That's your team's job.",
+          "id": "objection_auto_publish_risk",
+          "metadata": {
+            "answer_summary": "No. The audit generates draft FAQ shells with customer question wording and a placeholder for the verified answer. You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center without your approval.",
+            "kind": "objection",
+            "order": 5,
+            "primary_question": "Will this publish FAQ answers automatically?"
+          },
+          "title": "Does the audit publish FAQ answers automatically?"
+        },
+        {
+          "body_markdown": "No. The audit is built for support leaders without a dedicated docs team. It shows which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. If you have one person who can export a CSV and write three FAQ answers in a week, you have enough capacity.\n\nNo. The audit is built for support leaders who do not have a dedicated docs team. It shows you which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. Your support team already knows the verified resolutions \u2014 the audit just surfaces the pattern and gives you the draft structure.\n\nIf you have one person who can export a CSV, review a cluster list, and write three FAQ answers in a week, you have enough capacity to use this. The audit does not require ongoing maintenance, a content ops hire, or a full-time docs person. It requires deciding which repeat questions to answer first.",
+          "id": "objection_full_time_docs_person",
+          "metadata": {
+            "answer_summary": "No. The audit is built for support leaders without a dedicated docs team. It shows which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. If you have one person who can export a CSV and write three FAQ answers in a week, you have enough capacity.",
+            "kind": "objection",
+            "order": 6,
+            "primary_question": "Do we need a full-time docs person to use the FAQ Gap Audit?"
+          },
+          "title": "Do we need a full-time docs person to use this?"
+        },
+        {
+          "body_markdown": "The system reads the ticket text, identifies question-shaped tickets, groups them by topic similarity, and ranks clusters by ticket count. You get an audit report showing repeat patterns and draft FAQ shells. You review the clusters, add verified answers, and route to your review queue.\n\nAfter you upload the CSV, the system reads the ticket text and identifies question-shaped tickets. It groups them by topic similarity and ranks the clusters by ticket count. You get an audit report that shows the repeat patterns, preserves customer wording, and generates draft FAQ shells for each cluster.\n\nThe report does not include verified answers because the uploaded tickets contain customer questions but not support resolutions. You review the clusters, decide which FAQ gaps to write first, add the procedural steps your team knows, and route the draft to your review queue. The audit does not publish automatically.",
+          "id": "faq_after_upload",
+          "metadata": {
+            "answer_summary": "The system reads the ticket text, identifies question-shaped tickets, groups them by topic similarity, and ranks clusters by ticket count. You get an audit report showing repeat patterns and draft FAQ shells. You review the clusters, add verified answers, and route to your review queue.",
+            "kind": "faq",
+            "order": 7,
+            "primary_question": "What happens after I upload the CSV?"
+          },
+          "title": "What happens after I upload the CSV?"
+        },
+        {
+          "body_markdown": "Upload your support ticket CSV and get the audit report. It shows you which repeat questions cost you the most volume, preserves customer wording, and gives you draft FAQ shells for each cluster. You decide which answers to write first.\n\nThe audit does not publish automatically. It does not require a full-time docs person. It requires deciding which FAQ gaps represent the highest repeat risk and writing the verified answers your support team already knows.\n\nIf you're carrying a repeat-ticket backlog and you want to see the pattern, upload the CSV.",
+          "id": "conversion_next_action",
+          "metadata": {
+            "answer_summary": "",
+            "kind": "conversion",
+            "order": 8,
+            "primary_question": ""
+          },
+          "title": "Get your FAQ gap audit"
+        }
+      ],
+      "seo_aeo_readiness": {
+        "checks": {
+          "answer_first_hero": true,
+          "audience_specificity": true,
+          "meta_description": true,
+          "metadata_consistency": true,
+          "objection_coverage": true,
+          "problem_solution_clarity": true,
+          "slug_quality": true,
+          "title_tag": true
+        },
+        "missing": [],
+        "passed": 8,
+        "status": "ready",
+        "total": 8
+      },
+      "slug": "support-ticket-faq-gap-audit",
+      "status": "approved",
+      "structured_data": {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "about": {
+              "@type": "Thing",
+              "name": "Turn repeat support tickets into approved FAQ answers"
+            },
+            "audience": {
+              "@type": "Audience",
+              "audienceType": "SaaS support leaders carrying a repeat-ticket backlog"
+            },
+            "description": "Upload 90 days of support tickets and get a prioritized FAQ audit showing which repeat questions cost you the most volume. Draft shells included.",
+            "hasPart": [
+              {
+                "@type": "WebPageElement",
+                "additionalType": "problem",
+                "name": "What 36 uploaded tickets revealed about repeat support load",
+                "position": 1,
+                "text": "In the uploaded tickets, 35 out of 36 were question-shaped and clustered into 9 repeat patterns including reporting export, dashboard freshness, SSO setup, and permissions. When the same question appears four times in one quarter, you're carrying FAQ debt that costs another reply each time.\n\nIn the uploaded tickets, 35 out of 36 were question-shaped, and they clustered into 9 repeat patterns: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). When the same question appears four times in one quarter, you're carrying FAQ debt. Each repeat costs another reply, another context switch, and another chance the customer gives up before asking.\n\nThe audit shows you which clusters represent the highest repeat risk and gives you draft FAQ shells for each one. You decide which answers to write first."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "proof",
+                "name": "How customers actually asked the questions",
+                "position": 2,
+                "text": "Uploaded tickets show exact customer phrasing such as \"Attribution export blocked \u2014 How do I export attribution reports before our board meeting?\" and \"Dashboard stale data \u2014 Why has our pipeline dashboard not refreshed since yesterday?\" The audit preserves this wording so FAQ answers match the search terms customers already use.\n\nSupport leaders know that help-center language rarely matches the way customers phrase the problem. Here's what the uploaded tickets said:\n\n- \"Attribution export blocked \u2014 How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields \u2014 Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report \u2014 Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions \u2014 Why can analysts view dashboards but not export reports?\"\n- \"Dashboard stale data \u2014 Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag \u2014 How do we check whether the warehouse sync is delayed?\"\n\nThe audit preserves this wording so you can write FAQ answers that match the search terms customers already use. You're not guessing what they'll type \u2014 you're seeing what they typed."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "solution",
+                "name": "What you get: draft FAQ shells tied to repeat ticket clusters",
+                "position": 3,
+                "text": "The audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell with the customer's original question wording, the ticket count, and a placeholder for the verified answer. You add the procedural steps and route the draft to your review queue.\n\nThe Support Ticket FAQ Gap Audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell that includes the customer's original question wording, the ticket count, and a placeholder for the verified answer. The shell says \"Draft answer \u2014 support team should add the verified resolution before publishing\" because the uploaded tickets contain customer questions but not verified support resolutions.\n\nYou decide which clusters to write first, add the procedural steps your team already knows, and route the draft to your review queue. The audit does not publish automatically. It gives you the structure so you can focus on writing the answer instead of hunting for the pattern."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "how_it_works",
+                "name": "How the audit process works",
+                "position": 4,
+                "text": "Export your support tickets as CSV, upload at the intake link, and get an audit report showing repeat clusters ranked by ticket count. Review the clusters, write the verified answers with procedural steps your team knows, and route to your review queue. The audit does not publish automatically.\n\n1. Export your support tickets as CSV. Include ticket ID, subject line, and body text. The audit needs at least 30 days of tickets; 90 days gives better cluster confidence.\n2. Upload the CSV at the intake link. The system reads the ticket text, identifies question-shaped tickets, and groups them by topic similarity.\n3. Get the audit report. It shows repeat clusters ranked by ticket count, preserves customer wording, and generates draft FAQ shells for each cluster.\n4. Review the clusters. Decide which FAQ gaps represent the highest repeat risk or the easiest wins.\n5. Write the verified answers. Add the procedural steps, UI paths, or policy details your support team already knows.\n6. Route to your review queue. The audit does not publish automatically. You control what goes live and when.\n\nThe whole process takes the time it takes to export a CSV and decide which clusters to write first. Writing the answers is on you."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "objection",
+                "name": "Does the audit publish FAQ answers automatically?",
+                "position": 5,
+                "text": "No. The audit generates draft FAQ shells with customer question wording and a placeholder for the verified answer. You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center without your approval.\n\nNo. The audit generates draft FAQ shells with customer question wording and a placeholder that says \"Draft answer \u2014 support team should add the verified resolution before publishing.\" You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center, CMS, or knowledge base without your approval.\n\nThis matters because uploaded tickets show repeated questions but not verified support resolutions. The audit can tell you which questions cost you the most repeat volume, but it cannot write the procedural steps, permission rules, or UI paths that make the answer useful. That's your team's job."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "objection",
+                "name": "Do we need a full-time docs person to use this?",
+                "position": 6,
+                "text": "No. The audit is built for support leaders without a dedicated docs team. It shows which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. If you have one person who can export a CSV and write three FAQ answers in a week, you have enough capacity.\n\nNo. The audit is built for support leaders who do not have a dedicated docs team. It shows you which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. Your support team already knows the verified resolutions \u2014 the audit just surfaces the pattern and gives you the draft structure.\n\nIf you have one person who can export a CSV, review a cluster list, and write three FAQ answers in a week, you have enough capacity to use this. The audit does not require ongoing maintenance, a content ops hire, or a full-time docs person. It requires deciding which repeat questions to answer first."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "faq",
+                "name": "What happens after I upload the CSV?",
+                "position": 7,
+                "text": "The system reads the ticket text, identifies question-shaped tickets, groups them by topic similarity, and ranks clusters by ticket count. You get an audit report showing repeat patterns and draft FAQ shells. You review the clusters, add verified answers, and route to your review queue.\n\nAfter you upload the CSV, the system reads the ticket text and identifies question-shaped tickets. It groups them by topic similarity and ranks the clusters by ticket count. You get an audit report that shows the repeat patterns, preserves customer wording, and generates draft FAQ shells for each cluster.\n\nThe report does not include verified answers because the uploaded tickets contain customer questions but not support resolutions. You review the clusters, decide which FAQ gaps to write first, add the procedural steps your team knows, and route the draft to your review queue. The audit does not publish automatically."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "conversion",
+                "name": "Get your FAQ gap audit",
+                "position": 8,
+                "text": "Upload your support ticket CSV and get the audit report. It shows you which repeat questions cost you the most volume, preserves customer wording, and gives you draft FAQ shells for each cluster. You decide which answers to write first.\n\nThe audit does not publish automatically. It does not require a full-time docs person. It requires deciding which FAQ gaps represent the highest repeat risk and writing the verified answers your support team already knows.\n\nIf you're carrying a repeat-ticket backlog and you want to see the pattern, upload the CSV."
+              }
+            ],
+            "name": "Support Ticket FAQ Gap Audit \u2014 Find Repeat Questions",
+            "potentialAction": {
+              "@type": "Action",
+              "name": "Upload Ticket CSV \u2014 Get the Gap Audit",
+              "target": "/systems/ai-content-ops/intake"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "In the uploaded tickets, 35 out of 36 were question-shaped and clustered into 9 repeat patterns including reporting export, dashboard freshness, SSO setup, and permissions. When the same question appears four times in one quarter, you're carrying FAQ debt that costs another reply each time."
+                },
+                "name": "What did the uploaded support tickets show about repeat questions?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The audit turns your uploaded CSV into a prioritized list of FAQ opportunities. For each repeat cluster, you get a draft FAQ shell with the customer's original question wording, the ticket count, and a placeholder for the verified answer. You add the procedural steps and route the draft to your review queue."
+                },
+                "name": "What does the FAQ Gap Audit deliver?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Export your support tickets as CSV, upload at the intake link, and get an audit report showing repeat clusters ranked by ticket count. Review the clusters, write the verified answers with procedural steps your team knows, and route to your review queue. The audit does not publish automatically."
+                },
+                "name": "How does the Support Ticket FAQ Gap Audit process work?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. The audit generates draft FAQ shells with customer question wording and a placeholder for the verified answer. You write the verified answer, review it, and decide when it goes live. The audit does not touch your help center without your approval."
+                },
+                "name": "Will this publish FAQ answers automatically?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. The audit is built for support leaders without a dedicated docs team. It shows which FAQ gaps cost you the most repeat tickets so you can prioritize the answers that matter. If you have one person who can export a CSV and write three FAQ answers in a week, you have enough capacity."
+                },
+                "name": "Do we need a full-time docs person to use the FAQ Gap Audit?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The system reads the ticket text, identifies question-shaped tickets, groups them by topic similarity, and ranks clusters by ticket count. You get an audit report showing repeat patterns and draft FAQ shells. You review the clusters, add verified answers, and route to your review queue."
+                },
+                "name": "What happens after I upload the CSV?"
+              }
+            ],
+            "name": "35 Support Tickets Showed the Same 9 FAQ Gaps \u2014 Here's Your Audit FAQs"
+          }
+        ]
+      },
+      "title": "35 Support Tickets Showed the Same 9 FAQ Gaps \u2014 Here's Your Audit",
+      "value_prop": "Turn repeat support tickets into approved FAQ answers"
+    },
+    {
+      "campaign_name": "Support Ticket FAQ Gap Audit",
+      "cta": {
+        "label": "Upload Ticket CSV -- Get the Gap Audit",
+        "url": "/systems/ai-content-ops/intake",
+        "variant": "primary"
+      },
+      "generation_input_tokens": 3797,
+      "generation_output_tokens": 2150,
+      "generation_parse_attempts": 1,
+      "generation_quality_repair_attempts": 0,
+      "generation_quality_repair_history": [
+        {
+          "attempt": 0,
+          "blockers": [],
+          "passed": true,
+          "repair_issues": []
+        }
+      ],
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_extractability": true,
+          "audience_entity_clarity": true,
+          "claim_safety": true,
+          "conversion_path_clarity": true,
+          "offer_entity_clarity": true,
+          "section_semantics": true,
+          "trust_signal_visibility": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "hero": {
+        "cta_label": "Upload Ticket CSV -- Get the Gap Audit",
+        "cta_url": "/systems/ai-content-ops/intake",
+        "headline": "Turn repeat support tickets into approved FAQ answers",
+        "subheadline": "Upload your last 90 days of support tickets and get a gap audit showing which repeated questions need FAQ coverage\u2014no guesswork, no manual tagging."
+      },
+      "id": "2b09400f-a8b9-4787-86dd-ca655686d246",
+      "meta": {
+        "description": "Upload your support tickets and get a gap audit showing which repeated questions need FAQ coverage. Review-ready draft answers, no automatic publishing.",
+        "og_image_url": "",
+        "title_tag": "Support Ticket FAQ Gap Audit | Cut Repeat Tickets"
+      },
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "campaign_name": "Support Ticket FAQ Gap Audit",
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 0,
+        "generation_quality_repair_history": [
+          {
+            "attempt": 0,
+            "blockers": [],
+            "passed": true,
+            "repair_issues": []
+          }
+        ],
+        "generation_usage": {
+          "billable_input_tokens": 126,
+          "cache_write_tokens": 0,
+          "cached_tokens": 3671,
+          "input_tokens": 3797,
+          "output_tokens": 2150,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source_context": {
+          "customer_wording_examples": [
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-001",
+              "source_title": "Attribution export blocked",
+              "text": "Attribution export blocked How do I export attribution reports before our board meeting?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-002",
+              "source_title": "CSV export missing fields",
+              "text": "CSV export missing fields Why is the campaign CSV export missing source and owner columns?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-003",
+              "source_title": "Export scheduled report",
+              "text": "Export scheduled report Can I schedule a weekly attribution report export for finance?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-004",
+              "source_title": "Dashboard export permissions",
+              "text": "Dashboard export permissions Why can analysts view dashboards but not export reports?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-005",
+              "source_title": "Dashboard stale data",
+              "text": "Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-006",
+              "source_title": "Warehouse sync lag",
+              "text": "Warehouse sync lag How do we check whether the warehouse sync is delayed?"
+            }
+          ],
+          "has_dated_window": false,
+          "has_measured_outcomes": false,
+          "included_ticket_row_count": 36,
+          "measured_outcome_count": 0,
+          "question_like_ticket_count": 35,
+          "skipped_ticket_row_count": 0,
+          "source_row_count": 36,
+          "support_ticket_resolution_evidence_count": 0,
+          "support_ticket_resolution_evidence_present": false,
+          "top_ticket_clusters": [
+            {
+              "count": 4,
+              "label": "reporting export"
+            },
+            {
+              "count": 4,
+              "label": "dashboard freshness"
+            },
+            {
+              "count": 4,
+              "label": "sso setup"
+            },
+            {
+              "count": 4,
+              "label": "permissions and seats"
+            },
+            {
+              "count": 4,
+              "label": "api and webhooks"
+            },
+            {
+              "count": 4,
+              "label": "integration sync"
+            },
+            {
+              "count": 4,
+              "label": "data import"
+            },
+            {
+              "count": 4,
+              "label": "workflow automation"
+            },
+            {
+              "count": 4,
+              "label": "billing and plan management"
+            }
+          ],
+          "truncated_ticket_row_count": 0
+        },
+        "variant_angle": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result."
+      },
+      "output_checks": {
+        "answer_first_hero": true,
+        "audience_specificity": true,
+        "meta_description": true,
+        "metadata_consistency": true,
+        "objection_coverage": true,
+        "problem_solution_clarity": true,
+        "slug_quality": true,
+        "title_tag": true
+      },
+      "passed_output_checks": 8,
+      "persona": "SaaS support leaders carrying a repeat-ticket backlog",
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 0,
+      "reference_ids": [],
+      "section_count": 6,
+      "sections": [
+        {
+          "body_markdown": "When the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters appeared four times each, meaning your team is writing the same answer multiple times instead of publishing it once.\n\nWhen the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters\u2014reporting export, dashboard freshness, SSO setup, permissions and seats, API and webhooks, integration sync, data import, workflow automation, and billing and plan management\u2014each appeared four times. That pattern means your team is writing the same answer multiple times instead of publishing it once.\n\nThe risk is not just queue length. It is that your support leads do not know which gaps to close first, so the backlog keeps the same shape. You need the repeated questions ranked by frequency so you can decide which FAQ answers to write and review.",
+          "id": "repeat_ticket_risk",
+          "metadata": {
+            "answer_summary": "When the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters appeared four times each, meaning your team is writing the same answer multiple times instead of publishing it once.",
+            "kind": "problem",
+            "order": 1,
+            "primary_question": "Why do the same support questions keep coming back?"
+          },
+          "title": "Repeat tickets expose the same gaps every week"
+        },
+        {
+          "body_markdown": "The Support Ticket FAQ Gap Audit takes your uploaded ticket CSV and returns a ranked list of repeated questions with customer wording preserved. You see which questions appeared most often, what language your customers used, and which gaps carry the highest repeat risk.\n\nThe audit does not publish automatically. It gives you review-ready draft FAQ shells so your support team can add the verified resolution before you publish. That means you control what goes live, and you can prioritize the gaps that matter most to your queue.\n\nThe outcome is a clear next action: write and review the FAQ answers for the top repeat clusters, then track whether ticket volume changes after publication.",
+          "id": "gap_audit_outcome",
+          "metadata": {
+            "answer_summary": "The Support Ticket FAQ Gap Audit takes your uploaded ticket CSV and returns a ranked list of repeated questions with customer wording preserved. You see which questions appeared most often, what language your customers used, and which gaps carry the highest repeat risk.",
+            "kind": "solution",
+            "order": 2,
+            "primary_question": "What does the gap audit show me?"
+          },
+          "title": "The gap audit shows which repeated questions need FAQ coverage"
+        },
+        {
+          "body_markdown": "Export your support tickets as a CSV, upload it at the intake link, and the audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording. You get a gap report showing the top repeat clusters and draft FAQ answer shells, then your support team adds the verified resolution before publishing.\n\n1. Export your support tickets as a CSV. Include ticket title, body, and any tags or categories you already use.\n2. Upload the CSV at [/systems/ai-content-ops/intake](/systems/ai-content-ops/intake). The audit runs on the uploaded tickets\u2014no live system access required.\n3. The audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording so you see the exact language your customers used.\n4. You get a gap report showing the top repeat clusters and draft FAQ answer shells. The drafts include the customer question but not the verified resolution\u2014your support team adds that before publishing.\n5. Review the draft answers, add the verified steps, and publish the FAQ entries to your help center.\n6. Track whether ticket volume changes after publication. The audit does not predict future ticket reduction, but it gives you the baseline to measure it.\n\nThe whole process takes the time it takes to export a CSV, upload it, review the gap report, and write the verified answers. No full-time docs person required.",
+          "id": "how_the_audit_works",
+          "metadata": {
+            "answer_summary": "Export your support tickets as a CSV, upload it at the intake link, and the audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording. You get a gap report showing the top repeat clusters and draft FAQ answer shells, then your support team adds the verified resolution before publishing.",
+            "kind": "how_it_works",
+            "order": 3,
+            "primary_question": "How does the gap audit work?"
+          },
+          "title": "Upload tickets, get the gap audit, review and publish answers"
+        },
+        {
+          "body_markdown": "The audit preserves the exact language your customers used so you can write FAQ answers that match their search terms. Here are examples from the uploaded tickets:\n\n**Reporting export:**\n- \"Attribution export blocked How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions Why can analysts view dashboards but not export reports?\"\n\n**Dashboard freshness:**\n- \"Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag How do we check whether the warehouse sync is delayed?\"\n\nThese are the questions your customers are asking. The gap audit ranks them by frequency so you know which ones to answer first.",
+          "id": "customer_wording_proof",
+          "metadata": {
+            "answer_summary": "",
+            "kind": "proof",
+            "order": 4,
+            "primary_question": ""
+          },
+          "title": "Customer wording from the uploaded tickets"
+        },
+        {
+          "body_markdown": "No. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval.\n\n**Will this publish automatically?**\n\nNo. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval.\n\n**Do we need a full-time docs person?**\n\nNo. The gap audit is built for support leads who do not have a dedicated docs team. You upload the ticket CSV, review the gap report, and your support team writes the verified answers. The audit does the clustering and ranking work so you do not have to tag tickets manually or guess which gaps matter most.\n\n**What happens after I upload the CSV?**\n\nThe audit runs on the uploaded tickets and returns a gap report showing the top repeat clusters, customer wording examples, and draft FAQ answer shells. You review the report, prioritize the gaps, and write the verified answers. The audit does not access your live support system or publish anything automatically.\n\n**Does FAQ Report publish automatically?**\n\nNo. The gap audit gives you review-ready draft FAQ shells, and you add the verified resolution before publishing. You control the publication process and the help center content.",
+          "id": "objections_and_control",
+          "metadata": {
+            "answer_summary": "No. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval.",
+            "kind": "objection",
+            "order": 5,
+            "primary_question": "Will this publish automatically?"
+          },
+          "title": "You control what gets published and when"
+        },
+        {
+          "body_markdown": "The gap audit runs on your uploaded support tickets. You get a ranked list of repeated questions, customer wording examples, and draft FAQ answer shells. Your support team adds the verified resolution, you publish the answers, and you track whether ticket volume changes.\n\nNo live system access. No automatic publishing. No full-time docs person required.\n\n[Upload your ticket CSV and get the gap audit](/systems/ai-content-ops/intake).",
+          "id": "next_action",
+          "metadata": {
+            "answer_summary": "",
+            "kind": "conversion",
+            "order": 6,
+            "primary_question": ""
+          },
+          "title": "Upload your ticket CSV and get the gap audit"
+        }
+      ],
+      "seo_aeo_readiness": {
+        "checks": {
+          "answer_first_hero": true,
+          "audience_specificity": true,
+          "meta_description": true,
+          "metadata_consistency": true,
+          "objection_coverage": true,
+          "problem_solution_clarity": true,
+          "slug_quality": true,
+          "title_tag": true
+        },
+        "missing": [],
+        "passed": 8,
+        "status": "ready",
+        "total": 8
+      },
+      "slug": "support-ticket-faq-gap-audit",
+      "status": "approved",
+      "structured_data": {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "about": {
+              "@type": "Thing",
+              "name": "Turn repeat support tickets into approved FAQ answers"
+            },
+            "audience": {
+              "@type": "Audience",
+              "audienceType": "SaaS support leaders carrying a repeat-ticket backlog"
+            },
+            "description": "Upload your support tickets and get a gap audit showing which repeated questions need FAQ coverage. Review-ready draft answers, no automatic publishing.",
+            "hasPart": [
+              {
+                "@type": "WebPageElement",
+                "additionalType": "problem",
+                "name": "Repeat tickets expose the same gaps every week",
+                "position": 1,
+                "text": "When the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters appeared four times each, meaning your team is writing the same answer multiple times instead of publishing it once.\n\nWhen the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters\u2014reporting export, dashboard freshness, SSO setup, permissions and seats, API and webhooks, integration sync, data import, workflow automation, and billing and plan management\u2014each appeared four times. That pattern means your team is writing the same answer multiple times instead of publishing it once.\n\nThe risk is not just queue length. It is that your support leads do not know which gaps to close first, so the backlog keeps the same shape. You need the repeated questions ranked by frequency so you can decide which FAQ answers to write and review."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "solution",
+                "name": "The gap audit shows which repeated questions need FAQ coverage",
+                "position": 2,
+                "text": "The Support Ticket FAQ Gap Audit takes your uploaded ticket CSV and returns a ranked list of repeated questions with customer wording preserved. You see which questions appeared most often, what language your customers used, and which gaps carry the highest repeat risk.\n\nThe audit does not publish automatically. It gives you review-ready draft FAQ shells so your support team can add the verified resolution before you publish. That means you control what goes live, and you can prioritize the gaps that matter most to your queue.\n\nThe outcome is a clear next action: write and review the FAQ answers for the top repeat clusters, then track whether ticket volume changes after publication."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "how_it_works",
+                "name": "Upload tickets, get the gap audit, review and publish answers",
+                "position": 3,
+                "text": "Export your support tickets as a CSV, upload it at the intake link, and the audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording. You get a gap report showing the top repeat clusters and draft FAQ answer shells, then your support team adds the verified resolution before publishing.\n\n1. Export your support tickets as a CSV. Include ticket title, body, and any tags or categories you already use.\n2. Upload the CSV at [/systems/ai-content-ops/intake](/systems/ai-content-ops/intake). The audit runs on the uploaded tickets\u2014no live system access required.\n3. The audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording so you see the exact language your customers used.\n4. You get a gap report showing the top repeat clusters and draft FAQ answer shells. The drafts include the customer question but not the verified resolution\u2014your support team adds that before publishing.\n5. Review the draft answers, add the verified steps, and publish the FAQ entries to your help center.\n6. Track whether ticket volume changes after publication. The audit does not predict future ticket reduction, but it gives you the baseline to measure it.\n\nThe whole process takes the time it takes to export a CSV, upload it, review the gap report, and write the verified answers. No full-time docs person required."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "proof",
+                "name": "Customer wording from the uploaded tickets",
+                "position": 4,
+                "text": "The audit preserves the exact language your customers used so you can write FAQ answers that match their search terms. Here are examples from the uploaded tickets:\n\n**Reporting export:**\n- \"Attribution export blocked How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions Why can analysts view dashboards but not export reports?\"\n\n**Dashboard freshness:**\n- \"Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag How do we check whether the warehouse sync is delayed?\"\n\nThese are the questions your customers are asking. The gap audit ranks them by frequency so you know which ones to answer first."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "objection",
+                "name": "You control what gets published and when",
+                "position": 5,
+                "text": "No. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval.\n\n**Will this publish automatically?**\n\nNo. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval.\n\n**Do we need a full-time docs person?**\n\nNo. The gap audit is built for support leads who do not have a dedicated docs team. You upload the ticket CSV, review the gap report, and your support team writes the verified answers. The audit does the clustering and ranking work so you do not have to tag tickets manually or guess which gaps matter most.\n\n**What happens after I upload the CSV?**\n\nThe audit runs on the uploaded tickets and returns a gap report showing the top repeat clusters, customer wording examples, and draft FAQ answer shells. You review the report, prioritize the gaps, and write the verified answers. The audit does not access your live support system or publish anything automatically.\n\n**Does FAQ Report publish automatically?**\n\nNo. The gap audit gives you review-ready draft FAQ shells, and you add the verified resolution before publishing. You control the publication process and the help center content."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "conversion",
+                "name": "Upload your ticket CSV and get the gap audit",
+                "position": 6,
+                "text": "The gap audit runs on your uploaded support tickets. You get a ranked list of repeated questions, customer wording examples, and draft FAQ answer shells. Your support team adds the verified resolution, you publish the answers, and you track whether ticket volume changes.\n\nNo live system access. No automatic publishing. No full-time docs person required.\n\n[Upload your ticket CSV and get the gap audit](/systems/ai-content-ops/intake)."
+              }
+            ],
+            "name": "Support Ticket FAQ Gap Audit | Cut Repeat Tickets",
+            "potentialAction": {
+              "@type": "Action",
+              "name": "Upload Ticket CSV -- Get the Gap Audit",
+              "target": "/systems/ai-content-ops/intake"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "When the same questions come back week after week, your support queue carries questions that should have been answered once. In the uploaded tickets, 35 out of 36 tickets were question-shaped, and the top clusters appeared four times each, meaning your team is writing the same answer multiple times instead of publishing it once."
+                },
+                "name": "Why do the same support questions keep coming back?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The Support Ticket FAQ Gap Audit takes your uploaded ticket CSV and returns a ranked list of repeated questions with customer wording preserved. You see which questions appeared most often, what language your customers used, and which gaps carry the highest repeat risk."
+                },
+                "name": "What does the gap audit show me?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Export your support tickets as a CSV, upload it at the intake link, and the audit clusters question-like tickets by topic, ranks them by frequency, and preserves customer wording. You get a gap report showing the top repeat clusters and draft FAQ answer shells, then your support team adds the verified resolution before publishing."
+                },
+                "name": "How does the gap audit work?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. The gap audit returns draft FAQ answer shells with the customer question included, but your support team must add the verified resolution before you publish. You decide which answers to write, which to review, and which to publish. Nothing goes live without your approval."
+                },
+                "name": "Will this publish automatically?"
+              }
+            ],
+            "name": "Cut Repeat Support Tickets with Review-Ready FAQ Answers FAQs"
+          }
+        ]
+      },
+      "title": "Cut Repeat Support Tickets with Review-Ready FAQ Answers",
+      "value_prop": "Turn repeat support tickets into approved FAQ answers"
+    },
+    {
+      "campaign_name": "Support Ticket FAQ Gap Audit",
+      "cta": {
+        "label": "Upload Ticket CSV -- Get the Gap Audit",
+        "url": "/systems/ai-content-ops/intake",
+        "variant": "primary"
+      },
+      "generation_input_tokens": 3797,
+      "generation_output_tokens": 1679,
+      "generation_parse_attempts": 1,
+      "generation_quality_repair_attempts": 0,
+      "generation_quality_repair_history": [
+        {
+          "attempt": 0,
+          "blockers": [],
+          "passed": true,
+          "repair_issues": []
+        }
+      ],
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_extractability": true,
+          "audience_entity_clarity": true,
+          "claim_safety": true,
+          "conversion_path_clarity": true,
+          "offer_entity_clarity": true,
+          "section_semantics": true,
+          "trust_signal_visibility": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "hero": {
+        "cta_label": "Upload Ticket CSV -- Get the Gap Audit",
+        "cta_url": "/systems/ai-content-ops/intake",
+        "headline": "Your team answers the same questions every week",
+        "subheadline": "Upload your ticket CSV and see which repeat questions need approved FAQ answers before they hit the queue again."
+      },
+      "id": "49e324c1-f331-404d-bfa4-dcbcb5387027",
+      "meta": {
+        "description": "Upload your ticket CSV and see which repeat questions need approved FAQ answers. Turn support ticket patterns into help-center coverage.",
+        "og_image_url": "",
+        "title_tag": "Stop Answering the Same Support Tickets Every Week"
+      },
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "campaign_name": "Support Ticket FAQ Gap Audit",
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 0,
+        "generation_quality_repair_history": [
+          {
+            "attempt": 0,
+            "blockers": [],
+            "passed": true,
+            "repair_issues": []
+          }
+        ],
+        "generation_usage": {
+          "billable_input_tokens": 126,
+          "cache_write_tokens": 3671,
+          "cached_tokens": 0,
+          "input_tokens": 3797,
+          "output_tokens": 1679,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source_context": {
+          "customer_wording_examples": [
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-001",
+              "source_title": "Attribution export blocked",
+              "text": "Attribution export blocked How do I export attribution reports before our board meeting?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-002",
+              "source_title": "CSV export missing fields",
+              "text": "CSV export missing fields Why is the campaign CSV export missing source and owner columns?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-003",
+              "source_title": "Export scheduled report",
+              "text": "Export scheduled report Can I schedule a weekly attribution report export for finance?"
+            },
+            {
+              "pain_category": "reporting export",
+              "source_id": "saas-demo-004",
+              "source_title": "Dashboard export permissions",
+              "text": "Dashboard export permissions Why can analysts view dashboards but not export reports?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-005",
+              "source_title": "Dashboard stale data",
+              "text": "Dashboard stale data Why has our pipeline dashboard not refreshed since yesterday?"
+            },
+            {
+              "pain_category": "dashboard freshness",
+              "source_id": "saas-demo-006",
+              "source_title": "Warehouse sync lag",
+              "text": "Warehouse sync lag How do we check whether the warehouse sync is delayed?"
+            }
+          ],
+          "has_dated_window": false,
+          "has_measured_outcomes": false,
+          "included_ticket_row_count": 36,
+          "measured_outcome_count": 0,
+          "question_like_ticket_count": 35,
+          "skipped_ticket_row_count": 0,
+          "source_row_count": 36,
+          "support_ticket_resolution_evidence_count": 0,
+          "support_ticket_resolution_evidence_present": false,
+          "top_ticket_clusters": [
+            {
+              "count": 4,
+              "label": "reporting export"
+            },
+            {
+              "count": 4,
+              "label": "dashboard freshness"
+            },
+            {
+              "count": 4,
+              "label": "sso setup"
+            },
+            {
+              "count": 4,
+              "label": "permissions and seats"
+            },
+            {
+              "count": 4,
+              "label": "api and webhooks"
+            },
+            {
+              "count": 4,
+              "label": "integration sync"
+            },
+            {
+              "count": 4,
+              "label": "data import"
+            },
+            {
+              "count": 4,
+              "label": "workflow automation"
+            },
+            {
+              "count": 4,
+              "label": "billing and plan management"
+            }
+          ],
+          "truncated_ticket_row_count": 0
+        },
+        "variant_angle": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step."
+      },
+      "output_checks": {
+        "answer_first_hero": true,
+        "audience_specificity": true,
+        "meta_description": true,
+        "metadata_consistency": true,
+        "objection_coverage": true,
+        "problem_solution_clarity": true,
+        "slug_quality": true,
+        "title_tag": true
+      },
+      "passed_output_checks": 8,
+      "persona": "SaaS support leaders carrying a repeat-ticket backlog",
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 0,
+      "reference_ids": [],
+      "section_count": 6,
+      "sections": [
+        {
+          "body_markdown": "The same questions come back because your help center does not have approved answers yet. In the uploaded tickets, 35 out of 36 were question-shaped, and the top 9 clusters each appeared 4 times.\n\nYour support team closes tickets, but the same questions come back. In the uploaded tickets, 35 out of 36 were question-shaped. The top clusters\u2014reporting export, dashboard freshness, SSO setup, permissions and seats, API and webhooks, integration sync, data import, workflow automation, billing and plan management\u2014each appeared 4 times. When the same question hits the queue multiple times, your team writes the same answer multiple times. The backlog does not shrink because the help center does not have the answer yet.",
+          "id": "repeat_ticket_backlog",
+          "metadata": {
+            "answer_summary": "The same questions come back because your help center does not have approved answers yet. In the uploaded tickets, 35 out of 36 were question-shaped, and the top 9 clusters each appeared 4 times.",
+            "kind": "problem",
+            "order": 1,
+            "primary_question": "Why do we keep getting the same support tickets?"
+          },
+          "title": "The repeat-ticket backlog keeps growing"
+        },
+        {
+          "body_markdown": "Customers describe the friction they hit, not your internal product names. Examples from uploaded tickets include \"Attribution export blocked,\" \"CSV export missing fields,\" \"Dashboard stale data,\" and \"Warehouse sync lag.\"\n\nYour customers do not use your internal product names. They describe the friction they hit:\n\n- \"Attribution export blocked\u2014How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields\u2014Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report\u2014Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions\u2014Why can analysts view dashboards but not export reports?\"\n- \"Dashboard stale data\u2014Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag\u2014How do we check whether the warehouse sync is delayed?\"\n\nThese are real ticket titles from the uploaded CSV. When your help center does not match this wording, customers open a ticket instead of finding the answer.",
+          "id": "customer_wording_examples",
+          "metadata": {
+            "answer_summary": "Customers describe the friction they hit, not your internal product names. Examples from uploaded tickets include \"Attribution export blocked,\" \"CSV export missing fields,\" \"Dashboard stale data,\" and \"Warehouse sync lag.\"",
+            "kind": "problem",
+            "order": 2,
+            "primary_question": "What exact wording do customers use when they ask these questions?"
+          },
+          "title": "Here is how your customers ask the question"
+        },
+        {
+          "body_markdown": "The audit groups question-shaped tickets by topic, counts repeat clusters, and pulls customer wording. You get review-ready FAQ shells with the customer's question and a placeholder for your team to add the verified resolution before publishing.\n\nUpload your support ticket CSV. The audit groups question-shaped tickets by topic, counts how many times each cluster appeared, and pulls the customer wording. You see which repeat questions do not have help-center answers yet. The audit does not publish anything. It gives your team a list of review-ready FAQ shells with the customer's exact question and a placeholder for the verified resolution. Your support team adds the correct answer, reviews it, and decides when to publish.",
+          "id": "gap_audit_process",
+          "metadata": {
+            "answer_summary": "The audit groups question-shaped tickets by topic, counts repeat clusters, and pulls customer wording. You get review-ready FAQ shells with the customer's question and a placeholder for your team to add the verified resolution before publishing.",
+            "kind": "how_it_works",
+            "order": 3,
+            "primary_question": "What happens after I upload the CSV?"
+          },
+          "title": "The audit shows which questions need answers"
+        },
+        {
+          "body_markdown": "No. The audit gives you review-ready FAQ shells with customer questions and placeholders. Your team adds the verified resolution, reviews it, and decides when to publish. Nothing goes live without your approval.\n\nThe audit does not push answers to your help center. It does not write procedural steps or guess at product details. Each FAQ shell says \"Draft answer\u2014support team should add the verified resolution before publishing.\" Your team reviews the question, writes or pastes the correct answer, checks it, and publishes when ready. You control what goes live and when.",
+          "id": "no_auto_publish",
+          "metadata": {
+            "answer_summary": "No. The audit gives you review-ready FAQ shells with customer questions and placeholders. Your team adds the verified resolution, reviews it, and decides when to publish. Nothing goes live without your approval.",
+            "kind": "objection",
+            "order": 4,
+            "primary_question": "Will this publish automatically?"
+          },
+          "title": "Nothing publishes without your approval"
+        },
+        {
+          "body_markdown": "No. Your support team already knows the answers. The audit removes the noticing and drafting work. A support lead or senior agent can review the FAQ shells and publish the verified answers without hiring a dedicated docs writer.\n\nYour support team already knows the answers. The audit removes the step where someone has to notice the pattern, remember to write it down, and find time to draft the FAQ. The audit does that noticing and drafting work. Your team reviews the question, confirms the answer is correct, and publishes. The support lead or a senior agent can handle the review queue without hiring a dedicated docs writer.",
+          "id": "no_fulltime_docs_person",
+          "metadata": {
+            "answer_summary": "No. Your support team already knows the answers. The audit removes the noticing and drafting work. A support lead or senior agent can review the FAQ shells and publish the verified answers without hiring a dedicated docs writer.",
+            "kind": "objection",
+            "order": 5,
+            "primary_question": "Do we need a full-time docs person?"
+          },
+          "title": "You do not need a full-time docs person"
+        },
+        {
+          "body_markdown": "Export your support tickets as CSV. Upload the file. The audit runs and shows you which questions appeared multiple times, how your customers worded them, and which ones need help-center answers. You decide which FAQ answers to write first and when to publish them. No auto-publish. No placeholder content. No fake procedural steps. Just the repeat-question evidence and the review-ready FAQ shells your team needs to close the gap.",
+          "id": "next_action",
+          "metadata": {
+            "answer_summary": "",
+            "kind": "conversion",
+            "order": 6,
+            "primary_question": ""
+          },
+          "title": "Upload your ticket CSV and see the repeat-question clusters"
+        }
+      ],
+      "seo_aeo_readiness": {
+        "checks": {
+          "answer_first_hero": true,
+          "audience_specificity": true,
+          "meta_description": true,
+          "metadata_consistency": true,
+          "objection_coverage": true,
+          "problem_solution_clarity": true,
+          "slug_quality": true,
+          "title_tag": true
+        },
+        "missing": [],
+        "passed": 8,
+        "status": "ready",
+        "total": 8
+      },
+      "slug": "support-ticket-faq-gap-audit",
+      "status": "approved",
+      "structured_data": {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "about": {
+              "@type": "Thing",
+              "name": "Turn repeat support tickets into approved FAQ answers"
+            },
+            "audience": {
+              "@type": "Audience",
+              "audienceType": "SaaS support leaders carrying a repeat-ticket backlog"
+            },
+            "description": "Upload your ticket CSV and see which repeat questions need approved FAQ answers. Turn support ticket patterns into help-center coverage.",
+            "hasPart": [
+              {
+                "@type": "WebPageElement",
+                "additionalType": "problem",
+                "name": "The repeat-ticket backlog keeps growing",
+                "position": 1,
+                "text": "The same questions come back because your help center does not have approved answers yet. In the uploaded tickets, 35 out of 36 were question-shaped, and the top 9 clusters each appeared 4 times.\n\nYour support team closes tickets, but the same questions come back. In the uploaded tickets, 35 out of 36 were question-shaped. The top clusters\u2014reporting export, dashboard freshness, SSO setup, permissions and seats, API and webhooks, integration sync, data import, workflow automation, billing and plan management\u2014each appeared 4 times. When the same question hits the queue multiple times, your team writes the same answer multiple times. The backlog does not shrink because the help center does not have the answer yet."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "problem",
+                "name": "Here is how your customers ask the question",
+                "position": 2,
+                "text": "Customers describe the friction they hit, not your internal product names. Examples from uploaded tickets include \"Attribution export blocked,\" \"CSV export missing fields,\" \"Dashboard stale data,\" and \"Warehouse sync lag.\"\n\nYour customers do not use your internal product names. They describe the friction they hit:\n\n- \"Attribution export blocked\u2014How do I export attribution reports before our board meeting?\"\n- \"CSV export missing fields\u2014Why is the campaign CSV export missing source and owner columns?\"\n- \"Export scheduled report\u2014Can I schedule a weekly attribution report export for finance?\"\n- \"Dashboard export permissions\u2014Why can analysts view dashboards but not export reports?\"\n- \"Dashboard stale data\u2014Why has our pipeline dashboard not refreshed since yesterday?\"\n- \"Warehouse sync lag\u2014How do we check whether the warehouse sync is delayed?\"\n\nThese are real ticket titles from the uploaded CSV. When your help center does not match this wording, customers open a ticket instead of finding the answer."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "how_it_works",
+                "name": "The audit shows which questions need answers",
+                "position": 3,
+                "text": "The audit groups question-shaped tickets by topic, counts repeat clusters, and pulls customer wording. You get review-ready FAQ shells with the customer's question and a placeholder for your team to add the verified resolution before publishing.\n\nUpload your support ticket CSV. The audit groups question-shaped tickets by topic, counts how many times each cluster appeared, and pulls the customer wording. You see which repeat questions do not have help-center answers yet. The audit does not publish anything. It gives your team a list of review-ready FAQ shells with the customer's exact question and a placeholder for the verified resolution. Your support team adds the correct answer, reviews it, and decides when to publish."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "objection",
+                "name": "Nothing publishes without your approval",
+                "position": 4,
+                "text": "No. The audit gives you review-ready FAQ shells with customer questions and placeholders. Your team adds the verified resolution, reviews it, and decides when to publish. Nothing goes live without your approval.\n\nThe audit does not push answers to your help center. It does not write procedural steps or guess at product details. Each FAQ shell says \"Draft answer\u2014support team should add the verified resolution before publishing.\" Your team reviews the question, writes or pastes the correct answer, checks it, and publishes when ready. You control what goes live and when."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "objection",
+                "name": "You do not need a full-time docs person",
+                "position": 5,
+                "text": "No. Your support team already knows the answers. The audit removes the noticing and drafting work. A support lead or senior agent can review the FAQ shells and publish the verified answers without hiring a dedicated docs writer.\n\nYour support team already knows the answers. The audit removes the step where someone has to notice the pattern, remember to write it down, and find time to draft the FAQ. The audit does that noticing and drafting work. Your team reviews the question, confirms the answer is correct, and publishes. The support lead or a senior agent can handle the review queue without hiring a dedicated docs writer."
+              },
+              {
+                "@type": "WebPageElement",
+                "additionalType": "conversion",
+                "name": "Upload your ticket CSV and see the repeat-question clusters",
+                "position": 6,
+                "text": "Export your support tickets as CSV. Upload the file. The audit runs and shows you which questions appeared multiple times, how your customers worded them, and which ones need help-center answers. You decide which FAQ answers to write first and when to publish them. No auto-publish. No placeholder content. No fake procedural steps. Just the repeat-question evidence and the review-ready FAQ shells your team needs to close the gap."
+              }
+            ],
+            "name": "Stop Answering the Same Support Tickets Every Week",
+            "potentialAction": {
+              "@type": "Action",
+              "name": "Upload Ticket CSV -- Get the Gap Audit",
+              "target": "/systems/ai-content-ops/intake"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The same questions come back because your help center does not have approved answers yet. In the uploaded tickets, 35 out of 36 were question-shaped, and the top 9 clusters each appeared 4 times."
+                },
+                "name": "Why do we keep getting the same support tickets?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Customers describe the friction they hit, not your internal product names. Examples from uploaded tickets include \"Attribution export blocked,\" \"CSV export missing fields,\" \"Dashboard stale data,\" and \"Warehouse sync lag.\""
+                },
+                "name": "What exact wording do customers use when they ask these questions?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The audit groups question-shaped tickets by topic, counts repeat clusters, and pulls customer wording. You get review-ready FAQ shells with the customer's question and a placeholder for your team to add the verified resolution before publishing."
+                },
+                "name": "What happens after I upload the CSV?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. The audit gives you review-ready FAQ shells with customer questions and placeholders. Your team adds the verified resolution, reviews it, and decides when to publish. Nothing goes live without your approval."
+                },
+                "name": "Will this publish automatically?"
+              },
+              {
+                "@type": "Question",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. Your support team already knows the answers. The audit removes the noticing and drafting work. A support lead or senior agent can review the FAQ shells and publish the verified answers without hiring a dedicated docs writer."
+                },
+                "name": "Do we need a full-time docs person?"
+              }
+            ],
+            "name": "Stop Answering the Same Support Tickets Every Week FAQs"
+          }
+        ]
+      },
+      "title": "Stop Answering the Same Support Tickets Every Week",
+      "value_prop": "Turn repeat support tickets into approved FAQ answers"
+    }
+  ]
+}

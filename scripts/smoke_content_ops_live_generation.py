@@ -804,8 +804,8 @@ def _support_ticket_blog_blueprint_payload(
                 },
                 "chart_ids": [],
                 "data_summary": (
-                    f"The uploaded CSV contains {source_row_count} support-ticket "
-                    f"rows; {included_row_count} rows were included for generation. "
+                    f"The support-ticket set includes {source_row_count} source "
+                    f"rows and {included_row_count} usable ticket rows. "
                     f"{question_like_count} rows include direct customer questions. "
                     f"Top observed clusters: {cluster_summary}."
                 ),
@@ -843,7 +843,7 @@ def _support_ticket_blog_blueprint_payload(
                 },
                 "chart_ids": [],
                 "data_summary": (
-                    f"The uploaded ticket CSV can produce up to {draft_faq_entries} "
+                    f"The observed ticket set supports up to {draft_faq_entries} "
                     "first-pass FAQ entries from observed customer wording. "
                     + (
                         "Each answer should preserve customer language, use the "

@@ -1,0 +1,433 @@
+{
+  "errors": [],
+  "plan": {
+    "can_execute": true,
+    "limit": 1,
+    "preview": {
+      "blocked_outputs": [],
+      "can_run": true,
+      "estimated_cost_usd": 12.6,
+      "missing_inputs": [],
+      "normalized_request": {
+        "account_usage_budget_days": 7,
+        "account_usage_budget_usd": null,
+        "allow_unimplemented_outputs": false,
+        "brand_voice_profile_id": null,
+        "content_ops_cache_policy": null,
+        "ingestion_profile": "existing_evidence",
+        "limit": 1,
+        "max_cost_usd": 20.0,
+        "outputs": [
+          "landing_page",
+          "blog_post",
+          "sales_brief"
+        ],
+        "preset": null,
+        "reasoning_preset": null,
+        "require_quality_gates": true,
+        "target_mode": "vendor_retention",
+        "variant_count": 3
+      },
+      "outputs": [
+        "landing_page",
+        "blog_post",
+        "sales_brief"
+      ],
+      "warnings": []
+    },
+    "steps": [
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "quality_repair_attempts": 1,
+          "skill_name": "digest/landing_page_generation",
+          "temperature": 0.3,
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "landing_page",
+        "reason": "",
+        "runner": "LandingPageGenerationService.generate",
+        "status": "runnable"
+      },
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "limit": 1,
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "quality_repair_attempts": 2,
+          "skill_name": "digest/blog_post_generation",
+          "temperature": 0.3,
+          "topic": "Support ticket FAQ gaps: what repeat tickets reveal before renewal",
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "blog_post",
+        "reason": "",
+        "runner": "BlogPostGenerationService.generate",
+        "status": "runnable"
+      },
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "default_brief_type": "renewal",
+          "limit": 1,
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "skill_name": "digest/sales_brief_generation",
+          "temperature": 0.3,
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "sales_brief",
+        "reason": "",
+        "runner": "SalesBriefGenerationService.generate",
+        "status": "runnable"
+      }
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "status": "completed",
+  "steps": [
+    {
+      "error": "",
+      "output": "landing_page",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 3,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "49e324c1-f331-404d-bfa4-dcbcb5387027",
+          "2b09400f-a8b9-4787-86dd-ca655686d246",
+          "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+        ],
+        "skipped": 0,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "49e324c1-f331-404d-bfa4-dcbcb5387027"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "2b09400f-a8b9-4787-86dd-ca655686d246"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "LandingPageGenerationService.generate",
+      "status": "completed"
+    },
+    {
+      "error": "",
+      "output": "blog_post",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [
+          {
+            "blockers": [
+              "geo_citable_section_structure_missing",
+              "support_ticket_generated_content:debug_source_narration"
+            ],
+            "blueprint_id": "0da54d85-706c-43e9-aa59-036b182b2d87",
+            "failed_candidate": {
+              "content_excerpt_head": "## What repeat support questions show\n\nYour customers ask the same questions repeatedly. In the uploaded tickets, 35 of 36 rows include direct customer questions. Nine clusters appear with equal frequency: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). Each cluster represents a gap where your help center does not answer the question.\n\nThe reporting export cluster includes questions such as \"How do I export attribution reports before our board meeting?\" and \"Why is the campaign CSV export missing source and owner columns?\" The dashboard freshness cluster includes \"Why has our pipeline dashboard not refreshed since yesterday?\" and \"How do we check whether the warehouse sync is delayed?\" These are not edge cases. They are repeated patterns in the provided ticket set.\n\nThe uploaded tickets show which questions appear most often in this sample. They do not prove how often those questions appear across your full support queue. They show what customers asked in the provided set.\n\n## Which FAQ gaps should be reviewed first\n\nPrioritize by observed ticket volume. In this set, nine clusters are tied at 4 tickets each. You cannot rank tied clusters by business impact, activation risk, or workflow blocking without measured outcome evidence. The blueprint does not include that evidence. Review all nine tied clusters bef",
+              "content_excerpt_tail": "d resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### API and webhooks\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Integration sync\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for integration sync?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after publishing. Review FAQ page traffic and customer feedback as signals to inspect. Compare future tickets against the observed clusters without claiming causality.\n\nThe uploaded tickets do not include a dated source window, so do not add fixed checkpoints. Watch for changes in ticket patterns and adjust your FAQ content based on what you observe.\n\nIf a cluster continues to generate tickets after you publish an FAQ entry, that is a signal. The answer may need clearer wording, the question may need a different title, or the FAQ page may need better navigation. Use those signals to refine your content.",
+              "content_truncated": true,
+              "generation_parse_attempts": 1,
+              "generation_quality_repair_attempts": 2,
+              "seo_title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal",
+              "slug": "",
+              "target_keyword": "support ticket faq gaps",
+              "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
+              "topic_type": "",
+              "word_count": 924
+            },
+            "reason": "quality_blocked",
+            "variant_angle": "pain_led",
+            "variant_label": "Pain-led"
+          }
+        ],
+        "generated": 2,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "2f9ec4e3-475a-4046-9e01-182757d1de20",
+          "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+        ],
+        "skipped": 1,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [
+              {
+                "blockers": [
+                  "geo_citable_section_structure_missing",
+                  "support_ticket_generated_content:debug_source_narration"
+                ],
+                "blueprint_id": "0da54d85-706c-43e9-aa59-036b182b2d87",
+                "failed_candidate": {
+                  "content_excerpt_head": "## What repeat support questions show\n\nYour customers ask the same questions repeatedly. In the uploaded tickets, 35 of 36 rows include direct customer questions. Nine clusters appear with equal frequency: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). Each cluster represents a gap where your help center does not answer the question.\n\nThe reporting export cluster includes questions such as \"How do I export attribution reports before our board meeting?\" and \"Why is the campaign CSV export missing source and owner columns?\" The dashboard freshness cluster includes \"Why has our pipeline dashboard not refreshed since yesterday?\" and \"How do we check whether the warehouse sync is delayed?\" These are not edge cases. They are repeated patterns in the provided ticket set.\n\nThe uploaded tickets show which questions appear most often in this sample. They do not prove how often those questions appear across your full support queue. They show what customers asked in the provided set.\n\n## Which FAQ gaps should be reviewed first\n\nPrioritize by observed ticket volume. In this set, nine clusters are tied at 4 tickets each. You cannot rank tied clusters by business impact, activation risk, or workflow blocking without measured outcome evidence. The blueprint does not include that evidence. Review all nine tied clusters bef",
+                  "content_excerpt_tail": "d resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### API and webhooks\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Integration sync\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for integration sync?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after publishing. Review FAQ page traffic and customer feedback as signals to inspect. Compare future tickets against the observed clusters without claiming causality.\n\nThe uploaded tickets do not include a dated source window, so do not add fixed checkpoints. Watch for changes in ticket patterns and adjust your FAQ content based on what you observe.\n\nIf a cluster continues to generate tickets after you publish an FAQ entry, that is a signal. The answer may need clearer wording, the question may need a different title, or the FAQ page may need better navigation. Use those signals to refine your content.",
+                  "content_truncated": true,
+                  "generation_parse_attempts": 1,
+                  "generation_quality_repair_attempts": 2,
+                  "seo_title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal",
+                  "slug": "",
+                  "target_keyword": "support ticket faq gaps",
+                  "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
+                  "topic_type": "",
+                  "word_count": 924
+                },
+                "reason": "quality_blocked"
+              }
+            ],
+            "generated": 0,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [],
+            "skipped": 1,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "2f9ec4e3-475a-4046-9e01-182757d1de20"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "BlogPostGenerationService.generate",
+      "status": "completed"
+    },
+    {
+      "error": "",
+      "output": "sales_brief",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 3,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "33044118-629f-491d-ada6-0aa3fc838222",
+          "e71d3a76-e32a-4891-8879-e6b99d9e58af",
+          "8744dc21-df4e-424e-9a9d-e5cada717886"
+        ],
+        "skipped": 0,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "33044118-629f-491d-ada6-0aa3fc838222"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "e71d3a76-e32a-4891-8879-e6b99d9e58af"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "8744dc21-df4e-424e-9a9d-e5cada717886"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "SalesBriefGenerationService.generate",
+      "status": "completed"
+    }
+  ]
+}

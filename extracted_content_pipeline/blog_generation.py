@@ -163,11 +163,17 @@ _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
 )
 _SUPPORT_TICKET_DEBUG_SOURCE_NARRATION_PATTERNS = (
     re.compile(
-        r"\bthe uploaded (?:\d+\s+)?"
+        r"\b(?:the|your|these) uploaded (?:\d+\s+)?"
         r"(?:csv|file|support[- ]tickets?|support[- ]ticket rows?|"
         r"ticket rows?|records?|data|dataset) "
         r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
     ),
+    re.compile(r"\b\d+\s+rows? were included for generation\b"),
+    re.compile(
+        r"\bin (?:your |the )?uploaded tickets?,?\s+\d+\s+of\s+\d+\s+rows? "
+        r"(?:contains?|shows?|includes?|included)\b"
+    ),
+    re.compile(r"\bthe uploaded ticket csv can produce\b"),
     re.compile(
         r"\b(?:analysis of|looking at) (?:the )?(?:uploaded )?(?:\d+\s+)?"
         r"(?:support[- ]tickets?|ticket rows?|records?|data|dataset)\b"

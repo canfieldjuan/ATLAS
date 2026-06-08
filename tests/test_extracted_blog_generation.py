@@ -1201,6 +1201,15 @@ async def test_generate_blocks_support_ticket_debug_source_narration_without_sav
     "Looking at the uploaded records, 36 tickets cluster into account questions.",
     "The uploaded CSV reveals nine clusters across 36 rows.",
     "This export of 36 support tickets surfaces nine themes.",
+    (
+        "Your uploaded tickets contain 36 support-ticket rows; 36 rows were "
+        "included for generation. 35 rows include direct customer questions."
+    ),
+    "In uploaded tickets, 35 of 36 rows include direct customer questions.",
+    (
+        "The uploaded ticket CSV can produce up to 6 first-pass FAQ entries "
+        "from observed customer wording."
+    ),
 ])
 def test_support_ticket_debug_source_narration_blocks_varied_openings(opening: str) -> None:
     parsed = json.loads(
@@ -1218,6 +1227,8 @@ def test_support_ticket_debug_source_narration_blocks_varied_openings(opening: s
     "Support tickets show repeated account and reporting questions.",
     "In 36 support tickets, account and reporting questions repeat.",
     "Customers keep asking account and reporting questions in support tickets.",
+    "Support tickets include 35 direct customer questions across 36 rows.",
+    "The ticket set supports six first-pass FAQ shells for team review.",
 ])
 def test_support_ticket_debug_source_narration_allows_publishable_evidence(
     opening: str,

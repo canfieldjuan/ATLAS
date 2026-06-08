@@ -1,0 +1,39 @@
+{
+  "blog_post": {
+    "missing_ids": [],
+    "requested_ids": [
+      "2f9ec4e3-475a-4046-9e01-182757d1de20",
+      "44d56e20-d9c8-4626-8e39-e894cb8fd085"
+    ],
+    "updated_ids": [
+      "44d56e20-d9c8-4626-8e39-e894cb8fd085",
+      "2f9ec4e3-475a-4046-9e01-182757d1de20"
+    ]
+  },
+  "landing_page": {
+    "missing_ids": [],
+    "requested_ids": [
+      "49e324c1-f331-404d-bfa4-dcbcb5387027",
+      "2b09400f-a8b9-4787-86dd-ca655686d246",
+      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+    ],
+    "updated_ids": [
+      "49e324c1-f331-404d-bfa4-dcbcb5387027",
+      "2b09400f-a8b9-4787-86dd-ca655686d246",
+      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+    ]
+  },
+  "sales_brief": {
+    "missing_ids": [],
+    "requested_ids": [
+      "33044118-629f-491d-ada6-0aa3fc838222",
+      "e71d3a76-e32a-4891-8879-e6b99d9e58af",
+      "8744dc21-df4e-424e-9a9d-e5cada717886"
+    ],
+    "updated_ids": [
+      "8744dc21-df4e-424e-9a9d-e5cada717886",
+      "e71d3a76-e32a-4891-8879-e6b99d9e58af",
+      "33044118-629f-491d-ada6-0aa3fc838222"
+    ]
+  }
+}

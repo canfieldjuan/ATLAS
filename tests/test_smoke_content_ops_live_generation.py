@@ -1372,11 +1372,14 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "question_like_rows": 2,
         "cluster_count": 2,
     }
-    assert "2 support-ticket rows" in first_section["data_summary"]
-    assert "2 rows were included for generation" in first_section["data_summary"]
+    assert "2 source rows" in first_section["data_summary"]
+    assert "2 usable ticket rows" in first_section["data_summary"]
+    assert "rows were included for generation" not in first_section["data_summary"]
     process_section = payload["sections"][2]
     assert "source_window_days" not in process_section["key_stats"]
     assert process_section["heading"] == "How should old tickets become review-ready FAQ shells?"
+    assert "observed ticket set supports" in process_section["data_summary"]
+    assert "uploaded ticket CSV can produce" not in process_section["data_summary"]
     assert "review-needed shell" in process_section["data_summary"]
 
 
