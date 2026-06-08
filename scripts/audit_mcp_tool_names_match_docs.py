@@ -19,6 +19,7 @@ HEADER_TO_FILE = {
     "Invoicing": "invoicing_server.py",
     "Invoicing Readonly": "invoicing_readonly_server.py",
     "Content Ops Deflection Readonly": "content_ops_deflection_readonly_server.py",
+    "Content Ops Marketer Verify": "content_ops_marketer_verify_server.py",
     "Intelligence": "intelligence_server.py",
     "Universal Scraper": "scraper_server.py",
     "Memory": "memory_server.py",

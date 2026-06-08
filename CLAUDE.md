@@ -204,7 +204,7 @@ atlas_brain/
 ├── escalation/                  # Security event classification + LLM synthesis
 ├── events/                      # System event broadcast (real-time UI feed)
 ├── jobs/                        # Background jobs (e.g. NightlyMemorySync)
-├── mcp/                         # 10 MCP servers (see "MCP Servers" below)
+├── mcp/                         # 12 MCP servers (see "MCP Servers" below)
 │   └── b2b/                     # B2B-churn server module split
 ├── memory/                      # MemoryService, RAG client, token budgeting
 ├── modes/                       # Operating modes (tool groupings, model prefs)
@@ -230,7 +230,7 @@ atlas_brain/
 └── voice/                       # Local voice-to-voice (wake word, VAD, capture, playback)
 ```
 
-### `atlas_brain/mcp/` MCP servers (11)
+### `atlas_brain/mcp/` MCP servers (12)
 
 | Server                  | Port | Tools | Module                                |
 |-------------------------|------|-------|---------------------------------------|
@@ -241,6 +241,7 @@ atlas_brain/
 | Invoicing               | 8060 | 18    | `atlas_brain.mcp.invoicing_server`    |
 | Invoicing Readonly      | 8065 | 8     | `atlas_brain.mcp.invoicing_readonly_server` |
 | Content Ops Deflection Readonly | 8067 | 2 | `atlas_brain.mcp.content_ops_deflection_readonly_server` |
+| Content Ops Marketer Verify | 8068 | 1 | `atlas_brain.mcp.content_ops_marketer_verify_server` |
 | Intelligence            | 8061 | 33    | `atlas_brain.mcp.intelligence_server` |
 | B2B Churn Intelligence  | 8062 | 83    | `atlas_brain.mcp.b2b_churn_server` (split across 17 modules in `mcp/b2b/`) |
 | Universal Scraper       | 8063 | 5     | `atlas_brain.mcp.scraper_server`      |
@@ -352,6 +353,8 @@ ATLAS_MCP_INVOICING_READONLY_ENABLED=true
 ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_ENABLED=false
 ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_ACCOUNT_ID=
 ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_REPORT_BASE_URL=https://atlas.local/content-ops/deflection-reports
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ENABLED=false
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID=
 ATLAS_MCP_INTELLIGENCE_ENABLED=true
 ATLAS_MCP_B2B_CHURN_ENABLED=true
 ATLAS_MCP_CRM_PORT=8056
@@ -361,6 +364,7 @@ ATLAS_MCP_CALENDAR_PORT=8059
 ATLAS_MCP_INVOICING_PORT=8060
 ATLAS_MCP_INVOICING_READONLY_PORT=8065
 ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_PORT=8067
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT=8068
 ATLAS_MCP_INTELLIGENCE_PORT=8061
 ATLAS_MCP_B2B_CHURN_PORT=8062
 
@@ -621,6 +625,23 @@ for one configured tenant binding. It deliberately omits generation, publishing,
 checkout, paid unlock mutation, full report markdown, answers, and evidence.
 OAuth connector binding and public route smokes are deferred to the rollout
 slice.
+
+### Content Ops Marketer Verify MCP Server (1 tools)
+```bash
+# stdio mode
+python -m atlas_brain.mcp.content_ops_marketer_verify_server
+
+# SSE HTTP mode (port 8068, requires ATLAS_MCP_AUTH_TOKEN)
+ATLAS_MCP_AUTH_TOKEN=<token> python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
+```
+
+Tools: `verify_draft`
+
+This verify-only marketer surface accepts structured draft evidence for one
+configured tenant binding and returns the deterministic Content Ops review
+verdict. It deliberately omits generation, publishing, approval, checkout,
+search/fetch adapters, and registry mutation. OAuth connector binding and
+dual-client public route smokes are deferred to the rollout slice.
 
 ### Intelligence MCP Server (33 tools)
 ```bash

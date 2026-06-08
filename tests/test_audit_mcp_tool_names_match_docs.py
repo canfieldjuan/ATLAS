@@ -59,6 +59,20 @@ def test_content_ops_deflection_readonly_header_is_known(auditor):
     assert unknown == []
 
 
+def test_content_ops_marketer_verify_header_is_known(auditor):
+    text = textwrap.dedent("""\
+        ### Content Ops Marketer Verify MCP Server (1 tools)
+
+        Tools: `verify_draft`
+    """)
+
+    claims, unknown = auditor.doc_claims(text)
+
+    assert "Content Ops Marketer Verify" in claims
+    assert claims["Content Ops Marketer Verify"] == {"verify_draft"}
+    assert unknown == []
+
+
 def test_unknown_server_header_surfaces_in_unknown_list(auditor):
     claims, unknown = auditor.doc_claims(UNKNOWN_SECTION)
 

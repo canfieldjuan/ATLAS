@@ -122,6 +122,7 @@ def _write_fixture_repo(repo: Path) -> None:
         "audit_plan_doc.py",
         "audit_plan_doc_files_touched.py",
         "audit_plan_doc_diff_size.py",
+        "audit_ui_test_enrollment.py",
         "pre_push_audit.sh",
     ):
         (repo / "scripts" / name).write_text(
@@ -143,6 +144,8 @@ ATLAS_MCP_TWILIO_PORT=8058
 ATLAS_MCP_CALENDAR_PORT=8059
 ATLAS_MCP_INVOICING_PORT=8060
 ATLAS_MCP_INVOICING_READONLY_PORT=8065
+ATLAS_MCP_CONTENT_OPS_DEFLECTION_READONLY_PORT=8067
+ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT=8068
 ATLAS_MCP_INTELLIGENCE_PORT=8061
 ATLAS_MCP_B2B_CHURN_PORT=8062
 
@@ -170,6 +173,14 @@ python -m atlas_brain.mcp.invoicing_server --sse
 # SSE HTTP mode (port 8065)
 python -m atlas_brain.mcp.invoicing_readonly_server --sse
 {invoicing_readonly_tools}
+### Content Ops Deflection Readonly MCP Server (2 tools)
+# SSE HTTP mode (port 8067)
+python -m atlas_brain.mcp.content_ops_deflection_readonly_server --sse
+{content_ops_deflection_readonly_tools}
+### Content Ops Marketer Verify MCP Server (1 tools)
+# SSE HTTP mode (port 8068)
+python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
+{content_ops_marketer_verify_tools}
 ### Intelligence MCP Server (33 tools)
 # SSE HTTP mode (port 8061)
 python -m atlas_brain.mcp.intelligence_server --sse
@@ -193,6 +204,8 @@ python -m atlas_brain.mcp.memory_server --sse
         calendar_tools=_tool_list(8),
         invoicing_tools=_tool_list(18),
         invoicing_readonly_tools=_tool_list(8),
+        content_ops_deflection_readonly_tools=_tool_list(2),
+        content_ops_marketer_verify_tools=_tool_list(1),
         intelligence_tools=_tool_list(33),
         b2b_tools=_tool_list(83),
         scraper_tools=_tool_list(5),
@@ -213,6 +226,8 @@ class MCPConfig:
     calendar_port: int = Field(default=8059)
     invoicing_port: int = Field(default=8060)
     invoicing_readonly_port: int = Field(default=8065)
+    content_ops_deflection_readonly_port: int = Field(default=8067)
+    content_ops_marketer_verify_port: int = Field(default=8068)
     intelligence_port: int = Field(default=8061)
     b2b_churn_port: int = Field(default=8062)
     scraper_port: int = Field(default=8063)
@@ -231,6 +246,8 @@ def _write_mcp_servers(mcp_dir: Path) -> None:
         "calendar_server.py": 8,
         "invoicing_server.py": 18,
         "invoicing_readonly_server.py": 8,
+        "content_ops_deflection_readonly_server.py": 2,
+        "content_ops_marketer_verify_server.py": 1,
         "intelligence_server.py": 33,
         "scraper_server.py": 5,
         "memory_server.py": 15,

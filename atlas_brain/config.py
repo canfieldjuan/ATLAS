@@ -12,6 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .config_defaults import (
     DEFAULT_CONTENT_OPS_DEFLECTION_READONLY_PORT,
+    DEFAULT_CONTENT_OPS_MARKETER_VERIFY_PORT,
     DEFAULT_INVOICING_READONLY_PORT,
 )
 
@@ -5191,6 +5192,28 @@ class MCPConfig(BaseSettings):
     content_ops_deflection_readonly_report_base_url: str = Field(
         default="https://atlas.local/content-ops/deflection-reports",
         description="Base URL for read-only Content Ops deflection MCP result links.",
+    )
+    content_ops_marketer_verify_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable verify-only Content Ops marketer MCP server. Defaults off "
+            "until an account binding is configured."
+        ),
+    )
+    content_ops_marketer_verify_port: int = Field(
+        default=DEFAULT_CONTENT_OPS_MARKETER_VERIFY_PORT,
+        description=(
+            "Port for authenticated verify-only Content Ops marketer MCP "
+            "server before OAuth rollout."
+        ),
+    )
+    content_ops_marketer_verify_account_id: str = Field(
+        default="",
+        description=(
+            "Direct/test account binding for verify-only Content Ops marketer "
+            "MCP. OAuth mode must replace this with token-bound account "
+            "resolution."
+        ),
     )
     intelligence_port: int = Field(default=8061, description="Port for Intelligence MCP server (SSE transport)")
     b2b_churn_port: int = Field(default=8062, description="Port for B2B Churn Intelligence MCP server (SSE transport)")
