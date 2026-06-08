@@ -30,6 +30,7 @@ REQUIRED_KEYS = (
     "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL",
     "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL",
     "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN",
+    "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID",
 )
 
 
@@ -179,6 +180,8 @@ def _validate_env(env: Mapping[str, str]) -> list[str]:
             "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN must be at least "
             f"{MIN_APPROVAL_TOKEN_LENGTH} characters"
         )
+    if not env.get("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID", "").strip():
+        errors.append("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID is required in oauth mode")
     port = env.get("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT", DEFAULT_PORT).strip()
     try:
         parsed_port = int(port)

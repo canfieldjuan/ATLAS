@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -47,6 +48,9 @@ class _OAuthBase:
 class _OAuthRecord:
     def __init__(self, **kwargs) -> None:
         self.__dict__.update(kwargs)
+
+    def model_dump(self, mode="json"):
+        return dict(self.__dict__)
 
 
 class _OAuthException(Exception):
@@ -105,6 +109,7 @@ from atlas_brain.config import settings
 from atlas_brain.mcp import content_ops_marketer_verify_server as verify
 from atlas_brain.mcp.auth import BearerAuthMiddleware
 from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
+    ContentOpsMarketerVerifyOAuthProvider,
     DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
     validate_oauth_settings,
 )
@@ -146,6 +151,7 @@ def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify, "_registry_reader_override", None)
     monkeypatch.setattr(verify, "_account_resolver_override", None)
     monkeypatch.setattr(verify, "_oauth_provider", None)
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "")
     monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "bearer")
     monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_issuer_url", "")
     monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_oauth_resource_url", "")
@@ -353,6 +359,145 @@ def test_content_ops_marketer_verify_oauth_settings_require_approval_token() -> 
         )
 
 
+@pytest.mark.asyncio
+async def test_content_ops_marketer_oauth_provider_binds_access_and_refresh_tokens() -> None:
+    provider = ContentOpsMarketerVerifyOAuthProvider(
+        issuer_url="https://atlas.example.com/content-ops-marketer",
+        approval_token="approval-token-with-enough-entropy",
+        account_id=" acct-oauth ",
+    )
+    client = _OAuthRecord(client_id="client-1")
+    params = _OAuthRecord(
+        scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        code_challenge="challenge-1",
+        redirect_uri="https://chat.openai.com/aip/callback",
+        redirect_uri_provided_explicitly=True,
+        resource="https://atlas.example.com/content-ops-marketer/mcp",
+        state="state-1",
+    )
+
+    await provider.authorize(client, params)
+    request_id = next(iter(provider._pending))
+    provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = next(iter(provider._authorization_codes))
+    authorization_code = await provider.load_authorization_code(client, code)
+    token = await provider.exchange_authorization_code(client, authorization_code)
+
+    refresh = await provider.load_refresh_token(client, token.refresh_token)
+    refreshed = await provider.exchange_refresh_token(client, refresh, [])
+
+    assert provider.account_id == "acct-oauth"
+    assert provider.account_id_for_access_token(token.access_token) == "acct-oauth"
+    assert provider.account_id_for_access_token(refreshed.access_token) == "acct-oauth"
+
+
+@pytest.mark.asyncio
+async def test_content_ops_marketer_oauth_provider_rejects_unbound_tokens() -> None:
+    provider = ContentOpsMarketerVerifyOAuthProvider(
+        issuer_url="https://atlas.example.com/content-ops-marketer",
+        approval_token="approval-token-with-enough-entropy",
+        account_id="",
+    )
+    client = _OAuthRecord(client_id="client-1")
+    params = _OAuthRecord(
+        scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        code_challenge="challenge-1",
+        redirect_uri="https://chat.openai.com/aip/callback",
+        redirect_uri_provided_explicitly=True,
+        resource="https://atlas.example.com/content-ops-marketer/mcp",
+        state="state-1",
+    )
+
+    await provider.authorize(client, params)
+    request_id = next(iter(provider._pending))
+    provider.approve_pending_authorization(
+        request_id=request_id,
+        approval_token="approval-token-with-enough-entropy",
+    )
+    code = next(iter(provider._authorization_codes))
+    authorization_code = await provider.load_authorization_code(client, code)
+
+    with pytest.raises(_OAuthException, match="tenant-bound"):
+        await provider.exchange_authorization_code(client, authorization_code)
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_oauth_resolves_scope_from_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    provider = ContentOpsMarketerVerifyOAuthProvider(
+        issuer_url="https://atlas.example.com/content-ops-marketer",
+        approval_token="approval-token-with-enough-entropy",
+        account_id="acct-token",
+    )
+    provider._record_token_binding(
+        access_token="access-token-1",
+        refresh_token="refresh-token-1",
+        account_id="acct-token",
+    )
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(verify, "_oauth_provider", provider)
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "oauth")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "acct-config")
+    monkeypatch.setitem(
+        sys.modules,
+        "mcp.server.auth.middleware.auth_context",
+        types.SimpleNamespace(get_access_token=lambda: _OAuthRecord(token="access-token-1")),
+    )
+
+    payload = await verify.verify_draft(**_valid_payload())
+
+    assert payload["ok"] is True
+    assert reader.scopes == [TenantScope(account_id="acct-token")]
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_oauth_blocks_without_bound_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    provider = ContentOpsMarketerVerifyOAuthProvider(
+        issuer_url="https://atlas.example.com/content-ops-marketer",
+        approval_token="approval-token-with-enough-entropy",
+        account_id="acct-token",
+    )
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(verify, "_oauth_provider", provider)
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "oauth")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "acct-config")
+    monkeypatch.setitem(
+        sys.modules,
+        "mcp.server.auth.middleware.auth_context",
+        types.SimpleNamespace(get_access_token=lambda: _OAuthRecord(token="unknown-token")),
+    )
+
+    payload = await verify.verify_draft(**_valid_payload())
+
+    assert payload["ok"] is False
+    assert payload["decision"] == "blocked"
+    assert payload["reasons"] == ["tenant scope required"]
+    assert reader.scopes == []
+
+
+@pytest.mark.asyncio
+async def test_bearer_mode_keeps_configured_account_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "bearer")
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "acct-config")
+
+    payload = await verify.verify_draft(**_valid_payload())
+
+    assert payload["ok"] is True
+    assert reader.scopes == [TenantScope(account_id="acct-config")]
+
+
 def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -374,6 +519,7 @@ def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
         "content_ops_marketer_verify_oauth_approval_token",
         "approval-token-with-enough-entropy",
     )
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "acct-oauth")
     monkeypatch.setattr(
         settings.mcp,
         "content_ops_marketer_verify_oauth_state_file",
@@ -385,6 +531,7 @@ def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
 
     assert not isinstance(app, BearerAuthMiddleware)
     assert provider is not None
+    assert provider.account_id == "acct-oauth"
     assert provider.scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
     assert provider.state_file == state_file
     assert verify.mcp.settings.auth.required_scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
@@ -394,6 +541,31 @@ def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
     ]
     assert verify.mcp._auth_server_provider is provider
     assert verify.mcp._token_verifier.provider is provider
+
+
+def test_content_ops_marketer_verify_oauth_mode_requires_account_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "oauth")
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_issuer_url",
+        "https://atlas.example.com/content-ops-marketer",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_resource_url",
+        "https://atlas.example.com/content-ops-marketer/mcp",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_approval_token",
+        "approval-token-with-enough-entropy",
+    )
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "")
+
+    with pytest.raises(RuntimeError, match="ACCOUNT_ID"):
+        verify._streamable_http_app()
 
 
 def test_content_ops_marketer_verify_oauth_transport_security_allows_configured_hosts() -> None:
