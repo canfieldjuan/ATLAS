@@ -1328,7 +1328,7 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         section["heading"]
         for section in payload["data_context"]["required_section_outline"]
     ] == [
-        "What the uploaded support tickets show",
+        "What repeat support questions show",
         "Which FAQ gaps should be reviewed first",
         "Draft FAQ shells to verify",
         "What to measure after publishing",
@@ -1354,7 +1354,7 @@ def test_support_ticket_blog_blueprint_payload_uses_csv_counts(tmp_path: Path) -
         "Compare future tickets against the observed clusters without claiming causality.",
         (
             "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-            "checkpoints unless the uploaded tickets include a dated source window."
+            "checkpoints unless the provided tickets include a dated source window."
         ),
     ]
     assert "report_date" not in payload["data_context"]

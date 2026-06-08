@@ -63,8 +63,8 @@ _SUPPORT_TICKET_QUESTION_RE = re.compile(
 )
 SUPPORT_TICKET_DESCRIPTIVE_BLOG_MODE = "descriptive_no_outcome"
 _SUPPORT_TICKET_DESCRIPTIVE_ALLOWED_CLAIMS = (
-    "observed support-ticket clusters and counts from the uploaded rows",
-    "customer wording copied from the uploaded tickets",
+    "observed support-ticket clusters and counts from the provided ticket set",
+    "customer wording copied from the provided tickets",
     "review-needed draft FAQ shells",
     "support-team verification work before publishing",
     "metrics to watch after publishing, without claiming those metrics improved",
@@ -84,7 +84,7 @@ _SUPPORT_TICKET_DESCRIPTIVE_FORBIDDEN_CLAIMS = (
     "claims that FAQ entries are discoverable, rank for keywords, or are working",
     (
         "fixed calendar windows, rolling periods, or future tracking intervals "
-        "when uploaded tickets are undated"
+        "when provided tickets are undated"
     ),
     "prioritization by business impact, activation delay, workflow blocking, or friction reduction without evidence",
     "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence",
@@ -95,7 +95,7 @@ _SUPPORT_TICKET_DRAFT_ANSWER_GUIDANCE = (
 _SUPPORT_TICKET_REQUIRED_SECTION_OUTLINE = (
     {
         "id": "observed-ticket-patterns",
-        "heading": "What the uploaded support tickets show",
+        "heading": "What repeat support questions show",
         "allowed_source_fields": (
             "source_row_count",
             "included_ticket_row_count",
@@ -137,7 +137,7 @@ _SUPPORT_TICKET_MEASUREMENT_GUIDANCE = (
     "Compare future tickets against the observed clusters without claiming causality.",
     (
         "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-        "checkpoints unless the uploaded tickets include a dated source window."
+        "checkpoints unless the provided tickets include a dated source window."
     ),
 )
 _SUPPORT_TICKET_MAX_DRAFT_FAQ_SHELLS = 6
@@ -160,6 +160,32 @@ _SUPPORT_TICKET_DESCRIPTIVE_CONTRACT_KEYS = (
     "required_section_outline",
     "draft_faq_shells",
     "measurement_guidance",
+)
+_SUPPORT_TICKET_DEBUG_SOURCE_NARRATION_PATTERNS = (
+    re.compile(
+        r"\bthe uploaded (?:\d+\s+)?"
+        r"(?:csv|file|support[- ]tickets?|support[- ]ticket rows?|"
+        r"ticket rows?|records?|data|dataset) "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
+    ),
+    re.compile(
+        r"\b(?:analysis of|looking at) (?:the )?(?:uploaded )?(?:\d+\s+)?"
+        r"(?:support[- ]tickets?|ticket rows?|records?|data|dataset)\b"
+        r".{0,80}\b(?:contains?|shows?|includes?|reveals?|surfaces?|clusters?)\b"
+    ),
+    re.compile(
+        r"\b(?:the )?dataset of (?:\d+\s+)?(?:support[- ])?tickets? "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
+    ),
+    re.compile(r"\bacross (?:the )?(?:\d+\s+)?rows? in the export\b"),
+    re.compile(
+        r"\bthe support[- ]ticket data "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
+    ),
+    re.compile(
+        r"\bthis export of (?:\d+\s+)?support[- ]tickets? "
+        r"(?:contains?|shows?|includes?|reveals?|surfaces?)\b"
+    ),
 )
 
 
@@ -359,6 +385,13 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "`allowed_claims`, `forbidden_claims`, and `draft_answer_guidance` "
                 "instead of writing benefit or outcome claims."
             )
+            if code.endswith(":debug_source_narration"):
+                instructions.append(
+                    "- Rewrite the draft as publishable customer-facing article prose. "
+                    "Do not open by narrating the upload, CSV, rows, file, or source "
+                    "mechanics. Preserve grounded support-ticket counts and clusters, "
+                    "but frame them as evidence for the reader."
+                )
         elif code.startswith("brand_voice:"):
             if code == "brand_voice:preferred_pov_second_person_not_detected":
                 instructions.append(
@@ -1120,7 +1153,29 @@ def _support_ticket_generated_content_blockers(
         f"support_ticket_generated_content:{error}"
         for error in errors
         if error
-    )
+    ) + _support_ticket_debug_source_narration_blockers(parsed)
+
+
+def _support_ticket_debug_source_narration_blockers(
+    parsed: Mapping[str, Any],
+) -> tuple[str, ...]:
+    text = " ".join(_public_blog_text_parts(parsed)).lower()
+    if any(pattern.search(text) for pattern in _SUPPORT_TICKET_DEBUG_SOURCE_NARRATION_PATTERNS):
+        return ("support_ticket_generated_content:debug_source_narration",)
+    return ()
+
+
+def _public_blog_text_parts(parsed: Mapping[str, Any]) -> tuple[str, ...]:
+    parts = [
+        parsed.get("title"),
+        parsed.get("description"),
+        parsed.get("seo_title"),
+        parsed.get("seo_description"),
+        parsed.get("content"),
+    ]
+    for faq in _mapping_list(parsed.get("faq")):
+        parts.extend((faq.get("question"), faq.get("answer")))
+    return tuple(str(part).strip() for part in parts if str(part or "").strip())
 
 
 def _merged_blog_data_context(
@@ -1387,6 +1442,10 @@ def _with_support_ticket_descriptive_prompt_addendum(
         "Support-ticket descriptive mode instructions:\n"
         "- Write a descriptive support-ticket FAQ planning brief, not a "
         "persuasive ROI article.\n"
+        "- Write publishable customer-facing article prose from the first "
+        "sentence. Do not open by narrating the upload, CSV, export, rows, "
+        "records, dataset, analysis process, or source mechanics; frame "
+        "observed counts and clusters as evidence for the reader.\n"
         "- Use only observed ticket counts, observed clusters, copied customer "
         "wording, and review-needed FAQ shells from the blueprint.\n"
         "- If clusters have the same count, say they are tied. Do not rank tied "

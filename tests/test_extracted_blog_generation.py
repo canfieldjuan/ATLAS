@@ -12,6 +12,7 @@ from extracted_content_pipeline.blog_generation import (
     _is_support_ticket_blog_context,
     _normalize_blog_metadata,
     _quality_policy_for_context,
+    _support_ticket_debug_source_narration_blockers,
     parse_blog_post_response,
     support_ticket_descriptive_blog_contract,
 )
@@ -158,7 +159,7 @@ def _valid_content() -> str:
 def _valid_support_ticket_content(extra: str = "") -> str:
     body = (
         "## What do repeat support tickets show?\n\n"
-        "In the last 90 days, the uploaded 3 support tickets show account "
+        "In the last 90 days, 3 support tickets show account "
         "and reporting questions that customers keep asking. The clearest "
         "answer is that these teams need FAQ entries written in customer "
         "wording before another customer has to email support for the same "
@@ -177,13 +178,13 @@ def _valid_support_ticket_content(extra: str = "") -> str:
 def _large_support_ticket_descriptive_content(word_count: int = 1_000) -> str:
     sentence = (
         "Customers asked support about account email changes, billing exports, "
-        "and report access in the uploaded ticket rows. "
+        "and report access in the provided ticket set. "
     )
     words = sentence.split()
     repeated = (words * ((word_count // len(words)) + 1))[:word_count]
     midpoint = max(1, len(repeated) // 2)
     return (
-        "## What do the uploaded support tickets show?\n\n"
+        "## What repeat support questions show?\n\n"
         + " ".join(repeated[:midpoint])
         + "\n\n## Which repeated questions need clearer answers?\n\n"
         + " ".join(repeated[midpoint:])
@@ -461,12 +462,12 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
     )
     assert (
         "fixed calendar windows, rolling periods, or future tracking intervals "
-        "when uploaded tickets are undated"
+        "when provided tickets are undated"
         in contract["forbidden_claims"]
     )
     assert contract["draft_answer_guidance"].startswith("Draft answer -")
     assert [section["heading"] for section in contract["required_section_outline"]] == [
-        "What the uploaded support tickets show",
+        "What repeat support questions show",
         "Which FAQ gaps should be reviewed first",
         "Draft FAQ shells to verify",
         "What to measure after publishing",
@@ -495,7 +496,7 @@ def test_support_ticket_descriptive_blog_contract_requires_no_outcome_or_resolut
         "Compare future tickets against the observed clusters without claiming causality.",
         (
             "Do not add fixed day, week, month, 30-day, 60-day, or 90-day "
-            "checkpoints unless the uploaded tickets include a dated source window."
+            "checkpoints unless the provided tickets include a dated source window."
         ),
     ]
     assert support_ticket_descriptive_blog_contract({
@@ -1159,6 +1160,150 @@ async def test_generate_repairs_support_ticket_generated_content_failure() -> No
 
 
 @pytest.mark.asyncio
+async def test_generate_blocks_support_ticket_debug_source_narration_without_saving() -> None:
+    content = (
+        "The uploaded support-ticket rows show repeated "
+        "account and reporting questions.\n\n"
+        + _valid_support_ticket_content()
+    )
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[_valid_support_ticket_blog_json(content=content)],
+        config=BlogPostGenerationConfig(
+            parse_retry_attempts=0,
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert "support_ticket_generated_content:debug_source_narration" in result.errors[0]["blockers"]
+    assert blog_posts.saved == []
+
+
+@pytest.mark.parametrize("opening", [
+    "The uploaded CSV contains 36 support-ticket rows with account questions.",
+    "Analysis of the 36 support tickets reveals nine clusters.",
+    "The dataset of 36 tickets shows the same questions coming back.",
+    "Across the 36 rows in the export, nine clusters appear.",
+    "The support ticket data reveals nine recurring topics.",
+    "Looking at the uploaded records, 36 tickets cluster into account questions.",
+    "The uploaded CSV reveals nine clusters across 36 rows.",
+    "This export of 36 support tickets surfaces nine themes.",
+])
+def test_support_ticket_debug_source_narration_blocks_varied_openings(opening: str) -> None:
+    parsed = json.loads(
+        _valid_support_ticket_blog_json(
+            content=f"{opening}\n\n{_valid_support_ticket_content()}"
+        )
+    )
+
+    assert _support_ticket_debug_source_narration_blockers(parsed) == (
+        "support_ticket_generated_content:debug_source_narration",
+    )
+
+
+@pytest.mark.parametrize("opening", [
+    "Support tickets show repeated account and reporting questions.",
+    "In 36 support tickets, account and reporting questions repeat.",
+    "Customers keep asking account and reporting questions in support tickets.",
+])
+def test_support_ticket_debug_source_narration_allows_publishable_evidence(
+    opening: str,
+) -> None:
+    parsed = json.loads(
+        _valid_support_ticket_blog_json(
+            content=f"{opening}\n\n{_valid_support_ticket_content()}"
+        )
+    )
+
+    assert _support_ticket_debug_source_narration_blockers(parsed) == ()
+
+
+@pytest.mark.asyncio
+async def test_generate_repairs_support_ticket_debug_source_narration() -> None:
+    content = (
+        "The uploaded support tickets contain 36 rows with repeated account "
+        "and reporting questions.\n\n"
+        + _valid_support_ticket_content()
+    )
+    repaired_content = (
+        "Support tickets show repeated account and reporting questions that "
+        "customers keep asking.\n\n"
+        + _valid_support_ticket_content()
+    )
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[
+            _valid_support_ticket_blog_json(content=content),
+            _valid_support_ticket_blog_json(content=repaired_content),
+        ],
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=1,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.errors == ()
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert "support_ticket_generated_content:debug_source_narration" in retry_prompt
+    assert "publishable customer-facing article prose" in retry_prompt
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_quality_repair_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_allows_support_ticket_evidence_without_debug_narration() -> None:
+    content = (
+        "Support tickets show repeated account and reporting questions that "
+        "customers keep asking.\n\n"
+        + _valid_support_ticket_content()
+    )
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        rows=[_support_ticket_blueprint()],
+        responses=[_valid_support_ticket_blog_json(content=content)],
+        config=BlogPostGenerationConfig(
+            quality_repair_attempts=0,
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(),
+        target_mode="vendor_retention",
+        limit=1,
+    )
+
+    assert result.generated == 1
+    assert result.errors == ()
+    assert blog_posts.saved
+
+
+@pytest.mark.asyncio
 async def test_generate_saves_descriptive_support_ticket_blog_without_outcome_or_resolution_evidence() -> None:
     descriptive_content = _valid_support_ticket_content(
         "Teams with fewer tickets may have a simpler support queue, but this "
@@ -1223,6 +1368,8 @@ async def test_generate_puts_support_ticket_descriptive_contract_in_prompt() -> 
     assert '"draft_faq_shells":' in user_prompt
     assert '"measurement_guidance":' in user_prompt
     assert "Support-ticket descriptive mode instructions:" in user_prompt
+    assert "publishable customer-facing article prose" in user_prompt
+    assert "Do not open by narrating the upload, CSV, export, rows" in user_prompt
     assert "Do not rank tied clusters by business impact" in user_prompt
     assert (
         "Use `data_context.required_section_outline` as the H2 section order"
