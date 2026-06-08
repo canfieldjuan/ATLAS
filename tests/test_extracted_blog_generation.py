@@ -1008,6 +1008,81 @@ async def test_generate_repairs_geo_quality_block_with_retry_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_repairs_second_person_brand_voice_miss() -> None:
+    repaired_payload = json.loads(_valid_blog_json())
+    repaired_payload["title"] = "Your HubSpot Pricing Pressure Brief"
+    repaired_payload["description"] = (
+        "How you can read renewal pressure before your shortlist changes."
+    )
+    repaired_payload["content"] = (
+        "## What should you watch first?\n\n"
+        "You can read HubSpot pricing pressure through renewal friction, budget "
+        "concerns, and comparison shopping in the supplied evidence.\n\n"
+        + _valid_content()
+    )
+    service, _blueprints, blog_posts, llm, _skills = _service(
+        responses=[_valid_blog_json(), json.dumps(repaired_payload)],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+            quality_repair_attempts=1,
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=1,
+        brand_voice={
+            "account_id": "acct-1",
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 1
+    assert result.errors == ()
+    assert len(llm.calls) == 2
+    retry_prompt = llm.calls[1]["messages"][1].content
+    assert "brand_voice:preferred_pov_second_person_not_detected" in retry_prompt
+    assert "Rewrite the draft in second-person voice" in retry_prompt
+    draft = blog_posts.saved[0]["drafts"][0]
+    assert draft.metadata["generation_quality_repair_attempts"] == 1
+    assert draft.metadata["brand_voice_audit"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_blocks_second_person_brand_voice_miss_without_repair() -> None:
+    service, _blueprints, blog_posts, _llm, _skills = _service(
+        responses=[_valid_blog_json()],
+        config=BlogPostGenerationConfig(
+            quality_policy=QualityPolicy(
+                name="blog_post",
+                thresholds={"min_words": 20, "target_words": 20, "pass_score": 0},
+            ),
+            quality_repair_attempts=0,
+        ),
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        limit=1,
+        brand_voice={
+            "account_id": "acct-1",
+            "preferred_pov": "second_person",
+        },
+    )
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    assert result.errors[0]["reason"] == "quality_blocked"
+    assert "brand_voice:preferred_pov_second_person_not_detected" in result.errors[0]["blockers"]
+    assert blog_posts.saved == []
+
+
+@pytest.mark.asyncio
 async def test_generate_blocks_support_ticket_generated_content_failure_without_saving() -> None:
     service, _blueprints, blog_posts, _llm, _skills = _service(
         rows=[_support_ticket_blueprint()],

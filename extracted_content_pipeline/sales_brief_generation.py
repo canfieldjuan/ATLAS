@@ -51,6 +51,7 @@ from .brand_voice import (
     BrandVoiceProfile,
     apply_brand_voice_to_system_prompt,
     brand_voice_profile_from_mapping,
+    brand_voice_quality_blockers,
     brand_voice_result_metadata,
 )
 from .campaign_source_adapters import (
@@ -578,10 +579,11 @@ class SalesBriefGenerationService:
         *,
         quality_gates_enabled: bool = True,
     ) -> dict[str, Any]:
-        # PR-OptionA-4: opt out of the quality gate per call. Same shape
-        # as the landing-page service.
+        # PR-OptionA-4: callers can opt out of the generic quality gate,
+        # but selected brand voice remains a caller-visible contract.
         if not quality_gates_enabled:
-            return {"passed": True, "blockers": ()}
+            blockers = brand_voice_quality_blockers(parsed)
+            return {"passed": not blockers, "blockers": blockers}
         brief_input = QualityInput(
             artifact_type="sales_brief",
             context={
@@ -595,9 +597,10 @@ class SalesBriefGenerationService:
             },
         )
         report = evaluate_sales_brief(brief_input, policy=self._config.quality_policy)
+        brand_voice_blockers = brand_voice_quality_blockers(parsed)
         return {
-            "passed": report.passed,
-            "blockers": tuple(f.message for f in report.blockers),
+            "passed": report.passed and not brand_voice_blockers,
+            "blockers": tuple(f.message for f in report.blockers) + brand_voice_blockers,
         }
 
     def _build_draft(

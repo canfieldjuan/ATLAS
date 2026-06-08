@@ -20,6 +20,7 @@ from .brand_voice import (
     BrandVoiceProfile,
     apply_brand_voice_to_system_prompt,
     brand_voice_profile_from_mapping,
+    brand_voice_quality_blockers,
     brand_voice_result_metadata,
 )
 from .content_image_provider import (
@@ -358,6 +359,35 @@ def _blog_quality_repair_guidance(blockers: Sequence[str]) -> str:
                 "`allowed_claims`, `forbidden_claims`, and `draft_answer_guidance` "
                 "instead of writing benefit or outcome claims."
             )
+        elif code.startswith("brand_voice:"):
+            if code == "brand_voice:preferred_pov_second_person_not_detected":
+                instructions.append(
+                    "- Rewrite the draft in second-person voice. Use `you` or `your` "
+                    "naturally in the title, description, content, and FAQ copy where "
+                    "it fits, while preserving the supplied facts and evidence."
+                )
+            elif code.startswith("brand_voice:banned_term:"):
+                term = code.rsplit(":", 1)[-1]
+                instructions.append(
+                    f"- Remove the banned brand-voice term `{term}` from every field. "
+                    "Replace it with plain wording that preserves the same grounded "
+                    "meaning."
+                )
+            elif code == "brand_voice:reading_level_concise_exceeded":
+                instructions.append(
+                    "- Shorten long sentences and make the wording concise while "
+                    "preserving the grounded claims."
+                )
+            elif code == "brand_voice:reading_level_plain_exceeded":
+                instructions.append(
+                    "- Simplify long sentences into plain, accessible wording while "
+                    "preserving the grounded claims."
+                )
+            else:
+                instructions.append(
+                    "- Fix the brand-voice blocker without changing grounded claims, "
+                    "evidence, measurements, or source details."
+                )
     if not instructions:
         instructions.append(
             "- Fix each blocker directly while preserving the required blog JSON "
@@ -833,10 +863,11 @@ class BlogPostGenerationService:
         blueprint: Mapping[str, Any],
         quality_gates_enabled: bool = True,
     ) -> dict[str, Any]:
-        # PR-OptionA-5: opt out of the quality gate per call. Same shape
-        # as report / sales_brief / landing_page.
+        # PR-OptionA-5: callers can opt out of the generic quality gate,
+        # but selected brand voice remains a caller-visible contract.
         if not quality_gates_enabled:
-            return {"passed": True, "blockers": ()}
+            blockers = brand_voice_quality_blockers(parsed)
+            return {"passed": not blockers, "blockers": blockers}
         context = _quality_context(parsed, blueprint)
         quality = evaluate_blog_post(
             QualityInput(
@@ -854,9 +885,18 @@ class BlogPostGenerationService:
             parsed,
             blueprint=blueprint,
         )
+        brand_voice_blockers = brand_voice_quality_blockers(parsed)
         return {
-            "passed": quality.passed and not support_ticket_blockers,
-            "blockers": tuple(f.message for f in quality.blockers) + support_ticket_blockers,
+            "passed": (
+                quality.passed
+                and not support_ticket_blockers
+                and not brand_voice_blockers
+            ),
+            "blockers": (
+                tuple(f.message for f in quality.blockers)
+                + support_ticket_blockers
+                + brand_voice_blockers
+            ),
         }
 
     def _build_draft(
