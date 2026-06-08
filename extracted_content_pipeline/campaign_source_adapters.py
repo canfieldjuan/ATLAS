@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-import csv
 import json
 from pathlib import Path
 import re
@@ -12,6 +11,7 @@ from typing import Any, Literal
 from .campaign_customer_data import (
     CampaignOpportunityLoadResult,
     CampaignOpportunityWarning,
+    _load_csv_dict_rows,
     normalize_campaign_opportunity_rows,
 )
 from .campaign_opportunities import normalize_campaign_opportunity
@@ -694,18 +694,7 @@ def _is_safe_parent_value(value: Any) -> bool:
 
 
 def _load_source_csv_rows(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames:
-            return rows
-        for row in reader:
-            rows.append({
-                str(key): value
-                for key, value in row.items()
-                if key is not None and value not in (None, "")
-            })
-    return rows
+    return _load_csv_dict_rows(path)
 
 
 def _resolve_format(

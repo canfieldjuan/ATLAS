@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import csv
 from dataclasses import dataclass
+from io import StringIO
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -17,6 +18,8 @@ from .campaign_ports import TenantScope
 
 
 CustomerDataFormat = Literal["auto", "json", "csv"]
+_CSV_DETECT_DELIMITERS = ",;\t|"
+_CSV_SNIFFER_SAMPLE_CHARS = 65_536
 
 
 @dataclass(frozen=True)
@@ -214,21 +217,63 @@ def _load_json_rows(path: Path) -> list[Any]:
 
 
 def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+    return _load_csv_dict_rows(path, value_coercer=_coerce_csv_value)
+
+
+def _load_csv_dict_rows(
+    path: Path,
+    *,
+    value_coercer: Callable[[Any], Any] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames:
-            return []
-        for row in reader:
-            cleaned: dict[str, Any] = {}
-            for key, value in row.items():
-                if key is None:
-                    continue
-                cleaned_value = _coerce_csv_value(value)
-                if cleaned_value not in (None, ""):
-                    cleaned[str(key)] = cleaned_value
-            rows.append(cleaned)
+    text = _read_csv_text(path)
+    if not text.strip():
+        raise ValueError("CSV customer data must include a header row.")
+    reader = csv.DictReader(
+        StringIO(text),
+        dialect=_detect_csv_dialect(text),
+    )
+    fieldnames = tuple(
+        str(field).strip()
+        for field in (reader.fieldnames or ())
+        if field is not None and str(field).strip()
+    )
+    if not fieldnames:
+        raise ValueError("CSV customer data must include a header row.")
+    for row_index, row in enumerate(reader, start=2):
+        if row.get(None):
+            raise ValueError(
+                f"CSV row {row_index} has more cells than the header; "
+                "check the delimiter and header row."
+            )
+        cleaned: dict[str, Any] = {}
+        for key, value in row.items():
+            if key is None:
+                continue
+            cleaned_key = str(key).strip()
+            if not cleaned_key:
+                continue
+            cleaned_value = value_coercer(value) if value_coercer else value
+            if cleaned_value not in (None, ""):
+                cleaned[cleaned_key] = cleaned_value
+        rows.append(cleaned)
     return rows
+
+
+def _read_csv_text(path: Path) -> str:
+    data = path.read_bytes()
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return data.decode("cp1252", errors="replace")
+
+
+def _detect_csv_dialect(text: str) -> csv.Dialect:
+    sample = text[:_CSV_SNIFFER_SAMPLE_CHARS]
+    try:
+        return csv.Sniffer().sniff(sample, delimiters=_CSV_DETECT_DELIMITERS)
+    except csv.Error:
+        return csv.excel
 
 
 def _coerce_csv_value(value: Any) -> Any:

@@ -82,6 +82,77 @@ def test_load_campaign_opportunities_from_csv_coerces_json_cells_and_warns(
     assert loaded.warnings[0].row_index == 2
 
 
+def test_load_campaign_opportunities_from_csv_strips_utf8_bom_header(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "opportunities.csv"
+    path.write_bytes(
+        (
+            "\ufeffid,company,vendor,email\n"
+            "opp-1,Acme,HubSpot,buyer@example.com\n"
+        ).encode("utf-8")
+    )
+
+    loaded = load_campaign_opportunities_from_file(path)
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["target_id"] == "opp-1"
+    assert loaded.opportunities[0]["company_name"] == "Acme"
+
+
+def test_load_campaign_opportunities_from_csv_falls_back_for_cp1252_exports(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "opportunities.csv"
+    path.write_bytes(
+        (
+            "id,company,vendor,email,pain_category\n"
+            "opp-1,Acme,HubSpot,buyer@example.com,Buyer\u2019s renewal costs rose\n"
+        ).encode("cp1252")
+    )
+
+    loaded = load_campaign_opportunities_from_file(path)
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["pain_points"] == ["Buyer\u2019s renewal costs rose"]
+
+
+def test_load_campaign_opportunities_from_semicolon_csv_detects_delimiter(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "opportunities.csv"
+    path.write_text(
+        "\n".join([
+            "id;company;vendor;email;pain_category",
+            "opp-1;Acme;HubSpot;buyer@example.com;pricing",
+        ]),
+        encoding="utf-8",
+    )
+
+    loaded = load_campaign_opportunities_from_file(path)
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["target_id"] == "opp-1"
+    assert loaded.opportunities[0]["vendor_name"] == "HubSpot"
+
+
+def test_load_campaign_opportunities_from_csv_fails_on_leading_metadata_row(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "opportunities.csv"
+    path.write_text(
+        "\n".join([
+            "Zendesk ticket export",
+            "id,company,vendor,email",
+            "opp-1,Acme,HubSpot,buyer@example.com",
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="more cells than the header"):
+        load_campaign_opportunities_from_file(path)
+
+
 def test_normalize_campaign_opportunity_rows_skips_non_object_rows() -> None:
     loaded = normalize_campaign_opportunity_rows(
         [
