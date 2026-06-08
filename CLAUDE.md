@@ -653,6 +653,14 @@ python -m atlas_brain.mcp.content_ops_marketer_verify_server --sse
 .venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \
   --issuer-url <public-issuer-url> \
   --resource-url <public-resource-url>/mcp \
+  --client-profile claude-rich \
+  --approval-token-file /path/to/local-approval-token
+
+# ChatGPT proven connector adapter smoke once a search/fetch surface exists
+.venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \
+  --issuer-url <public-issuer-url> \
+  --resource-url <public-resource-url>/mcp \
+  --client-profile chatgpt-search-fetch \
   --approval-token-file /path/to/local-approval-token
 ```
 
@@ -662,8 +670,9 @@ This verify-only marketer surface accepts structured draft evidence for one
 configured tenant binding and returns the deterministic Content Ops review
 verdict. It deliberately omits generation, publishing, checkout, search/fetch
 adapters, and registry mutation. OAuth mode adds the server-side connector auth
-boundary and operator approval gate; dual-client route smokes and token-derived
-tenant binding are deferred to later rollout slices.
+boundary, operator approval gate, and token-bound tenant binding. The current
+Claude-rich e2e profile expects exactly `verify_draft`; the deferred ChatGPT
+profile expects a separate adapter surface with exactly search and fetch.
 
 ### Intelligence MCP Server (33 tools)
 ```bash

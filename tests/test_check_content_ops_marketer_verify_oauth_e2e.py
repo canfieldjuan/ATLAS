@@ -39,9 +39,11 @@ def _args(**overrides):
 
 def test_content_ops_e2e_defaults_to_verify_scope() -> None:
     module = _load_script_module()
+    args = module._build_parser().parse_args([])
 
     assert module.DEFAULT_SCOPE == "content_ops.review.verify"
     assert module.EXPECTED_TOOLS == {"verify_draft"}
+    assert args.client_profile == "claude-rich"
 
 
 def test_config_from_args_requires_content_ops_values() -> None:
@@ -168,6 +170,15 @@ def test_tool_surface_errors_accept_exact_verify_tool() -> None:
     assert module._tool_surface_errors({"verify_draft"}) == []
 
 
+def test_tool_surface_errors_accept_chatgpt_search_fetch_profile() -> None:
+    module = _load_script_module()
+
+    assert module._tool_surface_errors(
+        {"search", "fetch"},
+        module.CHATGPT_SEARCH_FETCH_PROFILE,
+    ) == []
+
+
 def test_tool_surface_errors_reject_extra_and_denied_tools() -> None:
     module = _load_script_module()
 
@@ -175,6 +186,32 @@ def test_tool_surface_errors_reject_extra_and_denied_tools() -> None:
 
     assert "unexpected tools exposed: start_brief, surprise_tool" in errors
     assert "denied tools exposed: start_brief" in errors
+
+
+def test_tool_surface_errors_chatgpt_profile_rejects_verify_draft_surface() -> None:
+    module = _load_script_module()
+
+    errors = module._tool_surface_errors(
+        {"verify_draft"},
+        module.CHATGPT_SEARCH_FETCH_PROFILE,
+    )
+
+    assert (
+        "missing Content Ops marketer tools for chatgpt-search-fetch: fetch, search"
+        in errors
+    )
+    assert "unexpected tools exposed: verify_draft" in errors
+    assert "denied tools exposed: verify_draft" in errors
+    assert any("requires a search/fetch adapter surface" in error for error in errors)
+
+
+def test_tool_surface_errors_claude_profile_rejects_adapter_tools() -> None:
+    module = _load_script_module()
+
+    errors = module._tool_surface_errors({"verify_draft", "fetch", "search"})
+
+    assert "unexpected tools exposed: fetch, search" in errors
+    assert "denied tools exposed: fetch, search" in errors
 
 
 def test_main_requires_config_before_network(monkeypatch, capsys) -> None:
@@ -216,9 +253,41 @@ def test_main_reports_success_without_printing_secrets(monkeypatch, capsys) -> N
 
     captured = capsys.readouterr()
     assert result == 0
-    assert "Content Ops marketer verify OAuth e2e smoke completed" in captured.out
+    assert (
+        "Content Ops marketer verify OAuth e2e smoke completed for claude-rich"
+        in captured.out
+    )
     assert "secret-approval-token-value" not in captured.out
     assert "verify_draft" in captured.out
+
+
+def test_main_reports_chatgpt_profile_success(monkeypatch, capsys) -> None:
+    module = _load_script_module()
+
+    async def fake_run(_config):
+        return {"search", "fetch"}
+
+    monkeypatch.setattr(module, "_run_smoke", fake_run)
+
+    result = module._main(
+        [
+            "--issuer-url",
+            "https://atlas.example.com/content-ops-marketer",
+            "--resource-url",
+            "https://atlas.example.com/content-ops-marketer/mcp",
+            "--approval-token",
+            "secret-approval-token-value",
+            "--client-profile",
+            "chatgpt-search-fetch",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "completed for chatgpt-search-fetch" in captured.out
+    assert "adapter tools" in captured.out
+    assert "- fetch" in captured.out
+    assert "- search" in captured.out
 
 
 def test_main_reports_tool_surface_errors(monkeypatch, capsys) -> None:
@@ -244,6 +313,33 @@ def test_main_reports_tool_surface_errors(monkeypatch, capsys) -> None:
     assert result == 1
     assert "unexpected tools exposed: start_brief" in captured.err
     assert "denied tools exposed: start_brief" in captured.err
+
+
+def test_main_reports_chatgpt_profile_mismatch(monkeypatch, capsys) -> None:
+    module = _load_script_module()
+
+    async def fake_run(_config):
+        return {"verify_draft"}
+
+    monkeypatch.setattr(module, "_run_smoke", fake_run)
+
+    result = module._main(
+        [
+            "--issuer-url",
+            "https://atlas.example.com/content-ops-marketer",
+            "--resource-url",
+            "https://atlas.example.com/content-ops-marketer/mcp",
+            "--approval-token",
+            "secret-approval-token-value",
+            "--client-profile",
+            "chatgpt-search-fetch",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "missing Content Ops marketer tools for chatgpt-search-fetch" in captured.err
+    assert "verify_draft is Claude-rich only" in captured.err
 
 
 def test_run_smoke_sequence_lists_tools_without_calling_verify_draft(monkeypatch) -> None:
