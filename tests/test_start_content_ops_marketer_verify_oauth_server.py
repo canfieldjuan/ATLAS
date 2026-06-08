@@ -49,6 +49,7 @@ def _valid_env():
         "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN": (
             "approval-token-with-enough-entropy"
         ),
+        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID": "acct-content-ops-demo",
         "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT": "8068",
     }
 
@@ -69,6 +70,34 @@ def test_validate_env_rejects_short_token_and_bad_port() -> None:
 
     assert any("APPROVAL_TOKEN" in error for error in errors)
     assert any("between 1 and 65535" in error for error in errors)
+
+
+def test_validate_env_rejects_missing_account_id() -> None:
+    module = _load_script_module()
+    env = _valid_env()
+    env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID"] = " "
+
+    errors = module._validate_env(env)
+
+    assert errors == [
+        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID is required in oauth mode"
+    ]
+
+
+def test_main_dry_run_rejects_missing_account_id(monkeypatch, capsys) -> None:
+    module = _load_script_module()
+    monkeypatch.setenv(
+        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN",
+        "approval-token-with-enough-entropy",
+    )
+    monkeypatch.delenv("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID", raising=False)
+
+    exit_code = module._main(["--dry-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID is required" in captured.err
+    assert "Starting server:" not in captured.out
 
 
 def test_validate_env_rejects_non_oauth_mode_and_non_public_urls() -> None:
@@ -248,6 +277,7 @@ def test_guidance_masks_secrets_and_prints_content_ops_smokes(capsys) -> None:
 
     captured = capsys.readouterr()
     assert "SET len=34" in captured.out
+    assert "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID=acct-content-ops-demo" in captured.out
     assert "approval-token-with-enough-entropy" not in captured.out
     assert "bearer-token-value-that-must-not-print" not in captured.out
     assert "--set-path /content-ops-marketer" in captured.out
@@ -287,6 +317,7 @@ def test_main_dry_run_does_not_start_subprocess(monkeypatch, tmp_path, capsys) -
                 "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN=approval-token-with-enough-entropy",
                 "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL=https://atlas.example.com/content-ops-marketer",
                 "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL=https://atlas.example.com/content-ops-marketer/mcp",
+                "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID=acct-content-ops-demo",
             ]
         )
         + "\n"

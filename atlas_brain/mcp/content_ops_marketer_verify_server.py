@@ -25,6 +25,7 @@ from extracted_content_pipeline.content_pr import (
 from .._content_ops_claim_registry import ContentOpsClaimRegistryRepository
 from .._content_ops_review_workflow import (
     ContentOpsReviewRequest,
+    ContentOpsAccountResolver,
     TenantClaimRegistryReader,
     run_content_ops_review_for_bound_tenant,
 )
@@ -49,7 +50,7 @@ _PLACEHOLDER_HTTP_AUTH_TOKENS = {
 }
 _MALFORMED_COVERAGE_RULE_PREFIX = "MALFORMED-COVERAGE"
 _registry_reader_override: TenantClaimRegistryReader | None = None
-_account_resolver_override: "StaticContentOpsMarketerAccountResolver | None" = None
+_account_resolver_override: ContentOpsAccountResolver | None = None
 _oauth_provider = None
 
 
@@ -70,6 +71,25 @@ class ConfiguredContentOpsMarketerAccountResolver:
         from ..config import settings
 
         return _clean(settings.mcp.content_ops_marketer_verify_account_id) or None
+
+
+@dataclass(frozen=True)
+class OAuthContentOpsMarketerAccountResolver:
+    """Resolve the bound tenant account from the authenticated OAuth token."""
+
+    provider: Any
+    access_token: Any | None = None
+
+    async def resolve_account_id(self) -> str | None:
+        token = self.access_token
+        if token is None:
+            from mcp.server.auth.middleware.auth_context import get_access_token
+
+            token = get_access_token()
+        token_value = _clean(getattr(token, "token", ""))
+        if not token_value:
+            return None
+        return _clean(self.provider.account_id_for_access_token(token_value)) or None
 
 
 @asynccontextmanager
@@ -228,12 +248,18 @@ def _configure_oauth_auth():
     issuer_url = _clean(settings.mcp.content_ops_marketer_verify_oauth_issuer_url)
     resource_url = _clean(settings.mcp.content_ops_marketer_verify_oauth_resource_url)
     approval_token = _clean(settings.mcp.content_ops_marketer_verify_oauth_approval_token)
+    account_id = _clean(settings.mcp.content_ops_marketer_verify_account_id)
     state_file = _clean(settings.mcp.content_ops_marketer_verify_oauth_state_file) or None
     validate_oauth_settings(
         issuer_url=issuer_url,
         resource_server_url=resource_url,
         approval_token=approval_token,
     )
+    if not account_id:
+        raise RuntimeError(
+            "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID is required in oauth "
+            "mode to issue tenant-bound tokens"
+        )
     mcp.settings.transport_security = _oauth_transport_security_settings(
         issuer_url=issuer_url,
         resource_url=resource_url,
@@ -245,6 +271,7 @@ def _configure_oauth_auth():
     provider = ContentOpsMarketerVerifyOAuthProvider(
         issuer_url=issuer_url,
         approval_token=approval_token,
+        account_id=account_id,
         scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
         state_file=state_file,
     )
@@ -300,7 +327,12 @@ def _host_header_variants(url: str) -> set[str]:
 
 
 def _get_account_resolver():
-    return _account_resolver_override or ConfiguredContentOpsMarketerAccountResolver()
+    if _account_resolver_override is not None:
+        return _account_resolver_override
+    if _http_auth_mode() == _AUTH_MODE_OAUTH:
+        provider = _oauth_provider or _configure_oauth_auth()
+        return OAuthContentOpsMarketerAccountResolver(provider=provider)
+    return ConfiguredContentOpsMarketerAccountResolver()
 
 
 def _get_registry_reader() -> TenantClaimRegistryReader:
