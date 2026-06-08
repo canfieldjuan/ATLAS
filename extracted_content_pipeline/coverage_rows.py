@@ -10,6 +10,20 @@ from .content_pr import CoverageRow, CoverageStatus
 
 _QUALITY_NAMESPACE = "QUALITY-GATE"
 _BRAND_VOICE_NAMESPACE = "BRAND-VOICE"
+_QUALITY_BLOCKING_FIELDS = ("decision", "verdict", "outcome")
+_QUALITY_BLOCKING_VALUES = (
+    "approval_required",
+    "block",
+    "blocked",
+    "blocking",
+    "deny",
+    "denied",
+    "fail",
+    "failed",
+    "failure",
+    "reject",
+    "rejected",
+)
 
 
 def quality_gate_coverage_rows(
@@ -25,6 +39,7 @@ def quality_gate_coverage_rows(
 
     passed = _get(report, "passed")
     passed = passed if isinstance(passed, bool) else None
+    contradiction = _quality_gate_contradiction(report, passed)
     rows: list[CoverageRow] = []
     for index, finding in enumerate(_items(_get(report, "findings")), start=1):
         code, message, severity, field = _finding_parts(finding)
@@ -40,6 +55,17 @@ def quality_gate_coverage_rows(
 
     if any(row.required and row.status == CoverageStatus.FAIL for row in rows):
         return tuple(rows)
+    if contradiction is not None:
+        field, value = contradiction
+        return (
+            _row(
+                namespace,
+                f"contradictory-{field}",
+                f"quality report {field} agrees with passed flag",
+                evidence=f"passed=True but {field}={value}",
+            ),
+            *rows,
+        )
     if passed is True:
         return (_row(namespace, "report", "quality report passes deterministic gates", status=CoverageStatus.PASS, evidence="quality report passed"), *rows)
     if passed is False:
@@ -103,6 +129,16 @@ def _finding_parts(value: Any) -> tuple[str, str, str, str]:
     )
 
 
+def _quality_gate_contradiction(report: Any, passed: bool | None) -> tuple[str, str] | None:
+    if passed is not True:
+        return None
+    for field in _QUALITY_BLOCKING_FIELDS:
+        value = _signal_token(_get(report, field))
+        if value in _QUALITY_BLOCKING_VALUES:
+            return field, value
+    return None
+
+
 def _items(value: Any) -> tuple[Any, ...]:
     if value is None:
         return ()
@@ -135,6 +171,11 @@ def _code(value: str) -> str:
 def _enum_value(value: Any) -> Any:
     enum_value = getattr(value, "value", None)
     return enum_value if isinstance(enum_value, str) else value
+
+
+def _signal_token(value: Any) -> str:
+    raw = _clean(_enum_value(value)).lower()
+    return "_".join("".join(char if char.isalnum() else "_" for char in raw).split("_"))
 
 
 def _clean(value: Any) -> str:
