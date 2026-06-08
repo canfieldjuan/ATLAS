@@ -31,7 +31,8 @@ from smoke_content_ops_live_generation import (  # noqa: E402
 )
 
 
-DEFAULT_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
+DEFAULT_OUTPUTS = ("email_campaign", "landing_page", "blog_post", "sales_brief")
+SEQUENCE_OUTPUTS = frozenset({"email_campaign"})
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_saas_demo_sources.csv"
 )
@@ -443,6 +444,9 @@ async def export_saved_drafts(
     from extracted_content_pipeline.blog_post_postgres import (  # noqa: PLC0415
         PostgresBlogPostRepository,
     )
+    from extracted_content_pipeline.campaign_postgres_export import (  # noqa: PLC0415
+        list_campaign_drafts,
+    )
     from extracted_content_pipeline.landing_page_export import (  # noqa: PLC0415
         export_landing_page_drafts,
     )
@@ -457,6 +461,19 @@ async def export_saved_drafts(
     )
 
     exports: dict[str, Mapping[str, Any]] = {}
+    campaign_ids = saved_ids.get("email_campaign") or ()
+    if campaign_ids:
+        export = await list_campaign_drafts(
+            pool,
+            scope=scope,
+            statuses=("approved",),
+            target_mode=target_mode,
+            limit=max(100, len(campaign_ids)),
+        )
+        exports["email_campaign"] = _filter_saved_draft_export_rows(
+            export.as_dict(),
+            campaign_ids,
+        )
     landing_ids = saved_ids.get("landing_page") or ()
     if landing_ids:
         export = await export_landing_page_drafts(
@@ -518,7 +535,7 @@ def _execution_errors(
         if not saved_ids.get(output):
             errors.append(f"{output} returned no saved_ids")
         payload = _step_payload(result, output)
-        if int(payload.get("variant_count") or 0) <= 1:
+        if output not in SEQUENCE_OUTPUTS and int(payload.get("variant_count") or 0) <= 1:
             errors.append(f"{output} did not report multiple variants")
     return errors
 
@@ -541,6 +558,9 @@ def variant_persistence_errors(
 ) -> list[str]:
     errors: list[str] = []
     for output in DEFAULT_OUTPUTS:
+        if output in SEQUENCE_OUTPUTS:
+            errors.extend(_sequence_persistence_errors(output, saved_ids, exports))
+            continue
         successful_variants = _successful_variant_count(result, output)
         if successful_variants <= 1:
             continue
@@ -560,6 +580,30 @@ def variant_persistence_errors(
                 f"{export_count} exported row(s)"
             )
     return errors
+
+
+def _sequence_persistence_errors(
+    output: str,
+    saved_ids: Mapping[str, Sequence[str]],
+    exports: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    raw_ids = [
+        str(item).strip()
+        for item in saved_ids.get(output, ())
+        if str(item).strip()
+    ]
+    if not raw_ids:
+        return []
+    unique_ids = tuple(dict.fromkeys(raw_ids))
+    export_count = int(_mapping(exports.get(output)).get("count") or 0)
+    if len(unique_ids) == len(raw_ids) and export_count >= len(raw_ids):
+        return []
+    return [
+        f"{output} sequence persistence collapsed: "
+        f"{len(raw_ids)} saved id entr{'y' if len(raw_ids) == 1 else 'ies'}, "
+        f"{len(unique_ids)} unique saved id(s), "
+        f"{export_count} exported row(s)"
+    ]
 
 
 def _successful_variant_count(result: Mapping[str, Any] | None, output: str) -> int:

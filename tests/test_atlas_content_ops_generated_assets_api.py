@@ -177,6 +177,11 @@ class _MemoryLandingPageRepository:
         return None
 
 
+class _CampaignReviewResult:
+    def __init__(self, rows: tuple[dict[str, Any], ...]) -> None:
+        self.rows = rows
+
+
 def test_api_aggregator_mounts_generated_asset_routes() -> None:
     api_pkg = _fresh_api_package()
 
@@ -187,6 +192,82 @@ def test_api_aggregator_mounts_generated_asset_routes() -> None:
     assert "/content-assets/{asset}/drafts/review" in paths
     assert "/content-assets/landing_page/public/sitemap.xml" in paths
     assert "/content-assets/landing_page/public/{landing_page_id}" in paths
+
+
+@pytest.mark.asyncio
+async def test_email_campaign_batch_review_delegates_to_campaign_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline.api import generated_assets
+
+    campaign_ids = (
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def _review_campaign_drafts(pool: Any, **kwargs: Any) -> _CampaignReviewResult:
+        calls.append({"pool": pool, **kwargs})
+        return _CampaignReviewResult((
+            {"id": campaign_ids[0]},
+            {"id": campaign_ids[1]},
+        ))
+
+    monkeypatch.setattr(
+        generated_assets,
+        "review_campaign_drafts",
+        _review_campaign_drafts,
+    )
+
+    pool = object()
+    scope = TenantScope(account_id="acct-campaign-review")
+    updated = await generated_assets._update_asset_statuses(
+        "email_campaign",
+        pool,
+        asset_ids=campaign_ids,
+        status="approved",
+        scope=scope,
+    )
+
+    assert updated == list(campaign_ids)
+    assert calls == [{
+        "pool": pool,
+        "campaign_ids": campaign_ids,
+        "status": "approved",
+        "scope": scope,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_email_campaign_review_rejects_unsupported_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline.api import generated_assets
+
+    calls: list[dict[str, Any]] = []
+
+    async def _review_campaign_drafts(pool: Any, **kwargs: Any) -> _CampaignReviewResult:
+        calls.append({"pool": pool, **kwargs})
+        return _CampaignReviewResult(())
+
+    monkeypatch.setattr(
+        generated_assets,
+        "review_campaign_drafts",
+        _review_campaign_drafts,
+    )
+
+    with pytest.raises(generated_assets.HTTPException) as exc_info:
+        await generated_assets._update_asset_statuses(
+            "email_campaign",
+            object(),
+            asset_ids=("11111111-1111-4111-8111-111111111111",),
+            status="rejected",
+            scope=TenantScope(account_id="acct-campaign-review"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "email_campaign review status" in exc_info.value.detail
+    assert calls == []
 
 
 def test_generated_asset_routes_use_shared_content_ops_auth_scope_and_pool() -> None:
