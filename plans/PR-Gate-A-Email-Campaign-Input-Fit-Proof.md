@@ -20,11 +20,21 @@ first live attempt exposed two harness input-fit failures:
    fixture's `example.com` source URLs and the existing placeholder URL guard
    correctly skipped every draft.
 
-This PR keeps the slice narrow: fix that harness input fit, commit the live
-proof artifacts, and report the generated samples for reviewer judgment.
+Review on #1394 then exposed a correctness failure in the first committed
+sample: the model fabricated source-volume/count claims such as "40+ queues"
+and unsupported percentages. This update keeps the slice in the same lane but
+closes that proof gap inline because a fabricated proof artifact cannot satisfy
+Gate A. The fix adds an upstream sparse-support-ticket grounding path for the
+exact one-ticket fixture and expands fail-closed validation for unsupported
+numeric, scan, aggregate, timing, recurrence, and queue/support-traffic claims.
+
+This PR keeps the slice narrow: fix harness input fit, make sparse one-ticket
+campaign output grounded by construction, commit the live proof artifacts, and
+report the generated samples for reviewer judgment.
 
 This PR exceeds the 400 LOC soft cap because the raw JSON validation artifacts
-are part of the deliverable.
+are part of the deliverable and the review fix needs focused negative fixtures
+for the fail-closed grounding detector branches.
 
 ## Scope (this PR)
 
@@ -45,6 +55,10 @@ Slice phase: Functional validation
    pointers.
 5. Keep this as validation. Do not self-certify product acceptance; the
    reviewer owns the GOOD-bar judgment against the exported campaign drafts.
+6. Prevent sparse one-ticket `email_campaign` fabrication by using a
+   deterministic scaffold for exactly-one `support_ticket` evidence rows and
+   by failing closed on unsupported LLM proof/volume claims when the normal
+   campaign path is used.
 
 ### Review Contract
 
@@ -72,6 +86,13 @@ Slice phase: Functional validation
 ### Files touched
 
 - `scripts/smoke_content_ops_gate_a_live_quality.py`
+- `atlas_brain/skills/digest/b2b_campaign_generation.md`
+- `extracted_content_pipeline/campaign_generation.py`
+- `extracted_content_pipeline/services/campaign_quality.py`
+- `extracted_content_pipeline/skills/digest/b2b_campaign_generation.md`
+- `tests/test_extracted_campaign_generation.py`
+- `tests/test_extracted_campaign_generation_seams.py`
+- `tests/test_extracted_campaign_skill_registry.py`
 - `tests/test_smoke_content_ops_gate_a_live_quality.py`
 - `docs/extraction/validation/content_ops_gate_a_email_campaign_input_fit_2026-06-08.md`
 - `docs/extraction/validation/fixtures/content_ops_gate_a_email_campaign_input_fit_20260608/execution-result.json`
@@ -108,6 +129,27 @@ The Gate A payload also includes a real selling context:
 This gives the campaign prompt a valid CTA URL while preserving the existing
 `example.com` placeholder URL rejection.
 
+For sparse support-ticket evidence, `CampaignGenerationService` now detects the
+exactly-one `support_ticket` shape before calling the LLM. That path renders a
+small deterministic email sequence from only:
+
+1. the exact uploaded ticket question,
+2. the allowed inference that the question points to a possible FAQ gap, and
+3. the claim that FineTune Lab can map this question against the help center to
+   identify whether an answer is missing or hard to find.
+
+The deterministic drafts still pass through the same
+`campaign_quality_revalidation(...)` gate, metadata builder, review, and export
+path as model-generated drafts. Multi-row or non-support-ticket campaign
+opportunities still use the normal LLM path, now with the same sales-brief
+truthfulness language plus stricter sparse-ticket prompt guidance.
+
+The quality seam now fails closed on unsupported numeric/count/percentage
+claims, scan/review claims, recurrence claims, unsupported turnaround/timing
+claims, and product-general queue/support-traffic claims. The harness also
+requires an `email_campaign` sequence to export both `email_cold` and
+`email_followup`; one saved row no longer yields `ok=true`.
+
 The proof reuses the #1378 harness path: execute the real Content Ops service
 builder, persist generated campaign drafts, review saved ids, export the
 reviewed sequence through `list_campaign_drafts(...)`, filter to the run's
@@ -122,6 +164,12 @@ saved ids, and write the same artifact envelope used by #1383/#1392.
   isolates the issue #1376 email-campaign follow-up.
 - Do not weaken campaign quality gates or placeholder URL detection. The fix
   supplies real campaign context instead.
+- Do not add a quality-repair LLM pass for this slice. The sparse one-ticket
+  path is deterministic to avoid billing a second generation and to prevent
+  fabricated claims from entering the proof artifact.
+- Keep the deterministic scaffold scoped to exactly-one `support_ticket`
+  evidence rows. Broader email campaigns still use the existing LLM generator
+  and fail closed if unsupported claims appear.
 - Keep the proof account and generated JSON artifacts committed so reviewer
   and operator can inspect the exact live output.
 - Do not close issue #1376 in this PR body. The reviewer/operator can decide
@@ -129,42 +177,39 @@ saved ids, and write the same artifact envelope used by #1383/#1392.
 
 ## Deferred
 
-- Messy-input `email_campaign` validation remains separate until the baseline
-  support-ticket input-fit proof is reviewed.
+- Messy-input and multi-ticket `email_campaign` validation remain separate
+  until the baseline support-ticket input-fit proof is reviewed.
 - Cheaper-model readiness remains separate after Sonnet behavior is reviewed.
-- Campaign copy quality improvements are separate unless the run exposes a
-  correctness failure in the harness plumbing.
+- Richer sparse-ticket copy is separate. This slice chooses a conservative
+  grounded scaffold over marketing polish.
 
 Parked hardening:
 
-- None. The two discovered input-fit failures are fixed inline because they
-  blocked the slice's stated real flow.
+- None. The input-fit failures, fabricated proof claims, and collapsed-sequence
+  false-green all blocked this slice's stated real flow and are fixed inline.
 
 ## Verification
 
-- `python -m pytest tests/test_smoke_content_ops_gate_a_live_quality.py -q`
-  - Result: `16 passed in 0.23s`.
+- `python -m pytest tests/test_extracted_campaign_generation_seams.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_smoke_content_ops_gate_a_live_quality.py -q`
+  - Result: `115 passed, 1 warning in 1.19s`.
 - `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false python scripts/smoke_content_ops_gate_a_live_quality.py --account-id 5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901 --user-id 11111111-1111-4111-8111-111111111111 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --output-dir tmp/content_ops_gate_a_email_campaign_input_fit_20260608 --outputs email_campaign --variant-count 3 --quality-repair-attempts 1 --max-cost-usd 20.00 --json`
   - Result: `status=passed`, `inserted=36`, `generated=2`, `saved_ids=2`,
-    `export_counts.email_campaign=2`.
+    `export_counts.email_campaign=2`, `llm_model=deterministic/single-support-ticket`.
 - Artifact JSON validation over
   `docs/extraction/validation/fixtures/content_ops_gate_a_email_campaign_input_fit_20260608/*.json`
   - Result: all committed artifact JSON files parsed successfully.
-- Model-route/generated-row check over `export-email_campaign.json`
-  - Result: `rows=2`, `models=['anthropic/claude-sonnet-4-5']`,
-    `channels=['email_cold', 'email_followup']`.
+- Generation-route/generated-row check over `export-email_campaign.json`
+  - Result: `rows=2`, `models=['deterministic/single-support-ticket']`,
+    `channels=['email_cold', 'email_followup']`, `parse_attempts=[0]`.
 - `bash scripts/run_extracted_pipeline_checks.sh`
-  - Result: `3408 passed, 10 skipped, 1 warning in 56.06s`.
+  - Result: `3433 passed, 10 skipped, 1 warning in 51.31s`.
 - `scripts/push_pr.sh` will run the repo's required local PR checks once
   before push.
 
 ## Estimated diff size
 
-| File | LOC |
+| Area | Diff |
 |---|---:|
-| `scripts/smoke_content_ops_gate_a_live_quality.py` | 50 |
-| `tests/test_smoke_content_ops_gate_a_live_quality.py` | 110 |
-| `docs/extraction/validation/content_ops_gate_a_email_campaign_input_fit_2026-06-08.md` | 125 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_email_campaign_input_fit_20260608/*.json` | 500 |
-| `plans/PR-Gate-A-Email-Campaign-Input-Fit-Proof.md` | 170 |
-| **Total** | **955** |
+| Code/tests | ~1,150 LOC |
+| Validation report/artifacts | ~780 LOC |
+| **Total** | **1,957 LOC (16 files, +1923 / -34)** |

@@ -64,10 +64,17 @@ Structural output counts:
 |---|---:|---:|---:|---:|---:|
 | `email_campaign` | 1 | 2 | 2 | 2 | 0 |
 
-Resolved model route:
+Resolved generation route:
 
-- `anthropic/claude-sonnet-4-5` is recorded as `llm_model` on both committed
-  generated campaign rows.
+- `deterministic/single-support-ticket` is recorded as `llm_model` on both
+  committed campaign rows.
+- The sparse one-ticket support-ticket path does not call a model and records
+  `generation_parse_attempts=0`. This prevents the fabricated count/volume
+  claims exposed during review while preserving the same review/export
+  pipeline.
+- Both rows record `campaign_revalidation.audit.status=pass` with empty
+  `unsupported_numeric_claims`, `unsupported_scan_claims`, and
+  `unsupported_aggregate_claims`.
 
 Placeholder URL guard:
 
@@ -83,8 +90,8 @@ Email campaign samples:
 
 | Channel | ID | Recipient | Subject | CTA |
 |---|---|---|---|---|
-| `email_cold` | `5d2d3d89-06ce-4657-9c99-ce0455df9f70` | `billing@silverline.example` | Your overage question is a content gap | Run a gap audit on your ticket queue |
-| `email_followup` | `77a2a351-98dd-4e1d-adc3-74309237cf3d` | `billing@silverline.example` | The workspace overage question came back | Run the audit and see which gaps are costing you the most tickets. |
+| `email_cold` | `13c6c335-f14e-41e1-adbd-687d723e3d6c` | `billing@silverline.example` | Usage overage question from your team | Worth a look? |
+| `email_followup` | `b26be0f8-6c54-4519-8b26-a2debb0a6f9d` | `billing@silverline.example` | Follow-up: usage overage question | Worth a look? |
 
 Grounding sample:
 
@@ -99,10 +106,10 @@ Grounding sample:
 Focused tests:
 
 ```bash
-python -m pytest tests/test_smoke_content_ops_gate_a_live_quality.py -q
+python -m pytest tests/test_extracted_campaign_generation_seams.py tests/test_extracted_campaign_generation.py tests/test_extracted_campaign_skill_registry.py tests/test_smoke_content_ops_gate_a_live_quality.py -q
 ```
 
-Result: `16 passed in 0.23s`.
+Result: `115 passed, 1 warning in 1.19s`.
 
 Artifact JSON validation:
 
@@ -120,7 +127,7 @@ PY
 
 Result: all committed artifact JSON files parsed successfully.
 
-Model route and generated-row check:
+Generation route and generated-row check:
 
 ```bash
 python - <<'PY'
@@ -130,15 +137,17 @@ root = Path('docs/extraction/validation/fixtures/content_ops_gate_a_email_campai
 payload = json.loads((root / 'export-email_campaign.json').read_text(encoding='utf-8'))
 models = sorted({row.get('llm_model') for row in payload.get('rows', [])})
 channels = sorted({row.get('channel') for row in payload.get('rows', [])})
-print(f'rows={payload.get("count")}; models={models}; channels={channels}')
+parse_attempts = sorted({row.get('generation_parse_attempts') for row in payload.get('rows', [])})
+print(f'rows={payload.get("count")}; models={models}; channels={channels}; parse_attempts={parse_attempts}')
 assert payload.get('count') == 2
-assert models == ['anthropic/claude-sonnet-4-5']
+assert models == ['deterministic/single-support-ticket']
 assert channels == ['email_cold', 'email_followup']
+assert parse_attempts == [0]
 PY
 ```
 
-Result: two generated rows, one cold email and one follow-up, both using
-`anthropic/claude-sonnet-4-5`.
+Result: two generated rows, one cold email and one follow-up, both using the
+deterministic sparse-ticket scaffold.
 
 Full extracted package checks:
 
@@ -146,4 +155,4 @@ Full extracted package checks:
 bash scripts/run_extracted_pipeline_checks.sh
 ```
 
-Result: `3408 passed, 10 skipped, 1 warning in 56.06s`.
+Result: `3433 passed, 10 skipped, 1 warning in 51.31s`.

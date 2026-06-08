@@ -40,6 +40,18 @@ def test_packaged_campaign_prompt_frames_support_tickets_as_service_evidence() -
     assert 'source_type: "support_ticket"' in prompt
     assert "service evidence, not buying-intent evidence" in prompt
     assert "is buying, is switching, is considering" in prompt
+    assert "Do NOT invent counts, percentages" in prompt
+    assert "If the input only provides one ticket" in prompt
+    assert "Sparse support-ticket mode" in prompt
+    assert "points to a possible FAQ gap" in prompt
+    assert "Use singular language only" in prompt
+    assert "The only allowed claims are" in prompt
+    assert "Do not add any other factual assertion" in prompt
+    assert "audit completion timelines" in prompt
+    assert "article/FAQ counts" in prompt
+    assert "\"repeat questions\"" in prompt
+    assert "same question repeats" in prompt
+    assert "aggregate support-volume claims are not allowed" in prompt
 
 
 def test_packaged_report_prompt_frames_support_tickets_as_service_evidence() -> None:

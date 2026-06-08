@@ -542,8 +542,29 @@ def test_variant_persistence_errors_fail_on_duplicate_email_sequence_ids() -> No
     assert smoke.variant_persistence_errors(
         {"status": "completed"},
         saved_ids={"email_campaign": ["campaign-1", "campaign-1"]},
-        exports={"email_campaign": {"count": 1}},
+        exports={
+            "email_campaign": {
+                "count": 1,
+                "rows": [
+                    {"id": "campaign-1", "channel": "email_cold"},
+                    {"id": "campaign-1", "channel": "email_followup"},
+                ],
+            }
+        },
     ) == [
         "email_campaign sequence persistence collapsed: "
         "2 saved id entries, 1 unique saved id(s), 1 exported row(s)"
     ]
+
+
+def test_variant_persistence_errors_fail_on_missing_email_sequence_channel() -> None:
+    assert smoke.variant_persistence_errors(
+        {"status": "completed"},
+        saved_ids={"email_campaign": ["campaign-1"]},
+        exports={
+            "email_campaign": {
+                "count": 1,
+                "rows": [{"id": "campaign-1", "channel": "email_followup"}],
+            }
+        },
+    ) == ["email_campaign sequence missing required channel: email_cold"]

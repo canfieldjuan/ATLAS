@@ -33,6 +33,7 @@ from smoke_content_ops_live_generation import (  # noqa: E402
 
 DEFAULT_OUTPUTS = ("email_campaign", "landing_page", "blog_post", "sales_brief")
 SEQUENCE_OUTPUTS = frozenset({"email_campaign"})
+SEQUENCE_REQUIRED_CHANNELS = {"email_campaign": ("email_cold", "email_followup")}
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_saas_demo_sources.csv"
 )
@@ -734,7 +735,22 @@ def _sequence_persistence_errors(
     if not raw_ids:
         return []
     unique_ids = tuple(dict.fromkeys(raw_ids))
-    export_count = int(_mapping(exports.get(output)).get("count") or 0)
+    export = _mapping(exports.get(output))
+    export_count = int(export.get("count") or 0)
+    rows = export.get("rows")
+    exported_channels = {
+        str(row.get("channel") or "").strip()
+        for row in rows
+        if isinstance(row, Mapping)
+    } if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)) else set()
+    required_channels = set(SEQUENCE_REQUIRED_CHANNELS.get(output, ()))
+    missing_channels = sorted(required_channels - exported_channels)
+    if missing_channels:
+        return [
+            f"{output} sequence missing required channel"
+            f"{'s' if len(missing_channels) > 1 else ''}: "
+            + ", ".join(missing_channels)
+        ]
     if len(unique_ids) == len(raw_ids) and export_count >= len(raw_ids):
         return []
     return [

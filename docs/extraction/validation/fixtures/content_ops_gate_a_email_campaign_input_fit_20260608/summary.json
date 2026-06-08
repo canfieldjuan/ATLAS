@@ -81,19 +81,19 @@
     "email_campaign": {
       "missing_ids": [],
       "requested_ids": [
-        "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
-        "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+        "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+        "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
       ],
       "updated_ids": [
-        "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
-        "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+        "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+        "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
       ]
     }
   },
   "saved_ids": {
     "email_campaign": [
-      "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
-      "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+      "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+      "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
     ]
   },
   "seeded_blog_blueprint": {},

@@ -469,6 +469,352 @@ def test_campaign_quality_revalidation_enforces_specificity_defaults_when_flags_
     assert "missing_timing_or_numeric" in result["audit"]["blocking_issues"]
 
 
+def test_campaign_quality_revalidation_blocks_unsupported_numeric_and_scan_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage signal",
+            "body": (
+                "We scanned 40+ FlowPilot support queues and found the same "
+                "billing question in 60% of them. Teams usually see 2-3 fewer "
+                "tickets per week after publishing the missing FAQ."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_numeric_claim" in result["audit"]["blocking_issues"]
+    assert "unsupported_scan_claim" in result["audit"]["blocking_issues"]
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_numeric_claims"] == [
+        (
+            "We scanned 40+ FlowPilot support queues and found the same "
+            "billing question in 60% of them."
+        ),
+        (
+            "Teams usually see 2-3 fewer tickets per week after publishing "
+            "the missing FAQ."
+        ),
+    ]
+    assert result["audit"]["unsupported_scan_claims"] == [
+        (
+            "We scanned 40+ FlowPilot support queues and found the same "
+            "billing question in 60% of them."
+        )
+    ]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        (
+            "Teams usually see 2-3 fewer tickets per week after publishing "
+            "the missing FAQ."
+        ),
+    ]
+
+
+def test_campaign_quality_revalidation_allows_source_backed_numeric_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Renewal pressure",
+            "body": "The Q2 renewal now carries a $200k/year issue.",
+            "metadata": {"campaign_proof_terms": ["Q2 renewal", "$200k/year"]},
+        },
+        boundary="generation",
+        specificity_context={
+            "anchor_examples": {
+                "renewal": [{
+                    "excerpt_text": "The Q2 renewal now carries a $200k/year issue.",
+                }]
+            }
+        },
+    )
+
+    assert result["audit"]["status"] == "pass"
+    assert result["audit"]["unsupported_numeric_claims"] == []
+    assert result["audit"]["unsupported_scan_claims"] == []
+    assert result["audit"]["unsupported_aggregate_claims"] == []
+
+
+def test_campaign_quality_revalidation_allows_scheduling_duration_cta() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": "Your team asked how to see which workspace caused a usage overage.",
+            "cta": "Schedule a 15-minute audit walkthrough",
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "pass"
+    assert result["audit"]["unsupported_numeric_claims"] == []
+
+
+def test_campaign_quality_revalidation_allows_single_evidence_count() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": "One support question asks how to see which workspace caused a usage overage.",
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "pass"
+    assert result["audit"]["unsupported_numeric_claims"] == []
+
+
+def test_campaign_quality_revalidation_blocks_repeat_question_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "Your team is fielding repeat questions on workspace usage overages."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        "Your team is fielding repeat questions on workspace usage overages."
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_recurrence_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "If that question is not covered in your help center, it will "
+                "come back. The next support lead will spend time on the same "
+                "answer again."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        (
+            "If that question is not covered in your help center, it will "
+            "come back."
+        ),
+        "The next support lead will spend time on the same answer again.",
+    ]
+
+
+def test_campaign_quality_revalidation_ignores_identifier_numeric_tokens() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": "The audit takes five minutes.",
+            "metadata": {},
+            "account_id": "5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901",
+            "user_id": "11111111-1111-4111-8111-111111111111",
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_numeric_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_numeric_claims"] == [
+        "The audit takes five minutes."
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_unsupported_turnaround_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "We can draft the missing article. Takes about a week. "
+                "We'll send the draft in a week."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_numeric_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_numeric_claims"] == [
+        "Takes about a week.",
+        "We'll send the draft in a week.",
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_usually_means_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "When billing questions like this one hit the queue, it usually "
+                "means the self-service path is missing a step."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        (
+            "When billing questions like this one hit the queue, it usually "
+            "means the self-service path is missing a step."
+        )
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_other_account_pattern_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "This week we mapped another billing-visibility question from "
+                "a FlowPilot account. Same pattern: the answer exists somewhere, "
+                "but the FAQ does not surface it fast enough. We flag these gaps "
+                "before they pile up in your queue."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        (
+            "This week we mapped another billing-visibility question from "
+            "a FlowPilot account."
+        ),
+        (
+            "Same pattern: the answer exists somewhere, but the FAQ does not "
+            "surface it fast enough."
+        ),
+        "We flag these gaps before they pile up in your queue.",
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_plural_sparse_ticket_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "We run audits for support teams. We find questions like this "
+                "and map ticket questions to help-center coverage."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        (
+            "We find questions like this and map ticket questions to "
+            "help-center coverage."
+        )
+    ]
+
+
+def test_campaign_quality_revalidation_blocks_billing_cycle_support_claims() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": (
+                "Every billing cycle will generate the same support question. "
+                "Users hit support instead of self-serve. If the answer is "
+                "missing, billing questions repeat. Billing questions land in "
+                "support. Users still hit support. That is a support ticket "
+                "pattern. Your support queue showed that one thing stood out. "
+                "That question will land in support again. That question keeps "
+                "coming up. Close that gap before the next billing cycle."
+            ),
+            "metadata": {},
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "fail"
+    assert "unsupported_aggregate_claim" in result["audit"]["blocking_issues"]
+    assert result["audit"]["unsupported_aggregate_claims"] == [
+        "Every billing cycle will generate the same support question.",
+        "Users hit support instead of self-serve.",
+        "If the answer is missing, billing questions repeat.",
+        "Billing questions land in support.",
+        "Users still hit support.",
+        "That is a support ticket pattern.",
+        "Your support queue showed that one thing stood out.",
+        "That question will land in support again.",
+        "That question keeps coming up.",
+        "Close that gap before the next billing cycle.",
+    ]
+
+
+def test_campaign_quality_revalidation_ignores_hyphenated_number_idioms() -> None:
+    result = campaign_quality_revalidation(
+        campaign={
+            "subject": "Usage overage question",
+            "body": "That support case is a one-off workflow question.",
+            "metadata": {},
+        },
+        boundary="generation",
+    )
+
+    assert result["audit"]["status"] == "pass"
+    assert result["audit"]["unsupported_numeric_claims"] == []
+
+
 def test_campaign_quality_revalidation_passes_with_anchor_and_preserves_metadata() -> None:
     result = campaign_quality_revalidation(
         campaign={
