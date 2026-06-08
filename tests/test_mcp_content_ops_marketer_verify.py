@@ -408,3 +408,13 @@ def test_content_ops_marketer_verify_oauth_transport_security_allows_configured_
     assert "localhost:*" in transport.allowed_hosts
     assert "127.0.0.1:*" in transport.allowed_hosts
     assert "evil.example.com" not in transport.allowed_hosts
+
+
+def test_content_ops_marketer_verify_oauth_transport_security_allows_explicit_default_port() -> None:
+    transport = verify._oauth_transport_security_settings(
+        issuer_url="https://atlas-brain.tailc7bd29.ts.net:443/content-ops-marketer",
+        resource_url="https://atlas-brain.tailc7bd29.ts.net:443/content-ops-marketer/mcp",
+    )
+
+    assert "atlas-brain.tailc7bd29.ts.net" in transport.allowed_hosts
+    assert "atlas-brain.tailc7bd29.ts.net:443" in transport.allowed_hosts

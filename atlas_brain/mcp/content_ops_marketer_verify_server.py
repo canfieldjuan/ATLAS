@@ -292,6 +292,10 @@ def _host_header_variants(url: str) -> set[str]:
             variants.add(f"{parsed.hostname}:443")
         elif parsed.scheme == "http":
             variants.add(f"{parsed.hostname}:80")
+    elif (parsed.scheme == "https" and parsed.port == 443) or (
+        parsed.scheme == "http" and parsed.port == 80
+    ):
+        variants.add(parsed.hostname)
     return {variant for variant in variants if variant}
 
 
