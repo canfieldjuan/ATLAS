@@ -52,6 +52,27 @@ def _dependency_names(route) -> list[str]:
     ]
 
 
+def _checkout_authorization_route(
+    store: InMemoryDeflectionReportArtifactStore,
+    *,
+    config_kwargs: dict[str, object] | None = None,
+):
+    router = create_content_ops_control_surface_router(
+        config=ContentOpsControlSurfaceApiConfig(
+            prefix="/ops",
+            tags=("ops",),
+            **(config_kwargs or {"deflection_checkout_price_id": "price_report"}),
+        ),
+        scope_provider=lambda: {"account_id": "acct-gate", "user_id": "user-gate"},
+        deflection_report_store_provider=lambda: store,
+    )
+    return _route(
+        router,
+        "/ops/deflection-reports/{request_id}/checkout-authorization",
+        "POST",
+    )
+
+
 class _UploadFile:
     def __init__(self, filename: str, content: bytes):
         self.filename = filename
@@ -2836,6 +2857,157 @@ async def test_deflection_report_artifact_route_is_locked_until_marked_paid():
     )
 
 
+@pytest.mark.asyncio
+async def test_deflection_checkout_authorization_returns_canonical_terms_only():
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-ready",
+        snapshot={"summary": {"generated": 1}},
+        artifact={
+            "markdown": "# Full report",
+            "faq_result": {"items": []},
+            "ticket_text": "Customer ticket text",
+        },
+        delivery_email="buyer@example.com",
+    )
+    route = _checkout_authorization_route(
+        store,
+        config_kwargs={
+            "deflection_checkout_amount_cents": 150000,
+            "deflection_checkout_allowed_amount_cents": "149000,150000",
+            "deflection_checkout_currency": "USD",
+            "deflection_checkout_price_id": " price_deflection_report ",
+        },
+    )
+    payload = await route.endpoint(request_id="request-ready")
+
+    assert payload == {
+        "request_id": "request-ready",
+        "status": "authorized",
+        "checkout": {
+            "amount_cents": 150000,
+            "currency": "usd",
+            "price_id": "price_deflection_report",
+        },
+    }
+    assert "Full report" not in str(payload)
+    assert "Customer ticket text" not in str(payload)
+    assert "buyer@example.com" not in str(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "request_id", "status_code", "detail"),
+    [
+        ("missing", "missing-request", 404, "Deflection report not found."),
+        ("paid", "request-paid", 409, "Deflection report is already paid."),
+        (
+            "empty-artifact",
+            "request-empty-artifact",
+            409,
+            "Deflection report artifact is not available.",
+        ),
+    ],
+)
+async def test_deflection_checkout_authorization_fails_closed_for_report_state(
+    state: str,
+    request_id: str,
+    status_code: int,
+    detail: str,
+):
+    store = InMemoryDeflectionReportArtifactStore()
+    if state != "missing":
+        await store.save_report(
+            account_id="acct-gate",
+            request_id=request_id,
+            snapshot={"summary": {"generated": 1}},
+            artifact={} if state == "empty-artifact" else {"markdown": "# Full"},
+        )
+    if state == "paid":
+        await store.mark_paid(account_id="acct-gate", request_id=request_id)
+
+    route = _checkout_authorization_route(store)
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id=request_id)
+
+    assert exc.value.status_code == status_code
+    assert exc.value.detail == detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config_kwargs", "detail"),
+    [
+        (
+            {"deflection_checkout_price_id": ""},
+            "Deflection checkout price is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_amount_cents": 0,
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout amount is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_currency": "usdollar",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout currency is not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_amount_cents": 150000,
+                "deflection_checkout_allowed_amount_cents": "149000",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout amount is not accepted by the payment gate.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "150000,",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "not-cents",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+        (
+            {
+                "deflection_checkout_allowed_amount_cents": "0",
+                "deflection_checkout_price_id": "price_deflection_report",
+            },
+            "Deflection checkout allowed amounts are not configured.",
+        ),
+    ],
+)
+async def test_deflection_checkout_authorization_fails_when_terms_misconfigured(
+    config_kwargs: dict[str, object],
+    detail: str,
+) -> None:
+    store = InMemoryDeflectionReportArtifactStore()
+    await store.save_report(
+        account_id="acct-gate",
+        request_id="request-ready",
+        snapshot={"summary": {"generated": 1}},
+        artifact={"markdown": "# Full report"},
+    )
+
+    route = _checkout_authorization_route(store, config_kwargs=config_kwargs)
+    with pytest.raises(api_module.HTTPException) as exc:
+        await route.endpoint(request_id="request-ready")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == detail
+
+
 def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
     async def _tenant_user() -> None:
         return None
@@ -2855,6 +3027,11 @@ def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
         "/ops/deflection-reports/{request_id}/artifact",
         "GET",
     )
+    checkout_authorization_route = _route(
+        router,
+        "/ops/deflection-reports/{request_id}/checkout-authorization",
+        "POST",
+    )
     snapshot_route = _route(
         router,
         "/ops/deflection-reports/{request_id}/snapshot",
@@ -2864,6 +3041,9 @@ def test_deflection_report_paid_route_uses_trusted_dependency() -> None:
     assert "_tenant_user" in _dependency_names(paid_route)
     assert "_trusted_paid_release" in _dependency_names(paid_route)
     assert "_trusted_paid_release" not in _dependency_names(artifact_route)
+    assert "_trusted_paid_release" not in _dependency_names(
+        checkout_authorization_route
+    )
     assert "_trusted_paid_release" not in _dependency_names(snapshot_route)
 
 

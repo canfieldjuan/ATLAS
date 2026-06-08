@@ -103,6 +103,10 @@ class SaaSAuthConfig(BaseSettings):
             "deflection report when no explicit allowed amount list is set"
         ),
     )
+    stripe_content_ops_deflection_report_price_id: str = Field(
+        default="",
+        description="Stripe Price ID for the one-time Content Ops FAQ deflection report",
+    )
     stripe_content_ops_deflection_report_allowed_amount_cents: str = Field(
         default="",
         description=(
