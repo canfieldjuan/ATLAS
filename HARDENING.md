@@ -50,15 +50,6 @@ register under `docs/technical-debt/`.
 - Owner/session: Codex Gate A live output-quality proof
 - Found during: PR-Gate-A-Live-Output-Quality-Proof review
 
-### Gate A needs a messy-ticket grounding rerun
-- File/location: Gate A validation harness input selection / future validation artifact.
-- Description: The committed Gate A proof used the clean `support_ticket_saas_demo_sources.csv` fixture where nine clusters each contain exactly four tickets. That proves the live path, but does not stress grounding on lopsided clusters, junk rows, missing fields, or noisy real tickets.
-- Why it matters: Grounding quality is easiest on the tidy demo fixture; the next acceptance run should use messy real support data before treating Gate A as product-cleared.
-- Effort: M
-- Category: correctness
-- Owner/session: Codex Gate A live output-quality proof
-- Found during: PR-Gate-A-Live-Output-Quality-Proof review
-
 ### Brand-voice second-person guidance is not consistently honored
 - File/location: `extracted_content_pipeline/brand_voice.py` audit surfaced from live blog and sales-brief exports.
 - Description: The Gate A profile requested `preferred_pov=second_person`. The exported blog draft and one sales brief had `brand_voice_audit.passed=false` with `preferred_pov_second_person_not_detected`.

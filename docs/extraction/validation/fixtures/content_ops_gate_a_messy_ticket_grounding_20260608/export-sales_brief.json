@@ -1,0 +1,373 @@
+{
+  "count": 3,
+  "filters": {
+    "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+    "id": [
+      "42d3e666-5bab-4581-9e88-ede18cd629c7",
+      "f4ac7467-911e-4840-86ca-d451d5ed45b7",
+      "6e7fb6bf-edd9-4b34-a756-ffef38713e8b"
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "limit": 100,
+  "rows": [
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1848,
+      "generation_output_tokens": 798,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "Your RevOps lead hit a wall exporting attribution reports right before the board packet deadline. Support ticket shows reporting friction.",
+      "id": "6e7fb6bf-edd9-4b34-a756-ffef38713e8b",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.78,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1704,
+          "input_tokens": 1848,
+          "output_tokens": 798,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "messy-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "messy-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Your contact is Morgan Reyes, Revenue Operations Lead. FlowPilot customer. Morgan filed a support ticket asking how to export attribution reports before the board packet is due.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Support ticket filed May 1, 2026. Morgan's question: \"How do I export attribution reports before the board packet is due?\" The timing is board-driven. The pain point is reporting export. This is not a feature question. This is a blocker.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {
+            "order": 2
+          },
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the export friction. Morgan is blocked on a board deadline. Ask what happened after the ticket. Did support solve it? Did Morgan find a workaround? Did the board packet go out incomplete? Then ask if this is the first time reporting export has been a problem. If it is not the first time, you have a pattern. If it is the first time, you have a new risk. Either way, the renewal conversation starts with whether FlowPilot can deliver the reports Morgan needs when Morgan needs them.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "talking_points",
+          "metadata": {
+            "order": 3
+          },
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "Morgan may say the ticket was resolved. Ask how long it took. Morgan may say the export works now. Ask if it will work next quarter. Morgan may say this is a one-off. Ask if the board packet deadline is a one-off. The objection you are listening for is \"we are fine.\" If Morgan is fine, the ticket does not exist.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "risks_and_objections",
+          "metadata": {
+            "order": 4
+          },
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Schedule a call with Morgan before the next board cycle. Ask about the ticket resolution. Ask about the export workflow. Ask about other reporting friction. If Morgan describes a workaround, ask how much time the workaround takes. If Morgan describes a pattern, ask if the pattern is documented. If Morgan describes a risk, ask if the risk is acceptable. Then ask when the renewal window opens.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "next_actions",
+          "metadata": {
+            "order": 5
+          },
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "messy-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Export block before board"
+    },
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1848,
+      "generation_output_tokens": 691,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "Your RevOps lead hit a reporting wall 30 days before board packet deadline. Export friction is renewal exposure.",
+      "id": "f4ac7467-911e-4840-86ca-d451d5ed45b7",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.78,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 0,
+          "cached_tokens": 1704,
+          "input_tokens": 1848,
+          "output_tokens": 691,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "messy-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "messy-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Morgan Reyes runs Revenue Operations. Your contact is asking how to export attribution reports before the board packet is due. This is not a feature question. This is a deadline question.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Support ticket opened May 1, 2026. Morgan asked: \"How do I export attribution reports before the board packet is due?\" The question names a specific deadline and a specific blocker. Export friction is now tied to board visibility. That is renewal risk.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {
+            "order": 2
+          },
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the outcome Morgan needs: board-ready attribution data before the packet deadline. Ask what the export blocker is. Ask what the board is measuring. Then show how you close the gap before the deadline. Do not pitch features. Show the path to the result.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "talking_points",
+          "metadata": {
+            "order": 3
+          },
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "If the export blocker is a product limitation, Morgan will evaluate alternatives. If the board packet deadline passes without the data, your product becomes the reason RevOps missed the deadline. That is not a renewal conversation you want to have.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "risks_and_objections",
+          "metadata": {
+            "order": 4
+          },
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Reach out to Morgan before the board packet deadline. Ask what the export blocker is. Offer a workaround or a fix. If you cannot deliver the export before the deadline, offer an alternative path to the board-ready data. Do not let this ticket sit in support.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "next_actions",
+          "metadata": {
+            "order": 5
+          },
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "messy-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Export block before board"
+    },
+    {
+      "brief_type": "renewal",
+      "generation_input_tokens": 1848,
+      "generation_output_tokens": 670,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "headline": "Your RevOps lead can't export attribution reports. Board packet deadline is forcing workarounds. Renewal window is your fix moment.",
+      "id": "42d3e666-5bab-4581-9e88-ede18cd629c7",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "confidence": 0.78,
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 144,
+          "cache_write_tokens": 1704,
+          "cached_tokens": 0,
+          "input_tokens": 1848,
+          "output_tokens": 670,
+          "reasoning_tokens": 0
+        },
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "target_id": "messy-001",
+        "target_mode": "vendor_retention",
+        "variant_angle": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step."
+      },
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "reference_count": 1,
+      "reference_ids": [
+        "messy-001"
+      ],
+      "section_count": 5,
+      "sections": [
+        {
+          "body_markdown": "Atlas Supply. Morgan Reyes is the Revenue Operations Lead. Your contact email is ops@atlas-supply.example. This is a FlowPilot retention opportunity.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "account_context",
+          "metadata": {
+            "order": 1
+          },
+          "title": "Account Context"
+        },
+        {
+          "body_markdown": "Support ticket filed May 1, 2026. Morgan asked: \"How do I export attribution reports before the board packet is due?\" The question is reporting export friction. The deadline is external and immovable.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "recent_signals",
+          "metadata": {},
+          "title": "Recent Signals"
+        },
+        {
+          "body_markdown": "Lead with the board packet deadline. Morgan is blocked on a recurring task. Ask if this is the first time or if the export path has been a repeat problem. If it repeats, frame the renewal conversation around fixing the workflow before the next board cycle. Do not promise a feature that does not exist. Ask what format Morgan needs and whether your current export covers it.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "talking_points",
+          "metadata": {},
+          "title": "Talking Points"
+        },
+        {
+          "body_markdown": "If your export feature does not support the format Morgan needs, this is a retention risk. If the workaround is manual and repeats every quarter, Morgan will evaluate tools that export attribution reports without support tickets. Do not assume this is a one-time question. Blocked reporting is a renewal objection.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "risks_and_objections",
+          "metadata": {},
+          "title": "Risks and Objections"
+        },
+        {
+          "body_markdown": "Reply to the support ticket with a direct answer. If the export path exists, send Morgan the steps. If it does not exist, escalate to product and give Morgan a timeline. Schedule a renewal check-in before the next board packet deadline. Ask if other reports are blocked.",
+          "claim_ids": [],
+          "evidence_ids": [
+            "messy-001"
+          ],
+          "id": "next_actions",
+          "metadata": {},
+          "title": "Next Actions"
+        }
+      ],
+      "status": "approved",
+      "target_id": "messy-001",
+      "target_mode": "vendor_retention",
+      "title": "Renewal brief: Atlas Supply -- Export friction before board"
+    }
+  ]
+}

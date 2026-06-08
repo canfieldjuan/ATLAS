@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,32 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC is not None and SPEC.loader is not None
 smoke = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(smoke)
+
+
+def test_messy_grounding_fixture_exercises_noisy_lopsided_ticket_shape() -> None:
+    rows = smoke._load_csv_rows(
+        ROOT
+        / "extracted_content_pipeline"
+        / "examples"
+        / "support_ticket_messy_grounding_sources.csv"
+    )
+    package = build_support_ticket_input_package(rows)
+
+    assert package.inputs["source_row_count"] == 44
+    assert package.inputs["included_ticket_row_count"] == 42
+    assert package.inputs["skipped_ticket_row_count"] == 2
+    assert package.inputs["question_like_ticket_count"] == 39
+    assert package.inputs["has_dated_window"] is False
+    assert [warning["code"] for warning in package.warnings] == [
+        "ticket_row_missing_text",
+        "ticket_row_missing_text",
+    ]
+    assert package.inputs["top_ticket_clusters"][:4] == [
+        {"label": "reporting export", "count": 11},
+        {"label": "dashboard freshness", "count": 7},
+        {"label": "sso setup", "count": 6},
+        {"label": "billing and plan management", "count": 4},
+    ]
 
 
 def test_build_gate_a_payload_sets_top_level_variants_and_brand_voice() -> None:
