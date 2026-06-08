@@ -1,0 +1,400 @@
+{
+  "errors": [],
+  "plan": {
+    "can_execute": true,
+    "limit": 1,
+    "preview": {
+      "blocked_outputs": [],
+      "can_run": true,
+      "estimated_cost_usd": 12.6,
+      "missing_inputs": [],
+      "normalized_request": {
+        "account_usage_budget_days": 7,
+        "account_usage_budget_usd": null,
+        "allow_unimplemented_outputs": false,
+        "brand_voice_profile_id": null,
+        "content_ops_cache_policy": null,
+        "ingestion_profile": "existing_evidence",
+        "limit": 1,
+        "max_cost_usd": 20.0,
+        "outputs": [
+          "landing_page",
+          "blog_post",
+          "sales_brief"
+        ],
+        "preset": null,
+        "reasoning_preset": null,
+        "require_quality_gates": true,
+        "target_mode": "vendor_retention",
+        "variant_count": 3
+      },
+      "outputs": [
+        "landing_page",
+        "blog_post",
+        "sales_brief"
+      ],
+      "warnings": []
+    },
+    "steps": [
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "quality_repair_attempts": 1,
+          "skill_name": "digest/landing_page_generation",
+          "temperature": 0.3,
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "landing_page",
+        "reason": "",
+        "runner": "LandingPageGenerationService.generate",
+        "status": "runnable"
+      },
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "limit": 1,
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "quality_repair_attempts": 2,
+          "skill_name": "digest/blog_post_generation",
+          "temperature": 0.3,
+          "topic": "Support ticket FAQ gaps: what repeat tickets reveal before renewal",
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "blog_post",
+        "reason": "",
+        "runner": "BlogPostGenerationService.generate",
+        "status": "runnable"
+      },
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "default_brief_type": "renewal",
+          "limit": 1,
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "skill_name": "digest/sales_brief_generation",
+          "temperature": 0.3,
+          "variant_angles": [
+            {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            },
+            {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            },
+            {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          ],
+          "variant_count": 3
+        },
+        "output": "sales_brief",
+        "reason": "",
+        "runner": "SalesBriefGenerationService.generate",
+        "status": "runnable"
+      }
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "status": "completed",
+  "steps": [
+    {
+      "error": "",
+      "output": "landing_page",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 3,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "cf198a6e-fb29-4df2-8066-37d096894067",
+          "5bc0bc6c-5717-4ab0-af61-1f77f17d0284",
+          "12ccdfa0-af71-43ed-898b-3b7371164b7c"
+        ],
+        "skipped": 0,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "cf198a6e-fb29-4df2-8066-37d096894067"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "5bc0bc6c-5717-4ab0-af61-1f77f17d0284"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "quality_repair_history": [
+              {
+                "attempt": 0,
+                "blockers": [
+                  "seo_aeo_readiness:meta_description"
+                ],
+                "passed": false,
+                "repair_issues": [
+                  "seo_aeo_readiness:meta_description"
+                ]
+              },
+              {
+                "attempt": 1,
+                "blockers": [],
+                "passed": true,
+                "repair_issues": []
+              }
+            ],
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "12ccdfa0-af71-43ed-898b-3b7371164b7c"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "LandingPageGenerationService.generate",
+      "status": "completed"
+    },
+    {
+      "error": "",
+      "output": "blog_post",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 3,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "d787d807-7d97-4587-a75e-6405b7f1cb67",
+          "d087572c-206c-444b-99b2-07477bfcba26",
+          "ed3e1ecc-7106-428d-bb59-ffbc07738b3d"
+        ],
+        "skipped": 0,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "d787d807-7d97-4587-a75e-6405b7f1cb67"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "d087572c-206c-444b-99b2-07477bfcba26"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "ed3e1ecc-7106-428d-bb59-ffbc07738b3d"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "BlogPostGenerationService.generate",
+      "status": "completed"
+    },
+    {
+      "error": "",
+      "output": "sales_brief",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 3,
+        "reasoning_contexts_used": 0,
+        "requested": 3,
+        "saved_ids": [
+          "42d3e666-5bab-4581-9e88-ede18cd629c7",
+          "f4ac7467-911e-4840-86ca-d451d5ed45b7",
+          "6e7fb6bf-edd9-4b34-a756-ffef38713e8b"
+        ],
+        "skipped": 0,
+        "variant_count": 3,
+        "variant_results": [
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "42d3e666-5bab-4581-9e88-ede18cd629c7"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "pain_led",
+              "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
+              "label": "Pain-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "f4ac7467-911e-4840-86ca-d451d5ed45b7"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "outcome_led",
+              "instruction": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result.",
+              "label": "Outcome-led"
+            }
+          },
+          {
+            "errors": [],
+            "generated": 1,
+            "reasoning_contexts_used": 0,
+            "requested": 1,
+            "saved_ids": [
+              "6e7fb6bf-edd9-4b34-a756-ffef38713e8b"
+            ],
+            "skipped": 0,
+            "variant_angle": {
+              "id": "social_proof",
+              "instruction": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials.",
+              "label": "Social-proof-led"
+            }
+          }
+        ]
+      },
+      "runner": "SalesBriefGenerationService.generate",
+      "status": "completed"
+    }
+  ]
+}

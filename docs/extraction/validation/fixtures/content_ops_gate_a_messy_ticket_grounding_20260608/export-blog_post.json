@@ -1,0 +1,1276 @@
+{
+  "count": 3,
+  "filters": {
+    "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+    "id": [
+      "d787d807-7d97-4587-a75e-6405b7f1cb67",
+      "d087572c-206c-444b-99b2-07477bfcba26",
+      "ed3e1ecc-7106-428d-bb59-ffbc07738b3d"
+    ],
+    "ids": [
+      "d787d807-7d97-4587-a75e-6405b7f1cb67",
+      "d087572c-206c-444b-99b2-07477bfcba26",
+      "ed3e1ecc-7106-428d-bb59-ffbc07738b3d"
+    ]
+  },
+  "limit": 3,
+  "rows": [
+    {
+      "chart_count": 0,
+      "charts": [],
+      "content": "## What repeat support questions show\n\nSupport ticket FAQ gaps appear when the same customer question arrives multiple times without a published answer. In 42 support tickets, 39 include direct customer questions that repeated across 11 observed clusters. The highest-volume clusters are reporting export (11 tickets), dashboard freshness (7 tickets), SSO setup (6 tickets), billing and plan management (4 tickets), data import (3 tickets), and API and webhooks (3 tickets). Lower-volume clusters include workflow automation (2 tickets), permissions and seats (2 tickets), integration sync (2 tickets), weekly account digest (1 ticket), and customer said thanks (1 ticket).\n\nCustomer wording shows what your team hears repeatedly:\n\n> \"Attribution export blocked How do I export attribution reports before the board packet is due?\" -- verified ticket\n\n> \"CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?\" -- verified ticket\n\n> \"Export report for finance Can I schedule an attribution export for finance every Monday?\" -- verified ticket\n\nThese examples come from the reporting export cluster. Six tickets in that cluster use similar phrasing about export timing, missing columns, scheduling, and permission blocks.\n\nThe observed ticket set does not include support resolutions. That means you can identify repeated questions and copy customer wording, but you cannot write concrete answer steps until your support team adds the verified resolution.\n\n## Which FAQ gaps to review first\n\nWhen you prioritize support ticket FAQ gaps by observed volume, the highest-volume clusters are reporting export (11 tickets), dashboard freshness (7 tickets), and SSO setup (6 tickets). Those three clusters show the most repeated customer questions in this sample and should be reviewed before lower-volume issues.\n\nThe next tier includes billing and plan management (4 tickets), data import (3 tickets), and API and webhooks (3 tickets). When counts tie at three tickets each, the provided evidence does not support ranking one tied cluster above another.\n\nWorkflow automation (2 tickets), permissions and seats (2 tickets), and integration sync (2 tickets) are tied at two tickets each. Weekly account digest (1 ticket) and customer said thanks (1 ticket) are one-off observations. One-off tickets may still need FAQ entries if your team knows the question repeats outside this sample, but the observed evidence does not prove that.\n\nThis ranking uses observed ticket counts only. If your renewal data or customer success notes show that a lower-volume cluster creates risk, prioritize that cluster even when the ticket count is small.\n\n## Draft FAQ shells to verify\n\nThe observed ticket set supports six first-pass FAQ entries from customer wording. Each entry below stays as a review-needed shell until your support team adds the verified resolution.\n\n### Reporting export (11 tickets)\n\n**Draft question:** How do I export attribution reports before the board packet is due?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\n**Source tickets:** messy-001, messy-002, messy-003\n\nCustomer wording from this cluster includes \"attribution export blocked,\" \"CSV missing owner column,\" \"export report for finance,\" \"dashboard export permission,\" \"attribution export blocked again,\" and \"export filters reset.\" Your FAQ answer should address export timing, missing columns, scheduled exports, permission rules, and filter persistence.\n\n### Dashboard freshness (7 tickets)\n\n**Draft question:** What should the team verify for dashboard freshness?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\nSeven tickets mention dashboard freshness. Without resolution evidence, the draft question stays generic. Your support team should review those seven tickets, identify the specific freshness question customers ask, and write the verified answer.\n\n### SSO setup (6 tickets)\n\n**Draft question:** What should the team verify for SSO setup?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\nSix tickets mention SSO setup. The draft question is a placeholder. Your support team should review those six tickets, identify the specific SSO question customers ask, and write the verified answer.\n\n### Billing and plan management (4 tickets)\n\n**Draft question:** What should the team verify for billing and plan management?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\nFour tickets mention billing and plan management. The draft question is a placeholder. Your support team should review those four tickets, identify the specific billing question customers ask, and write the verified answer.\n\n### Data import (3 tickets)\n\n**Draft question:** What happens after I provide ticket data?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\nThree tickets mention data import. The draft question uses customer wording from the FAQ questions list. Your support team should verify the import process and write the customer-facing answer.\n\n### API and webhooks (3 tickets)\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** verified resolution, approved customer-facing wording, support owner review\n\nThree tickets mention API and webhooks. The draft question is a placeholder. Your support team should review those three tickets, identify the specific API question customers ask, and write the verified answer.\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after you publish FAQ entries. Compare future tickets against the observed clusters as inspection signals. Review FAQ page traffic and customer feedback as signals to inspect.\n\nIf reporting export tickets continue at the same rate after you publish the FAQ entry, inspect whether the entry is visible to customers, whether the answer matches what customers need, or whether customers open tickets without checking the FAQ first. If reporting export tickets change, inspect whether other factors explain the change: product updates, seasonal patterns, customer cohort shifts, support-team routing changes, or unrelated process improvements.\n\nWatch the metrics as inspection signals. If your team publishes FAQ entries and ticket volume stays flat, review whether customers can find the entries and whether the answers match the questions customers actually ask.",
+      "data_context": {
+        "_known_vendors": [],
+        "allowed_claims": [
+          "observed support-ticket clusters and counts from the provided ticket set",
+          "customer wording copied from the provided tickets",
+          "review-needed draft FAQ shells",
+          "support-team verification work before publishing",
+          "metrics to watch after publishing, without claiming those metrics improved"
+        ],
+        "category": "support tickets",
+        "customer_wording_examples": [
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-001",
+            "source_title": "Attribution export blocked",
+            "text": "Attribution export blocked How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-002",
+            "source_title": "CSV missing owner column",
+            "text": "CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-003",
+            "source_title": "Export report for finance",
+            "text": "Export report for finance Can I schedule an attribution export for finance every Monday?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-004",
+            "source_title": "Dashboard export permission",
+            "text": "Dashboard export permission Why can analysts view dashboards but not export reports?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-005",
+            "source_title": "Attribution export blocked again",
+            "text": "Attribution export blocked again How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-006",
+            "source_title": "Export filters reset",
+            "text": "Export filters reset Why do my saved filters disappear when I export campaign reports?"
+          }
+        ],
+        "deep_enriched_count": 42,
+        "draft_answer_guidance": "Draft answer - support team should add the verified resolution before publishing.",
+        "draft_faq_shells": [
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "reporting export",
+            "draft_question": "How do I export attribution reports before the board packet is due?",
+            "observed_ticket_count": 11,
+            "source_ids": [
+              "messy-001",
+              "messy-002",
+              "messy-003"
+            ],
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "dashboard freshness",
+            "draft_question": "What should the team verify for dashboard freshness?",
+            "observed_ticket_count": 7,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "sso setup",
+            "draft_question": "What should the team verify for sso setup?",
+            "observed_ticket_count": 6,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "billing and plan management",
+            "draft_question": "What should the team verify for billing and plan management?",
+            "observed_ticket_count": 4,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "data import",
+            "draft_question": "What happens after I provide ticket data?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "api and webhooks",
+            "draft_question": "What should the team verify for api and webhooks?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          }
+        ],
+        "faq_questions": [
+          "What happens after I provide ticket data?",
+          "Does FAQ Report publish automatically?"
+        ],
+        "forbidden_claims": [
+          "future ticket reduction or deflection",
+          "prevented tickets or fewer repeat questions",
+          "churn, retention, upgrade, referral, ROI, or capacity outcomes",
+          "claims that FAQ entries help customers find answers or avoid tickets",
+          "claims that customers can find answers themselves because an FAQ exists",
+          "faster resolution or customers finding answers without opening tickets",
+          "claims that FAQ entries reduce how often the team answers a question",
+          "claims that FAQ entries perform better in search without measured evidence",
+          "claims that lower repeat tickets prove an FAQ entry is working",
+          "claims that unresolved questions delay activation or block workflows",
+          "claims that FAQ entries create self-service options or search-result visibility",
+          "claims that FAQ entries are discoverable, rank for keywords, or are working",
+          "fixed calendar windows, rolling periods, or future tracking intervals when provided tickets are undated",
+          "unsupported priority rankings or operational-impact rankings when observed counts are tied",
+          "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence"
+        ],
+        "has_dated_window": false,
+        "has_measured_outcomes": false,
+        "included_ticket_row_count": 42,
+        "measured_outcome_count": 0,
+        "measured_outcome_examples": [],
+        "measurement_guidance": [
+          "Track new tickets by the same observed cluster labels after publishing.",
+          "Review FAQ page traffic and customer feedback as signals to inspect.",
+          "Compare future tickets against the observed clusters without claiming causality.",
+          "Do not add fixed day, week, month, 30-day, 60-day, or 90-day checkpoints unless `data_context.has_dated_window` is true."
+        ],
+        "question_like_ticket_count": 39,
+        "required_section_outline": [
+          {
+            "allowed_source_fields": [
+              "source_row_count",
+              "included_ticket_row_count",
+              "question_like_ticket_count",
+              "top_clusters"
+            ],
+            "claim_boundary": "Describe observed rows, repeated clusters, and customer wording only.",
+            "heading": "What repeat support questions show",
+            "id": "observed-ticket-patterns"
+          },
+          {
+            "allowed_source_fields": [
+              "top_clusters",
+              "draft_faq_shells"
+            ],
+            "claim_boundary": "Order by observed ticket count only; when counts tie, say no evidence-based rank is available.",
+            "heading": "Which FAQ gaps should be reviewed first",
+            "id": "faq-gap-review-order"
+          },
+          {
+            "allowed_source_fields": [
+              "draft_faq_shells",
+              "customer_wording_examples"
+            ],
+            "claim_boundary": "Use review-needed placeholders until support adds verified resolutions.",
+            "heading": "Draft FAQ shells to verify",
+            "id": "draft-faq-shells"
+          },
+          {
+            "allowed_source_fields": [
+              "measurement_guidance"
+            ],
+            "claim_boundary": "Frame metrics as future signals to watch, not outcomes already caused.",
+            "heading": "What to measure after publishing",
+            "id": "post-publication-measurement"
+          }
+        ],
+        "review_period": "observed support-ticket sample",
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source": "support_ticket_provider",
+        "source_period": "Last 90 days of support tickets",
+        "source_row_count": 44,
+        "support_ticket_blog_mode": "descriptive_no_outcome",
+        "support_ticket_resolution_evidence_count": 0,
+        "support_ticket_resolution_evidence_present": false,
+        "support_ticket_resolution_examples": [],
+        "top_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "top_ticket_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "topic": "Support ticket FAQ gaps: what repeat tickets reveal before renewal",
+        "total_reviews_analyzed": 42
+      },
+      "description": "In 42 support tickets, 39 direct customer questions repeated across 11 clusters. See which FAQ gaps your team should verify first.",
+      "generation_input_tokens": 28977,
+      "generation_output_tokens": 5989,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_first_sections": true,
+          "citable_section_structure": true,
+          "citation_safety": true,
+          "entity_clarity": true,
+          "evidence_specificity": true,
+          "faq_coverage": true,
+          "freshness_context": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "id": "ed3e1ecc-7106-428d-bb59-ffbc07738b3d",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "faq": [
+          {
+            "answer": "In 42 support tickets, 39 include direct customer questions that repeated across 11 observed clusters. The highest-volume clusters are reporting export (11 tickets), dashboard freshness (7 tickets), and SSO setup (6 tickets).",
+            "question": "What do repeat support tickets reveal about FAQ gaps?"
+          },
+          {
+            "answer": "Prioritize by observed ticket volume. In this sample, reporting export (11 tickets), dashboard freshness (7 tickets), and SSO setup (6 tickets) show the highest repeat counts and should be reviewed before lower-volume clusters.",
+            "question": "Which FAQ gaps should a small team fix first?"
+          },
+          {
+            "answer": "Copy customer wording from repeat tickets, group by cluster, and create draft FAQ shells. Each answer should stay as a review-needed placeholder until the support team adds the verified resolution before publishing.",
+            "question": "How should old tickets become review-ready FAQ shells?"
+          }
+        ],
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 2,
+        "generation_usage": {
+          "billable_input_tokens": 9,
+          "cache_write_tokens": 13599,
+          "cached_tokens": 15369,
+          "input_tokens": 28977,
+          "output_tokens": 5989,
+          "reasoning_tokens": 0
+        },
+        "secondary_keywords": [
+          "repeat support questions",
+          "FAQ planning from tickets",
+          "support ticket clusters"
+        ],
+        "seo_description": "42 support tickets show 39 repeat customer questions across 11 clusters. See which FAQ gaps to verify first before renewal.",
+        "seo_title": "Support Ticket FAQ Gaps: What Repeat Questions Show",
+        "target_keyword": "support ticket FAQ gaps",
+        "variant_angle": "Social-proof-led: frame the post around observed customer or market signals without adding unsupported testimonials."
+      },
+      "output_checks": {
+        "aeo_structure_detected": true,
+        "faq_ready": true,
+        "secondary_keywords_present": true,
+        "seo_description_ready": true,
+        "seo_title_ready": true,
+        "target_keyword_present": true
+      },
+      "passed_output_checks": 6,
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "seo_aeo_readiness": {
+        "checks": {
+          "aeo_structure_detected": true,
+          "faq_ready": true,
+          "secondary_keywords_present": true,
+          "seo_description_ready": true,
+          "seo_title_ready": true,
+          "target_keyword_present": true
+        },
+        "missing": [],
+        "passed": 6,
+        "status": "ready",
+        "total": 6
+      },
+      "slug": "content-ops-support-ticket-live-smoke-3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91-social-proof-led",
+      "status": "approved",
+      "tag_count": 3,
+      "tags": [
+        "repeat support questions",
+        "FAQ planning from tickets",
+        "support ticket clusters"
+      ],
+      "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
+      "topic_type": "content_ops_support_ticket_faq"
+    },
+    {
+      "chart_count": 0,
+      "charts": [],
+      "content": "## What repeat support questions show\n\nIn 42 support tickets, 39 include direct customer questions. Support ticket FAQ gaps appear when the same question repeats without a published answer. The observed clusters show which missing FAQ entries your team should verify before renewal. The original sample contains 44 total tickets; 42 include usable customer wording.\n\nTop observed clusters:\n\n- **Reporting export** -- 11 tickets\n- **Dashboard freshness** -- 7 tickets\n- **SSO setup** -- 6 tickets\n- **Billing and plan management** -- 4 tickets\n- **Data import** -- 3 tickets\n- **API and webhooks** -- 3 tickets\n- **Workflow automation** -- 2 tickets\n- **Permissions and seats** -- 2 tickets\n- **Integration sync** -- 2 tickets\n- **Weekly account digest** -- 1 ticket\n- **Customer said thanks** -- 1 ticket\n\nThe highest-volume clusters reveal where your FAQ coverage has gaps. When 11 tickets ask about reporting export, that cluster should become a review-ready FAQ shell before lower-volume questions.\n\n## Which FAQ gaps should be reviewed first\n\nPrioritize FAQ work by observed ticket count. Support ticket FAQ gaps that repeat most often should be verified first. In this sample, the highest-volume clusters are reporting export (11), dashboard freshness (7), and SSO setup (6). Those clusters should be reviewed before billing and plan management (4), data import (3), or API and webhooks (3).\n\nWhen counts tie, the provided evidence does not support ranking one cluster above another. Workflow automation (2), permissions and seats (2), and integration sync (2) are tied. Weekly account digest (1) and Customer said thanks (1) are one-off observations.\n\nSmall teams should focus on the top three clusters first. Reporting export, dashboard freshness, and SSO setup account for 24 of the 42 observed tickets. Verify those FAQ shells before moving to lower-volume clusters.\n\n## Draft FAQ shells to verify\n\nThe observed ticket set supports up to 6 first-pass FAQ entries from customer wording. Each answer should preserve customer language, stay as a review-needed shell, and wait for your support team to add the verified resolution. Without resolution evidence, do not publish concrete steps, UI paths, or capability claims.\n\n### Reporting export (11 tickets)\n\n**Draft question:** How do I export attribution reports before the board packet is due?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n**Customer wording examples:**\n\n> \"Attribution export blocked How do I export attribution reports before the board packet is due?\" -- ticket messy-001\n\n> \"CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?\" -- ticket messy-002\n\n> \"Export report for finance Can I schedule an attribution export for finance every Monday?\" -- ticket messy-003\n\n### Dashboard freshness (7 tickets)\n\n**Draft question:** What should the team verify for dashboard freshness?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### SSO setup (6 tickets)\n\n**Draft question:** What should the team verify for SSO setup?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Billing and plan management (4 tickets)\n\n**Draft question:** What should the team verify for billing and plan management?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Data import (3 tickets)\n\n**Draft question:** What happens after I provide ticket data?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### API and webhooks (3 tickets)\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after publishing. Compare future tickets against the observed clusters without claiming causality. Review FAQ page traffic and customer feedback as signals to inspect.\n\nDo not assume ticket volume will decline, the FAQ entry is working, or customers will find it. Measurement should be observational: what changed, not what the FAQ entry caused.\n\nWatch these signals:\n\n- **New tickets by cluster label** -- Do reporting export, dashboard freshness, or SSO setup tickets still appear after you publish the verified FAQ entries?\n- **FAQ page traffic** -- Which FAQ entries get views? Which get none?\n- **Customer feedback** -- Do customers say the FAQ entry answered their question, or do they still open tickets?\n\nThe observed ticket set shows what repeated before you published FAQ entries. Future tickets show what repeats after. The difference is a signal to inspect, not proof the FAQ entry is working.",
+      "data_context": {
+        "_known_vendors": [],
+        "allowed_claims": [
+          "observed support-ticket clusters and counts from the provided ticket set",
+          "customer wording copied from the provided tickets",
+          "review-needed draft FAQ shells",
+          "support-team verification work before publishing",
+          "metrics to watch after publishing, without claiming those metrics improved"
+        ],
+        "category": "support tickets",
+        "customer_wording_examples": [
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-001",
+            "source_title": "Attribution export blocked",
+            "text": "Attribution export blocked How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-002",
+            "source_title": "CSV missing owner column",
+            "text": "CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-003",
+            "source_title": "Export report for finance",
+            "text": "Export report for finance Can I schedule an attribution export for finance every Monday?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-004",
+            "source_title": "Dashboard export permission",
+            "text": "Dashboard export permission Why can analysts view dashboards but not export reports?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-005",
+            "source_title": "Attribution export blocked again",
+            "text": "Attribution export blocked again How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-006",
+            "source_title": "Export filters reset",
+            "text": "Export filters reset Why do my saved filters disappear when I export campaign reports?"
+          }
+        ],
+        "deep_enriched_count": 42,
+        "draft_answer_guidance": "Draft answer - support team should add the verified resolution before publishing.",
+        "draft_faq_shells": [
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "reporting export",
+            "draft_question": "How do I export attribution reports before the board packet is due?",
+            "observed_ticket_count": 11,
+            "source_ids": [
+              "messy-001",
+              "messy-002",
+              "messy-003"
+            ],
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "dashboard freshness",
+            "draft_question": "What should the team verify for dashboard freshness?",
+            "observed_ticket_count": 7,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "sso setup",
+            "draft_question": "What should the team verify for sso setup?",
+            "observed_ticket_count": 6,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "billing and plan management",
+            "draft_question": "What should the team verify for billing and plan management?",
+            "observed_ticket_count": 4,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "data import",
+            "draft_question": "What happens after I provide ticket data?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "api and webhooks",
+            "draft_question": "What should the team verify for api and webhooks?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          }
+        ],
+        "faq_questions": [
+          "What happens after I provide ticket data?",
+          "Does FAQ Report publish automatically?"
+        ],
+        "forbidden_claims": [
+          "future ticket reduction or deflection",
+          "prevented tickets or fewer repeat questions",
+          "churn, retention, upgrade, referral, ROI, or capacity outcomes",
+          "claims that FAQ entries help customers find answers or avoid tickets",
+          "claims that customers can find answers themselves because an FAQ exists",
+          "faster resolution or customers finding answers without opening tickets",
+          "claims that FAQ entries reduce how often the team answers a question",
+          "claims that FAQ entries perform better in search without measured evidence",
+          "claims that lower repeat tickets prove an FAQ entry is working",
+          "claims that unresolved questions delay activation or block workflows",
+          "claims that FAQ entries create self-service options or search-result visibility",
+          "claims that FAQ entries are discoverable, rank for keywords, or are working",
+          "fixed calendar windows, rolling periods, or future tracking intervals when provided tickets are undated",
+          "unsupported priority rankings or operational-impact rankings when observed counts are tied",
+          "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence"
+        ],
+        "has_dated_window": false,
+        "has_measured_outcomes": false,
+        "included_ticket_row_count": 42,
+        "measured_outcome_count": 0,
+        "measured_outcome_examples": [],
+        "measurement_guidance": [
+          "Track new tickets by the same observed cluster labels after publishing.",
+          "Review FAQ page traffic and customer feedback as signals to inspect.",
+          "Compare future tickets against the observed clusters without claiming causality.",
+          "Do not add fixed day, week, month, 30-day, 60-day, or 90-day checkpoints unless `data_context.has_dated_window` is true."
+        ],
+        "question_like_ticket_count": 39,
+        "required_section_outline": [
+          {
+            "allowed_source_fields": [
+              "source_row_count",
+              "included_ticket_row_count",
+              "question_like_ticket_count",
+              "top_clusters"
+            ],
+            "claim_boundary": "Describe observed rows, repeated clusters, and customer wording only.",
+            "heading": "What repeat support questions show",
+            "id": "observed-ticket-patterns"
+          },
+          {
+            "allowed_source_fields": [
+              "top_clusters",
+              "draft_faq_shells"
+            ],
+            "claim_boundary": "Order by observed ticket count only; when counts tie, say no evidence-based rank is available.",
+            "heading": "Which FAQ gaps should be reviewed first",
+            "id": "faq-gap-review-order"
+          },
+          {
+            "allowed_source_fields": [
+              "draft_faq_shells",
+              "customer_wording_examples"
+            ],
+            "claim_boundary": "Use review-needed placeholders until support adds verified resolutions.",
+            "heading": "Draft FAQ shells to verify",
+            "id": "draft-faq-shells"
+          },
+          {
+            "allowed_source_fields": [
+              "measurement_guidance"
+            ],
+            "claim_boundary": "Frame metrics as future signals to watch, not outcomes already caused.",
+            "heading": "What to measure after publishing",
+            "id": "post-publication-measurement"
+          }
+        ],
+        "review_period": "observed support-ticket sample",
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source": "support_ticket_provider",
+        "source_period": "Last 90 days of support tickets",
+        "source_row_count": 44,
+        "support_ticket_blog_mode": "descriptive_no_outcome",
+        "support_ticket_resolution_evidence_count": 0,
+        "support_ticket_resolution_evidence_present": false,
+        "support_ticket_resolution_examples": [],
+        "top_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "top_ticket_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "topic": "Support ticket FAQ gaps: what repeat tickets reveal before renewal",
+        "total_reviews_analyzed": 42
+      },
+      "description": "In 42 support tickets, 39 direct customer questions repeated across 11 clusters. See which FAQ gaps your team should verify first.",
+      "generation_input_tokens": 8182,
+      "generation_output_tokens": 1779,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_first_sections": true,
+          "citable_section_structure": true,
+          "citation_safety": true,
+          "entity_clarity": true,
+          "evidence_specificity": true,
+          "faq_coverage": true,
+          "freshness_context": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "id": "d087572c-206c-444b-99b2-07477bfcba26",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "faq": [
+          {
+            "answer": "In 42 support tickets, 39 include direct customer questions that repeated across 11 observed clusters. The highest-volume clusters are reporting export (11 tickets), dashboard freshness (7), and SSO setup (6). These patterns show which FAQ entries your team should verify first.",
+            "question": "What do repeat support tickets reveal about FAQ gaps?"
+          },
+          {
+            "answer": "Prioritize by observed ticket count. In this sample, reporting export (11 tickets), dashboard freshness (7), and SSO setup (6) are the highest-volume clusters. Review those before lower-volume or one-off questions.",
+            "question": "How should a small team prioritize FAQ work from old tickets?"
+          },
+          {
+            "answer": "The observed ticket set supports up to 6 first-pass FAQ entries from customer wording. Each answer stays as a review-needed shell until your support team adds the verified resolution and approved customer-facing wording.",
+            "question": "What happens after I provide ticket data?"
+          }
+        ],
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 0,
+        "generation_usage": {
+          "billable_input_tokens": 3,
+          "cache_write_tokens": 3056,
+          "cached_tokens": 5123,
+          "input_tokens": 8182,
+          "output_tokens": 1779,
+          "reasoning_tokens": 0
+        },
+        "secondary_keywords": [
+          "repeat support questions",
+          "FAQ planning from tickets",
+          "support ticket clusters"
+        ],
+        "seo_description": "42 support tickets show 39 repeated customer questions across 11 clusters. See which FAQ gaps to verify first before renewal.",
+        "seo_title": "Support Ticket FAQ Gaps: What Repeat Questions Show",
+        "target_keyword": "support ticket FAQ gaps",
+        "variant_angle": "Outcome-led: lead with the business result the audience wants, then connect the supporting evidence to that result."
+      },
+      "output_checks": {
+        "aeo_structure_detected": true,
+        "faq_ready": true,
+        "secondary_keywords_present": true,
+        "seo_description_ready": true,
+        "seo_title_ready": true,
+        "target_keyword_present": true
+      },
+      "passed_output_checks": 6,
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "seo_aeo_readiness": {
+        "checks": {
+          "aeo_structure_detected": true,
+          "faq_ready": true,
+          "secondary_keywords_present": true,
+          "seo_description_ready": true,
+          "seo_title_ready": true,
+          "target_keyword_present": true
+        },
+        "missing": [],
+        "passed": 6,
+        "status": "ready",
+        "total": 6
+      },
+      "slug": "content-ops-support-ticket-live-smoke-3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91-outcome-led",
+      "status": "approved",
+      "tag_count": 3,
+      "tags": [
+        "repeat support questions",
+        "FAQ planning from tickets",
+        "support ticket clusters"
+      ],
+      "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
+      "topic_type": "content_ops_support_ticket_faq"
+    },
+    {
+      "chart_count": 0,
+      "charts": [],
+      "content": "## What repeat support questions show\n\nSupport ticket FAQ gaps appear when your customers ask the same questions and your help center does not answer them. In 42 support tickets, 39 include direct customer questions that repeated across 11 observed clusters. The highest-volume clusters are reporting export (11 tickets), dashboard freshness (7 tickets), SSO setup (6 tickets), billing and plan management (4 tickets), and data import (3 tickets). These patterns show which FAQ entries your support team should verify first.\n\nThe original sample contains 44 total tickets. Two tickets did not include customer questions\u2014one was a weekly account digest, and one was a customer thank-you note. The remaining 42 tickets show repeated question patterns that your team can turn into draft FAQ shells.\n\nCustomer wording reveals what your users actually ask. One customer wrote: **\"Attribution export blocked How do I export attribution reports before the board packet is due?\"** Another asked: **\"CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?\"** A third said: **\"Export report for finance Can I schedule an attribution export for finance every Monday?\"**\n\nThese are not paraphrased summaries. This is how your customers phrase their questions when they open tickets. Your FAQ entries should use the same language.\n\nThe observed clusters do not prove how often these questions appear outside this sample. They show what repeated in the tickets you provided. If your full support queue is larger, the same clusters may appear more or less frequently. Track new tickets by the same cluster labels after you publish FAQ entries to see whether the pattern holds.\n\n## Which FAQ gaps should be reviewed first\n\nSupport ticket FAQ gaps should be prioritized by observed ticket count in the provided sample. In 42 support tickets, reporting export appeared 11 times, dashboard freshness appeared 7 times, and SSO setup appeared 6 times. Those three clusters should be reviewed before lower-volume or one-off questions. Billing and plan management appeared in 4 tickets. Data import and API and webhooks each appeared in 3 tickets. Workflow automation, permissions and seats, and integration sync each appeared in 2 tickets. Weekly account digest and customer thank-you notes each appeared once.\n\nWhen counts tie, the provided evidence does not support ranking one cluster above another. Data import and API and webhooks both appeared in 3 tickets. Without additional context\u2014such as customer impact, contract risk, or support-team capacity\u2014you cannot say one is more urgent than the other. Review tied clusters in the order that fits your team's priorities.\n\nThe observed counts show what repeated in this ticket set. They do not prove that reporting export is the most common question across your entire support queue, or that weekly account digest questions are rare. If your full queue is larger, run the same clustering process on a broader sample to see whether the ranking changes.\n\n## Draft FAQ shells to verify\n\nThe observed ticket set supports up to 6 first-pass FAQ entries from customer wording. Without resolution evidence in the original tickets, each answer should stay as a review-needed shell until your support team adds the verified resolution.\n\n### Reporting export (11 tickets)\n\n**Draft question:** How do I export attribution reports before the board packet is due?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\n**Source customer wording:**\n- \"Attribution export blocked How do I export attribution reports before the board packet is due?\"\n- \"CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?\"\n- \"Export report for finance Can I schedule an attribution export for finance every Monday?\"\n\nThis cluster appeared in 11 tickets. The draft question uses the exact phrasing from one customer. Your support team should confirm the resolution, verify that the answer matches current product behavior, and approve the customer-facing wording before you publish.\n\n### Dashboard freshness (7 tickets)\n\n**Draft question:** What should the team verify for dashboard freshness?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\nThis cluster appeared in 7 tickets. The draft question is a placeholder. Your support team should write the actual customer question based on the ticket wording, then add the verified resolution.\n\n### SSO setup (6 tickets)\n\n**Draft question:** What should the team verify for SSO setup?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\nThis cluster appeared in 6 tickets. The draft question is a placeholder. Your support team should write the actual customer question based on the ticket wording, then add the verified resolution.\n\n### Billing and plan management (4 tickets)\n\n**Draft question:** What should the team verify for billing and plan management?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\nThis cluster appeared in 4 tickets. The draft question is a placeholder. Your support team should write the actual customer question based on the ticket wording, then add the verified resolution.\n\n### Data import (3 tickets)\n\n**Draft question:** What happens after I provide ticket data?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\nThis cluster appeared in 3 tickets. The draft question uses phrasing from the FAQ metadata. Your support team should confirm whether this matches the actual customer wording in the tickets, then add the verified resolution.\n\n### API and webhooks (3 tickets)\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:** Verified resolution, approved customer-facing wording, support owner review.\n\nThis cluster appeared in 3 tickets. The draft question is a placeholder. Your support team should write the actual customer question based on the ticket wording, then add the verified resolution.\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after you publish FAQ entries. Compare future ticket counts against the observed baseline as one signal to inspect. Review FAQ page traffic and customer feedback as additional signals.\n\nIf a published FAQ entry receives low traffic, check whether the question wording matches how customers search. If customers leave negative feedback, check whether the answer is incomplete or outdated. If future ticket counts change, note what shifted without claiming the FAQ entry caused the change. Other factors\u2014such as product updates, onboarding changes, or seasonal usage patterns\u2014may also shift ticket volume.\n\nThe observed ticket set does not include calendar dates or a rolling time window. Without a dated baseline, you cannot compare ticket volume before and after publishing using fixed intervals. Track new tickets by cluster label and review the pattern after you accumulate a similar number of tickets as the original sample.\n\nIf you publish FAQ entries and ticket volume stays the same, inspect whether customers are finding the entries. Check search analytics, help center traffic, and customer feedback. If customers are not finding the entries, revise the question wording or improve the help center search. If you publish FAQ entries and ticket volume changes, compare the new ticket pattern against the observed baseline and note what shifted. Then decide whether the FAQ entry needs revision or whether the change reflects a different cause.",
+      "data_context": {
+        "_known_vendors": [],
+        "allowed_claims": [
+          "observed support-ticket clusters and counts from the provided ticket set",
+          "customer wording copied from the provided tickets",
+          "review-needed draft FAQ shells",
+          "support-team verification work before publishing",
+          "metrics to watch after publishing, without claiming those metrics improved"
+        ],
+        "category": "support tickets",
+        "customer_wording_examples": [
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-001",
+            "source_title": "Attribution export blocked",
+            "text": "Attribution export blocked How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-002",
+            "source_title": "CSV missing owner column",
+            "text": "CSV missing owner column Why is the campaign CSV export missing source owner and channel columns?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-003",
+            "source_title": "Export report for finance",
+            "text": "Export report for finance Can I schedule an attribution export for finance every Monday?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-004",
+            "source_title": "Dashboard export permission",
+            "text": "Dashboard export permission Why can analysts view dashboards but not export reports?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-005",
+            "source_title": "Attribution export blocked again",
+            "text": "Attribution export blocked again How do I export attribution reports before the board packet is due?"
+          },
+          {
+            "pain_category": "reporting export",
+            "source_id": "messy-006",
+            "source_title": "Export filters reset",
+            "text": "Export filters reset Why do my saved filters disappear when I export campaign reports?"
+          }
+        ],
+        "deep_enriched_count": 42,
+        "draft_answer_guidance": "Draft answer - support team should add the verified resolution before publishing.",
+        "draft_faq_shells": [
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "reporting export",
+            "draft_question": "How do I export attribution reports before the board packet is due?",
+            "observed_ticket_count": 11,
+            "source_ids": [
+              "messy-001",
+              "messy-002",
+              "messy-003"
+            ],
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "dashboard freshness",
+            "draft_question": "What should the team verify for dashboard freshness?",
+            "observed_ticket_count": 7,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "sso setup",
+            "draft_question": "What should the team verify for sso setup?",
+            "observed_ticket_count": 6,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "billing and plan management",
+            "draft_question": "What should the team verify for billing and plan management?",
+            "observed_ticket_count": 4,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "data import",
+            "draft_question": "What happens after I provide ticket data?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          },
+          {
+            "answer_shell": "Draft answer - support team should add the verified resolution before publishing.",
+            "cluster": "api and webhooks",
+            "draft_question": "What should the team verify for api and webhooks?",
+            "observed_ticket_count": 3,
+            "verification_needed": [
+              "verified resolution",
+              "approved customer-facing wording",
+              "support owner review"
+            ]
+          }
+        ],
+        "faq_questions": [
+          "What happens after I provide ticket data?",
+          "Does FAQ Report publish automatically?"
+        ],
+        "forbidden_claims": [
+          "future ticket reduction or deflection",
+          "prevented tickets or fewer repeat questions",
+          "churn, retention, upgrade, referral, ROI, or capacity outcomes",
+          "claims that FAQ entries help customers find answers or avoid tickets",
+          "claims that customers can find answers themselves because an FAQ exists",
+          "faster resolution or customers finding answers without opening tickets",
+          "claims that FAQ entries reduce how often the team answers a question",
+          "claims that FAQ entries perform better in search without measured evidence",
+          "claims that lower repeat tickets prove an FAQ entry is working",
+          "claims that unresolved questions delay activation or block workflows",
+          "claims that FAQ entries create self-service options or search-result visibility",
+          "claims that FAQ entries are discoverable, rank for keywords, or are working",
+          "fixed calendar windows, rolling periods, or future tracking intervals when provided tickets are undated",
+          "unsupported priority rankings or operational-impact rankings when observed counts are tied",
+          "concrete answer steps, UI paths, menu names, or capability claims without resolution evidence"
+        ],
+        "has_dated_window": false,
+        "has_measured_outcomes": false,
+        "included_ticket_row_count": 42,
+        "measured_outcome_count": 0,
+        "measured_outcome_examples": [],
+        "measurement_guidance": [
+          "Track new tickets by the same observed cluster labels after publishing.",
+          "Review FAQ page traffic and customer feedback as signals to inspect.",
+          "Compare future tickets against the observed clusters without claiming causality.",
+          "Do not add fixed day, week, month, 30-day, 60-day, or 90-day checkpoints unless `data_context.has_dated_window` is true."
+        ],
+        "question_like_ticket_count": 39,
+        "required_section_outline": [
+          {
+            "allowed_source_fields": [
+              "source_row_count",
+              "included_ticket_row_count",
+              "question_like_ticket_count",
+              "top_clusters"
+            ],
+            "claim_boundary": "Describe observed rows, repeated clusters, and customer wording only.",
+            "heading": "What repeat support questions show",
+            "id": "observed-ticket-patterns"
+          },
+          {
+            "allowed_source_fields": [
+              "top_clusters",
+              "draft_faq_shells"
+            ],
+            "claim_boundary": "Order by observed ticket count only; when counts tie, say no evidence-based rank is available.",
+            "heading": "Which FAQ gaps should be reviewed first",
+            "id": "faq-gap-review-order"
+          },
+          {
+            "allowed_source_fields": [
+              "draft_faq_shells",
+              "customer_wording_examples"
+            ],
+            "claim_boundary": "Use review-needed placeholders until support adds verified resolutions.",
+            "heading": "Draft FAQ shells to verify",
+            "id": "draft-faq-shells"
+          },
+          {
+            "allowed_source_fields": [
+              "measurement_guidance"
+            ],
+            "claim_boundary": "Frame metrics as future signals to watch, not outcomes already caused.",
+            "heading": "What to measure after publishing",
+            "id": "post-publication-measurement"
+          }
+        ],
+        "review_period": "observed support-ticket sample",
+        "scope": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "user_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "source": "support_ticket_provider",
+        "source_period": "Last 90 days of support tickets",
+        "source_row_count": 44,
+        "support_ticket_blog_mode": "descriptive_no_outcome",
+        "support_ticket_resolution_evidence_count": 0,
+        "support_ticket_resolution_evidence_present": false,
+        "support_ticket_resolution_examples": [],
+        "top_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "top_ticket_clusters": [
+          {
+            "count": 11,
+            "label": "reporting export"
+          },
+          {
+            "count": 7,
+            "label": "dashboard freshness"
+          },
+          {
+            "count": 6,
+            "label": "sso setup"
+          },
+          {
+            "count": 4,
+            "label": "billing and plan management"
+          },
+          {
+            "count": 3,
+            "label": "data import"
+          },
+          {
+            "count": 3,
+            "label": "api and webhooks"
+          },
+          {
+            "count": 2,
+            "label": "workflow automation"
+          },
+          {
+            "count": 2,
+            "label": "permissions and seats"
+          },
+          {
+            "count": 2,
+            "label": "integration sync"
+          },
+          {
+            "count": 1,
+            "label": "Weekly account digest"
+          },
+          {
+            "count": 1,
+            "label": "Customer said thanks"
+          }
+        ],
+        "topic": "Support ticket FAQ gaps: what repeat tickets reveal before renewal",
+        "total_reviews_analyzed": 42
+      },
+      "description": "In 42 support tickets, 39 direct customer questions repeated across 11 clusters. See which FAQ gaps your team should verify first.",
+      "generation_input_tokens": 19040,
+      "generation_output_tokens": 4522,
+      "generation_parse_attempts": 1,
+      "generation_total_tokens": null,
+      "geo_readiness": {
+        "checks": {
+          "answer_first_sections": true,
+          "citable_section_structure": true,
+          "citation_safety": true,
+          "entity_clarity": true,
+          "evidence_specificity": true,
+          "faq_coverage": true,
+          "freshness_context": true
+        },
+        "missing": [],
+        "passed": 7,
+        "status": "ready",
+        "total": 7
+      },
+      "id": "d787d807-7d97-4587-a75e-6405b7f1cb67",
+      "metadata": {
+        "brand_voice_audit": {
+          "banned_terms": [],
+          "passed": true,
+          "warnings": []
+        },
+        "brand_voice_profile": {
+          "account_id": "3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91",
+          "descriptors": [
+            "plainspoken",
+            "skeptical",
+            "operator-led",
+            "specific",
+            "short sentences"
+          ],
+          "id": "gate-a-sharp-support-operator",
+          "name": "Sharp Support Operator",
+          "preferred_pov": "second_person",
+          "reading_level": "concise"
+        },
+        "faq": [
+          {
+            "answer": "In 42 support tickets, 39 include direct customer questions that repeated across 11 observed clusters. The highest-volume clusters are reporting export (11 tickets), dashboard freshness (7 tickets), and SSO setup (6 tickets). These patterns show which FAQ entries the support team should verify first.",
+            "question": "What do repeat support tickets reveal about FAQ gaps?"
+          },
+          {
+            "answer": "Copy customer wording from observed tickets, group by cluster, and create draft FAQ shells with review-needed placeholders. The support team adds verified resolutions before publishing. Without resolution evidence in the original tickets, answer content should stay as draft shells until support confirms the fix.",
+            "question": "How should old tickets become review-ready FAQ shells?"
+          },
+          {
+            "answer": "Prioritize by observed ticket count. In this sample, reporting export (11 tickets), dashboard freshness (7 tickets), and SSO setup (6 tickets) are the highest-volume clusters. Review those before lower-volume or one-off questions.",
+            "question": "Which FAQ gaps should a small team fix first?"
+          }
+        ],
+        "generation_model": "anthropic/claude-sonnet-4-5",
+        "generation_parse_attempts": 1,
+        "generation_quality_repair_attempts": 1,
+        "generation_usage": {
+          "billable_input_tokens": 6,
+          "cache_write_tokens": 13911,
+          "cached_tokens": 5123,
+          "input_tokens": 19040,
+          "output_tokens": 4522,
+          "reasoning_tokens": 0
+        },
+        "secondary_keywords": [
+          "repeat support questions",
+          "FAQ planning from tickets",
+          "customer question clusters"
+        ],
+        "seo_description": "42 support tickets show 39 repeated customer questions across 11 clusters. See which FAQ gaps to verify first before renewal.",
+        "seo_title": "Support Ticket FAQ Gaps: What Repeat Questions Show",
+        "target_keyword": "support ticket FAQ gaps",
+        "variant_angle": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step."
+      },
+      "output_checks": {
+        "aeo_structure_detected": true,
+        "faq_ready": true,
+        "secondary_keywords_present": true,
+        "seo_description_ready": true,
+        "seo_title_ready": true,
+        "target_keyword_present": true
+      },
+      "passed_output_checks": 6,
+      "reasoning_confidence": null,
+      "reasoning_context_used": false,
+      "reasoning_wedge": null,
+      "seo_aeo_readiness": {
+        "checks": {
+          "aeo_structure_detected": true,
+          "faq_ready": true,
+          "secondary_keywords_present": true,
+          "seo_description_ready": true,
+          "seo_title_ready": true,
+          "target_keyword_present": true
+        },
+        "missing": [],
+        "passed": 6,
+        "status": "ready",
+        "total": 6
+      },
+      "slug": "content-ops-support-ticket-live-smoke-3e4f1b6c-1a92-4b8a-9d7e-5f2a0e8c7b91-pain-led",
+      "status": "approved",
+      "tag_count": 3,
+      "tags": [
+        "repeat support questions",
+        "FAQ planning from tickets",
+        "customer question clusters"
+      ],
+      "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
+      "topic_type": "content_ops_support_ticket_faq"
+    }
+  ]
+}
