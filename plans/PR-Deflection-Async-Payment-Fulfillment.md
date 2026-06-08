@@ -43,9 +43,8 @@ Acceptance criteria:
   `payment_status` updates `content_ops_deflection_reports`, queues delivery
   when an email exists, and records the async event type.
 - Pending completed: a `checkout.session.completed` deflection webhook whose
-  session is still unpaid raises a retryable 409 pending-payment response and
-  does not update the report, queue delivery, or insert a processed
-  `billing_events` row.
+  session is still unpaid returns 200 after inserting an observed-but-unfulfilled
+  `billing_events` row, and does not update the report or queue delivery.
 - Async failure: `checkout.session.async_payment_failed` logs the failed
   deflection payment context and does not update the report or queue delivery.
 - Existing idempotency remains intact for fulfilled events: already processed
@@ -80,9 +79,10 @@ paid status, metadata, amount, and currency before `mark_paid`.
 This slice keeps that helper as the single fulfillment path, but routes both
 `checkout.session.completed` and `checkout.session.async_payment_succeeded` into
 it for deflection sessions. Those routes remain valid only when Stripe's session
-payload says `payment_status=paid`; otherwise they raise a retryable 409 before
-the event is inserted into `billing_events`, so an unpaid event is not recorded
-as a successfully processed paid event.
+payload says `payment_status=paid`; otherwise they skip unlock, continue to the
+normal `billing_events` audit insert, and return 200. A redelivered unpaid event
+then dedupes by its own event ID, while a later async-success event has a
+distinct ID and can still unlock.
 
 `checkout.session.async_payment_failed` does not unlock anything. It logs the
 session/account/request context at warning level and records the failed event in
@@ -99,7 +99,7 @@ unrelated Stripe event.
   are followed by best-effort `billing_events` insertion, and duplicate
   processed event IDs skip before side effects.
 - A non-paid async-success payload is treated like a non-paid completed payload:
-  no unlock, no delivery, and no processed event row.
+  no unlock and no delivery, but the event is acknowledged and audited.
 
 ## Deferred
 
@@ -125,7 +125,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/billing.py` | 46 |
+| `atlas_brain/api/billing.py` | 56 |
 | `plans/PR-Deflection-Async-Payment-Fulfillment.md` | 131 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 219 |
-| **Total** | **396** |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 223 |
+| **Total** | **410** |

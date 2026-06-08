@@ -399,12 +399,12 @@ async def stripe_webhook(request: Request):
         elif meta.get("source") == "content_ops_deflection_report":
             if _stripe_text(obj, "payment_status") != "paid":
                 _log_content_ops_deflection_report_payment_pending(obj, meta)
-                raise HTTPException(status_code=409, detail="Deflection report payment pending")
-            await _handle_content_ops_deflection_report_checkout_completed(
-                pool,
-                obj,
-                meta,
-            )
+            else:
+                await _handle_content_ops_deflection_report_checkout_completed(
+                    pool,
+                    obj,
+                    meta,
+                )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
 
@@ -413,12 +413,12 @@ async def stripe_webhook(request: Request):
         if meta.get("source") == "content_ops_deflection_report":
             if _stripe_text(obj, "payment_status") != "paid":
                 _log_content_ops_deflection_report_payment_pending(obj, meta)
-                raise HTTPException(status_code=409, detail="Deflection report payment pending")
-            await _handle_content_ops_deflection_report_checkout_completed(
-                pool,
-                obj,
-                meta,
-            )
+            else:
+                await _handle_content_ops_deflection_report_checkout_completed(
+                    pool,
+                    obj,
+                    meta,
+                )
 
     elif event_type == "checkout.session.async_payment_failed":
         meta = obj.metadata or {}

@@ -495,14 +495,16 @@ async def test_stripe_webhook_deflection_completed_unpaid_stays_pending(
     )
     monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
 
-    with pytest.raises(billing.HTTPException) as exc:
-        await billing.stripe_webhook(request)
+    response = await billing.stripe_webhook(request)
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail == "Deflection report payment pending"
+    assert response == {"status": "ok"}
     assert "checkout event arrived before funds were available" in caplog.text
-    assert pool.execute_calls == []
-    assert pool.processed_event_ids == set()
+    assert len(pool.execute_calls) == 1
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_pending_payment"
+    assert insert_args[2] == "checkout.session.completed"
+    assert pool.processed_event_ids == {"evt_deflection_pending_payment"}
     assert pool.report_rows[(account_id, "req-123")]["paid"] is False
     assert pool.delivery_rows == {}
 
@@ -545,14 +547,16 @@ async def test_stripe_webhook_deflection_async_success_unpaid_stays_pending(
     )
     monkeypatch.setattr(billing, "get_db_pool", lambda: pool)
 
-    with pytest.raises(billing.HTTPException) as exc:
-        await billing.stripe_webhook(request)
+    response = await billing.stripe_webhook(request)
 
-    assert exc.value.status_code == 409
-    assert exc.value.detail == "Deflection report payment pending"
+    assert response == {"status": "ok"}
     assert "checkout event arrived before funds were available" in caplog.text
-    assert pool.execute_calls == []
-    assert pool.processed_event_ids == set()
+    assert len(pool.execute_calls) == 1
+    insert_query, insert_args = pool.execute_calls[0]
+    assert "INSERT INTO billing_events" in insert_query
+    assert insert_args[1] == "evt_deflection_async_success_unpaid"
+    assert insert_args[2] == "checkout.session.async_payment_succeeded"
+    assert pool.processed_event_ids == {"evt_deflection_async_success_unpaid"}
     assert pool.report_rows[(account_id, "req-123")]["paid"] is False
     assert pool.delivery_rows == {}
 
