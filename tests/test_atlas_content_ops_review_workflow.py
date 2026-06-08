@@ -9,6 +9,7 @@ from atlas_brain._content_ops_review_workflow import (
     ContentOpsReviewRequest,
     TenantClaimRegistryReadError,
     run_content_ops_review,
+    run_content_ops_review_for_bound_tenant,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import ClaimStatus, ExtractedClaim, RegistryClaim
@@ -20,6 +21,12 @@ from extracted_content_pipeline.content_pr import (
     RulePacketVersions,
 )
 from extracted_content_pipeline.review_contract import ReviewDecision, RiskTier
+from extracted_quality_gate.types import (
+    GateDecision,
+    GateFinding,
+    GateSeverity,
+    QualityReport,
+)
 
 
 _AS_OF = date(2026, 6, 7)
@@ -49,6 +56,25 @@ class _FailingRegistryReader:
     async def list_registry_claims(self, *, scope: TenantScope):
         self.scopes.append(scope)
         raise TenantClaimRegistryReadError("claim registry read failed")
+
+
+@dataclass
+class _AccountResolver:
+    account_id: object
+    calls: int = 0
+
+    async def resolve_account_id(self):
+        self.calls += 1
+        return self.account_id
+
+
+@dataclass
+class _FailingAccountResolver:
+    calls: int = 0
+
+    async def resolve_account_id(self):
+        self.calls += 1
+        raise RuntimeError("oauth token lookup failed")
 
 
 def _reader() -> _RegistryReader:
@@ -136,6 +162,62 @@ async def test_registry_reader_receives_tenant_scope_not_request_account_id() ->
 
 
 @pytest.mark.asyncio
+async def test_bound_tenant_review_uses_resolved_account_scope() -> None:
+    reader = _reader()
+    resolver = _AccountResolver(" acct-1 ")
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert resolver.calls == 1
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+    assert result.mapped_claims[0].status == ClaimStatus.MATCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_id", [None, "", " ", 123])
+async def test_bound_tenant_review_blocks_missing_or_malformed_binding(
+    account_id: object,
+) -> None:
+    reader = _reader()
+    resolver = _AccountResolver(account_id)
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("tenant scope required",)
+    assert result.mapped_claims == ()
+    assert resolver.calls == 1
+    assert reader.scopes == []
+
+
+@pytest.mark.asyncio
+async def test_bound_tenant_review_blocks_resolver_failure_before_registry() -> None:
+    reader = _reader()
+    resolver = _FailingAccountResolver()
+
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(),
+        account_resolver=resolver,
+        registry_reader=reader,
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.reasons == ("tenant binding resolution failed",)
+    assert result.mapped_claims == ()
+    assert resolver.calls == 1
+    assert reader.scopes == []
+
+
+@pytest.mark.asyncio
 async def test_registry_reader_failure_blocks_review() -> None:
     reader = _failing_reader()
     scope = TenantScope(account_id="acct-1")
@@ -169,6 +251,140 @@ async def test_result_as_dict_is_tool_shaped() -> None:
     assert payload["mapped_claims"][0]["risk_tier"] == "medium"
     assert payload["content_pr"]["asset_id"] == "asset-1"
     assert payload["content_pr"]["coverage"][0]["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_quality_report_can_supply_required_coverage() -> None:
+    result = await run_content_ops_review(
+        _request(
+            coverage=(),
+            quality_reports=(QualityReport(passed=True, decision=GateDecision.PASS),),
+        ),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert [row.rule_id for row in result.content_pr.coverage] == [
+        "QUALITY-GATE:report",
+    ]
+    assert result.content_pr.coverage[0].status == CoverageStatus.PASS
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_coverage_is_preserved_before_quality_rows() -> None:
+    result = await run_content_ops_review(
+        _request(
+            coverage=(_pass_row("MANUAL-VOICE"),),
+            quality_reports=(QualityReport(passed=True, decision=GateDecision.PASS),),
+        ),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert [row.rule_id for row in result.content_pr.coverage] == [
+        "MANUAL-VOICE",
+        "QUALITY-GATE:report",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_quality_report_blocker_requires_revision() -> None:
+    result = await run_content_ops_review(
+        _request(
+            coverage=(),
+            quality_reports=(
+                QualityReport(
+                    passed=False,
+                    decision=GateDecision.BLOCK,
+                    findings=(
+                        GateFinding(
+                            code="no_cta",
+                            message="CTA is missing",
+                            severity=GateSeverity.BLOCKER,
+                            field_name="cta",
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.REVISION_REQUIRED
+    assert result.content_pr.coverage[0].rule_id == "QUALITY-GATE:no-cta"
+    assert any("failed required coverage" in reason for reason in result.reasons)
+
+
+@pytest.mark.asyncio
+async def test_malformed_quality_evidence_blocks_as_unresolved_coverage() -> None:
+    result = await run_content_ops_review(
+        _request(coverage=(), quality_reports=(None,)),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.content_pr.coverage[0].rule_id == "QUALITY-GATE:report"
+    assert result.content_pr.coverage[0].status == CoverageStatus.UNRESOLVED
+    assert any("unresolved required coverage" in reason for reason in result.reasons)
+
+
+@pytest.mark.asyncio
+async def test_contradictory_quality_evidence_blocks_as_unresolved_coverage() -> None:
+    result = await run_content_ops_review(
+        _request(coverage=(), quality_reports=({"passed": True, "decision": "block"},)),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert result.content_pr.coverage[0].rule_id == "QUALITY-GATE:contradictory-decision"
+    assert result.content_pr.coverage[0].status == CoverageStatus.UNRESOLVED
+    assert any("unresolved required coverage" in reason for reason in result.reasons)
+
+
+@pytest.mark.asyncio
+async def test_brand_voice_public_metadata_can_supply_required_coverage() -> None:
+    result = await run_content_ops_review(
+        _request(
+            coverage=(),
+            brand_voice_payload={"brand_voice_audit": {"passed": True}},
+        ),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert [row.rule_id for row in result.content_pr.coverage] == [
+        "BRAND-VOICE:audit",
+    ]
+    assert result.content_pr.coverage[0].status == CoverageStatus.PASS
+
+
+@pytest.mark.asyncio
+async def test_brand_voice_warning_requires_revision() -> None:
+    result = await run_content_ops_review(
+        _request(
+            coverage=(),
+            brand_voice_payload={
+                "brand_voice_audit": {
+                    "passed": False,
+                    "warnings": ["preferred_pov_second_person_not_detected"],
+                }
+            },
+        ),
+        scope=TenantScope(account_id="acct-1"),
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.REVISION_REQUIRED
+    assert result.content_pr.coverage[0].rule_id == (
+        "BRAND-VOICE:warning-preferred-pov-second-person-not-detected"
+    )
+    assert any("failed required coverage" in reason for reason in result.reasons)
 
 
 @pytest.mark.asyncio
