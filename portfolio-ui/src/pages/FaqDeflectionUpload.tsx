@@ -144,9 +144,9 @@ export default function FaqDeflectionUpload() {
     <>
       <SeoHead
         meta={{
-          title: "FAQ Deflection Upload",
+          title: "FAQ Deflection Intake",
           description:
-            "Prepare a support-ticket CSV for the FAQ deflection report handoff.",
+            "Start a deterministic FAQ deflection analysis from private support-ticket data.",
           canonicalPath: "/services/faq-deflection",
           noindex: true,
         }}
@@ -183,10 +183,15 @@ export default function FaqDeflectionUpload() {
                   FAQ deflection
                 </p>
                 <h1 className="text-3xl font-bold tracking-normal text-white md:text-4xl">
-                  Support-ticket CSV upload
+                  Start a deterministic FAQ gap audit
                 </h1>
               </div>
             </div>
+            <p className="mt-5 max-w-3xl text-base leading-7 text-surface-200/85">
+              Upload real support tickets and ATLAS turns repeated customer
+              questions into a locked report using repeatable clustering, not
+              chatbot interpretation.
+            </p>
 
             <div className="mt-8 grid gap-5 md:grid-cols-2">
               <label className="block">
@@ -231,7 +236,8 @@ export default function FaqDeflectionUpload() {
               <div className="rounded-lg border border-surface-700/70 bg-surface-900/60 px-3 py-3">
                 <span className="text-sm font-medium text-surface-100">ATLAS account</span>
                 <p className="mt-2 text-xs leading-5 text-surface-200/65">
-                  Bound server-side to the configured report workspace.
+                  Workspace routing is handled server-side. Your browser never
+                  receives ATLAS service tokens or account credentials.
                 </p>
               </div>
             </div>
@@ -239,7 +245,7 @@ export default function FaqDeflectionUpload() {
             <label className="mt-6 block rounded-lg border border-dashed border-surface-600 bg-surface-900/55 p-5 transition focus-within:border-primary-400">
               <span className="flex items-center gap-3 text-sm font-medium text-surface-100">
                 <Upload size={18} className="text-primary-300" />
-                CSV export
+                Support-ticket CSV
               </span>
               <input
                 className="mt-4 block w-full cursor-pointer rounded-lg border border-surface-700 bg-surface-900 text-sm text-surface-100 file:mr-4 file:border-0 file:bg-primary-500 file:px-4 file:py-3 file:text-sm file:font-semibold file:text-surface-900"
@@ -248,10 +254,19 @@ export default function FaqDeflectionUpload() {
                 accept=".csv,text/csv"
                 onChange={(event) => setUpload(fileState(event.target.files?.[0]))}
               />
+              <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
+                <p className="text-sm font-semibold text-primary-100">
+                  🛡️ 100% Deterministic Engine
+                </p>
+                <p className="mt-2 text-xs leading-5 text-primary-100/80">
+                  This tool does not use LLMs or generative AI to analyze your
+                  logs. We use exact mathematical clustering to sort your data.
+                </p>
+              </div>
               <span className="mt-3 block text-xs text-surface-200/60">
-                50 MB cap. CSV bytes are first stored in private Vercel Blob,
-                then forwarded to ATLAS server-side; service tokens never reach
-                the browser.
+                Up to 50 MB. Your CSV stays in private storage first, then
+                ATLAS reads it server-side; service tokens never reach the
+                browser.
               </span>
             </label>
 
@@ -332,7 +347,7 @@ export default function FaqDeflectionUpload() {
           </form>
 
           <aside className="h-fit rounded-lg border border-surface-700/60 bg-surface-800/45 p-6">
-            <h2 className="text-lg font-semibold text-white">Handoff state</h2>
+            <h2 className="text-lg font-semibold text-white">Private analysis handoff</h2>
             <dl className="mt-5 space-y-4 text-sm">
               <div>
                 <dt className="text-surface-200/60">Upload fields</dt>
@@ -354,9 +369,9 @@ export default function FaqDeflectionUpload() {
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              The portfolio persists the CSV to private Blob, reads it back on
-              the server, then sends the browser to the hosted result page for
-              snapshot hydration and Checkout.
+              ATLAS stores the CSV privately, reads it back on the server, then
+              sends the browser to the locked result page for snapshot hydration
+              and Checkout.
             </p>
           </aside>
         </div>
