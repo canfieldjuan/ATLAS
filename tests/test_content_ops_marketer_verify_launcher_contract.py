@@ -126,8 +126,10 @@ def test_launcher_e2e_command_satisfies_e2e_checker_parser(
     ]
     assert args.issuer_url == "https://atlas.example.com/content-ops-marketer"
     assert args.resource_url == "https://atlas.example.com/content-ops-marketer/mcp"
+    assert args.client_profile == "claude-rich"
     assert args.approval_token_file == "/path/to/local-approval-token"
     assert args.approval_token == ""
+    assert "chatgpt-search-fetch" in _operator_guidance(launcher)
 
 
 def test_launcher_required_env_covers_server_oauth_account_binding(monkeypatch) -> None:

@@ -8,6 +8,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,8 +46,11 @@ _strip_trailing_slash = _draft_e2e._strip_trailing_slash
 
 DEFAULT_SCOPE = "content_ops.review.verify"
 DEFAULT_REDIRECT_URI = _draft_e2e.DEFAULT_REDIRECT_URI
-EXPECTED_TOOLS = {"verify_draft"}
-DENIED_TOOLS = {
+CLAUDE_RICH_PROFILE = "claude-rich"
+CHATGPT_SEARCH_FETCH_PROFILE = "chatgpt-search-fetch"
+EXPECTED_TOOLS = frozenset({"verify_draft"})
+CHATGPT_SEARCH_FETCH_TOOLS = frozenset({"fetch", "search"})
+DENIED_TOOLS = frozenset({
     "add_registry_claim",
     "define_experiment",
     "generate_asset",
@@ -55,10 +59,45 @@ DENIED_TOOLS = {
     "start_brief",
     "update_registry_claim",
     "verify_and_publish",
-}
+})
+ADAPTER_TOOLS = frozenset({"fetch", "search"})
 ISSUER_ENV = "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL"
 RESOURCE_ENV = "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL"
 APPROVAL_ENV = "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN"
+
+
+@dataclass(frozen=True)
+class ClientProfile:
+    key: str
+    expected_tools: frozenset[str]
+    denied_tools: frozenset[str]
+    tool_noun: str
+
+
+CLIENT_PROFILES = {
+    CLAUDE_RICH_PROFILE: ClientProfile(
+        key=CLAUDE_RICH_PROFILE,
+        expected_tools=EXPECTED_TOOLS,
+        denied_tools=DENIED_TOOLS | ADAPTER_TOOLS,
+        tool_noun="verify-only tool",
+    ),
+    CHATGPT_SEARCH_FETCH_PROFILE: ClientProfile(
+        key=CHATGPT_SEARCH_FETCH_PROFILE,
+        expected_tools=CHATGPT_SEARCH_FETCH_TOOLS,
+        denied_tools=DENIED_TOOLS | EXPECTED_TOOLS,
+        tool_noun="adapter tools",
+    ),
+}
+
+
+def _client_profile(profile_key: str) -> ClientProfile:
+    try:
+        return CLIENT_PROFILES[profile_key]
+    except KeyError as exc:
+        choices = ", ".join(sorted(CLIENT_PROFILES))
+        raise ValueError(
+            f"unknown client profile {profile_key!r}; expected one of: {choices}"
+        ) from exc
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -100,6 +139,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scope",
         default=DEFAULT_SCOPE,
         help=f"Required OAuth scope. Default: {DEFAULT_SCOPE}.",
+    )
+    parser.add_argument(
+        "--client-profile",
+        choices=sorted(CLIENT_PROFILES),
+        default=CLAUDE_RICH_PROFILE,
+        help=(
+            "Tool-surface contract to validate. Default: claude-rich. "
+            "Use chatgpt-search-fetch only against a ChatGPT adapter surface."
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -165,17 +213,28 @@ def _register_client(config: Any) -> Any:
     return RegisteredClient(client_id=client_id, client_secret=client_secret)
 
 
-def _tool_surface_errors(tool_names: set[str]) -> list[str]:
+def _tool_surface_errors(
+    tool_names: set[str],
+    profile_key: str = CLAUDE_RICH_PROFILE,
+) -> list[str]:
+    profile = _client_profile(profile_key)
     errors: list[str] = []
-    missing = sorted(EXPECTED_TOOLS - tool_names)
-    extra = sorted(tool_names - EXPECTED_TOOLS)
-    denied = sorted(tool_names & DENIED_TOOLS)
+    missing = sorted(profile.expected_tools - tool_names)
+    extra = sorted(tool_names - profile.expected_tools)
+    denied = sorted(tool_names & profile.denied_tools)
     if missing:
-        errors.append("missing Content Ops marketer verify tools: " + ", ".join(missing))
+        errors.append(
+            f"missing Content Ops marketer tools for {profile.key}: " + ", ".join(missing)
+        )
     if extra:
         errors.append("unexpected tools exposed: " + ", ".join(extra))
     if denied:
         errors.append("denied tools exposed: " + ", ".join(denied))
+    if profile.key == CHATGPT_SEARCH_FETCH_PROFILE and "verify_draft" in tool_names:
+        errors.append(
+            "chatgpt-search-fetch requires a search/fetch adapter surface; "
+            "verify_draft is Claude-rich only"
+        )
     return errors
 
 
@@ -202,16 +261,20 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"OAuth e2e smoke failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-    errors = _tool_surface_errors(tool_names)
+    errors = _tool_surface_errors(tool_names, args.client_profile)
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
 
-    print("OK: Content Ops marketer verify OAuth e2e smoke completed")
+    profile = _client_profile(args.client_profile)
+    print(f"OK: Content Ops marketer verify OAuth e2e smoke completed for {profile.key}")
     print("- dynamic client registration succeeded")
     print("- operator approval and token exchange succeeded")
-    print(f"- OAuth-authenticated MCP session exposes {len(tool_names)} verify-only tool")
+    print(
+        f"- OAuth-authenticated MCP session exposes {len(tool_names)} "
+        f"{profile.tool_noun}"
+    )
     for name in sorted(tool_names):
         print(f"- {name}")
     return 0

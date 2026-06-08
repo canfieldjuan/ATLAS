@@ -278,10 +278,11 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
     print(f"  --issuer-url {issuer_url} \\")
     print(f"  --resource-url {resource_url}")
     print()
-    print("Planned next-slice OAuth e2e smoke:")
+    print("OAuth e2e smoke for Claude rich connector profile:")
     print(".venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \\")
     print(f"  --issuer-url {issuer_url} \\")
     print(f"  --resource-url {resource_url} \\")
+    print("  --client-profile claude-rich \\")
     token_file = config.approval_token_file or "/path/to/local-approval-token"
     print(f"  --approval-token-file {shlex.quote(token_file)}")
     if config.approval_token_file is None:
@@ -290,6 +291,13 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
             "file or export ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN "
             "and pass --approval-token."
         )
+    print()
+    print("After a ChatGPT search/fetch adapter exists, verify that surface with:")
+    print(".venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \\")
+    print(f"  --issuer-url {issuer_url} \\")
+    print(f"  --resource-url {resource_url} \\")
+    print("  --client-profile chatgpt-search-fetch \\")
+    print("  --approval-token-file /path/to/local-approval-token")
 
 
 def _main(argv: list[str] | None = None) -> int:
