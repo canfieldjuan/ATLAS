@@ -56,7 +56,7 @@ DEFAULT_LANDING_PAGE_INPUTS: Mapping[str, Any] = {
         "Do we need a full-time docs person?",
     ],
     "faq_questions": [
-        "What happens after I upload the CSV?",
+        "What happens after I provide ticket data?",
         "Does FAQ Report publish automatically?",
     ],
     "source_period": "Last 90 days of support tickets",
@@ -694,7 +694,7 @@ def _default_blog_blueprint_payload() -> dict[str, Any]:
                 "id": "publishable-answer-process",
                 "heading": "How should old tickets become customer-ready answers?",
                 "goal": (
-                    "Show the operational path from CSV upload to clustered "
+                    "Show the operational path from ticket intake to clustered "
                     "questions, customer wording, draft answers, and review."
                 ),
                 "key_stats": {
@@ -743,17 +743,19 @@ def _support_ticket_blog_blueprint_payload(
     cluster_summary = _cluster_summary(top_clusters)
     faq_questions = list(inputs.get("faq_questions") or [])
     draft_faq_entries = min(12, max(1, len(faq_questions) or included_row_count))
+    has_valid_date_window = bool(inputs.get("has_dated_window"))
     source_period = str(
         inputs.get("source_period") or UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD
     )
-    has_valid_date_window = bool(inputs.get("has_dated_window"))
+    if not has_valid_date_window:
+        source_period = "observed support-ticket sample"
     resolution_evidence_present = bool(
         inputs.get("support_ticket_resolution_evidence_present")
     )
     review_period = (
         SUPPORT_TICKET_LAST_90_DAYS_REVIEW_PERIOD
         if has_valid_date_window
-        else UPLOADED_TICKETS_REVIEW_PERIOD
+        else "observed support-ticket sample"
     )
     data_context = {
         "review_period": review_period,
@@ -793,7 +795,7 @@ def _support_ticket_blog_blueprint_payload(
                 "id": "repeat-ticket-patterns",
                 "heading": "What do repeat support tickets reveal?",
                 "goal": (
-                    "Explain what the uploaded support-ticket rows show about "
+                    "Explain what the observed support-ticket sample shows about "
                     "customer questions and missing customer-facing answers."
                 ),
                 "key_stats": {
@@ -804,9 +806,9 @@ def _support_ticket_blog_blueprint_payload(
                 },
                 "chart_ids": [],
                 "data_summary": (
-                    f"The support-ticket set includes {source_row_count} source "
-                    f"rows and {included_row_count} usable ticket rows. "
-                    f"{question_like_count} rows include direct customer questions. "
+                    f"In {included_row_count} support tickets, "
+                    f"{question_like_count} include direct customer questions. "
+                    f"The original sample contains {source_row_count} total tickets. "
                     f"Top observed clusters: {cluster_summary}."
                 ),
             },
@@ -821,7 +823,7 @@ def _support_ticket_blog_blueprint_payload(
                 "chart_ids": [],
                 "data_summary": (
                     "Prioritize FAQ work by observed ticket volume. In this "
-                    f"CSV, the highest-volume clusters are: {cluster_summary}. "
+                    f"sample, the highest-volume clusters are: {cluster_summary}. "
                     "Those clusters should be reviewed before lower-volume or "
                     "one-off questions."
                 ),
@@ -830,7 +832,7 @@ def _support_ticket_blog_blueprint_payload(
                 "id": "publishable-answer-process",
                 "heading": "How should old tickets become review-ready FAQ shells?",
                 "goal": (
-                    "Show the operational path from CSV upload to clustered "
+                    "Show the operational path from ticket intake to clustered "
                     "questions, customer wording, review-needed draft answer "
                     "shells, and support-team verification."
                 ),

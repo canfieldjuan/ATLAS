@@ -161,9 +161,9 @@
         "reasoning_contexts_used": 0,
         "requested": 3,
         "saved_ids": [
-          "49e324c1-f331-404d-bfa4-dcbcb5387027",
-          "2b09400f-a8b9-4787-86dd-ca655686d246",
-          "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+          "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+          "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+          "104b8793-9015-4aac-abab-41917dd38309"
         ],
         "skipped": 0,
         "variant_count": 3,
@@ -174,6 +174,18 @@
             "quality_repair_history": [
               {
                 "attempt": 0,
+                "blockers": [
+                  "seo_aeo_readiness:meta_description",
+                  "geo_readiness:section_semantics"
+                ],
+                "passed": false,
+                "repair_issues": [
+                  "seo_aeo_readiness:meta_description",
+                  "geo_readiness:section_semantics"
+                ]
+              },
+              {
+                "attempt": 1,
                 "blockers": [],
                 "passed": true,
                 "repair_issues": []
@@ -182,7 +194,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "49e324c1-f331-404d-bfa4-dcbcb5387027"
+              "d8b20a0d-44c5-42ee-ae7a-b29251426db8"
             ],
             "skipped": 0,
             "variant_angle": {
@@ -205,7 +217,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "2b09400f-a8b9-4787-86dd-ca655686d246"
+              "067c7531-b8c7-4b88-acaf-4f7643cd43f6"
             ],
             "skipped": 0,
             "variant_angle": {
@@ -228,7 +240,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+              "104b8793-9015-4aac-abab-41917dd38309"
             ],
             "skipped": 0,
             "variant_angle": {
@@ -252,70 +264,27 @@
         "service_supports_reasoning": true
       },
       "result": {
-        "errors": [
-          {
-            "blockers": [
-              "geo_citable_section_structure_missing",
-              "support_ticket_generated_content:debug_source_narration"
-            ],
-            "blueprint_id": "0da54d85-706c-43e9-aa59-036b182b2d87",
-            "failed_candidate": {
-              "content_excerpt_head": "## What repeat support questions show\n\nYour customers ask the same questions repeatedly. In the uploaded tickets, 35 of 36 rows include direct customer questions. Nine clusters appear with equal frequency: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). Each cluster represents a gap where your help center does not answer the question.\n\nThe reporting export cluster includes questions such as \"How do I export attribution reports before our board meeting?\" and \"Why is the campaign CSV export missing source and owner columns?\" The dashboard freshness cluster includes \"Why has our pipeline dashboard not refreshed since yesterday?\" and \"How do we check whether the warehouse sync is delayed?\" These are not edge cases. They are repeated patterns in the provided ticket set.\n\nThe uploaded tickets show which questions appear most often in this sample. They do not prove how often those questions appear across your full support queue. They show what customers asked in the provided set.\n\n## Which FAQ gaps should be reviewed first\n\nPrioritize by observed ticket volume. In this set, nine clusters are tied at 4 tickets each. You cannot rank tied clusters by business impact, activation risk, or workflow blocking without measured outcome evidence. The blueprint does not include that evidence. Review all nine tied clusters bef",
-              "content_excerpt_tail": "d resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### API and webhooks\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Integration sync\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for integration sync?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after publishing. Review FAQ page traffic and customer feedback as signals to inspect. Compare future tickets against the observed clusters without claiming causality.\n\nThe uploaded tickets do not include a dated source window, so do not add fixed checkpoints. Watch for changes in ticket patterns and adjust your FAQ content based on what you observe.\n\nIf a cluster continues to generate tickets after you publish an FAQ entry, that is a signal. The answer may need clearer wording, the question may need a different title, or the FAQ page may need better navigation. Use those signals to refine your content.",
-              "content_truncated": true,
-              "generation_parse_attempts": 1,
-              "generation_quality_repair_attempts": 2,
-              "seo_title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal",
-              "slug": "",
-              "target_keyword": "support ticket faq gaps",
-              "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
-              "topic_type": "",
-              "word_count": 924
-            },
-            "reason": "quality_blocked",
-            "variant_angle": "pain_led",
-            "variant_label": "Pain-led"
-          }
-        ],
-        "generated": 2,
+        "errors": [],
+        "generated": 3,
         "reasoning_contexts_used": 0,
         "requested": 3,
         "saved_ids": [
+          "0501c17f-90c9-4318-9d15-e3253160a4e5",
           "2f9ec4e3-475a-4046-9e01-182757d1de20",
           "44d56e20-d9c8-4626-8e39-e894cb8fd085"
         ],
-        "skipped": 1,
+        "skipped": 0,
         "variant_count": 3,
         "variant_results": [
           {
-            "errors": [
-              {
-                "blockers": [
-                  "geo_citable_section_structure_missing",
-                  "support_ticket_generated_content:debug_source_narration"
-                ],
-                "blueprint_id": "0da54d85-706c-43e9-aa59-036b182b2d87",
-                "failed_candidate": {
-                  "content_excerpt_head": "## What repeat support questions show\n\nYour customers ask the same questions repeatedly. In the uploaded tickets, 35 of 36 rows include direct customer questions. Nine clusters appear with equal frequency: reporting export (4 tickets), dashboard freshness (4), SSO setup (4), permissions and seats (4), API and webhooks (4), integration sync (4), data import (4), workflow automation (4), and billing and plan management (4). Each cluster represents a gap where your help center does not answer the question.\n\nThe reporting export cluster includes questions such as \"How do I export attribution reports before our board meeting?\" and \"Why is the campaign CSV export missing source and owner columns?\" The dashboard freshness cluster includes \"Why has our pipeline dashboard not refreshed since yesterday?\" and \"How do we check whether the warehouse sync is delayed?\" These are not edge cases. They are repeated patterns in the provided ticket set.\n\nThe uploaded tickets show which questions appear most often in this sample. They do not prove how often those questions appear across your full support queue. They show what customers asked in the provided set.\n\n## Which FAQ gaps should be reviewed first\n\nPrioritize by observed ticket volume. In this set, nine clusters are tied at 4 tickets each. You cannot rank tied clusters by business impact, activation risk, or workflow blocking without measured outcome evidence. The blueprint does not include that evidence. Review all nine tied clusters bef",
-                  "content_excerpt_tail": "d resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### API and webhooks\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for API and webhooks?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n### Integration sync\n\n**Observed ticket count:** 4\n\n**Draft question:** What should the team verify for integration sync?\n\n**Answer shell:** Draft answer - support team should add the verified resolution before publishing.\n\n**Verification needed:**\n- Verified resolution\n- Approved customer-facing wording\n- Support owner review\n\n## What to measure after publishing\n\nTrack new tickets by the same observed cluster labels after publishing. Review FAQ page traffic and customer feedback as signals to inspect. Compare future tickets against the observed clusters without claiming causality.\n\nThe uploaded tickets do not include a dated source window, so do not add fixed checkpoints. Watch for changes in ticket patterns and adjust your FAQ content based on what you observe.\n\nIf a cluster continues to generate tickets after you publish an FAQ entry, that is a signal. The answer may need clearer wording, the question may need a different title, or the FAQ page may need better navigation. Use those signals to refine your content.",
-                  "content_truncated": true,
-                  "generation_parse_attempts": 1,
-                  "generation_quality_repair_attempts": 2,
-                  "seo_title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal",
-                  "slug": "",
-                  "target_keyword": "support ticket faq gaps",
-                  "title": "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal",
-                  "topic_type": "",
-                  "word_count": 924
-                },
-                "reason": "quality_blocked"
-              }
-            ],
-            "generated": 0,
+            "errors": [],
+            "generated": 1,
             "reasoning_contexts_used": 0,
             "requested": 1,
-            "saved_ids": [],
-            "skipped": 1,
+            "saved_ids": [
+              "0501c17f-90c9-4318-9d15-e3253160a4e5"
+            ],
+            "skipped": 0,
             "variant_angle": {
               "id": "pain_led",
               "instruction": "Pain-led: open with the customer's current friction, then show how the evidence supports the recommended next step.",
@@ -372,9 +341,9 @@
         "reasoning_contexts_used": 0,
         "requested": 3,
         "saved_ids": [
-          "33044118-629f-491d-ada6-0aa3fc838222",
-          "e71d3a76-e32a-4891-8879-e6b99d9e58af",
-          "8744dc21-df4e-424e-9a9d-e5cada717886"
+          "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+          "490247f3-19bf-4c0e-b532-e78c369cf989",
+          "2689157c-2473-44e9-bc75-3f786b105aae"
         ],
         "skipped": 0,
         "variant_count": 3,
@@ -385,7 +354,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "33044118-629f-491d-ada6-0aa3fc838222"
+              "3fc2cbe9-eca0-42ee-8804-2b63c9af9057"
             ],
             "skipped": 0,
             "variant_angle": {
@@ -400,7 +369,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "e71d3a76-e32a-4891-8879-e6b99d9e58af"
+              "490247f3-19bf-4c0e-b532-e78c369cf989"
             ],
             "skipped": 0,
             "variant_angle": {
@@ -415,7 +384,7 @@
             "reasoning_contexts_used": 0,
             "requested": 1,
             "saved_ids": [
-              "8744dc21-df4e-424e-9a9d-e5cada717886"
+              "2689157c-2473-44e9-bc75-3f786b105aae"
             ],
             "skipped": 0,
             "variant_angle": {

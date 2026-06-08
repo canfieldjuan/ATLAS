@@ -11,11 +11,12 @@ reviewer owns the product-quality judgment against the exported drafts.
 
 Review-response note: the first #1383 proof run exposed that the seeded
 support-ticket blog source summary still contained debug generation wording
-and that the blog debug-source detector missed the exact live phrase. This
-refresh includes the detector/source-summary hardening and reruns the same
-selected outputs. The rerun blocked a bad blog candidate on
-`support_ticket_generated_content:debug_source_narration` and exported only the
-saved drafts listed below.
+and that the blog debug-source detector missed the exact live phrase. The next
+review showed that quote-specific detection was not enough: passing blog
+variants could still narrate uploaded/source mechanics. This refresh makes the
+support-ticket prose instruction unconditional, removes upload/source-row copy
+from the live seed, broadens the detector to the source-mechanics class, and
+reruns the same selected outputs.
 
 Raw artifacts:
 
@@ -66,22 +67,18 @@ review ids. `summary.json` reports `ok=true`.
 | Output | Saved ids | Exported rows | Review status |
 |---|---:|---:|---|
 | landing_page | 3 | 3 | approved, no missing ids |
-| blog_post | 2 | 2 | approved, no missing ids |
+| blog_post | 3 | 3 | approved, no missing ids |
 | sales_brief | 3 | 3 | approved, no missing ids |
 
-Blocked variants recorded by the harness:
+No selected-output variants were blocked in the final run. `summary.json`
+records 3 generated variants for each selected output with empty per-variant
+error lists.
 
-| Output | Variant | Blocker |
-|---|---|---|
-| blog_post | pain_led | `geo_citable_section_structure_missing`, `support_ticket_generated_content:debug_source_narration` |
-
-The blocked variants are preserved in `summary.json` under
-`variant_summary`. The blocked blog candidate includes the exact debug-source
-shape found in review ("In the uploaded tickets, 35 of 36 rows...") and was not
-saved or exported. The exported blog samples were also checked for the known
-debug-generation phrases `rows were included for generation`,
-`uploaded ticket CSV can produce`, and `Your uploaded tickets contain`; none
-were present.
+The exported blog samples were checked for source-mechanics/debug-generation
+phrases including `uploaded tickets`, `uploaded ticket set`, `source rows`,
+`usable rows`, `included rows`, `rows were included`, `we ingested`,
+`you sent`, `support ticket export`, and `source mechanics`; none were present
+in public blog content or the full blog export JSON.
 
 ## Samples
 
@@ -89,24 +86,25 @@ Landing-page exports:
 
 | Variant | Draft id | Title | Hero headline | Brand voice |
 |---|---|---|---|---|
-| pain_led | `49e324c1-f331-404d-bfa4-dcbcb5387027` | "Stop Answering the Same Support Tickets Every Week" | "Your team answers the same questions every week" | passed |
-| outcome_led | `2b09400f-a8b9-4787-86dd-ca655686d246` | "Cut Repeat Support Tickets with Review-Ready FAQ Answers" | "Turn repeat support tickets into approved FAQ answers" | passed |
-| social_proof | `a1181e5e-91e3-49d0-9ad1-1c5494783330` | "35 Support Tickets Showed the Same 9 FAQ Gaps - Here's Your Audit" | "Your repeat tickets already told you what's missing" | passed |
+| pain_led | `d8b20a0d-44c5-42ee-ae7a-b29251426db8` | "Support Ticket FAQ Gap Audit - Turn Repeat Tickets Into Approved Answers" | "Your repeat tickets show the FAQ gaps" | passed |
+| outcome_led | `067c7531-b8c7-4b88-acaf-4f7643cd43f6` | "Cut Repeat Support Tickets with FAQ Gap Audit" | "Turn Repeat Support Tickets into Approved FAQ Answers" | passed |
+| social_proof | `104b8793-9015-4aac-abab-41917dd38309` | "Support Ticket FAQ Gap Audit - Turn Repeat Questions Into Approved Answers" | "Your repeat tickets already show the FAQ gaps" | passed |
 
 Blog exports:
 
 | Variant | Draft id | Title | Opening heading | Brand voice |
 |---|---|---|---|---|
-| outcome_led | `2f9ec4e3-475a-4046-9e01-182757d1de20` | "Support Ticket FAQ Gaps: What Your Repeat Tickets Reveal Before Renewal" | "What your repeat support questions show" | passed |
-| social_proof | `44d56e20-d9c8-4626-8e39-e894cb8fd085` | "Support Ticket FAQ Gaps: What Your Repeat Tickets Reveal Before Renewal" | "What repeat support questions show" | passed |
+| pain_led | `0501c17f-90c9-4318-9d15-e3253160a4e5` | "Support Ticket FAQ Gaps: What Repeat Tickets Reveal Before Renewal" | "What repeat support questions show" | passed |
+| outcome_led | `2f9ec4e3-475a-4046-9e01-182757d1de20` | "Support Ticket FAQ Gaps: What Your Repeat Questions Reveal Before Renewal" | "What repeat support questions show" | passed |
+| social_proof | `44d56e20-d9c8-4626-8e39-e894cb8fd085` | "Support Ticket FAQ Gaps: What 36 Repeat Tickets Reveal Before Renewal" | "What repeat support questions show" | passed |
 
 Sales-brief exports:
 
 | Variant | Draft id | Headline | Brief type | Brand voice |
 |---|---|---|---|---|
-| pain_led | `33044118-629f-491d-ada6-0aa3fc838222` | "Your RevOps lead hit a reporting wall before their board meeting. Export friction at renewal time is churn friction." | renewal | passed |
-| outcome_led | `e71d3a76-e32a-4891-8879-e6b99d9e58af` | "Your RevOps lead needs attribution exports before the board meeting. Support ticket shows renewal-stage reporting gap." | renewal | passed |
-| social_proof | `8744dc21-df4e-424e-9a9d-e5cada717886` | "RevOps lead needs attribution exports before board meeting. Support ticket signals reporting gap risk at renewal." | renewal | passed |
+| pain_led | `3fc2cbe9-eca0-42ee-8804-2b63c9af9057` | "Your RevOps lead hit a wall exporting attribution data right before a board meeting. That's your renewal conversation starter." | renewal | passed |
+| outcome_led | `490247f3-19bf-4c0e-b532-e78c369cf989` | "Your RevOps lead needs attribution exports before the board meeting. Renewal window is your leverage to fix the blocker." | renewal | passed |
+| social_proof | `2689157c-2473-44e9-bc75-3f786b105aae` | "RevOps lead blocked on attribution exports days before board meeting. Support ticket shows renewal-risk friction." | renewal | passed |
 
 ## Reviewer Notes
 
@@ -118,7 +116,7 @@ drafts directly for:
 - variant distinction in title, body, and section order;
 - grounded counts only;
 - second-person voice;
-- whether the one blocked blog variant should keep Gate A from passing.
+- whether the 3/3 exported samples meet the GOOD bar.
 
 The artifact set is complete enough for a reviewer to judge the real samples
 without rerunning the live generation.

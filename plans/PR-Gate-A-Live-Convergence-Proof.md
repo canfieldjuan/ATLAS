@@ -19,7 +19,10 @@ blog debug-source detector missed the exact live phrase "rows were included
 for generation", and the live smoke seed still exposed that debug wording in
 the source summary. The same review cycle also exposed a second-person sales
 brief instability where the shared brand-voice prompt was too implicit. This
-PR now closes those narrow gates and refreshes the proof artifacts.
+PR now closes those gates and the follow-up review finding that quote-specific
+blog detection still let upload/source-mechanics narration through passing
+exports. The final artifacts rerun the same selected outputs after moving
+support-ticket blog prose prevention into the unconditional prompt path.
 
 This PR may exceed the 400 LOC soft cap because the raw JSON outputs are the
 point of the slice. The artifacts are indivisible evidence, while the code
@@ -38,12 +41,16 @@ Slice phase: Functional validation
 3. Commit the exact run artifacts under `docs/extraction/validation/fixtures/`
    plus a markdown report with the command, resolved model, structural result,
    and sample pointers.
-4. Harden the support-ticket blog debug-source detector for the exact live
-   phrase and remove debug "included for generation" wording from the smoke
-   seed blueprint.
+4. Harden the support-ticket blog source-mechanics prevention path so the
+   support-ticket prose prompt fires unconditionally, the detector covers the
+   upload/source-row class, and the smoke seed no longer hands that wording to
+   the model.
 5. Make the shared second-person brand-voice prompt explicit enough for
    sales-brief generation to satisfy the existing enforcement gate.
-6. Do not self-certify product acceptance. The reviewer owns the GOOD-bar
+6. Keep the existing GEO/citable-section gate intact by prompting
+   support-ticket blog H2 sections to satisfy the required target-keyword
+   paragraph shape.
+7. Do not self-certify product acceptance. The reviewer owns the GOOD-bar
    judgment against the exported drafts.
 
 ### Review Contract
@@ -60,9 +67,11 @@ Slice phase: Functional validation
         claiming product pass/fail beyond the harness result.
   - [ ] The run excludes `email_campaign` so its unverified input-fit cannot
         mask the three-generator convergence signal.
-  - [ ] The refreshed run proves the bad blog prose candidate is blocked with
-        `support_ticket_generated_content:debug_source_narration`.
-  - [ ] Tests cover the exact live debug phrases and allowed near-misses.
+  - [ ] The refreshed run exports all three blog variants with no
+        source-mechanics/debug-source phrases in public blog content or the
+        full blog export JSON.
+  - [ ] Tests cover the exact live debug phrases, generalized
+        upload/source-mechanics shapes, and allowed near-misses.
 - Affected surfaces: validation artifacts, support-ticket blog generation
   gates, support-ticket live-smoke seed copy, shared brand-voice prompt
   guidance, and focused tests.
@@ -87,6 +96,7 @@ Slice phase: Functional validation
 - `scripts/smoke_content_ops_live_generation.py`
 - `tests/test_extracted_blog_generation.py`
 - `tests/test_extracted_brand_voice.py`
+- `tests/test_extracted_content_ops_live_execute_harness.py`
 - `tests/test_extracted_sales_brief_generation.py`
 - `tests/test_smoke_content_ops_live_generation.py`
 
@@ -110,11 +120,16 @@ and summarized in
 Review-response mechanics:
 
 - `extracted_content_pipeline/blog_generation.py` expands the existing
-  support-ticket debug-source narration patterns to catch the exact live
-  phrases from review, while paired tests preserve allowed near-misses.
+  support-ticket debug-source narration patterns to catch the generalized
+  upload/source-mechanics class from review, while paired tests preserve
+  allowed near-misses.
+- `extracted_content_pipeline/blog_generation.py` also applies
+  support-ticket customer-facing prose instructions before the descriptive
+  no-outcome contract check, prompts the existing GEO H2 target-keyword shape,
+  and normalizes blog-export upload-period labels to observed-sample wording.
 - `scripts/smoke_content_ops_live_generation.py` rewrites the seeded blog
-  blueprint summaries so the model no longer sees "rows were included for
-  generation" or "uploaded ticket CSV can produce" as source copy to repeat.
+  blueprint summaries so the model no longer sees upload, CSV, source-row, or
+  generation mechanics as source copy to repeat.
 - `extracted_content_pipeline/brand_voice.py` keeps the existing audit/blocker
   contract but makes second-person prompt guidance explicit (`you` / `your`)
   before sales-brief generation, so compliant drafts are more likely to pass
@@ -130,9 +145,9 @@ Review-response mechanics:
   changing the model variable.
 - Do not write a product-quality verdict. The report can state structural
   counts and sample excerpts, but the GOOD-bar judgment remains reviewer-owned.
-- The refreshed live run still permits a blocked variant. The blocked
-  `pain_led` blog candidate is evidence that the #1373-style gate fired, not a
-  saved customer-facing draft.
+- Preserve the quality gates instead of weakening them. The blog fix improves
+  first-pass prompt compliance and broadens deterministic detection; it does
+  not lower the generated-content, brand-voice, or GEO gates.
 
 ## Deferred
 
@@ -166,35 +181,41 @@ Parked hardening:
 
 ## Verification
 
-- `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false python scripts/smoke_content_ops_gate_a_live_quality.py --account-id 2b2b950d-f64b-4852-bc30-f92a34cdf169 --user-id 11111111-1111-4111-8111-111111111111 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --output-dir tmp/content_ops_gate_a_reconfirm_20260608 --outputs landing_page,blog_post,sales_brief --variant-count 3 --quality-repair-attempts 1 --max-cost-usd 20.00 --json` - PASS (`summary.json` reports `ok=true`; selected outputs only).
-- `python -m pytest tests/test_extracted_blog_generation.py tests/test_extracted_brand_voice.py tests/test_extracted_sales_brief_generation.py tests/test_smoke_content_ops_live_generation.py tests/test_smoke_content_ops_gate_a_live_quality.py -q` - PASS (193 passed).
+- `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false python scripts/smoke_content_ops_gate_a_live_quality.py --account-id 2b2b950d-f64b-4852-bc30-f92a34cdf169 --user-id 11111111-1111-4111-8111-111111111111 --support-ticket-csv extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv --env-file /home/juan-canfield/Desktop/Atlas/.env --env-file /home/juan-canfield/Desktop/Atlas/.env.local --output-dir tmp/content_ops_gate_a_reconfirm_20260608 --outputs landing_page,blog_post,sales_brief --variant-count 3 --quality-repair-attempts 1 --max-cost-usd 20.00 --json` - PASS (`summary.json` reports `ok=true`; `export_counts` are `blog_post=3`, `landing_page=3`, `sales_brief=3`; selected outputs only).
+- `python -m pytest tests/test_extracted_blog_generation.py tests/test_extracted_brand_voice.py tests/test_extracted_sales_brief_generation.py tests/test_smoke_content_ops_live_generation.py tests/test_smoke_content_ops_gate_a_live_quality.py -q` - PASS (203 passed).
 - `for f in docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/*.json; do python -m json.tool "$f" >/dev/null || exit 1; done` - PASS.
 - `jq` model-route check over `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json`, `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-landing_page.json`, and `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-sales_brief.json` with filter `map([.. | objects | .generation_model? // empty]) | add | unique` - PASS (`anthropic/claude-sonnet-4-5`).
-- `rg` check for known bad phrases in `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json` - PASS (no matches for `rows were included for generation`, `uploaded ticket CSV can produce`, or `Your uploaded tickets contain`).
+- Blog public-content source-mechanics phrase check against `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json` - PASS (no matches for upload/source-row/debug-source mechanics).
+- Blog full-export source-mechanics phrase check against `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json` - PASS (no matches for upload/source-row/debug-source mechanics).
 - `bash` `scripts/validate_extracted_content_pipeline.sh` - PASS.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - PASS.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - PASS.
 - `bash` `scripts/check_ascii_python.sh` - PASS.
-- `bash` `scripts/run_extracted_pipeline_checks.sh` - PASS (`extracted_reasoning_core`: 295 passed; `extracted_content_pipeline`: 3370 passed, 10 skipped, 1 known `pynvml` warning).
+- `python -m pytest tests/test_extracted_content_ops_live_execute_harness.py::test_support_ticket_provider_feeds_real_blog_post_generation -q` - PASS (1 passed).
+- `bash` `scripts/run_extracted_pipeline_checks.sh` - PASS (`extracted_reasoning_core`: 295 passed; `extracted_content_pipeline`: 3380 passed, 10 skipped, 1 known `pynvml` warning).
 - `bash scripts/push_pr.sh tmp/gate-a-live-convergence-proof-pr-body.md --force-with-lease origin claude/pr-gate-a-live-convergence-proof` - runs the managed pre-push hook once before pushing.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/extraction/validation/content_ops_gate_a_reconfirm_2026-06-08.md` | 124 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/execution-result.json` | 433 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json` | 831 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-landing_page.json` | 1258 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-sales_brief.json` | 367 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/review-results.json` | 39 |
-| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/summary.json` | 214 |
-| `extracted_content_pipeline/blog_generation.py` | 8 |
+| `docs/extraction/validation/content_ops_gate_a_reconfirm_2026-06-08.md` | 122 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/execution-result.json` | 402 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-blog_post.json` | 1240 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-landing_page.json` | 1412 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/export-sales_brief.json` | 379 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/review-results.json` | 41 |
+| `docs/extraction/validation/fixtures/content_ops_gate_a_reconfirm_20260608/summary.json` | 197 |
+| `extracted_content_pipeline/blog_generation.py` | 96 |
 | `extracted_content_pipeline/brand_voice.py` | 16 |
-| `plans/PR-Gate-A-Live-Convergence-Proof.md` | 200 |
-| `scripts/smoke_content_ops_live_generation.py` | 6 |
-| `tests/test_extracted_blog_generation.py` | 11 |
+| `plans/PR-Gate-A-Live-Convergence-Proof.md` | 217 |
+| `scripts/smoke_content_ops_live_generation.py` | 24 |
+| `tests/test_extracted_blog_generation.py` | 67 |
 | `tests/test_extracted_brand_voice.py` | 1 |
+| `tests/test_extracted_content_ops_live_execute_harness.py` | 2 |
 | `tests/test_extracted_sales_brief_generation.py` | 33 |
-| `tests/test_smoke_content_ops_live_generation.py` | 7 |
-| **Total** | **3548** |
+| `tests/test_smoke_content_ops_live_generation.py` | 18 |
+| **Total** | **4268** |
+
+PR-scope diff summary from the merge base: 16 files, +4230/-37. The overage is
+raw validation evidence; code/test changes are the narrow review-response fix.

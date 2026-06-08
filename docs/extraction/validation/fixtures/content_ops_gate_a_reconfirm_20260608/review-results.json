@@ -2,38 +2,40 @@
   "blog_post": {
     "missing_ids": [],
     "requested_ids": [
+      "0501c17f-90c9-4318-9d15-e3253160a4e5",
       "2f9ec4e3-475a-4046-9e01-182757d1de20",
       "44d56e20-d9c8-4626-8e39-e894cb8fd085"
     ],
     "updated_ids": [
       "44d56e20-d9c8-4626-8e39-e894cb8fd085",
-      "2f9ec4e3-475a-4046-9e01-182757d1de20"
+      "2f9ec4e3-475a-4046-9e01-182757d1de20",
+      "0501c17f-90c9-4318-9d15-e3253160a4e5"
     ]
   },
   "landing_page": {
     "missing_ids": [],
     "requested_ids": [
-      "49e324c1-f331-404d-bfa4-dcbcb5387027",
-      "2b09400f-a8b9-4787-86dd-ca655686d246",
-      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+      "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+      "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+      "104b8793-9015-4aac-abab-41917dd38309"
     ],
     "updated_ids": [
-      "49e324c1-f331-404d-bfa4-dcbcb5387027",
-      "2b09400f-a8b9-4787-86dd-ca655686d246",
-      "a1181e5e-91e3-49d0-9ad1-1c5494783330"
+      "d8b20a0d-44c5-42ee-ae7a-b29251426db8",
+      "067c7531-b8c7-4b88-acaf-4f7643cd43f6",
+      "104b8793-9015-4aac-abab-41917dd38309"
     ]
   },
   "sales_brief": {
     "missing_ids": [],
     "requested_ids": [
-      "33044118-629f-491d-ada6-0aa3fc838222",
-      "e71d3a76-e32a-4891-8879-e6b99d9e58af",
-      "8744dc21-df4e-424e-9a9d-e5cada717886"
+      "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+      "490247f3-19bf-4c0e-b532-e78c369cf989",
+      "2689157c-2473-44e9-bc75-3f786b105aae"
     ],
     "updated_ids": [
-      "8744dc21-df4e-424e-9a9d-e5cada717886",
-      "e71d3a76-e32a-4891-8879-e6b99d9e58af",
-      "33044118-629f-491d-ada6-0aa3fc838222"
+      "3fc2cbe9-eca0-42ee-8804-2b63c9af9057",
+      "490247f3-19bf-4c0e-b532-e78c369cf989",
+      "2689157c-2473-44e9-bc75-3f786b105aae"
     ]
   }
 }
