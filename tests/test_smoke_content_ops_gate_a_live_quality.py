@@ -48,6 +48,26 @@ def test_build_gate_a_payload_sets_top_level_variants_and_brand_voice() -> None:
     assert payload["inputs"]["source_material"][0]["Ticket ID"] == "ticket-1"
 
 
+def test_build_gate_a_payload_accepts_selected_outputs() -> None:
+    payload = smoke.build_gate_a_payload(
+        account_id="acct-gate-a",
+        support_ticket_rows=[],
+        target_mode="vendor_retention",
+        variant_count=3,
+        quality_repair_attempts=1,
+        outputs=("landing_page", "blog_post", "sales_brief"),
+    )
+
+    assert payload["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+
+
+def test_resolve_outputs_rejects_empty_or_unsupported_selection() -> None:
+    with pytest.raises(ValueError, match="at least one output"):
+        smoke._resolve_outputs(" , ")
+    with pytest.raises(ValueError, match="unsupported output"):
+        smoke._resolve_outputs("landing_page,unknown")
+
+
 def test_build_gate_a_payload_requires_multiple_variants() -> None:
     with pytest.raises(ValueError, match="variant_count"):
         smoke.build_gate_a_payload(
@@ -105,6 +125,30 @@ def test_saved_ids_by_output_reads_aggregate_variant_saved_ids() -> None:
     assert "email_campaign did not report multiple variants" not in (
         smoke._execution_errors(result, smoke.saved_ids_by_output(result))
     )
+
+
+def test_execution_errors_respect_selected_outputs() -> None:
+    result = {
+        "status": "completed",
+        "steps": [
+            {
+                "output": "blog_post",
+                "status": "completed",
+                "result": {
+                    "variant_count": 3,
+                    "saved_ids": ["blog-1", "blog-2", "blog-3"],
+                },
+            },
+        ],
+    }
+
+    saved_ids = smoke.saved_ids_by_output(result, outputs=("blog_post",))
+
+    assert saved_ids == {"blog_post": ["blog-1", "blog-2", "blog-3"]}
+    assert smoke._execution_errors(result, saved_ids, outputs=("blog_post",)) == []
+    assert smoke.variant_summary(result, outputs=("blog_post",)) == {
+        "blog_post": {"variant_count": 3, "variants": []}
+    }
 
 
 @pytest.mark.asyncio

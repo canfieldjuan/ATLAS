@@ -239,6 +239,36 @@ async def test_email_campaign_batch_review_delegates_to_campaign_review(
 
 
 @pytest.mark.asyncio
+async def test_email_campaign_batch_review_empty_ids_does_not_delegate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline.api import generated_assets
+
+    calls: list[dict[str, Any]] = []
+
+    async def _review_campaign_drafts(pool: Any, **kwargs: Any) -> _CampaignReviewResult:
+        calls.append({"pool": pool, **kwargs})
+        return _CampaignReviewResult(())
+
+    monkeypatch.setattr(
+        generated_assets,
+        "review_campaign_drafts",
+        _review_campaign_drafts,
+    )
+
+    updated = await generated_assets._update_asset_statuses(
+        "email_campaign",
+        object(),
+        asset_ids=(),
+        status="approved",
+        scope=TenantScope(account_id="acct-campaign-review"),
+    )
+
+    assert updated == ()
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_email_campaign_review_rejects_unsupported_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

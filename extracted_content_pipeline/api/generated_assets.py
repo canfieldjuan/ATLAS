@@ -982,6 +982,9 @@ async def _update_asset_statuses(
     scope: TenantScope,
 ) -> Sequence[str]:
     if asset == "email_campaign":
+        if not asset_ids:
+            _campaign_review_status(status)
+            return ()
         result = await review_campaign_drafts(
             pool,
             campaign_ids=asset_ids,
