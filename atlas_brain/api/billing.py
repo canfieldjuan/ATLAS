@@ -397,6 +397,9 @@ async def stripe_webhook(request: Request):
         if meta.get("source") == "vendor_briefing_report":
             await _handle_vendor_checkout_completed(pool, obj, meta)
         elif meta.get("source") == "content_ops_deflection_report":
+            if _stripe_text(obj, "payment_status") != "paid":
+                _log_content_ops_deflection_report_payment_pending(obj, meta)
+                raise HTTPException(status_code=409, detail="Deflection report payment pending")
             await _handle_content_ops_deflection_report_checkout_completed(
                 pool,
                 obj,
@@ -404,6 +407,23 @@ async def stripe_webhook(request: Request):
             )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
+
+    elif event_type == "checkout.session.async_payment_succeeded":
+        meta = obj.metadata or {}
+        if meta.get("source") == "content_ops_deflection_report":
+            if _stripe_text(obj, "payment_status") != "paid":
+                _log_content_ops_deflection_report_payment_pending(obj, meta)
+                raise HTTPException(status_code=409, detail="Deflection report payment pending")
+            await _handle_content_ops_deflection_report_checkout_completed(
+                pool,
+                obj,
+                meta,
+            )
+
+    elif event_type == "checkout.session.async_payment_failed":
+        meta = obj.metadata or {}
+        if meta.get("source") == "content_ops_deflection_report":
+            _log_content_ops_deflection_report_async_payment_failed(obj, meta)
 
     elif event_type == "invoice.paid":
         account_id = await _handle_invoice_paid(pool, obj)
@@ -689,6 +709,32 @@ async def _queue_content_ops_deflection_report_delivery(
         payment_reference,
     )
     return "queued"
+
+
+def _log_content_ops_deflection_report_payment_pending(
+    session: Any,
+    meta: Mapping[str, Any],
+) -> None:
+    logger.warning(
+        "Deflection report checkout event arrived before funds were available: account=%s request=%s session=%s payment_status=%s",
+        _clean_metadata(meta.get("account_id")) or "<missing>",
+        _clean_metadata(meta.get("request_id")) or "<missing>",
+        _stripe_text(session, "id") or "<missing>",
+        _stripe_text(session, "payment_status") or "<missing>",
+    )
+
+
+def _log_content_ops_deflection_report_async_payment_failed(
+    session: Any,
+    meta: Mapping[str, Any],
+) -> None:
+    logger.warning(
+        "Deflection report async payment failed: account=%s request=%s session=%s payment_status=%s",
+        _clean_metadata(meta.get("account_id")) or "<missing>",
+        _clean_metadata(meta.get("request_id")) or "<missing>",
+        _stripe_text(session, "id") or "<missing>",
+        _stripe_text(session, "payment_status") or "<missing>",
+    )
 
 
 def _deflection_checkout_amount_is_valid(session: Any) -> bool:
