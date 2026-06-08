@@ -507,6 +507,8 @@ async def test_generate_substitutes_campaign_json_into_system_prompt_only() -> N
     system_msg = llm.calls[0]["messages"][0].content
     user_msg = llm.calls[0]["messages"][1].content
     assert '"name":"acme-q3-launch"' in system_msg
+    assert "## Grounding contract" in system_msg
+    assert "Never introduce counts, percentages, statistics" in system_msg
     assert '"name":"acme-q3-launch"' not in user_msg
     assert "acme-q3-launch" not in user_msg
 

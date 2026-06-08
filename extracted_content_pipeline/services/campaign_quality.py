@@ -2,12 +2,111 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import json
 import re
 from typing import Any
 
 
 _PLACEHOLDER_RE = re.compile(r"\[(?:Name|Company|Your Name|First Name|Title)\]|\{\{.+?\}\}")
+_PERCENT_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<first>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?:-\s*(?P<second>\d+(?:,\d{3})*(?:\.\d+)?)\s*)?%"
+)
+_NUMBER_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[$]\s*)?(?P<first>\d+(?:,\d{3})*(?:\.\d+)?)"
+    r"(?:\s*-\s*(?P<second>\d+(?:,\d{3})*(?:\.\d+)?))?"
+    r"\s*(?:[kKmMbB])?\+?"
+)
+_QUARTER_RE = re.compile(r"\bq(?P<quarter>[1-4])\b", re.IGNORECASE)
+_SCAN_CLAIM_RE = re.compile(
+    r"\b(?:we|i|our team)\s+"
+    r"(?:scanned|analy[sz]ed|reviewed|looked at)\b",
+    re.IGNORECASE,
+)
+_SENTENCE_RE = re.compile(r"[^.!?]+[.!?]?")
+_AGGREGATE_CLAIM_RE = re.compile(
+    r"\b(?:daily|weekly|monthly|every\s+week|per\s+week|"
+    r"every\s+(?:billing\s+)?cycle|"
+    r"next\s+(?:billing\s+)?cycle|"
+    r"across\s+(?:accounts|teams|queues|customers)|"
+    r"another\s+[-\w]+(?:\s+[-\w]+){0,4}\s+(?:question|ticket|account|customer|case)|"
+    r"same\s+pattern|"
+    r"pile\s+up|"
+    r"questions?\s+like\s+this|"
+    r"ticket\s+questions?|"
+    r"support\s+queue|"
+    r"support\s+ticket\s+patterns?|"
+    r"support\s+questions|"
+    r"(?:billing\s+)?questions?\s+lands?\s+in\s+support|"
+    r"(?:question|answer|it)\s+(?:will|would|could)\s+lands?\s+in\s+support(?:\s+again)?|"
+    r"keeps?\s+coming\s+up|"
+    r"same\s+support\s+question|"
+    r"users?\s+(?:(?:still|again|often|also)\s+)?"
+    r"(?:hit|contact|open|file|send).{0,24}\bsupport|"
+    r"stood\s+out|"
+    r"(?:usually|typically)\s+means|"
+    r"keeps?\s+(?:asking|coming|showing|hitting)|"
+    r"(?:will|would|could)\s+come\s+back|"
+    r"repeat(?:ed)?\s+(?:questions?|tickets?|cases?|requests?)|"
+    r"(?:questions?|tickets?|cases?|requests?)\s+repeat|"
+    r"same\s+\w+(?:\s+\w+){0,4}\s+again|"
+    r"same\s+\w+(?:\s+\w+){0,4}\s+repeats?)\b",
+    re.IGNORECASE,
+)
+_NUMBER_WORDS = {
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+}
+_TIME_WORDS = "minutes?|hours?|days?|weeks?|months?"
+_TIMING_CLAIM_RE = re.compile(
+    rf"\btakes?\s+(?:about\s+)?(?:a|an|\d+|{'|'.join(_NUMBER_WORDS)})?\s*"
+    rf"(?:{_TIME_WORDS})\b|"
+    rf"\b(?:send|deliver|draft|article).{{0,40}}\b(?:in|within)\s+"
+    rf"(?:a|an|\d+|{'|'.join(_NUMBER_WORDS)})\s+(?:{_TIME_WORDS})\b",
+    re.IGNORECASE,
+)
+_NUMBER_WORD_RE_TEMPLATE = r"(?<![-A-Za-z0-9]){word}(?![-A-Za-z0-9])"
+_SCHEDULING_DURATION_RE = re.compile(
+    r"\b(?:schedule|book|call|meeting|walkthrough|chat)\b.*\bminutes?\b|"
+    r"\bminutes?\b.*\b(?:schedule|book|call|meeting|walkthrough|chat)\b",
+    re.IGNORECASE,
+)
+_GENERATED_VALUE_KEYS = frozenset({
+    "angle_reasoning",
+    "body",
+    "campaign_revalidation",
+    "cold_email_context",
+    "content",
+    "cta",
+    "email_body",
+    "generation_usage",
+    "metadata",
+    "subject",
+})
+_SOURCE_EXCLUDED_KEYS = frozenset({
+    "account_id",
+    "contact_email",
+    "email",
+    "id",
+    "scope",
+    "source_id",
+    "source_url",
+    "target_id",
+    "ticket_id",
+    "user_id",
+    "url",
+})
 
 
 def coerce_json_dict(value: Any) -> dict[str, Any]:
@@ -95,6 +194,127 @@ def _has_timing_or_numeric(content: str) -> bool:
     return bool(re.search(r"\d|q[1-4]|renewal|month|quarter|year", content.lower()))
 
 
+def _sentences(text: str) -> list[str]:
+    return [
+        match.group(0).strip()
+        for match in _SENTENCE_RE.finditer(text)
+        if match.group(0).strip()
+    ]
+
+
+def _number_token(value: str) -> str:
+    text = value.replace(",", "").strip().lower()
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text
+
+
+def _numeric_tokens(value: Any) -> set[str]:
+    text = str(value or "")
+    tokens: set[str] = set()
+    for match in _PERCENT_RE.finditer(text):
+        tokens.add(f"pct:{_number_token(match.group('first'))}")
+        second = match.group("second")
+        if second is not None:
+            tokens.add(f"pct:{_number_token(second)}")
+    for match in _NUMBER_RE.finditer(text):
+        tokens.add(f"num:{_number_token(match.group('first'))}")
+        second = match.group("second")
+        if second is not None:
+            tokens.add(f"num:{_number_token(second)}")
+    for match in _QUARTER_RE.finditer(text):
+        tokens.add(f"quarter:q{match.group('quarter')}")
+    for word, number in _NUMBER_WORDS.items():
+        if re.search(_NUMBER_WORD_RE_TEMPLATE.format(word=word), text, re.IGNORECASE):
+            tokens.add(f"num:{number}")
+    return tokens
+
+
+def _source_text_values(value: Any, *, key: str = "") -> list[str]:
+    normalized_key = key.strip().lower().replace(" ", "_")
+    if normalized_key in _GENERATED_VALUE_KEYS or normalized_key in _SOURCE_EXCLUDED_KEYS:
+        return []
+    if isinstance(value, Mapping):
+        values: list[str] = []
+        for item_key, item_value in value.items():
+            values.extend(_source_text_values(item_value, key=str(item_key)))
+        return values
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = []
+        for item in value:
+            values.extend(_source_text_values(item, key=key))
+        return values
+    if value in (None, "", [], {}):
+        return []
+    return [str(value)]
+
+
+def _source_numeric_tokens(
+    campaign: dict[str, Any],
+    context: dict[str, Any],
+    proof_terms: list[str],
+) -> set[str]:
+    values = [
+        *_source_text_values(campaign),
+        *_source_text_values(context),
+        *proof_terms,
+    ]
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(_numeric_tokens(value))
+    evidence = campaign.get("evidence")
+    if (
+        isinstance(evidence, Sequence)
+        and not isinstance(evidence, (str, bytes, bytearray))
+        and len(evidence) == 1
+    ):
+        tokens.add("num:1")
+    return tokens
+
+
+def _unsupported_numeric_claims(content: str, allowed_tokens: set[str]) -> list[str]:
+    unsupported: list[str] = []
+    for sentence in _sentences(content):
+        if _SCHEDULING_DURATION_RE.search(sentence):
+            continue
+        tokens = _numeric_tokens(sentence)
+        if (tokens and not tokens.issubset(allowed_tokens)) or _TIMING_CLAIM_RE.search(sentence):
+            unsupported.append(sentence)
+    return unsupported
+
+
+def _generated_content_blocks(campaign: dict[str, Any]) -> list[str]:
+    return [
+        str(campaign.get(key) or "").strip()
+        for key in ("subject", "body", "cta")
+        if str(campaign.get(key) or "").strip()
+    ]
+
+
+def _unsupported_scan_claims(content: str, source_values: list[str]) -> list[str]:
+    source_text = " ".join(re.findall(r"[a-z0-9]+", " ".join(source_values).lower()))
+    unsupported: list[str] = []
+    for sentence in _sentences(content):
+        if not _SCAN_CLAIM_RE.search(sentence):
+            continue
+        normalized = " ".join(re.findall(r"[a-z0-9]+", sentence.lower()))
+        if normalized and normalized not in source_text:
+            unsupported.append(sentence)
+    return unsupported
+
+
+def _unsupported_aggregate_claims(content: str, source_values: list[str]) -> list[str]:
+    source_text = " ".join(re.findall(r"[a-z0-9]+", " ".join(source_values).lower()))
+    unsupported: list[str] = []
+    for sentence in _sentences(content):
+        if not _AGGREGATE_CLAIM_RE.search(sentence):
+            continue
+        normalized = " ".join(re.findall(r"[a-z0-9]+", sentence.lower()))
+        if normalized and normalized not in source_text:
+            unsupported.append(sentence)
+    return unsupported
+
+
 def campaign_quality_revalidation(
     *,
     campaign: dict[str, Any],
@@ -127,10 +347,7 @@ def campaign_quality_revalidation(
     anchor_rows = _flatten_anchor_rows(resolved_context)
     anchor_terms = _context_terms(anchor_rows)
     proof_terms = _proof_terms(resolved_metadata, resolved_context) or anchor_terms
-    content = " ".join(
-        str(campaign.get(key) or "")
-        for key in ("subject", "body", "cta")
-    )
+    content = ". ".join(_generated_content_blocks(campaign))
     min_hits = int(min_anchor_hits or 1)
     require_anchor = True if require_anchor_support is None else bool(require_anchor_support)
     require_timing = (
@@ -147,6 +364,31 @@ def campaign_quality_revalidation(
         and not _has_timing_or_numeric(content)
     ):
         blocking_issues.append("missing_timing_or_numeric")
+    source_values = [
+        *_source_text_values(campaign),
+        *_source_text_values(resolved_context),
+        *proof_terms,
+    ]
+    allowed_numeric_tokens = _source_numeric_tokens(
+        campaign,
+        resolved_context,
+        proof_terms,
+    )
+    unsupported_numeric_claims = _unsupported_numeric_claims(
+        content,
+        allowed_numeric_tokens,
+    )
+    if unsupported_numeric_claims:
+        blocking_issues.append("unsupported_numeric_claim")
+    unsupported_scan_claims = _unsupported_scan_claims(content, source_values)
+    if unsupported_scan_claims:
+        blocking_issues.append("unsupported_scan_claim")
+    unsupported_aggregate_claims = _unsupported_aggregate_claims(
+        content,
+        source_values,
+    )
+    if unsupported_aggregate_claims:
+        blocking_issues.append("unsupported_aggregate_claim")
 
     anchors = resolved_context.get("anchor_examples")
     available_groups = list(anchors.keys()) if isinstance(anchors, dict) else []
@@ -165,6 +407,9 @@ def campaign_quality_revalidation(
         "missing_groups": missing_groups,
         "used_proof_terms": matched_terms,
         "unused_proof_terms": [term for term in proof_terms if term not in matched_terms],
+        "unsupported_numeric_claims": unsupported_numeric_claims,
+        "unsupported_scan_claims": unsupported_scan_claims,
+        "unsupported_aggregate_claims": unsupported_aggregate_claims,
         "primary_blocker": blocking_issues[0] if blocking_issues else None,
         "cause_type": blocking_issues[0] if blocking_issues else None,
         "missing_inputs": [],

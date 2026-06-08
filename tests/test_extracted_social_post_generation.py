@@ -425,6 +425,8 @@ async def test_social_post_service_rewrites_with_brand_voice_and_persists_metada
         "source_id": "review-1",
     }
     system_prompt = llm_call["messages"][0].content
+    assert "## Grounding contract" in system_prompt
+    assert "Never introduce counts, percentages, statistics" in system_prompt
     assert "## Brand voice" in system_prompt
     assert "plainspoken" in system_prompt
     user_prompt = llm_call["messages"][1].content

@@ -33,6 +33,7 @@ from smoke_content_ops_live_generation import (  # noqa: E402
 
 DEFAULT_OUTPUTS = ("email_campaign", "landing_page", "blog_post", "sales_brief")
 SEQUENCE_OUTPUTS = frozenset({"email_campaign"})
+SEQUENCE_REQUIRED_CHANNELS = {"email_campaign": ("email_cold", "email_followup")}
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_saas_demo_sources.csv"
 )
@@ -208,6 +209,13 @@ def build_gate_a_payload(
         "target_account": "SaaS support team with repeat ticket backlog",
         "offer": "Turn repeat support tickets into approved FAQ answers",
         "audience": "SaaS support leaders carrying a repeat-ticket backlog",
+        "selling": {
+            "product_name": "Support Ticket FAQ Gap Audit",
+            "affiliate_url": "https://finetunelab.ai/systems/ai-content-ops/intake",
+            "sender_name": "FineTune Lab",
+            "sender_title": "Content Ops Team",
+            "sender_company": "FineTune Lab",
+        },
         "target_keyword": "support ticket FAQ gaps",
         "search_intent": (
             "Find the highest-risk repeat support questions and turn them "
@@ -266,6 +274,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
     reviewed: dict[str, Any] = {}
     exports: dict[str, Any] = {}
     seeded_blog_blueprint: Mapping[str, Any] | None = None
+    opportunity_import: Mapping[str, Any] | None = None
     errors: list[str] = []
     configured_outputs: tuple[str, ...] = ()
     scope = tenant_scope_cls(
@@ -286,15 +295,20 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
                 + ", ".join(missing_outputs)
             )
         else:
-            payload = await _payload_with_support_ticket_provider(payload, scope=scope)
-            _reassert_gate_a_controls(
+            pool = _current_db_pool()
+            (
                 payload,
-                account_id=str(args.account_id or "").strip(),
-                variant_count=int(args.variant_count),
-                outputs=selected_outputs,
+                seeded_blog_blueprint,
+                opportunity_import,
+            ) = await prepare_gate_a_output_dependencies(
+                args,
+                scope,
+                pool=pool,
+                payload=payload,
+                selected_outputs=selected_outputs,
+                source_rows=source_rows,
+                output_dir=output_dir,
             )
-            seeded_blog_blueprint = await _seed_default_blog_blueprint(args, scope)
-            _align_blog_payload_to_seed(payload, seeded_blog_blueprint)
             execution_result = await executor(
                 payload,
                 services=services,
@@ -310,7 +324,6 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
                 _execution_errors(execution_result, saved_ids, outputs=selected_outputs)
             )
             if not errors:
-                pool = _current_db_pool()
                 reviewed = await review_saved_ids(pool, scope, saved_ids)
                 _write_json(output_dir / "review-results.json", reviewed)
                 errors.extend(_review_errors(reviewed, outputs=selected_outputs))
@@ -346,6 +359,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
         "required_outputs": list(selected_outputs),
         "configured_outputs": list(configured_outputs),
         "variant_count": int(args.variant_count),
+        "opportunity_import": dict(opportunity_import or {}),
         "seeded_blog_blueprint": dict(seeded_blog_blueprint or {}),
         "saved_ids": saved_ids_by_output(execution_result, outputs=selected_outputs),
         "variant_summary": variant_summary(execution_result, outputs=selected_outputs),
@@ -365,6 +379,83 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
     }
     _write_json(output_dir / "summary.json", summary)
     return (0 if summary["ok"] else 1), summary
+
+
+async def prepare_gate_a_output_dependencies(
+    args: argparse.Namespace,
+    scope: Any,
+    *,
+    pool: Any,
+    payload: Mapping[str, Any],
+    selected_outputs: Sequence[str],
+    source_rows: Sequence[Mapping[str, Any]],
+    output_dir: Path,
+) -> tuple[dict[str, Any], Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    prepared_payload = await _payload_with_support_ticket_provider(payload, scope=scope)
+    _reassert_gate_a_controls(
+        prepared_payload,
+        account_id=str(args.account_id or "").strip(),
+        variant_count=int(args.variant_count),
+        outputs=selected_outputs,
+    )
+    seeded_blog_blueprint: Mapping[str, Any] | None = None
+    if "blog_post" in selected_outputs:
+        seeded_blog_blueprint = await _seed_default_blog_blueprint(args, scope)
+        _align_blog_payload_to_seed(prepared_payload, seeded_blog_blueprint)
+
+    opportunity_import: Mapping[str, Any] | None = None
+    if "email_campaign" in selected_outputs:
+        opportunity_import = await seed_email_campaign_opportunities(
+            pool,
+            scope,
+            target_mode=str(args.target_mode or "vendor_retention").strip()
+            or "vendor_retention",
+            source_rows=source_rows,
+            filters=_payload_filters(prepared_payload),
+        )
+        _write_json(output_dir / "opportunity-import.json", opportunity_import)
+    return prepared_payload, seeded_blog_blueprint, opportunity_import
+
+
+def _payload_filters(payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return None
+    filters = inputs.get("filters")
+    return filters if isinstance(filters, Mapping) else None
+
+
+async def seed_email_campaign_opportunities(
+    pool: Any,
+    scope: Any,
+    *,
+    target_mode: str,
+    source_rows: Sequence[Mapping[str, Any]],
+    filters: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    from extracted_content_pipeline.campaign_postgres_import import (  # noqa: PLC0415
+        import_campaign_opportunities,
+    )
+    from extracted_content_pipeline.campaign_source_adapters import (  # noqa: PLC0415
+        source_rows_to_campaign_opportunities,
+    )
+
+    loaded = source_rows_to_campaign_opportunities(
+        source_rows,
+        target_mode=target_mode,
+        default_fields=filters,
+    )
+    imported = await import_campaign_opportunities(
+        pool,
+        loaded.opportunities,
+        scope=scope,
+        target_mode=target_mode,
+        replace_existing=True,
+        normalize=False,
+        warnings=loaded.warnings,
+        source="gate_a_support_ticket_csv",
+    )
+    return imported.as_dict()
 
 
 def _reassert_gate_a_controls(
@@ -644,7 +735,22 @@ def _sequence_persistence_errors(
     if not raw_ids:
         return []
     unique_ids = tuple(dict.fromkeys(raw_ids))
-    export_count = int(_mapping(exports.get(output)).get("count") or 0)
+    export = _mapping(exports.get(output))
+    export_count = int(export.get("count") or 0)
+    rows = export.get("rows")
+    exported_channels = {
+        str(row.get("channel") or "").strip()
+        for row in rows
+        if isinstance(row, Mapping)
+    } if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)) else set()
+    required_channels = set(SEQUENCE_REQUIRED_CHANNELS.get(output, ()))
+    missing_channels = sorted(required_channels - exported_channels)
+    if missing_channels:
+        return [
+            f"{output} sequence missing required channel"
+            f"{'s' if len(missing_channels) > 1 else ''}: "
+            + ", ".join(missing_channels)
+        ]
     if len(unique_ids) == len(raw_ids) and export_count >= len(raw_ids):
         return []
     return [

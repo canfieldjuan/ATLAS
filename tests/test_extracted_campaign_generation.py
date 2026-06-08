@@ -595,13 +595,55 @@ async def test_generate_includes_opportunity_payload_when_skill_has_no_placehold
     )
 
     assert result.generated == 1
-    assert "opportunity=" not in llm.calls[0]["messages"][0].content
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "opportunity=" not in system_prompt
+    assert "## Grounding contract" in system_prompt
+    assert "Never introduce counts, percentages, statistics" in system_prompt
+    assert "scan or research claims" in system_prompt
     user_prompt = llm.calls[0]["messages"][1].content
     assert "target_mode=vendor_retention" in user_prompt
     assert "channel=email" in user_prompt
+    assert "one support_ticket evidence item" in user_prompt
+    assert "STRICT_SINGLE_SUPPORT_TICKET_MODE" in user_prompt
+    assert "Allowed factual content is limited to" in user_prompt
+    assert "Use singular language only" in user_prompt
     assert '"target_id":"opp-1"' in user_prompt
     assert '"company_name":"Acme"' in user_prompt
     assert '"target_mode":"vendor_retention"' in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_includes_single_support_ticket_grounding_note() -> None:
+    service, _, _, llm, _ = _service(
+        [{
+            "id": "opp-1",
+            "company_name": "Silverline Studio",
+            "evidence": [{
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            }],
+        }],
+        ['{"subject":"Usage overage","body":"This question points to a possible FAQ gap."}'],
+        prompts={
+            "digest/b2b_campaign_generation": (
+                "You receive normalized opportunity JSON and return a draft."
+            )
+        },
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+    )
+
+    assert result.generated == 1
+    user_prompt = llm.calls[0]["messages"][1].content
+    assert "CURRENT_EVIDENCE_MODE=single_support_ticket" in user_prompt
+    assert (
+        "ONLY_ALLOWED_FACTUAL_ANCHOR=How do I see which workspace caused a usage overage?"
+        in user_prompt
+    )
+    assert "The only allowed claims are" in user_prompt
 
 
 @pytest.mark.asyncio
@@ -951,6 +993,93 @@ async def test_generate_quality_revalidation_failure_includes_proof_term_details
         "Pricing drove evaluation."
     ]
     assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_blocks_unsupported_numeric_claims() -> None:
+    config = CampaignGenerationConfig(quality_revalidation_enabled=True)
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Silverline Studio",
+        "vendor_name": "FlowPilot",
+        "evidence": [
+            {
+                "text": "How do I see which workspace caused a usage overage?",
+                "source_type": "support_ticket",
+            },
+            {
+                "text": "Where can I find my latest invoice?",
+                "source_type": "support_ticket",
+            },
+        ],
+    }
+    fabricated = json.dumps({
+        "subject": "Usage overage signal",
+        "body": (
+            "We scanned 40+ FlowPilot support queues and found the "
+            "same billing question in 60% of them."
+        ),
+    })
+    service, _, campaigns, _, _ = _service(
+        [opportunity],
+        [fabricated],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 0
+    assert result.skipped == 1
+    error = result.errors[0]
+    assert error["reason"] == "quality_revalidation_failed"
+    assert "unsupported_numeric_claim" in error["quality_revalidation"]["blocking_issues"]
+    assert "unsupported_scan_claim" in error["quality_revalidation"]["blocking_issues"]
+    assert error["quality_revalidation"]["unsupported_numeric_claims"] == [
+        (
+            "We scanned 40+ FlowPilot support queues and found the "
+            "same billing question in 60% of them."
+        )
+    ]
+    assert campaigns.saved == []
+
+
+@pytest.mark.asyncio
+async def test_generate_quality_revalidation_uses_single_ticket_scaffold() -> None:
+    config = CampaignGenerationConfig(
+        quality_revalidation_enabled=True,
+        channels=("email_cold", "email_followup"),
+    )
+    opportunity = {
+        "id": "opp-1",
+        "company_name": "Silverline Studio",
+        "Contact Name": "Reese Morgan",
+        "selling": {
+            "affiliate_url": "https://example.test/intake",
+        },
+        "evidence": [{
+            "text": "How do I see which workspace caused a usage overage?",
+            "source_type": "support_ticket",
+        }],
+    }
+    service, _, campaigns, llm, _ = _service(
+        [opportunity],
+        [],
+        config=config,
+    )
+
+    result = await service.generate(scope=TenantScope(), target_mode="vendor_retention")
+
+    assert result.generated == 2
+    assert result.skipped == 0
+    assert result.errors == ()
+    assert llm.calls == []
+    cold, followup = campaigns.saved[0]["drafts"]
+    assert cold.channel == "email_cold"
+    assert followup.channel == "email_followup"
+    assert "How do I see which workspace caused a usage overage?" in cold.body
+    assert "That question points to a possible FAQ gap." in followup.body
+    assert cold.metadata["generation_model"] == "deterministic/single-support-ticket"
+    assert cold.metadata["campaign_revalidation"]["audit"]["status"] == "pass"
 
 
 @pytest.mark.asyncio

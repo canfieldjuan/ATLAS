@@ -1,0 +1,85 @@
+{
+  "errors": [],
+  "plan": {
+    "can_execute": true,
+    "limit": 1,
+    "preview": {
+      "blocked_outputs": [],
+      "can_run": true,
+      "estimated_cost_usd": 0.36,
+      "missing_inputs": [],
+      "normalized_request": {
+        "account_usage_budget_days": 7,
+        "account_usage_budget_usd": null,
+        "allow_unimplemented_outputs": false,
+        "brand_voice_profile_id": null,
+        "content_ops_cache_policy": null,
+        "ingestion_profile": "existing_evidence",
+        "limit": 1,
+        "max_cost_usd": 20.0,
+        "outputs": [
+          "email_campaign"
+        ],
+        "preset": null,
+        "reasoning_preset": null,
+        "require_quality_gates": true,
+        "target_mode": "vendor_retention",
+        "variant_count": 3
+      },
+      "outputs": [
+        "email_campaign"
+      ],
+      "warnings": []
+    },
+    "steps": [
+      {
+        "config": {
+          "brand_voice_profile_id": "gate-a-sharp-support-operator",
+          "channels": [
+            "email_cold",
+            "email_followup"
+          ],
+          "limit": 1,
+          "max_tokens": 1200,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_prompt_proof_term_limit": 5,
+          "quality_revalidation_enabled": true,
+          "skill_name": "digest/b2b_campaign_generation",
+          "temperature": 0.4
+        },
+        "output": "email_campaign",
+        "reason": "",
+        "runner": "CampaignGenerationService.generate",
+        "status": "runnable"
+      }
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "status": "completed",
+  "steps": [
+    {
+      "error": "",
+      "output": "email_campaign",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 2,
+        "reasoning_contexts_used": 0,
+        "requested": 1,
+        "saved_ids": [
+          "13c6c335-f14e-41e1-adbd-687d723e3d6c",
+          "b26be0f8-6c54-4519-8b26-a2debb0a6f9d"
+        ],
+        "skipped": 0
+      },
+      "runner": "CampaignGenerationService.generate",
+      "status": "completed"
+    }
+  ]
+}

@@ -327,12 +327,13 @@ async def test_generate_threads_requested_brief_type_with_variant_angle() -> Non
     )
 
     assert result.generated == 1
+    system_prompt = llm.calls[0]["messages"][0].content
+    assert "## Grounding contract" in system_prompt
+    assert "Never introduce counts, percentages, statistics" in system_prompt
     user_prompt = llm.calls[0]["messages"][1].content
     assert "Requested brief type:" in user_prompt
     assert "- displacement:" in user_prompt
     assert "competitive displacement motion" in user_prompt
-    assert "do not invent contract dates" in user_prompt
-    assert "competitor names" in user_prompt
     assert "Variant angle:" in user_prompt
     assert "Pain-led: open with competitive friction." in user_prompt
     saved_drafts = sales_briefs.saved[0]["drafts"]
@@ -812,8 +813,9 @@ async def test_generate_per_call_default_brief_type_wins_over_model_type():
     assert "- renewal:" in user_prompt
     assert "renewal-stage retention" in user_prompt
     assert "contract timing" in user_prompt
-    assert "renewal windows" in user_prompt
-    assert "timelines that are not in the data" in user_prompt
+    assert "renewal window closes" in user_prompt
+    system_prompt = _llm.calls[0]["messages"][0].content
+    assert "## Grounding contract" in system_prompt
     saved_drafts = sales_briefs.saved[0]["drafts"]
     assert saved_drafts[0].brief_type == "renewal"
 

@@ -26,6 +26,17 @@ _SUPPORTED_POV = {
 }
 _PLAIN_READING_LEVELS = frozenset({"plain", "simple", "accessible"})
 _CONCISE_READING_LEVELS = frozenset({"concise", "short"})
+_GROUNDING_CONTRACT_HEADING = "## Grounding contract"
+_GROUNDING_CONTRACT_BLOCK = "\n".join((
+    _GROUNDING_CONTRACT_HEADING,
+    "Use only facts present in the supplied inputs: opportunity, ticket, "
+    "evidence, source post, blueprint, campaign, or draft data.",
+    "Never introduce counts, percentages, statistics, scan or research claims, "
+    "company or contact names, comparative claims, timelines, source volume, "
+    "outcomes, or proof points that are not in the provided data.",
+    "If a proof point is not in the inputs, omit it or mark it review-needed. "
+    "Do not invent it.",
+))
 
 
 @dataclass(frozen=True)
@@ -103,14 +114,31 @@ def apply_brand_voice_to_system_prompt(
     prompt: str,
     profile: BrandVoiceProfile | None,
 ) -> str:
-    """Inject brand-voice guidance into the grounded system prompt."""
+    """Inject the shared grounding contract and optional brand-voice guidance."""
 
-    block = brand_voice_prompt_block(profile)
+    block = _shared_prompt_block(profile)
     if "{brand_voice}" in prompt:
         return prompt.replace("{brand_voice}", block)
-    if not block:
+    if _GROUNDING_CONTRACT_HEADING in prompt:
+        voice_block = brand_voice_prompt_block(profile)
+        if voice_block and "## Brand voice" not in prompt:
+            return f"{prompt.rstrip()}\n\n{voice_block}"
         return prompt
     return f"{prompt.rstrip()}\n\n{block}"
+
+
+def generation_grounding_prompt_block() -> str:
+    """Return the shared factual grounding contract for generated content."""
+
+    return _GROUNDING_CONTRACT_BLOCK
+
+
+def _shared_prompt_block(profile: BrandVoiceProfile | None) -> str:
+    blocks = [generation_grounding_prompt_block()]
+    brand_voice = brand_voice_prompt_block(profile)
+    if brand_voice:
+        blocks.append(brand_voice)
+    return "\n\n".join(blocks)
 
 
 def brand_voice_prompt_block(profile: BrandVoiceProfile | None) -> str:
@@ -119,7 +147,7 @@ def brand_voice_prompt_block(profile: BrandVoiceProfile | None) -> str:
     lines = [
         "## Brand voice",
         "Use this profile as style guidance only. It changes wording, rhythm, "
-        "and tone; it must not add facts, claims, evidence, or source details. "
+        "and tone while the grounding contract controls factual claims. "
         "Do not omit or alter grounded claims to satisfy the voice profile.",
     ]
     if profile.name:
@@ -341,4 +369,5 @@ __all__ = [
     "brand_voice_profile_metadata",
     "brand_voice_prompt_block",
     "brand_voice_result_metadata",
+    "generation_grounding_prompt_block",
 ]
