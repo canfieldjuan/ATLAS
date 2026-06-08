@@ -52,6 +52,7 @@ from ..quote_card_export import export_quote_card_drafts
 from ..quote_card_postgres import PostgresQuoteCardRepository
 from ..report_export import export_report_drafts
 from ..report_postgres import PostgresReportRepository
+from ..review_contract import ReviewDecision
 from ..sales_brief_export import export_sales_brief_drafts
 from ..sales_brief_postgres import PostgresSalesBriefRepository
 from ..social_post_export import export_social_post_drafts
@@ -83,6 +84,14 @@ ASSET_CHOICES = (
     "faq_markdown",
 )
 logger = logging.getLogger(__name__)
+
+_REVIEW_DECISION_STATUS: Mapping[ReviewDecision, str] = {
+    ReviewDecision.APPROVED: "approved",
+    ReviewDecision.APPROVED_WITH_EXCEPTION: "approved",
+    ReviewDecision.REVISION_REQUIRED: "rejected",
+    ReviewDecision.BLOCKED: "queued",
+    ReviewDecision.ESCALATED: "queued",
+}
 
 
 def _require_fastapi() -> None:
@@ -229,6 +238,43 @@ def _review_status(value: Any) -> str:
     if not status:
         raise HTTPException(status_code=400, detail="status is required")
     return status
+
+
+def generated_asset_status_for_review_decision(value: Any) -> str:
+    """Map a content review decision onto the generated-asset lifecycle status."""
+
+    if isinstance(value, ReviewDecision):
+        cleaned = value.value
+    elif isinstance(value, str):
+        cleaned = _clean(value)
+    else:
+        cleaned = ""
+    if not cleaned:
+        raise ValueError("review_decision is required")
+    for decision, status in _REVIEW_DECISION_STATUS.items():
+        if decision == cleaned:
+            return status
+    allowed = ", ".join(decision.value for decision in ReviewDecision)
+    raise ValueError(f"review_decision must be one of {allowed}")
+
+
+def _review_status_from_payload(payload: Mapping[str, Any]) -> str:
+    if "status" in payload:
+        return _review_status(payload.get("status"))
+    decision_value = (
+        payload.get("review_decision")
+        if "review_decision" in payload
+        else payload.get("decision")
+    )
+    if "review_decision" not in payload and "decision" not in payload:
+        raise HTTPException(
+            status_code=400,
+            detail="status or review_decision is required",
+        )
+    try:
+        return generated_asset_status_for_review_decision(decision_value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _review_ids(value: Any) -> tuple[str, ...]:
@@ -430,7 +476,7 @@ def create_generated_asset_router(
         asset_id = _clean(payload.get("id") or payload.get("asset_id"))
         if not asset_id:
             raise HTTPException(status_code=400, detail="id is required")
-        status = _review_status(payload.get("status"))
+        status = _review_status_from_payload(payload)
         updated = await _update_asset_status(
             asset_name,
             pool,
@@ -536,7 +582,7 @@ def create_generated_asset_router(
                     f"({resolved_config.max_batch_size})"
                 ),
         )
-        status = _review_status(payload.get("status"))
+        status = _review_status_from_payload(payload)
         valid_ids, invalid_ids = _partition_uuid_ids(ids)
         updated = set(await _update_asset_statuses(
             asset_name,
@@ -1077,4 +1123,5 @@ __all__ = [
     "GeneratedAssetApiConfig",
     "create_generated_asset_router",
     "create_public_landing_page_router",
+    "generated_asset_status_for_review_decision",
 ]
