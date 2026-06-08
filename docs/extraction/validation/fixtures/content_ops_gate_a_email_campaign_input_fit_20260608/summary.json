@@ -1,0 +1,109 @@
+{
+  "account_id": "5b2f2a9c-6d1e-4f2c-9a87-31e64d42a901",
+  "budget": {
+    "account_usage_budget_days": 7,
+    "account_usage_budget_usd": null,
+    "max_cost_usd": 20.0,
+    "messages": [],
+    "triggered": false
+  },
+  "configured_outputs": [
+    "email_campaign",
+    "blog_post",
+    "report",
+    "landing_page",
+    "sales_brief",
+    "social_post",
+    "ad_copy",
+    "quote_card",
+    "stat_card",
+    "signal_extraction",
+    "faq_markdown",
+    "faq_deflection_report"
+  ],
+  "errors": [],
+  "export_counts": {
+    "email_campaign": 2
+  },
+  "issue": 1357,
+  "ok": true,
+  "opportunity_import": {
+    "dry_run": false,
+    "inserted": 36,
+    "replace_existing": true,
+    "skipped": 0,
+    "source": "gate_a_support_ticket_csv",
+    "target_ids": [
+      "saas-demo-001",
+      "saas-demo-002",
+      "saas-demo-003",
+      "saas-demo-004",
+      "saas-demo-005",
+      "saas-demo-006",
+      "saas-demo-007",
+      "saas-demo-008",
+      "saas-demo-009",
+      "saas-demo-010",
+      "saas-demo-011",
+      "saas-demo-012",
+      "saas-demo-013",
+      "saas-demo-014",
+      "saas-demo-015",
+      "saas-demo-016",
+      "saas-demo-017",
+      "saas-demo-018",
+      "saas-demo-019",
+      "saas-demo-020",
+      "saas-demo-021",
+      "saas-demo-022",
+      "saas-demo-023",
+      "saas-demo-024",
+      "saas-demo-025",
+      "saas-demo-026",
+      "saas-demo-027",
+      "saas-demo-028",
+      "saas-demo-029",
+      "saas-demo-030",
+      "saas-demo-031",
+      "saas-demo-032",
+      "saas-demo-033",
+      "saas-demo-034",
+      "saas-demo-035",
+      "saas-demo-036"
+    ],
+    "warnings": []
+  },
+  "output_dir": "tmp/content_ops_gate_a_email_campaign_input_fit_20260608",
+  "required_outputs": [
+    "email_campaign"
+  ],
+  "review": {
+    "email_campaign": {
+      "missing_ids": [],
+      "requested_ids": [
+        "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
+        "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+      ],
+      "updated_ids": [
+        "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
+        "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+      ]
+    }
+  },
+  "saved_ids": {
+    "email_campaign": [
+      "5d2d3d89-06ce-4657-9c99-ce0455df9f70",
+      "77a2a351-98dd-4e1d-adc3-74309237cf3d"
+    ]
+  },
+  "seeded_blog_blueprint": {},
+  "status": "passed",
+  "support_ticket_csv": "extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv",
+  "variant_count": 3,
+  "variant_summary": {
+    "email_campaign": {
+      "variant_count": 0,
+      "variants": []
+    }
+  }
+}
