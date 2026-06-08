@@ -31,7 +31,8 @@ from smoke_content_ops_live_generation import (  # noqa: E402
 )
 
 
-DEFAULT_OUTPUTS = ("landing_page", "blog_post", "sales_brief")
+DEFAULT_OUTPUTS = ("email_campaign", "landing_page", "blog_post", "sales_brief")
+SEQUENCE_OUTPUTS = frozenset({"email_campaign"})
 DEFAULT_SUPPORT_TICKET_CSV = (
     ROOT / "extracted_content_pipeline" / "examples" / "support_ticket_saas_demo_sources.csv"
 )
@@ -55,6 +56,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--target-mode",
         default="vendor_retention",
         help="Content Ops target_mode for the live run.",
+    )
+    parser.add_argument(
+        "--outputs",
+        default=",".join(DEFAULT_OUTPUTS),
+        help="Comma-separated outputs to run. Defaults to all Gate A outputs.",
     )
     parser.add_argument(
         "--support-ticket-csv",
@@ -151,6 +157,27 @@ def _default_brand_voice(account_id: str) -> dict[str, Any]:
     }
 
 
+def _resolve_outputs(raw_outputs: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(raw_outputs, str):
+        candidates = raw_outputs.split(",")
+    else:
+        candidates = list(raw_outputs)
+    outputs = tuple(
+        dict.fromkeys(str(output).strip() for output in candidates if str(output).strip())
+    )
+    if not outputs:
+        raise ValueError("at least one output is required")
+    unsupported = [output for output in outputs if output not in DEFAULT_OUTPUTS]
+    if unsupported:
+        raise ValueError(
+            "unsupported output(s): "
+            + ", ".join(unsupported)
+            + "; expected one of "
+            + ", ".join(DEFAULT_OUTPUTS)
+        )
+    return outputs
+
+
 def build_gate_a_payload(
     *,
     account_id: str,
@@ -158,6 +185,7 @@ def build_gate_a_payload(
     target_mode: str,
     variant_count: int,
     quality_repair_attempts: int,
+    outputs: Sequence[str] = DEFAULT_OUTPUTS,
     max_cost_usd: float | None = None,
     account_usage_budget_usd: float | None = None,
     account_usage_budget_days: int = 7,
@@ -166,6 +194,7 @@ def build_gate_a_payload(
         raise ValueError("variant_count must be greater than 1")
     if quality_repair_attempts < 0:
         raise ValueError("quality_repair_attempts must be >= 0")
+    selected_outputs = _resolve_outputs(outputs)
 
     inputs = {
         **dict(DEFAULT_LANDING_PAGE_INPUTS),
@@ -190,7 +219,7 @@ def build_gate_a_payload(
         "cta_url": "/systems/ai-content-ops/intake",
     }
     payload: dict[str, Any] = {
-        "outputs": list(DEFAULT_OUTPUTS),
+        "outputs": list(selected_outputs),
         "target_mode": target_mode,
         "limit": 1,
         "variant_count": variant_count,
@@ -208,6 +237,10 @@ def build_gate_a_payload(
 async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if int(args.variant_count) <= 1:
         raise SystemExit("--variant-count must be greater than 1")
+    try:
+        selected_outputs = _resolve_outputs(str(args.outputs or ""))
+    except ValueError as exc:
+        raise SystemExit(f"--outputs: {exc}") from None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,6 +253,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
         or "vendor_retention",
         variant_count=int(args.variant_count),
         quality_repair_attempts=int(args.quality_repair_attempts),
+        outputs=selected_outputs,
         max_cost_usd=args.max_cost_usd,
         account_usage_budget_usd=args.account_usage_budget_usd,
         account_usage_budget_days=int(args.account_usage_budget_days),
@@ -244,7 +278,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
         services = services_factory()
         configured_outputs = tuple(services.configured_outputs())
         missing_outputs = [
-            output for output in DEFAULT_OUTPUTS if output not in configured_outputs
+            output for output in selected_outputs if output not in configured_outputs
         ]
         if missing_outputs:
             errors.append(
@@ -257,6 +291,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
                 payload,
                 account_id=str(args.account_id or "").strip(),
                 variant_count=int(args.variant_count),
+                outputs=selected_outputs,
             )
             seeded_blog_blueprint = await _seed_default_blog_blueprint(args, scope)
             _align_blog_payload_to_seed(payload, seeded_blog_blueprint)
@@ -270,13 +305,15 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
                 },
             )
             _write_json(output_dir / "execution-result.json", execution_result)
-            saved_ids = saved_ids_by_output(execution_result)
-            errors.extend(_execution_errors(execution_result, saved_ids))
+            saved_ids = saved_ids_by_output(execution_result, outputs=selected_outputs)
+            errors.extend(
+                _execution_errors(execution_result, saved_ids, outputs=selected_outputs)
+            )
             if not errors:
                 pool = _current_db_pool()
                 reviewed = await review_saved_ids(pool, scope, saved_ids)
                 _write_json(output_dir / "review-results.json", reviewed)
-                errors.extend(_review_errors(reviewed))
+                errors.extend(_review_errors(reviewed, outputs=selected_outputs))
                 exports = await export_saved_drafts(
                     pool,
                     scope=scope,
@@ -291,6 +328,7 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
                         execution_result,
                         saved_ids=saved_ids,
                         exports=exports,
+                        outputs=selected_outputs,
                     )
                 )
     except Exception as exc:  # live proof must preserve failure details.
@@ -305,12 +343,12 @@ async def run_gate_a_live_quality(args: argparse.Namespace) -> tuple[int, dict[s
         "account_id": str(args.account_id or "").strip(),
         "support_ticket_csv": str(Path(args.support_ticket_csv)),
         "output_dir": str(output_dir),
-        "required_outputs": list(DEFAULT_OUTPUTS),
+        "required_outputs": list(selected_outputs),
         "configured_outputs": list(configured_outputs),
         "variant_count": int(args.variant_count),
         "seeded_blog_blueprint": dict(seeded_blog_blueprint or {}),
-        "saved_ids": saved_ids_by_output(execution_result),
-        "variant_summary": variant_summary(execution_result),
+        "saved_ids": saved_ids_by_output(execution_result, outputs=selected_outputs),
+        "variant_summary": variant_summary(execution_result, outputs=selected_outputs),
         "review": reviewed,
         "export_counts": {
             output: int(_mapping(export).get("count") or 0)
@@ -334,8 +372,9 @@ def _reassert_gate_a_controls(
     *,
     account_id: str,
     variant_count: int,
+    outputs: Sequence[str],
 ) -> None:
-    payload["outputs"] = list(DEFAULT_OUTPUTS)
+    payload["outputs"] = list(outputs)
     payload["limit"] = 1
     payload["variant_count"] = variant_count
     inputs = payload.setdefault("inputs", {})
@@ -364,9 +403,13 @@ def saved_ids_by_output(
     return ids_by_output
 
 
-def variant_summary(result: Mapping[str, Any] | None) -> dict[str, Any]:
+def variant_summary(
+    result: Mapping[str, Any] | None,
+    *,
+    outputs: Sequence[str] = DEFAULT_OUTPUTS,
+) -> dict[str, Any]:
     summary: dict[str, Any] = {}
-    for output in DEFAULT_OUTPUTS:
+    for output in outputs:
         payload = _step_payload(result, output)
         variants = payload.get("variant_results") or ()
         if isinstance(variants, (str, bytes)) or not isinstance(variants, Sequence):
@@ -443,6 +486,9 @@ async def export_saved_drafts(
     from extracted_content_pipeline.blog_post_postgres import (  # noqa: PLC0415
         PostgresBlogPostRepository,
     )
+    from extracted_content_pipeline.campaign_postgres_export import (  # noqa: PLC0415
+        list_campaign_drafts,
+    )
     from extracted_content_pipeline.landing_page_export import (  # noqa: PLC0415
         export_landing_page_drafts,
     )
@@ -457,6 +503,19 @@ async def export_saved_drafts(
     )
 
     exports: dict[str, Mapping[str, Any]] = {}
+    campaign_ids = saved_ids.get("email_campaign") or ()
+    if campaign_ids:
+        export = await list_campaign_drafts(
+            pool,
+            scope=scope,
+            statuses=("approved",),
+            target_mode=target_mode,
+            limit=max(100, len(campaign_ids)),
+        )
+        exports["email_campaign"] = _filter_saved_draft_export_rows(
+            export.as_dict(),
+            campaign_ids,
+        )
     landing_ids = saved_ids.get("landing_page") or ()
     if landing_ids:
         export = await export_landing_page_drafts(
@@ -502,13 +561,15 @@ async def export_saved_drafts(
 def _execution_errors(
     result: Mapping[str, Any] | None,
     saved_ids: Mapping[str, Sequence[str]],
+    *,
+    outputs: Sequence[str] = DEFAULT_OUTPUTS,
 ) -> list[str]:
     if not isinstance(result, Mapping):
         return ["execution returned no result"]
     errors: list[str] = []
     if result.get("status") != "completed":
         errors.append(f"execution status was {result.get('status')!r}, not 'completed'")
-    for output in DEFAULT_OUTPUTS:
+    for output in outputs:
         step = _step(result, output)
         if not step:
             errors.append(f"execution result did not include {output}")
@@ -518,14 +579,18 @@ def _execution_errors(
         if not saved_ids.get(output):
             errors.append(f"{output} returned no saved_ids")
         payload = _step_payload(result, output)
-        if int(payload.get("variant_count") or 0) <= 1:
+        if output not in SEQUENCE_OUTPUTS and int(payload.get("variant_count") or 0) <= 1:
             errors.append(f"{output} did not report multiple variants")
     return errors
 
 
-def _review_errors(reviewed: Mapping[str, Any]) -> list[str]:
+def _review_errors(
+    reviewed: Mapping[str, Any],
+    *,
+    outputs: Sequence[str] = DEFAULT_OUTPUTS,
+) -> list[str]:
     errors: list[str] = []
-    for output in DEFAULT_OUTPUTS:
+    for output in outputs:
         review = _mapping(reviewed.get(output))
         missing = list(review.get("missing_ids") or ())
         if missing:
@@ -538,9 +603,13 @@ def variant_persistence_errors(
     *,
     saved_ids: Mapping[str, Sequence[str]],
     exports: Mapping[str, Mapping[str, Any]],
+    outputs: Sequence[str] = DEFAULT_OUTPUTS,
 ) -> list[str]:
     errors: list[str] = []
-    for output in DEFAULT_OUTPUTS:
+    for output in outputs:
+        if output in SEQUENCE_OUTPUTS:
+            errors.extend(_sequence_persistence_errors(output, saved_ids, exports))
+            continue
         successful_variants = _successful_variant_count(result, output)
         if successful_variants <= 1:
             continue
@@ -560,6 +629,30 @@ def variant_persistence_errors(
                 f"{export_count} exported row(s)"
             )
     return errors
+
+
+def _sequence_persistence_errors(
+    output: str,
+    saved_ids: Mapping[str, Sequence[str]],
+    exports: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    raw_ids = [
+        str(item).strip()
+        for item in saved_ids.get(output, ())
+        if str(item).strip()
+    ]
+    if not raw_ids:
+        return []
+    unique_ids = tuple(dict.fromkeys(raw_ids))
+    export_count = int(_mapping(exports.get(output)).get("count") or 0)
+    if len(unique_ids) == len(raw_ids) and export_count >= len(raw_ids):
+        return []
+    return [
+        f"{output} sequence persistence collapsed: "
+        f"{len(raw_ids)} saved id entr{'y' if len(raw_ids) == 1 else 'ies'}, "
+        f"{len(unique_ids)} unique saved id(s), "
+        f"{export_count} exported row(s)"
+    ]
 
 
 def _successful_variant_count(result: Mapping[str, Any] | None, output: str) -> int:

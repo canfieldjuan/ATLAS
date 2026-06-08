@@ -24,6 +24,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 from ..campaign_ports import LLMClient, SkillStore, TenantScope
+from ..campaign_postgres_review import review_campaign_drafts
 from ..ad_copy_export import export_ad_copy_drafts
 from ..ad_copy_postgres import PostgresAdCopyRepository
 from ..blog_post_export import export_blog_post_drafts
@@ -73,6 +74,7 @@ MacroPublishProviderFactory = Callable[
 ]
 
 ASSET_CHOICES = (
+    "email_campaign",
     "blog_post",
     "report",
     "landing_page",
@@ -942,6 +944,14 @@ async def _update_asset_status(
     status: str,
     scope: TenantScope,
 ) -> bool:
+    if asset == "email_campaign":
+        result = await review_campaign_drafts(
+            pool,
+            campaign_ids=[asset_id],
+            status=_campaign_review_status(status),
+            scope=scope,
+        )
+        return bool(result.rows)
     if asset == "blog_post":
         return await PostgresBlogPostRepository(pool).update_status(asset_id, status, scope=scope)
     if asset == "report":
@@ -971,6 +981,17 @@ async def _update_asset_statuses(
     status: str,
     scope: TenantScope,
 ) -> Sequence[str]:
+    if asset == "email_campaign":
+        if not asset_ids:
+            _campaign_review_status(status)
+            return ()
+        result = await review_campaign_drafts(
+            pool,
+            campaign_ids=asset_ids,
+            status=_campaign_review_status(status),
+            scope=scope,
+        )
+        return [str(row.get("id") or "").strip() for row in result.rows if row.get("id")]
     if asset == "blog_post":
         return await PostgresBlogPostRepository(pool).update_statuses(asset_ids, status, scope=scope)
     if asset == "report":
@@ -990,6 +1011,21 @@ async def _update_asset_statuses(
     if asset == "faq_markdown":
         return await PostgresTicketFAQRepository(pool).update_statuses(asset_ids, status, scope=scope)
     raise HTTPException(status_code=400, detail=f"unsupported asset: {asset}")
+
+
+def _campaign_review_status(status: str) -> str:
+    cleaned = _clean(status).lower()
+    if cleaned == "canceled":
+        cleaned = "cancelled"
+    if cleaned in {"approved", "queued", "cancelled", "expired"}:
+        return cleaned
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "email_campaign review status must be one of "
+            "approved, queued, cancelled, expired"
+        ),
+    )
 
 
 def _tenant_scope(value: TenantScope | Mapping[str, Any] | None) -> TenantScope:

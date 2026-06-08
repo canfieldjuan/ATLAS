@@ -34,13 +34,38 @@ def test_build_gate_a_payload_sets_top_level_variants_and_brand_voice() -> None:
         max_cost_usd=1.25,
     )
 
-    assert payload["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+    assert payload["outputs"] == [
+        "email_campaign",
+        "landing_page",
+        "blog_post",
+        "sales_brief",
+    ]
     assert payload["variant_count"] == 3
     assert payload["max_cost_usd"] == 1.25
     assert payload["inputs"]["target_account"] == "SaaS support team with repeat ticket backlog"
     assert payload["inputs"]["brand_voice"]["account_id"] == "acct-gate-a"
     assert payload["inputs"]["brand_voice"]["preferred_pov"] == "second_person"
     assert payload["inputs"]["source_material"][0]["Ticket ID"] == "ticket-1"
+
+
+def test_build_gate_a_payload_accepts_selected_outputs() -> None:
+    payload = smoke.build_gate_a_payload(
+        account_id="acct-gate-a",
+        support_ticket_rows=[],
+        target_mode="vendor_retention",
+        variant_count=3,
+        quality_repair_attempts=1,
+        outputs=("landing_page", "blog_post", "sales_brief"),
+    )
+
+    assert payload["outputs"] == ["landing_page", "blog_post", "sales_brief"]
+
+
+def test_resolve_outputs_rejects_empty_or_unsupported_selection() -> None:
+    with pytest.raises(ValueError, match="at least one output"):
+        smoke._resolve_outputs(" , ")
+    with pytest.raises(ValueError, match="unsupported output"):
+        smoke._resolve_outputs("landing_page,unknown")
 
 
 def test_build_gate_a_payload_requires_multiple_variants() -> None:
@@ -58,6 +83,11 @@ def test_saved_ids_by_output_reads_aggregate_variant_saved_ids() -> None:
     result = {
         "status": "completed",
         "steps": [
+            {
+                "output": "email_campaign",
+                "status": "completed",
+                "result": {"saved_ids": ["campaign-1", "campaign-2"]},
+            },
             {
                 "output": "landing_page",
                 "status": "completed",
@@ -84,6 +114,7 @@ def test_saved_ids_by_output_reads_aggregate_variant_saved_ids() -> None:
     }
 
     assert smoke.saved_ids_by_output(result) == {
+        "email_campaign": ["campaign-1", "campaign-2"],
         "landing_page": ["lp-1", "lp-2", "lp-3"],
         "blog_post": ["blog-1"],
         "sales_brief": ["brief-1"],
@@ -91,6 +122,33 @@ def test_saved_ids_by_output_reads_aggregate_variant_saved_ids() -> None:
     assert smoke.variant_summary(result)["landing_page"]["variants"][0][
         "variant_angle"
     ] == "pain_led"
+    assert "email_campaign did not report multiple variants" not in (
+        smoke._execution_errors(result, smoke.saved_ids_by_output(result))
+    )
+
+
+def test_execution_errors_respect_selected_outputs() -> None:
+    result = {
+        "status": "completed",
+        "steps": [
+            {
+                "output": "blog_post",
+                "status": "completed",
+                "result": {
+                    "variant_count": 3,
+                    "saved_ids": ["blog-1", "blog-2", "blog-3"],
+                },
+            },
+        ],
+    }
+
+    saved_ids = smoke.saved_ids_by_output(result, outputs=("blog_post",))
+
+    assert saved_ids == {"blog_post": ["blog-1", "blog-2", "blog-3"]}
+    assert smoke._execution_errors(result, saved_ids, outputs=("blog_post",)) == []
+    assert smoke.variant_summary(result, outputs=("blog_post",)) == {
+        "blog_post": {"variant_count": 3, "variants": []}
+    }
 
 
 @pytest.mark.asyncio
@@ -124,6 +182,56 @@ async def test_review_saved_ids_reports_missing_updates(
     assert smoke._review_errors(reviewed) == [
         "landing_page review update missed ids: lp-2"
     ]
+
+
+@pytest.mark.asyncio
+async def test_review_saved_ids_threads_email_campaign_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_update_statuses(
+        asset: str,
+        pool: Any,
+        *,
+        asset_ids: list[str],
+        status: str,
+        scope: Any,
+    ) -> list[str]:
+        calls.append({
+            "asset": asset,
+            "pool": pool,
+            "asset_ids": asset_ids,
+            "status": status,
+            "scope": scope,
+        })
+        return list(asset_ids)
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.api.generated_assets._update_asset_statuses",
+        _fake_update_statuses,
+    )
+
+    pool = object()
+    scope = object()
+    reviewed = await smoke.review_saved_ids(
+        pool,
+        scope,
+        {"email_campaign": ["campaign-1", "campaign-2"]},
+    )
+
+    assert reviewed["email_campaign"]["updated_ids"] == [
+        "campaign-1",
+        "campaign-2",
+    ]
+    assert reviewed["email_campaign"]["missing_ids"] == []
+    assert calls == [{
+        "asset": "email_campaign",
+        "pool": pool,
+        "asset_ids": ["campaign-1", "campaign-2"],
+        "status": "approved",
+        "scope": scope,
+    }]
 
 
 def test_filter_saved_draft_export_rows_fails_closed_on_missing_id() -> None:
@@ -161,4 +269,65 @@ def test_variant_persistence_errors_fail_on_duplicate_saved_ids() -> None:
         "blog_post variant persistence collapsed: "
         "2 successful variant(s), 2 saved id entries, "
         "1 unique saved id(s), 1 exported row(s)"
+    ]
+
+
+class _ExportResult:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"count": len(self.rows), "filters": {}, "rows": list(self.rows)}
+
+
+@pytest.mark.asyncio
+async def test_export_saved_drafts_exports_email_campaign_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_list_campaign_drafts(pool: Any, **kwargs: Any) -> _ExportResult:
+        calls.append({"pool": pool, **kwargs})
+        return _ExportResult([
+            {"id": "campaign-1", "subject": "First"},
+            {"id": "campaign-2", "subject": "Second"},
+            {"id": "other-campaign", "subject": "Other"},
+        ])
+
+    monkeypatch.setattr(
+        "extracted_content_pipeline.campaign_postgres_export.list_campaign_drafts",
+        _fake_list_campaign_drafts,
+    )
+
+    pool = object()
+    scope = object()
+    exports = await smoke.export_saved_drafts(
+        pool,
+        scope=scope,
+        target_mode="vendor_retention",
+        saved_ids={"email_campaign": ["campaign-1", "campaign-2"]},
+    )
+
+    assert calls == [{
+        "pool": pool,
+        "scope": scope,
+        "statuses": ("approved",),
+        "target_mode": "vendor_retention",
+        "limit": 100,
+    }]
+    assert exports["email_campaign"]["count"] == 2
+    assert [row["id"] for row in exports["email_campaign"]["rows"]] == [
+        "campaign-1",
+        "campaign-2",
+    ]
+
+
+def test_variant_persistence_errors_fail_on_duplicate_email_sequence_ids() -> None:
+    assert smoke.variant_persistence_errors(
+        {"status": "completed"},
+        saved_ids={"email_campaign": ["campaign-1", "campaign-1"]},
+        exports={"email_campaign": {"count": 1}},
+    ) == [
+        "email_campaign sequence persistence collapsed: "
+        "2 saved id entries, 1 unique saved id(s), 1 exported row(s)"
     ]
