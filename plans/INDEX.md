@@ -1,6 +1,6 @@
 # Plan archive index
 
-905 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+906 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -739,6 +739,7 @@
 - [PR-Frontend-Test-CI-Enrollment-Rule](archive/PR-Frontend-Test-CI-Enrollment-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Gate-A-Blog-Variant-Persistence](archive/PR-Gate-A-Blog-Variant-Persistence.md) - lane: content-ops/gate-a-blog-variant-persistence | phase: Production hardening
 - [PR-Gate-A-Sales-Brief-Type-Lock](archive/PR-Gate-A-Sales-Brief-Type-Lock.md) - lane: content-ops/gate-a-output-quality | phase: Production hardening
+- [PR-Gate-A-Sales-Brief-Type-Prompt-Steering](archive/PR-Gate-A-Sales-Brief-Type-Prompt-Steering.md) - lane: content-ops/gate-a-output-quality | phase: Production hardening
 - [PR-Generated-Asset-API-Draft-Id-Filters](archive/PR-Generated-Asset-API-Draft-Id-Filters.md) - lane: content-ops/support-ticket-input-provider | phase: Functional validation
 - [PR-Generated-Asset-Repair-History-Type-Contract](archive/PR-Generated-Asset-Repair-History-Type-Contract.md)
 - [PR-Generated-Asset-Repair-History-UI](archive/PR-Generated-Asset-Repair-History-UI.md)
