@@ -14,6 +14,7 @@ import {
 import { SeoHead } from "@/components/seo/SeoHead";
 
 const SUBMIT_ENDPOINT = "/api/content-ops/deflection/submit";
+const INSPECT_ENDPOINT = "/api/content-ops/deflection/inspect";
 const BLOB_UPLOAD_ENDPOINT = "/api/content-ops/deflection/upload";
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
@@ -31,8 +32,26 @@ type UploadState =
 
 type SubmitState =
   | { status: "idle" }
+  | { status: "inspecting" }
   | { status: "uploading"; percentage: number }
   | { status: "submitting" }
+  | { status: "error"; message: string };
+
+type InspectDiagnostics = {
+  ok: boolean;
+  opportunity_count: number;
+  warning_count: number;
+  warning_counts: Record<string, number>;
+  missing_field_counts: Record<string, number>;
+  source_type_counts: Record<string, number>;
+  samples: Array<Record<string, unknown>>;
+};
+
+type InspectState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "ready"; diagnostics: InspectDiagnostics }
+  | { status: "not_ready"; diagnostics: InspectDiagnostics; message: string }
   | { status: "error"; message: string };
 
 function formatBytes(bytes: number) {
@@ -70,11 +89,71 @@ function boundedProgress(percentage: number | undefined) {
   return Math.max(0, Math.min(100, Math.round(percentage ?? 0)));
 }
 
+function countSummary(counts: Record<string, number>) {
+  const entries = Object.entries(counts).filter(([, value]) => value > 0);
+  if (entries.length === 0) return "none";
+  return entries.map(([key, value]) => `${key}: ${value}`).join(", ");
+}
+
+function inspectMessage(diagnostics: InspectDiagnostics) {
+  if (diagnostics.opportunity_count <= 0) {
+    return "ATLAS could not find usable ticket rows in this CSV. Re-export full ticket threads before creating a report.";
+  }
+  if (Object.values(diagnostics.missing_field_counts).some((value) => value > 0)) {
+    return "ATLAS found rows, but required mapped fields are missing. Check the preview before creating a report.";
+  }
+  return "ATLAS found usable rows in this CSV.";
+}
+
+async function inspectDeflectionCsv(file: File): Promise<InspectDiagnostics> {
+  const formData = new FormData();
+  formData.set("file", file);
+  formData.set("source_rows", "true");
+  formData.set("source", "ticket-csv-upload");
+  formData.set("target_mode", "faq_deflection_report");
+  formData.set("file_format", "csv");
+  formData.set("sample_limit", "3");
+  formData.set("include_source_material", "false");
+  const response = await fetch(INSPECT_ENDPOINT, { method: "POST", body: formData });
+  const payload = (await response.json().catch(() => null)) as Partial<InspectDiagnostics> & {
+    error?: unknown;
+  } | null;
+  if (!response.ok) {
+    throw new Error(
+      payload && typeof payload.error === "string"
+        ? payload.error
+        : "CSV pre-flight inspection failed.",
+    );
+  }
+  if (
+    !payload ||
+    typeof payload.ok !== "boolean" ||
+    typeof payload.opportunity_count !== "number" ||
+    typeof payload.warning_count !== "number" ||
+    !payload.warning_counts ||
+    !payload.missing_field_counts ||
+    !payload.source_type_counts ||
+    !Array.isArray(payload.samples)
+  ) {
+    throw new Error("CSV pre-flight inspection returned an invalid response.");
+  }
+  return {
+    ok: payload.ok,
+    opportunity_count: payload.opportunity_count,
+    warning_count: payload.warning_count,
+    warning_counts: payload.warning_counts,
+    missing_field_counts: payload.missing_field_counts,
+    source_type_counts: payload.source_type_counts,
+    samples: payload.samples,
+  };
+}
+
 export default function FaqDeflectionUpload() {
   const [companyName, setCompanyName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [supportPlatform, setSupportPlatform] = useState<string>(SUPPORT_PLATFORMS[0].value);
   const [upload, setUpload] = useState<UploadState>({ status: "empty" });
+  const [inspect, setInspect] = useState<InspectState>({ status: "idle" });
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
 
   const fieldsReady = useMemo(
@@ -87,13 +166,32 @@ export default function FaqDeflectionUpload() {
       ),
     [companyName, contactEmail, supportPlatform, upload.status],
   );
-  const canSubmit = fieldsReady && submit.status !== "uploading" && submit.status !== "submitting";
+  const canSubmit =
+    fieldsReady &&
+    submit.status !== "inspecting" &&
+    submit.status !== "uploading" &&
+    submit.status !== "submitting";
   const isRetry = submit.status === "error";
 
   const startSubmit = async () => {
     if (upload.status !== "ready" || !fieldsReady) return;
 
+    let phase: "inspect" | "upload" = "inspect";
     try {
+      setSubmit({ status: "inspecting" });
+      setInspect({ status: "checking" });
+      const diagnostics = await inspectDeflectionCsv(upload.file);
+      if (!diagnostics.ok) {
+        setInspect({
+          status: "not_ready",
+          diagnostics,
+          message: inspectMessage(diagnostics),
+        });
+        setSubmit({ status: "idle" });
+        return;
+      }
+      setInspect({ status: "ready", diagnostics });
+      phase = "upload";
       setSubmit({ status: "uploading", percentage: 0 });
       const blob = await uploadBlob(blobPathname(upload.fileName), upload.file, {
         access: "private",
@@ -135,8 +233,15 @@ export default function FaqDeflectionUpload() {
         return;
       }
       window.location.assign(payload.result_path);
-    } catch {
-      setSubmit({ status: "error", message: "FAQ deflection upload could not be completed." });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : "FAQ deflection upload could not be completed.";
+      if (phase === "inspect") {
+        setInspect({ status: "error", message });
+      }
+      setSubmit({ status: "error", message });
     }
   };
 
@@ -156,6 +261,7 @@ export default function FaqDeflectionUpload() {
         className="mx-auto max-w-6xl px-6 py-10 md:py-14"
         data-atlas-deflection-upload
         data-atlas-deflection-submit-endpoint={SUBMIT_ENDPOINT}
+        data-atlas-deflection-inspect-endpoint={INSPECT_ENDPOINT}
         data-atlas-deflection-upload-endpoint={BLOB_UPLOAD_ENDPOINT}
       >
         <Link
@@ -223,7 +329,10 @@ export default function FaqDeflectionUpload() {
                   className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-3 text-sm text-white outline-none transition focus:border-primary-400"
                   data-atlas-deflection-support-platform
                   value={supportPlatform}
-                  onChange={(event) => setSupportPlatform(event.target.value)}
+                  onChange={(event) => {
+                    setSupportPlatform(event.target.value);
+                    setInspect({ status: "idle" });
+                  }}
                 >
                   {SUPPORT_PLATFORMS.map((platform) => (
                     <option key={platform.value} value={platform.value}>
@@ -252,7 +361,10 @@ export default function FaqDeflectionUpload() {
                 data-atlas-deflection-csv-file
                 type="file"
                 accept=".csv,text/csv"
-                onChange={(event) => setUpload(fileState(event.target.files?.[0]))}
+                onChange={(event) => {
+                  setUpload(fileState(event.target.files?.[0]));
+                  setInspect({ status: "idle" });
+                }}
               />
               <div
                 className="mt-4 space-y-2 text-xs leading-5 text-surface-200/70"
@@ -278,9 +390,8 @@ export default function FaqDeflectionUpload() {
                 </p>
               </div>
               <span className="mt-3 block text-xs text-surface-200/60">
-                Up to 50 MB. Your CSV stays in private storage first, then
-                ATLAS reads it server-side; service tokens never reach the
-                browser.
+                Up to 50 MB. CSV inspection and private storage both run
+                server-side; service tokens never reach the browser.
               </span>
             </label>
 
@@ -323,6 +434,80 @@ export default function FaqDeflectionUpload() {
                   </div>
                 </div>
               )}
+              {inspect.status === "checking" && (
+                <div
+                  className="flex items-start gap-3 rounded-lg border border-primary-500/30 bg-primary-500/10 p-4 text-sm text-primary-100"
+                  data-atlas-deflection-inspect-preview
+                >
+                  <Loader2 className="mt-0.5 h-5 w-5 flex-none animate-spin text-primary-300" />
+                  <p>Checking CSV rows with ATLAS before private upload.</p>
+                </div>
+              )}
+              {(inspect.status === "ready" || inspect.status === "not_ready") && (
+                <div
+                  className={`rounded-lg border p-4 text-sm ${
+                    inspect.status === "ready"
+                      ? "border-primary-500/30 bg-primary-500/10 text-primary-100"
+                      : "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                  }`}
+                  data-atlas-deflection-inspect-preview
+                >
+                  <div className="flex items-start gap-3">
+                    {inspect.status === "ready" ? (
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-primary-300" />
+                    ) : (
+                      <AlertTriangle className="mt-0.5 h-5 w-5 flex-none text-amber-300" />
+                    )}
+                    <div>
+                      <p className="font-semibold">
+                        {inspect.status === "ready"
+                          ? "CSV pre-flight passed"
+                          : "CSV needs a fuller export"}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 opacity-80">
+                        {inspect.status === "ready"
+                          ? inspectMessage(inspect.diagnostics)
+                          : inspect.message}
+                      </p>
+                    </div>
+                  </div>
+                  <dl className="mt-3 grid gap-2 text-xs leading-5 md:grid-cols-2">
+                    <div>
+                      <dt className="font-semibold">Rows found</dt>
+                      <dd>{inspect.diagnostics.opportunity_count}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold">Source types</dt>
+                      <dd>{countSummary(inspect.diagnostics.source_type_counts)}</dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold">Warnings</dt>
+                      <dd>
+                        {inspect.diagnostics.warning_count} total;{" "}
+                        {countSummary(inspect.diagnostics.warning_counts)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="font-semibold">Missing mapped fields</dt>
+                      <dd>{countSummary(inspect.diagnostics.missing_field_counts)}</dd>
+                    </div>
+                  </dl>
+                  {inspect.diagnostics.samples.length > 0 && (
+                    <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-surface-950/70 p-3 text-[11px] leading-5 text-surface-100">
+                      {JSON.stringify(inspect.diagnostics.samples, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
+              {inspect.status === "error" && (
+                <div
+                  className="flex items-start gap-3 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100"
+                  data-atlas-deflection-inspect-preview
+                >
+                  <AlertTriangle className="mt-0.5 h-5 w-5 flex-none text-amber-300" />
+                  <p>{inspect.message}</p>
+                </div>
+              )}
             </div>
 
             <button
@@ -331,7 +516,12 @@ export default function FaqDeflectionUpload() {
               data-atlas-deflection-submit
               disabled={!canSubmit}
             >
-              {submit.status === "uploading" ? (
+              {submit.status === "inspecting" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Checking CSV
+                </>
+              ) : submit.status === "uploading" ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Uploading CSV
@@ -383,9 +573,9 @@ export default function FaqDeflectionUpload() {
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              ATLAS stores the CSV privately, reads it back on the server, then
-              sends the browser to the locked result page for snapshot hydration
-              and Checkout.
+              ATLAS checks the CSV first, stores it privately after validation,
+              then sends the browser to the locked result page for snapshot
+              hydration and Checkout.
             </p>
           </aside>
         </div>

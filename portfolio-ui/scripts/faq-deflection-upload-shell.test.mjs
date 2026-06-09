@@ -11,6 +11,10 @@ import submitHandler, {
   readPrivateCsvBlob,
   submitPrivateBlob,
 } from "../api/content-ops/deflection/submit.js";
+import inspectHandler, {
+  INSPECT_PATH,
+  MAX_INSPECT_MULTIPART_BYTES,
+} from "../api/content-ops/deflection/inspect.js";
 import {
   CSV_CONTENT_TYPES,
   MAX_BLOB_CSV_BYTES as MAX_UPLOAD_CSV_BYTES,
@@ -32,6 +36,7 @@ const appSource = await readFile(resolve(root, "src/App.tsx"), "utf8");
 const servicesSource = await readFile(resolve(root, "src/pages/Services.tsx"), "utf8");
 const uploadSource = await readFile(resolve(root, "src/pages/FaqDeflectionUpload.tsx"), "utf8");
 const submitSource = await readFile(resolve(root, "api/content-ops/deflection/submit.js"), "utf8");
+const inspectSource = await readFile(resolve(root, "api/content-ops/deflection/inspect.js"), "utf8");
 const submitSmokeSource = await readFile(
   resolve(root, "scripts/faq-deflection-submit-live-smoke.mjs"),
   "utf8",
@@ -49,6 +54,28 @@ const ENV = {
   ATLAS_ACCOUNT_ID: ACCOUNT_ID,
   BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_token",
 };
+const READY_INSPECT_PAYLOAD = {
+  ok: true,
+  ingestion_path: "file_upload",
+  mode: "source_rows",
+  opportunity_count: 1,
+  warning_count: 0,
+  warning_counts: {},
+  missing_field_counts: {},
+  source_type_counts: { support_ticket: 1 },
+  samples: [],
+};
+const NOT_READY_INSPECT_PAYLOAD = {
+  ok: false,
+  ingestion_path: "file_upload",
+  mode: "source_rows",
+  opportunity_count: 0,
+  warning_count: 1,
+  warning_counts: { no_rows: 1 },
+  missing_field_counts: { target_id: 1 },
+  source_type_counts: {},
+  samples: [],
+};
 const MULTIPART_BODY = Buffer.from(
   [
     "--atlas",
@@ -65,6 +92,34 @@ const MULTIPART_BODY = Buffer.from(
     "lead@acme.example",
     "--atlas",
     'Content-Disposition: form-data; name="csv_file"; filename="tickets.csv"',
+    "Content-Type: text/csv",
+    "",
+    "ticket_id,message",
+    "ticket-1,How do I export reports?",
+    "--atlas--",
+    "",
+  ].join("\r\n"),
+);
+const INSPECT_MULTIPART_BODY = Buffer.from(
+  [
+    "--atlas",
+    'Content-Disposition: form-data; name="source_rows"',
+    "",
+    "true",
+    "--atlas",
+    'Content-Disposition: form-data; name="source"',
+    "",
+    "ticket-csv-upload",
+    "--atlas",
+    'Content-Disposition: form-data; name="target_mode"',
+    "",
+    "faq_deflection_report",
+    "--atlas",
+    'Content-Disposition: form-data; name="file_format"',
+    "",
+    "csv",
+    "--atlas",
+    'Content-Disposition: form-data; name="file"; filename="tickets.csv"',
     "Content-Type: text/csv",
     "",
     "ticket_id,message",
@@ -145,8 +200,10 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-contact-email",
     "data-atlas-deflection-support-platform",
     "data-atlas-deflection-submit",
+    "data-atlas-deflection-inspect-endpoint",
     "data-atlas-deflection-upload-endpoint",
     "data-atlas-deflection-upload-progress",
+    "data-atlas-deflection-inspect-preview",
     "data-atlas-deflection-export-guidance",
     "data-atlas-deflection-retry",
   ]) {
@@ -174,7 +231,19 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.doesNotMatch(uploadSource, /exact mathematical clustering/);
   assert.match(uploadSource, /Workspace routing is handled server-side/);
   assert.match(uploadSource, /Your browser never[\s\S]*receives ATLAS service tokens/);
-  assert.match(uploadSource, /Your CSV stays in private storage first/);
+  assert.match(uploadSource, /CSV inspection and private storage both run\s+server-side/);
+  assert.match(uploadSource, /ATLAS checks the CSV first[\s\S]*stores it privately after validation/);
+  assert.match(uploadSource, /const INSPECT_ENDPOINT = "\/api\/content-ops\/deflection\/inspect"/);
+  assert.match(uploadSource, /fetch\(INSPECT_ENDPOINT/);
+  assert.match(uploadSource, /source_rows", "true"/);
+  assert.match(uploadSource, /target_mode", "faq_deflection_report"/);
+  assert.match(uploadSource, /Checking CSV/);
+  assert.match(uploadSource, /CSV pre-flight passed/);
+  assert.match(uploadSource, /CSV needs a fuller export/);
+  assert.ok(
+    uploadSource.indexOf("await inspectDeflectionCsv") < uploadSource.indexOf("uploadBlob("),
+    "inspect must run before private Blob upload",
+  );
   assert.doesNotMatch(uploadSource, />\s*Support-ticket CSV upload\s*</);
   assert.doesNotMatch(uploadSource, /Bound server-side to the configured report workspace/);
   assert.doesNotMatch(uploadSource, /CSV bytes are first stored in private Vercel Blob/);
@@ -186,12 +255,164 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /value: "other", label: "Freshdesk \/ other"/);
   assert.doesNotMatch(uploadSource, /value: "freshdesk"/);
   assert.doesNotMatch(uploadSource, /value: "help-scout"/);
-  assert.doesNotMatch(uploadSource, /new FormData/);
+  assert.match(uploadSource, /new FormData\(\)/);
   assert.match(uploadSource, /JSON\.stringify/);
   assert.doesNotMatch(uploadSource, /X-Atlas-Account-Id|account_id/);
   assert.doesNotMatch(uploadSource, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
   assert.doesNotMatch(uploadSource, /Authorization/);
   assert.doesNotMatch(uploadSource, /\/paid\b/);
+});
+
+await test("portfolio inspect endpoint forwards multipart to ATLAS and redacts preview samples", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          ok: true,
+          ingestion_path: "file_upload",
+          mode: "source_rows",
+          opportunity_count: 2,
+          warning_count: 0,
+          warning_counts: {},
+          missing_field_counts: {},
+          source_type_counts: { support_ticket: 2 },
+          samples: [{
+            target_id: "ticket-1",
+            text: "Customer lead@example.com asks how to export reports.",
+          }],
+          source_material: [{
+            contact_email: "lead@example.com",
+          }],
+        });
+      },
+    };
+  };
+  const res = mockResponse();
+  try {
+    await withEnv(ENV, async () => {
+      await inspectHandler(
+        request({ body: INSPECT_MULTIPART_BODY }),
+        res,
+      );
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${INSPECT_PATH}`);
+  assert.equal(calls[0].options.method, "POST");
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
+  assert.equal(calls[0].options.headers["Content-Type"], "multipart/form-data; boundary=atlas");
+  assert.deepEqual(calls[0].options.body, INSPECT_MULTIPART_BODY);
+  const payload = JSON.parse(res.body);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.opportunity_count, 2);
+  assert.deepEqual(payload.source_type_counts, { support_ticket: 2 });
+  assert.equal(payload.samples[0].text.includes("[redacted-email]"), true);
+  assert.equal("source_material" in payload, false);
+  assert.equal(res.body.includes(ENV.ATLAS_B2B_JWT), false);
+  assert.equal(res.body.includes("lead@example.com"), false);
+});
+
+await test("portfolio inspect endpoint returns not-ready diagnostics without failing transport", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify({
+        ok: false,
+        ingestion_path: "file_upload",
+        mode: "source_rows",
+        opportunity_count: 0,
+        warning_count: 1,
+        warning_counts: { no_rows: 1 },
+        missing_field_counts: { target_id: 1 },
+        source_type_counts: {},
+        samples: [],
+      });
+    },
+  });
+  const res = mockResponse();
+  try {
+    await withEnv(ENV, async () => {
+      await inspectHandler(request({ body: INSPECT_MULTIPART_BODY }), res);
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(JSON.parse(res.body), {
+    ok: false,
+    ingestion_path: "file_upload",
+    mode: "source_rows",
+    opportunity_count: 0,
+    warning_count: 1,
+    warning_counts: { no_rows: 1 },
+    missing_field_counts: { target_id: 1 },
+    source_type_counts: {},
+    samples: [],
+  });
+});
+
+await test("portfolio inspect endpoint fails closed on malformed ATLAS envelope", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async text() {
+      return JSON.stringify({ ok: true, samples: [] });
+    },
+  });
+  const res = mockResponse();
+  try {
+    await withEnv(ENV, async () => {
+      await inspectHandler(request({ body: INSPECT_MULTIPART_BODY }), res);
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(res.statusCode, 502);
+  assert.deepEqual(JSON.parse(res.body), {
+    ok: false,
+    error: "atlas_inspect_contract_violation",
+  });
+});
+
+await test("portfolio inspect endpoint caps multipart bytes before ATLAS", async () => {
+  const previousFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    throw new Error("must not call ATLAS for oversized inspect");
+  };
+  const res = mockResponse();
+  try {
+    await withEnv(ENV, async () => {
+      await inspectHandler(
+        request({ body: Buffer.alloc(MAX_INSPECT_MULTIPART_BYTES + 1) }),
+        res,
+      );
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(fetchCalled, false);
+  assert.equal(res.statusCode, 413);
+  assert.deepEqual(JSON.parse(res.body), {
+    ok: false,
+    error: "deflection_inspect_csv_too_large",
+  });
 });
 
 await test("portfolio submit endpoint pins private Blob submit handling", () => {
@@ -201,6 +422,11 @@ await test("portfolio submit endpoint pins private Blob submit handling", () => 
   assert.match(submitSource, /const \{ del \} = await import\("@vercel\/blob"\)/);
   assert.match(submitSource, /direct_multipart_deprecated/);
   assert.doesNotMatch(submitSource, /readRawBody|MAX_MULTIPART_OVERHEAD_BYTES/);
+  assert.match(submitSource, /inspectPrivateCsvBlob/);
+  assert.match(submitSource, /deflection_inspect_not_ready/);
+  assert.match(inspectSource, /bodyParser:\s*false/);
+  assert.match(inspectSource, /projectInspectPayload/);
+  assert.doesNotMatch(inspectSource, /ATLAS_B2B_JWT[^\\n]*console\\.log/);
 });
 
 await test("submit live smoke exercises the production private blob helper", async () => {
@@ -417,6 +643,16 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
     },
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
+      if (url.endsWith(INSPECT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify(READY_INSPECT_PAYLOAD);
+          },
+        };
+      }
+      assert.equal(url.endsWith(SUBMIT_PATH), true);
       return {
         ok: true,
         status: 200,
@@ -432,14 +668,81 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
 
   assert.equal(result.ok, true);
   assert.equal(result.payload.result_path.includes("content-ops-private123"), true);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${INSPECT_PATH}`);
   assert.equal(calls[0].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
   assert.equal("Content-Type" in calls[0].options.headers, false);
   assert.equal(calls[0].options.body instanceof FormData, true);
-  assert.equal(calls[0].options.body.get("support_platform"), "zendesk");
-  assert.equal(calls[0].options.body.get("company_name"), "Acme Co.");
-  assert.equal(await calls[0].options.body.get("csv_file").text(), csv);
+  assert.equal(calls[0].options.body.get("source_rows"), "true");
+  assert.equal(calls[0].options.body.get("target_mode"), "faq_deflection_report");
+  assert.equal(await calls[0].options.body.get("file").text(), csv);
+  assert.equal(calls[1].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.equal(calls[1].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
+  assert.equal("Content-Type" in calls[1].options.headers, false);
+  assert.equal(calls[1].options.body instanceof FormData, true);
+  assert.equal(calls[1].options.body.get("support_platform"), "zendesk");
+  assert.equal(calls[1].options.body.get("company_name"), "Acme Co.");
+  assert.equal(await calls[1].options.body.get("csv_file").text(), csv);
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+});
+
+await test("private blob submit blocks not-ready inspect before report submit", async () => {
+  const calls = [];
+  const deleteCalls = [];
+  const csv = "ticket_id,message\nticket-1,How do I export reports?";
+  const result = await submitPrivateBlob({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      support_platform: "zendesk",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    getBlobImpl: async () => ({
+      statusCode: 200,
+      stream: new Blob([csv], { type: "text/csv" }).stream(),
+      blob: {
+        size: Buffer.byteLength(csv),
+        contentType: "text/csv",
+      },
+    }),
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith(SUBMIT_PATH)) {
+        throw new Error("not-ready inspect must block report submit");
+      }
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify(NOT_READY_INSPECT_PAYLOAD);
+        },
+      };
+    },
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 400,
+    error: "deflection_inspect_not_ready",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${INSPECT_PATH}`);
   assert.deepEqual(deleteCalls, [
     {
       pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
@@ -474,13 +777,24 @@ await test("private blob cleanup preserves ATLAS failure result", async () => {
         contentType: "text/csv",
       },
     }),
-    fetchImpl: async () => ({
-      ok: false,
-      status: 502,
-      async text() {
-        return JSON.stringify({ error: "upstream failed" });
-      },
-    }),
+    fetchImpl: async (url) => {
+      if (url.endsWith(INSPECT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify(READY_INSPECT_PAYLOAD);
+          },
+        };
+      }
+      return {
+        ok: false,
+        status: 502,
+        async text() {
+          return JSON.stringify({ error: "upstream failed" });
+        },
+      };
+    },
     deleteBlobImpl: async (pathname, options) => {
       deleteCalls.push({ pathname, options });
     },
@@ -526,13 +840,24 @@ await test("private blob cleanup failure does not mask submit success", async ()
         contentType: "text/csv",
       },
     }),
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      async text() {
-        return JSON.stringify({ request_id: "content-ops-cleanup123" });
-      },
-    }),
+    fetchImpl: async (url) => {
+      if (url.endsWith(INSPECT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify(READY_INSPECT_PAYLOAD);
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ request_id: "content-ops-cleanup123" });
+        },
+      };
+    },
     deleteBlobImpl: async () => {
       throw new Error("delete unavailable");
     },
