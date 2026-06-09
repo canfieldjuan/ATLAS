@@ -742,6 +742,19 @@ class TaskScheduler:
             },
         },
         {
+            "name": "content_ops_deflection_report_delivery",
+            "description": "Deliver queued paid Content Ops deflection reports to buyer inboxes",
+            "task_type": "builtin",
+            "schedule_type": "interval",
+            "interval_seconds": None,  # resolved from settings.deflection_delivery.interval_seconds
+            "timeout_seconds": 300,
+            "enabled": False,  # opt-in via ATLAS_DEFLECTION_DELIVERY_ENABLED
+            "metadata": {
+                "builtin_handler": "content_ops_deflection_report_delivery",
+                "notify_tags": "email,content_ops,deflection",
+            },
+        },
+        {
             "name": "b2b_scrape_target_pruning",
             "description": "Disable low-yield scrape targets based on recent scrape outcomes",
             "task_type": "builtin",
@@ -963,6 +976,7 @@ class TaskScheduler:
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
+                "content_ops_deflection_report_delivery": settings.deflection_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
                 "llm_provider_cost_sync": settings.provider_cost.interval_seconds,
@@ -974,6 +988,13 @@ class TaskScheduler:
                 "content_ops_faq_macro_writeback_scheduled_publish": (
                     settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled
                 ),
+                "content_ops_deflection_report_delivery": settings.deflection_delivery.enabled,
+            }
+            _enabled_config_keys = {
+                "content_ops_faq_macro_writeback_scheduled_publish": (
+                    "settings.b2b_campaign.content_ops_faq_macro_writeback_scheduled_enabled"
+                ),
+                "content_ops_deflection_report_delivery": "settings.deflection_delivery.enabled",
             }
 
             # Resolve configurable cron expressions at runtime
@@ -1014,6 +1035,10 @@ class TaskScheduler:
                     task_def = {**task_def, "interval_seconds": _interval_overrides[task_def["name"]]}
                 if task_def["name"] in _enabled_overrides:
                     task_def = {**task_def, "enabled": _enabled_overrides[task_def["name"]]}
+                    metadata = dict(task_def.get("metadata") or {})
+                    metadata.setdefault("enabled_config_key", _enabled_config_keys[task_def["name"]])
+                    metadata.setdefault("enabled_config_value", bool(task_def["enabled"]))
+                    task_def = {**task_def, "metadata": metadata}
                 existing = await repo.get_by_name(task_def["name"])
                 if existing is not None:
                     # Merge any new metadata keys from the definition into the existing row.
@@ -1027,8 +1052,25 @@ class TaskScheduler:
                     code_timeout = task_def.get("timeout_seconds", 120)
                     db_timeout = existing.timeout_seconds or 120
                     timeout_changed = code_timeout != db_timeout
+                    existing_enabled = bool(existing.enabled)
+                    desired_enabled = bool(task_def.get("enabled", True))
+                    last_config_enabled = existing_meta.get("enabled_config_value")
+                    enabled_config_managed = bool(default_meta.get("enabled_config_key"))
+                    enabled_changed = (
+                        enabled_config_managed
+                        and existing_enabled != desired_enabled
+                        and (
+                            last_config_enabled is None
+                            or existing_enabled == bool(last_config_enabled)
+                        )
+                    )
+                    if (
+                        enabled_config_managed
+                        and existing_meta.get("enabled_config_value") != desired_enabled
+                    ):
+                        new_keys["enabled_config_value"] = desired_enabled
 
-                    if new_keys or timeout_changed:
+                    if new_keys or timeout_changed or enabled_changed:
                         from ..storage.database import get_db_pool
                         pool = get_db_pool()
                         if not pool.is_initialized:
@@ -1056,6 +1098,14 @@ class TaskScheduler:
                                     "Synced timeout_seconds for task '%s': %d -> %d",
                                     task_def["name"], db_timeout, code_timeout,
                                 )
+                            if enabled_changed:
+                                updated = await repo.update(existing.id, enabled=desired_enabled)
+                                logger.info(
+                                    "Synced enabled for task '%s': %s -> %s",
+                                    task_def["name"], existing_enabled, desired_enabled,
+                                )
+                                if updated is not None:
+                                    await self.register_and_schedule(updated)
                     continue
 
                 task = await repo.create(
@@ -1115,6 +1165,7 @@ class TaskScheduler:
                 "b2b_churn_alert": settings.b2b_alert.interval_seconds,
                 "b2b_report_subscription_delivery": settings.b2b_report_delivery.interval_seconds,
                 "b2b_watchlist_alert_delivery": settings.b2b_watchlist_delivery.interval_seconds,
+                "content_ops_deflection_report_delivery": settings.deflection_delivery.interval_seconds,
                 "b2b_scrape_target_pruning": settings.b2b_scrape.source_low_yield_pruning_interval_seconds,
                 "b2b_parser_upgrade_maintenance": settings.b2b_scrape.parser_upgrade_maintenance_interval_seconds,
                 "content_ops_faq_macro_writeback_scheduled_publish": (

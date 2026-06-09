@@ -4,18 +4,28 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/__init__.py"
+      - "atlas_brain/autonomous/tasks/content_ops_deflection_report_delivery.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
       - "scripts/send_content_ops_deflection_report_deliveries.py"
       - "tests/test_atlas_content_ops_deflection_delivery.py"
+      - "tests/test_deflection_report_delivery_task.py"
       - "tests/test_send_content_ops_deflection_report_deliveries.py"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "atlas_brain/autonomous/scheduler.py"
+      - "atlas_brain/autonomous/tasks/__init__.py"
+      - "atlas_brain/autonomous/tasks/content_ops_deflection_report_delivery.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
       - "scripts/send_content_ops_deflection_report_deliveries.py"
       - "tests/test_atlas_content_ops_deflection_delivery.py"
+      - "tests/test_deflection_report_delivery_task.py"
       - "tests/test_send_content_ops_deflection_report_deliveries.py"
 
 jobs:
@@ -41,5 +51,6 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_deflection_delivery.py \
+            tests/test_deflection_report_delivery_task.py \
             tests/test_send_content_ops_deflection_report_deliveries.py \
             -q

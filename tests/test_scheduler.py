@@ -782,3 +782,170 @@ class TestDefaults:
         assert create_kwargs["enabled"] is False
         assert create_kwargs["interval_seconds"] == 3600
         s.register_and_schedule.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_deflection_delivery_default_seed_uses_typed_interval_and_opt_in(self, mock_repo_fn, monkeypatch):
+        s = _scheduler()
+        s._DEFAULT_TASKS = [
+            {
+                "name": "content_ops_deflection_report_delivery",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": None,
+                "timeout_seconds": 300,
+                "enabled": False,
+                "metadata": {"builtin_handler": "content_ops_deflection_report_delivery"},
+            },
+        ]
+
+        repo = AsyncMock()
+        repo.get_by_name = AsyncMock(return_value=None)
+        repo.create = AsyncMock(
+            return_value=ScheduledTask(
+                id=uuid4(),
+                name="content_ops_deflection_report_delivery",
+                task_type="builtin",
+                schedule_type="interval",
+                interval_seconds=123,
+                timeout_seconds=300,
+                enabled=True,
+            )
+        )
+        mock_repo_fn.return_value = repo
+        monkeypatch.setattr(s, "register_and_schedule", AsyncMock())
+        from atlas_brain.config import settings
+
+        monkeypatch.setattr(settings.deflection_delivery, "enabled", True, raising=False)
+        monkeypatch.setattr(settings.deflection_delivery, "interval_seconds", 123, raising=False)
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_interval_overrides", lambda: {})
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_default_tasks", lambda: [])
+
+        await s._ensure_default_tasks()
+
+        create_kwargs = repo.create.await_args.kwargs
+        assert create_kwargs["enabled"] is True
+        assert create_kwargs["interval_seconds"] == 123
+        assert s.register_and_schedule.await_args.args[0].name == "content_ops_deflection_report_delivery"
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_config_managed_enabled_opt_in_syncs_existing_seeded_task(
+        self, mock_repo_fn, monkeypatch
+    ):
+        s = _scheduler()
+        task_id = uuid4()
+        s._DEFAULT_TASKS = [
+            {
+                "name": "content_ops_deflection_report_delivery",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": None,
+                "timeout_seconds": 300,
+                "enabled": False,
+                "metadata": {"builtin_handler": "content_ops_deflection_report_delivery"},
+            },
+        ]
+        existing = ScheduledTask(
+            id=task_id,
+            name="content_ops_deflection_report_delivery",
+            task_type="builtin",
+            schedule_type="interval",
+            interval_seconds=300,
+            timeout_seconds=300,
+            enabled=False,
+            metadata={"builtin_handler": "content_ops_deflection_report_delivery"},
+        )
+        updated = ScheduledTask(
+            id=task_id,
+            name="content_ops_deflection_report_delivery",
+            task_type="builtin",
+            schedule_type="interval",
+            interval_seconds=300,
+            timeout_seconds=300,
+            enabled=True,
+            metadata={
+                "builtin_handler": "content_ops_deflection_report_delivery",
+                "enabled_config_key": "settings.deflection_delivery.enabled",
+                "enabled_config_value": True,
+            },
+        )
+        repo = AsyncMock()
+        repo.get_by_name = AsyncMock(return_value=existing)
+        repo.create = AsyncMock()
+        repo.update = AsyncMock(return_value=updated)
+        mock_repo_fn.return_value = repo
+        pool = _FakeExecPool()
+        monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", lambda: pool)
+        monkeypatch.setattr(s, "register_and_schedule", AsyncMock())
+        from atlas_brain.config import settings
+
+        monkeypatch.setattr(settings.deflection_delivery, "enabled", True, raising=False)
+        monkeypatch.setattr(settings.deflection_delivery, "interval_seconds", 300, raising=False)
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_interval_overrides", lambda: {})
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_default_tasks", lambda: [])
+
+        await s._ensure_default_tasks()
+
+        repo.create.assert_not_awaited()
+        repo.update.assert_awaited_once_with(task_id, enabled=True)
+        metadata_update = pool.calls[0]
+        assert "UPDATE scheduled_tasks SET metadata" in metadata_update[0]
+        metadata = __import__("json").loads(metadata_update[1])
+        assert metadata["enabled_config_key"] == "settings.deflection_delivery.enabled"
+        assert metadata["enabled_config_value"] is True
+        assert s.register_and_schedule.await_args.args[0] is updated
+
+    @pytest.mark.asyncio
+    @patch("atlas_brain.storage.repositories.scheduled_task.get_scheduled_task_repo")
+    async def test_config_managed_enabled_sync_preserves_manual_disable_after_prior_sync(
+        self, mock_repo_fn, monkeypatch
+    ):
+        s = _scheduler()
+        task_id = uuid4()
+        s._DEFAULT_TASKS = [
+            {
+                "name": "content_ops_deflection_report_delivery",
+                "task_type": "builtin",
+                "schedule_type": "interval",
+                "interval_seconds": None,
+                "timeout_seconds": 300,
+                "enabled": False,
+                "metadata": {"builtin_handler": "content_ops_deflection_report_delivery"},
+            },
+        ]
+        existing = ScheduledTask(
+            id=task_id,
+            name="content_ops_deflection_report_delivery",
+            task_type="builtin",
+            schedule_type="interval",
+            interval_seconds=300,
+            timeout_seconds=300,
+            enabled=False,
+            metadata={
+                "builtin_handler": "content_ops_deflection_report_delivery",
+                "enabled_config_key": "settings.deflection_delivery.enabled",
+                "enabled_config_value": True,
+            },
+        )
+        repo = AsyncMock()
+        repo.get_by_name = AsyncMock(return_value=existing)
+        repo.create = AsyncMock()
+        repo.update = AsyncMock()
+        mock_repo_fn.return_value = repo
+        pool = _FakeExecPool()
+        monkeypatch.setattr("atlas_brain.storage.database.get_db_pool", lambda: pool)
+        monkeypatch.setattr(s, "register_and_schedule", AsyncMock())
+        from atlas_brain.config import settings
+
+        monkeypatch.setattr(settings.deflection_delivery, "enabled", True, raising=False)
+        monkeypatch.setattr(settings.deflection_delivery, "interval_seconds", 300, raising=False)
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_interval_overrides", lambda: {})
+        monkeypatch.setattr("atlas_brain.pipelines.get_pipeline_default_tasks", lambda: [])
+
+        await s._ensure_default_tasks()
+
+        repo.create.assert_not_awaited()
+        repo.update.assert_not_awaited()
+        s.register_and_schedule.assert_not_awaited()
+        assert pool.calls == []

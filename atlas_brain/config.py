@@ -4005,6 +4005,27 @@ class B2BReportDeliveryConfig(BaseSettings):
     )
 
 
+class DeflectionDeliveryConfig(BaseSettings):
+    """Paid Content Ops deflection report delivery scheduler configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ATLAS_DEFLECTION_DELIVERY_", env_file=ENV_FILES, extra="ignore"
+    )
+
+    enabled: bool = Field(default=False, description="Enable queued paid deflection report delivery")
+    interval_seconds: int = Field(default=300, ge=60, le=86400, description="How often to drain pending paid-report delivery rows")
+    limit: int = Field(default=20, ge=1, le=250, description="Maximum queued paid-report deliveries processed per task run")
+    dry_run: bool = Field(default=True, description="Claim-read delivery rows without sending email")
+    from_email: str = Field(default="", description="Verified sender for paid deflection report delivery emails")
+    reply_to: str = Field(default="", description="Optional Reply-To address for deflection delivery emails")
+    subject: str = Field(default="Your FAQ deflection report is ready", description="Subject for paid deflection report delivery emails")
+    result_base_url: str = Field(default="", description="Portfolio base URL used to build deflection result links")
+    result_url_template: str = Field(default="", description="Optional full result URL template containing {request_id}")
+    resend_api_key: str = Field(default="", description="Resend API key for live paid deflection report delivery")
+    resend_api_url: str = Field(default="https://api.resend.com/emails", description="Resend email send API URL")
+    resend_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0, description="Timeout for Resend email send requests")
+
+
 class B2BWebhookConfig(BaseSettings):
     """B2B outbound webhook delivery configuration."""
 
@@ -5719,6 +5740,7 @@ class Settings(BaseSettings):
     b2b_alert: B2BAlertConfig = Field(default_factory=B2BAlertConfig)
     b2b_watchlist_delivery: B2BWatchlistDeliveryConfig = Field(default_factory=B2BWatchlistDeliveryConfig)
     b2b_report_delivery: B2BReportDeliveryConfig = Field(default_factory=B2BReportDeliveryConfig)
+    deflection_delivery: DeflectionDeliveryConfig = Field(default_factory=DeflectionDeliveryConfig)
     b2b_webhook: B2BWebhookConfig = Field(default_factory=B2BWebhookConfig)
     crm_event: CRMEventConfig = Field(default_factory=CRMEventConfig)
     b2b_scrape: B2BScrapeConfig = Field(default_factory=B2BScrapeConfig)

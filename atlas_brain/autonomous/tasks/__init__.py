@@ -43,6 +43,7 @@ _BUILTIN_TASKS = [
     ("b2b_tenant_report", "run", "b2b_tenant_report"),
     ("b2b_report_subscription_delivery", "run", "b2b_report_subscription_delivery"),
     ("b2b_watchlist_alert_delivery", "run", "b2b_watchlist_alert_delivery"),
+    ("content_ops_deflection_report_delivery", "run", "content_ops_deflection_report_delivery"),
     ("consumer_weekly_digest", "run", "consumer_weekly_digest"),
     ("consumer_signal_alerts", "run", "consumer_signal_alerts"),
     ("trial_nurture", "run", "trial_nurture"),

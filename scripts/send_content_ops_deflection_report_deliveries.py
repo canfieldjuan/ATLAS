@@ -104,12 +104,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--result-base-url",
-        default=_env("ATLAS_DEFLECTION_PORTFOLIO_BASE_URL"),
+        default=_env(
+            "ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL",
+            "ATLAS_DEFLECTION_PORTFOLIO_BASE_URL",
+        ),
         help="Portfolio origin; production result path is appended.",
     )
     parser.add_argument(
         "--result-url-template",
-        default=_env("ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL_TEMPLATE"),
+        default=_env(
+            "ATLAS_DEFLECTION_DELIVERY_RESULT_URL_TEMPLATE",
+            "ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL_TEMPLATE",
+        ),
         help="Full result URL template containing {request_id}.",
     )
     parser.add_argument(
@@ -160,6 +166,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     if not _configured(args.result_base_url) and not _configured(args.result_url_template):
         raise SystemExit(
             "Missing --result-base-url, --result-url-template, "
+            "ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL, "
+            "ATLAS_DEFLECTION_DELIVERY_RESULT_URL_TEMPLATE, "
             "ATLAS_DEFLECTION_PORTFOLIO_BASE_URL, or "
             "ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL_TEMPLATE"
         )

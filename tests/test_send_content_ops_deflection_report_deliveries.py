@@ -50,6 +50,24 @@ def test_parse_defaults_to_dry_run_and_env_config(monkeypatch: pytest.MonkeyPatc
     assert args.send is False
 
 
+def test_parse_prefers_typed_delivery_result_url_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ATLAS_DEFLECTION_DELIVERY_RESULT_BASE_URL", "https://typed.example")
+    monkeypatch.setenv("ATLAS_DEFLECTION_PORTFOLIO_BASE_URL", "https://legacy.example")
+    monkeypatch.setenv(
+        "ATLAS_DEFLECTION_DELIVERY_RESULT_URL_TEMPLATE",
+        "https://typed.example/results/{request_id}",
+    )
+    monkeypatch.setenv(
+        "ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL_TEMPLATE",
+        "https://legacy.example/results/{request_id}",
+    )
+
+    args = send_cli._parse_args([])
+
+    assert args.result_base_url == "https://typed.example"
+    assert args.result_url_template == "https://typed.example/results/{request_id}"
+
+
 def test_validate_allows_dry_run_without_resend_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ATLAS_DEFLECTION_DELIVERY_RESEND_API_KEY", raising=False)
     args = send_cli._parse_args(_base_args())
