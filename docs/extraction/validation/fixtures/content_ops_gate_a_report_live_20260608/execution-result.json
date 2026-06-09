@@ -1,0 +1,79 @@
+{
+  "errors": [],
+  "plan": {
+    "can_execute": true,
+    "limit": 1,
+    "preview": {
+      "blocked_outputs": [],
+      "can_run": true,
+      "estimated_cost_usd": 1.1,
+      "missing_inputs": [],
+      "normalized_request": {
+        "account_usage_budget_days": 7,
+        "account_usage_budget_usd": null,
+        "allow_unimplemented_outputs": false,
+        "brand_voice_profile_id": null,
+        "content_ops_cache_policy": null,
+        "ingestion_profile": "existing_evidence",
+        "limit": 1,
+        "max_cost_usd": 20.0,
+        "outputs": [
+          "report"
+        ],
+        "preset": null,
+        "reasoning_preset": null,
+        "require_quality_gates": true,
+        "target_mode": "vendor_retention",
+        "variant_count": 3
+      },
+      "outputs": [
+        "report"
+      ],
+      "warnings": []
+    },
+    "steps": [
+      {
+        "config": {
+          "default_report_type": "vendor_pressure",
+          "limit": 1,
+          "max_tokens": 4096,
+          "parse_retry_attempts": 1,
+          "parse_retry_response_excerpt_chars": 800,
+          "quality_gates_enabled": true,
+          "skill_name": "digest/report_generation",
+          "temperature": 0.3
+        },
+        "output": "report",
+        "reason": "",
+        "runner": "ReportGenerationService.generate",
+        "status": "runnable"
+      }
+    ],
+    "target_mode": "vendor_retention"
+  },
+  "status": "completed",
+  "steps": [
+    {
+      "error": "",
+      "output": "report",
+      "reasoning": {
+        "contexts_used": 0,
+        "provider_configured": false,
+        "requirement": "optional_host_context",
+        "service_supports_reasoning": true
+      },
+      "result": {
+        "errors": [],
+        "generated": 1,
+        "reasoning_contexts_used": 0,
+        "requested": 1,
+        "saved_ids": [
+          "c8b7105a-392e-4641-90a2-bb9110ae580e"
+        ],
+        "skipped": 0
+      },
+      "runner": "ReportGenerationService.generate",
+      "status": "completed"
+    }
+  ]
+}
