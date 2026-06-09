@@ -127,3 +127,35 @@ def test_main_empty_bots_exit_2(tmp_path):
     tf = tmp_path / "threads.json"
     tf.write_text("[]", encoding="utf-8")
     assert c.main(["--threads-file", str(tf), "--bots", "  "]) == 2
+
+
+# --- pagination: a thread past the first page must not be missed -----------
+
+def _page(nodes, *, has_next, cursor=None):
+    return json.dumps(
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {
+            "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+            "nodes": nodes,
+        }}}}}
+    )
+
+
+def test_fetch_threads_paginates(monkeypatch):
+    c = load_check()
+    pages = [
+        _page([thread(path="page1.py")], has_next=True, cursor="C1"),
+        _page([thread(path="page2.py")], has_next=False),
+    ]
+    seen = {"n": 0, "cursors": []}
+
+    def fake_gh(args, gh):
+        # capture whether the cursor was forwarded on the second call
+        seen["cursors"].append("C1" in " ".join(args))
+        out = pages[seen["n"]]
+        seen["n"] += 1
+        return out
+
+    monkeypatch.setattr(c, "_gh", fake_gh)
+    nodes = c.fetch_threads(1431, "owner", "name", "gh")
+    assert len(nodes) == 2  # both pages collected, not just the first 100
+    assert seen["n"] == 2 and seen["cursors"] == [False, True]

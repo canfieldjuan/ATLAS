@@ -39,10 +39,11 @@ from pathlib import Path
 _DEFAULT_BOTS = ("copilot", "codex")
 
 _THREADS_QUERY = """
-query($owner:String!,$name:String!,$pr:Int!){
+query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$pr){
-      reviewThreads(first:100){
+      reviewThreads(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
         nodes{
           isResolved
           isOutdated
@@ -55,6 +56,10 @@ query($owner:String!,$name:String!,$pr:Int!){
   }
 }
 """
+
+# Defensive cap on pagination (100 threads/page) so a pathological PR can never
+# loop unbounded; far above any real review.
+_MAX_THREAD_PAGES = 50
 
 
 def _load_phase2():
@@ -162,21 +167,33 @@ def _gh(args: Sequence[str], gh: str) -> str:
 
 
 def fetch_threads(pr: int, owner: str, name: str, gh: str) -> list[dict]:
-    out = _gh(
-        [
+    """Fetch ALL review threads, paginating so a PR with >100 threads cannot
+
+    hide an unresolved finding past the first page and pass as clear.
+    """
+    nodes: list[dict] = []
+    cursor: str | None = None
+    for _ in range(_MAX_THREAD_PAGES):
+        args = [
             "api", "graphql",
             "-f", f"query={_THREADS_QUERY}",
             "-F", f"owner={owner}",
             "-F", f"name={name}",
             "-F", f"pr={pr}",
-        ],
-        gh,
-    )
-    data = json.loads(out)
-    return (
-        ((((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
-         .get("reviewThreads") or {}).get("nodes")
-    ) or []
+        ]
+        if cursor:
+            args += ["-F", f"cursor={cursor}"]
+        data = json.loads(_gh(args, gh))
+        threads = (
+            (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+            .get("reviewThreads") or {}
+        )
+        nodes.extend(threads.get("nodes") or [])
+        page = threads.get("pageInfo") or {}
+        if not page.get("hasNextPage"):
+            break
+        cursor = page.get("endCursor")
+    return nodes
 
 
 def fetch_body(pr: int, repo: str, gh: str) -> str:
