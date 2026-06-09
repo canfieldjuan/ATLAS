@@ -643,6 +643,14 @@ waived with a reason in the PR body.** The machine owns mechanical issues; the
 human owns intent mismatch, product logic, architecture, risky assumptions, and
 missing tests.
 
+This rule is enforced from both sides. Locally,
+`scripts/audit_ai_reconciliation.py` checks the PR body's reconciliation record
+is internally resolved. In CI, the `AI Reconciliation (live)` workflow
+(`scripts/check_ai_reconciliation_live.py`) reads the live Codex/Copilot review
+threads and fails when the body records the findings as all fixed/waived (or
+carries no record) while bot threads are still open -- closing the
+"omitted a real open finding" loophole the local check cannot see.
+
 ### 4b. Verdict frugality
 
 Post **one** review per push. Don't comment on the PR while CI is

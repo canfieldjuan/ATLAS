@@ -13,8 +13,10 @@ finding left unresolved, every waiver carrying a reason. Fail closed on a
 contradictory or empty reconciliation block so a recorded reconciliation can be
 trusted. With --require, also fail when the section is absent.
 
-Cross-checking the recorded reconciliation against the live bot threads is a
-CI-side follow-up (needs gh/API) and is intentionally out of scope here.
+Cross-checking the recorded reconciliation against the live bot threads is done
+by the CI-side companion `scripts/check_ai_reconciliation_live.py` (needs
+gh/API), which fails when this recorded reconciliation omits a still-open bot
+finding. This local audit owns the body-shape half; that one owns reality.
 """
 from __future__ import annotations
 

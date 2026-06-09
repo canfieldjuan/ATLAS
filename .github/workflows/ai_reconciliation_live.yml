@@ -1,0 +1,43 @@
+name: AI Reconciliation (live)
+
+# Phase 5 of the review-workflow redesign (#1328): the live, CI-side half of the
+# AI-finding reconciliation gate. Fails when the PR body records the bot findings
+# as all fixed/waived (or carries no record) while unresolved Codex/Copilot
+# review threads still exist.
+#
+# Runs on `pull_request` as well as the review events so that, as a *required*
+# status check, it always runs and reports (a quiet PR with no bot threads
+# reports green instead of wedging the merge as "missing required check"), and
+# re-runs when a bot comment lands after the PR opens.
+
+on:
+  # `edited` is included so that when a reviewer fixes a failed check by editing
+  # only the PR body (adding the fixed/waived record), the required check re-runs
+  # instead of staying stale until the next push.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  pull_request_review:
+  pull_request_review_comment:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  live-reconciliation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Live AI-reconciliation check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/check_ai_reconciliation_live.py \
+            --pr "${{ github.event.pull_request.number }}"
