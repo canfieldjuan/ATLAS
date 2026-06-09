@@ -192,7 +192,7 @@ def _section_local_claim_id(section_id: str, index: int) -> str:
     return f"{slug}_claim_{index}"
 
 
-def _narrative_plan_claim_ids_by_section(
+def _narrative_plan_claim_ids(
     opportunity: Mapping[str, Any] | None,
 ) -> dict[str, tuple[str, ...]]:
     if opportunity is None:
@@ -516,22 +516,49 @@ class ReportGenerationService:
         default_report_type: str | None = None,
         opportunity: Mapping[str, Any] | None = None,
     ) -> ReportDraft:
-        plan_claim_ids_by_section = _narrative_plan_claim_ids_by_section(opportunity)
+        plan_claim_ids_by_section = _narrative_plan_claim_ids(opportunity)
         built_sections: list[ReportSection] = []
         for index, section in enumerate(parsed.get("sections") or (), start=1):
             if not isinstance(section, Mapping):
                 continue
             section_id = str(section.get("id") or "").strip()
             evidence_ids = _clean_id_values(section.get("evidence_ids"))
-            claim_ids = _clean_id_values(section.get("claim_ids"))
+            model_claim_ids = _clean_id_values(section.get("claim_ids"))
+            plan_claim_ids = plan_claim_ids_by_section.get(section_id, ())
+            claim_ids: tuple[str, ...] = ()
             metadata = dict(section.get("metadata") or {})
-            if not claim_ids:
-                claim_ids = plan_claim_ids_by_section.get(section_id, ())
+            dropped_model_claim_ids: tuple[str, ...] = ()
+            if model_claim_ids and plan_claim_ids:
+                claim_ids = tuple(
+                    claim_id
+                    for claim_id in model_claim_ids
+                    if claim_id in plan_claim_ids
+                )
+                dropped_model_claim_ids = tuple(
+                    claim_id
+                    for claim_id in model_claim_ids
+                    if claim_id not in plan_claim_ids
+                )
                 if claim_ids:
+                    metadata["claim_id_source"] = "model_verified"
+            elif model_claim_ids:
+                dropped_model_claim_ids = model_claim_ids
+            if not claim_ids:
+                claim_ids = plan_claim_ids
+                if plan_claim_ids:
                     metadata["claim_id_source"] = "narrative_plan"
             if not claim_ids and evidence_ids:
                 claim_ids = (_section_local_claim_id(section_id, index),)
                 metadata["claim_id_source"] = "derived_section"
+            dropped_model_claim_ids = tuple(
+                claim_id
+                for claim_id in dropped_model_claim_ids
+                if claim_id not in claim_ids
+            )
+            if dropped_model_claim_ids:
+                metadata["dropped_unverified_claim_ids"] = list(
+                    dropped_model_claim_ids
+                )
             built_sections.append(
                 ReportSection(
                     id=section_id,

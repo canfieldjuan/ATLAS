@@ -530,14 +530,162 @@ async def test_generate_aggregates_section_evidence_ids_into_reference_ids() -> 
 
 
 @pytest.mark.asyncio
-async def test_generate_preserves_supplied_section_claim_ids() -> None:
-    service, _intel, reports, _llm, _skills, _rp = _service()
+async def test_generate_preserves_ledger_verified_model_claim_ids() -> None:
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "narrative_plan": {
+                "claims": [{"claim_id": "c1"}],
+                "sections": [
+                    {"id": "findings", "title": "Findings", "claim_ids": ["c1"]}
+                ],
+            }
+        },
+    )
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        reasoning_context=context,
+    )
 
     await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
 
     section = reports.saved[0]["drafts"][0].sections[0]
     assert section.claim_ids == ("c1",)
-    assert "claim_id_source" not in section.metadata
+    assert section.metadata["claim_id_source"] == "model_verified"
+
+
+@pytest.mark.asyncio
+async def test_generate_drops_unverified_model_claim_ids_and_uses_plan_fallback() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "drivers",
+                "title": "Drivers",
+                "body_markdown": "body",
+                "claim_ids": ["c-fake"],
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "narrative_plan": {
+                "claims": [{"claim_id": "c-plan"}],
+                "sections": [
+                    {"id": "drivers", "title": "Drivers", "claim_ids": ["c-plan"]}
+                ],
+            }
+        },
+    )
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        reasoning_context=context,
+    )
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("c-plan",)
+    assert section.metadata["claim_id_source"] == "narrative_plan"
+    assert section.metadata["dropped_unverified_claim_ids"] == ["c-fake"]
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_verified_model_claim_ids_and_drops_invalid_near_miss() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "drivers",
+                "title": "Drivers",
+                "body_markdown": "body",
+                "claim_ids": ["c-plan", "c-fake"],
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "narrative_plan": {
+                "claims": [{"claim_id": "c-plan"}],
+                "sections": [
+                    {"id": "drivers", "title": "Drivers", "claim_ids": ["c-plan"]}
+                ],
+            }
+        },
+    )
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        reasoning_context=context,
+    )
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("c-plan",)
+    assert section.metadata["claim_id_source"] == "model_verified"
+    assert section.metadata["dropped_unverified_claim_ids"] == ["c-fake"]
+
+
+@pytest.mark.asyncio
+async def test_generate_drops_wrong_section_model_claim_ids() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "drivers",
+                "title": "Drivers",
+                "body_markdown": "body",
+                "claim_ids": ["c-competitive"],
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "narrative_plan": {
+                "sections": [
+                    {"id": "drivers", "title": "Drivers", "claim_ids": ["c-drivers"]},
+                    {
+                        "id": "competitive",
+                        "title": "Competitive",
+                        "claim_ids": ["c-competitive"],
+                    },
+                ]
+            }
+        },
+    )
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        reasoning_context=context,
+    )
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("c-drivers",)
+    assert section.metadata["claim_id_source"] == "narrative_plan"
+    assert section.metadata["dropped_unverified_claim_ids"] == ["c-competitive"]
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_trust_model_claim_ids_when_no_ledger_exists() -> None:
+    service, _intel, reports, _llm, _skills, _rp = _service()
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("findings_claim_1",)
+    assert section.metadata["claim_id_source"] == "derived_section"
+    assert section.metadata["dropped_unverified_claim_ids"] == ["c1"]
 
 
 @pytest.mark.asyncio
