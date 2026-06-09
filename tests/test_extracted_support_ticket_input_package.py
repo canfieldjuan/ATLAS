@@ -477,6 +477,77 @@ def test_support_ticket_clusters_group_messy_untagged_export_rows() -> None:
     assert "<p>" not in package.inputs["customer_wording_examples"][0]["text"]
 
 
+def test_support_ticket_input_package_strips_generic_provider_html_before_clustering() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "html-1",
+            "subject": "<section>Reset password</section>",
+            "description": (
+                "<article><h2>How do I reset my password?</h2>"
+                "<custom-widget>Use the login screen &amp; email link.</custom-widget>"
+                "<script>ignore me</script></article>"
+            ),
+            "comments": [
+                {
+                    "body": (
+                        "<message-fragment>Customer still sees the reset error.</message-fragment>"
+                    )
+                }
+            ],
+            "resolution_text": (
+                "<answer-card>Open Login, choose Forgot password, then use the "
+                "emailed reset link.</answer-card>"
+            ),
+        },
+        {
+            "ticket_id": "plain-1",
+            "subject": "Export threshold comparison",
+            "description": (
+                "Why does the export fail when total < 10? "
+                "Keep the literal &lt;manual_review&gt; marker in the note."
+            ),
+        },
+        {
+            "ticket_id": "xml-1",
+            "subject": "API field text",
+            "description": (
+                "Why did <email>user@example.test</email> fail when "
+                "<config>retries=3</config> was set?"
+            ),
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+
+    assert rows[0]["text"] == (
+        "Reset password How do I reset my password? Use the login screen & "
+        "email link. Customer still sees the reset error."
+    )
+    assert rows[0]["resolution_text"] == (
+        "Open Login, choose Forgot password, then use the emailed reset link."
+    )
+    assert "section" not in rows[0]["support_ticket_cluster"]
+    assert "article" not in rows[0]["support_ticket_cluster"]
+    assert "custom" not in rows[0]["support_ticket_cluster"]
+    assert rows[1]["text"] == (
+        "Export threshold comparison Why does the export fail when total < 10? "
+        "Keep the literal <manual_review> marker in the note."
+    )
+    assert rows[2]["text"] == (
+        "API field text Why did <email>user@example.test</email> fail when "
+        "<config>retries=3</config> was set?"
+    )
+    assert "<" not in rows[0]["text"]
+    assert "<manual_review>" in rows[1]["text"]
+    assert "<email>user@example.test</email>" in rows[2]["text"]
+    assert "<config>retries=3</config>" in rows[2]["text"]
+    assert "ignore me" not in rows[0]["text"]
+    assert "answer-card" not in rows[0]["resolution_text"]
+    assert "<" not in rows[0]["resolution_text"]
+    assert package.inputs["customer_wording_examples"][0]["text"] == rows[0]["text"]
+    assert package.inputs["faq_questions"][0] == "How do I reset my password?"
+
+
 def test_support_ticket_clusters_group_topic_varied_anchor_rows() -> None:
     package = build_support_ticket_input_package([
         {

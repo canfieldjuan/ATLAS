@@ -14,7 +14,13 @@ from typing import Any
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _HTML_SIGNAL_RE = re.compile(
-    r"</?(?:p|br|div|span|ul|ol|li|table|tr|td|th|strong|em|b|i|a|blockquote|pre|code|html|body)\b",
+    r"</?(?:article|aside|blockquote|body|br|code|dd|div|dl|dt|em|footer|"
+    r"h[1-6]|header|html|i|li|main|nav|ol|p|pre|section|span|strong|table|"
+    r"tbody|td|tfoot|th|thead|tr|ul)\b",
+    re.IGNORECASE,
+)
+_HTML_CUSTOM_TAG_RE = re.compile(
+    r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
     re.IGNORECASE,
 )
 _TAG_FALLBACK_RE = re.compile(r"</?[^>]+>")
@@ -256,15 +262,13 @@ class _HTMLTextExtractor(HTMLParser):
         lowered = tag.lower()
         if lowered in {"script", "style"}:
             self._skip_depth += 1
-        if lowered in {"br", "p", "div", "li", "tr", "td", "th"}:
-            self.parts.append(" ")
+        self.parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
         lowered = tag.lower()
         if lowered in {"script", "style"} and self._skip_depth:
             self._skip_depth -= 1
-        if lowered in {"p", "div", "li", "tr", "td", "th"}:
-            self.parts.append(" ")
+        self.parts.append(" ")
 
     def handle_data(self, data: str) -> None:
         if not self._skip_depth:
@@ -277,9 +281,12 @@ def support_ticket_plain_text(value: Any) -> str:
     raw = str(value or "")
     if not raw.strip():
         return ""
-    text = unescape(raw)
-    if not _HTML_SIGNAL_RE.search(text):
-        return _compact(text)
+    text = raw
+    if not _looks_like_html(text):
+        decoded = unescape(text)
+        if not _looks_like_html(decoded):
+            return _compact(decoded)
+        text = decoded
     parser = _HTMLTextExtractor()
     try:
         parser.feed(text)
@@ -288,6 +295,13 @@ def support_ticket_plain_text(value: Any) -> str:
     except Exception:
         parsed = _TAG_FALLBACK_RE.sub(" ", text)
     return _compact(parsed)
+
+
+def _looks_like_html(text: str) -> bool:
+    return bool(
+        _HTML_SIGNAL_RE.search(text)
+        or _HTML_CUSTOM_TAG_RE.search(text)
+    )
 
 
 def support_ticket_tokens(value: Any) -> frozenset[str]:
