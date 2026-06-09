@@ -110,6 +110,7 @@ pytest \
   tests/test_content_ops_marketer_verify_launcher_contract.py \
   tests/test_check_content_ops_marketer_verify_oauth_discovery.py \
   tests/test_check_content_ops_marketer_verify_oauth_e2e.py \
+  tests/test_check_content_ops_marketer_verify_dual_client_rollout.py \
   tests/test_mcp_content_ops_marketer_verify.py \
   tests/test_content_ops_claim_registry.py \
   tests/test_atlas_content_ops_generated_assets_api.py \
