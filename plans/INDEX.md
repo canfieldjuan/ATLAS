@@ -614,6 +614,7 @@
 - [PR-Deflection-Real-Data-Proof](archive/PR-Deflection-Real-Data-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Report-Brand-Neutral](archive/PR-Deflection-Report-Brand-Neutral.md) - lane: go-live-deflection-cleanup | phase: Product polish
 - [PR-Deflection-Resolution-Copy-Polish](archive/PR-Deflection-Resolution-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
+- [PR-Deflection-Resolution-Evidence-Absent-Assertions](archive/PR-Deflection-Resolution-Evidence-Absent-Assertions.md) - lane: content-ops/deflection-launch-readiness | phase: Robust testing
 - [PR-Deflection-Resolution-Evidence-Preview-Signal](archive/PR-Deflection-Resolution-Evidence-Preview-Signal.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Session-Amount-Gate](archive/PR-Deflection-Session-Amount-Gate.md) - lane: ai-content-ops/faq-deflection-monetization | phase: Production hardening

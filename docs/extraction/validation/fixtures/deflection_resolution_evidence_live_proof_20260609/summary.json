@@ -1,0 +1,20 @@
+{
+  "drafted_answer_count": 2,
+  "generated": 4,
+  "no_proven_answer_count": 2,
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "resolution_evidence_scoped": true,
+    "uses_user_vocabulary": true
+  },
+  "source_count": 12,
+  "source_date_end": "2026-05-08",
+  "source_date_start": "2026-05-02",
+  "source_window_days": 7,
+  "support_ticket_resolution_evidence_count": 2,
+  "support_ticket_resolution_evidence_present": true,
+  "ticket_source_count": 12,
+  "top_opportunity_score": 12,
+  "top_question": "How do I export attribution reports before our board meeting?"
+}

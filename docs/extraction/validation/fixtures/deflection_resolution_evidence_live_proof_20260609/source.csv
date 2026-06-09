@@ -1,0 +1,13 @@
+ticket_id,created_at,subject,message,pain_category,resolution_text,status,tags
+zd-4101,2026-05-02T09:14:00Z,Attribution export blocked,How do I export attribution reports before our board meeting?,reporting export,"Open Analytics then Attribution then click Download report. Choose CSV when the export modal asks for file type.",closed,"export,analytics,resolved"
+zd-4102,2026-05-02T11:48:00Z,Report download missing,Where is the report download for attribution exports?,reporting export,"Open Analytics then Attribution then click Download report. Choose CSV when the export modal asks for file type.",closed,"export,analytics,resolved"
+fd-4103,2026-05-03T08:05:00Z,Dashboard export permissions,Why can analysts view dashboards but not export reports?,reporting export,"Open Analytics then Attribution then click Download report. Choose CSV when the export modal asks for file type.",closed,"export,analytics,resolved"
+hs-4104,2026-05-03T14:22:00Z,CSV export file type,Can I download attribution data as a CSV for finance?,reporting export,"Open Analytics then Attribution then click Download report. Choose CSV when the export modal asks for file type.",closed,"export,analytics,resolved"
+zd-4201,2026-05-04T10:00:00Z,Invoice download,Where can I download invoices for last quarter?,billing export,"Open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.",closed,"billing,invoices,resolved"
+fd-4202,2026-05-04T10:37:00Z,Annual invoice PDF,How do I get the annual subscription invoice PDF?,billing export,"Open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.",closed,"billing,invoices,resolved"
+hs-4203,2026-05-05T13:18:00Z,Receipt export,Can finance export subscription receipts without admin access?,billing export,"Open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.",closed,"billing,invoices,resolved"
+zd-4301,2026-05-06T09:21:00Z,SSO certificate rotation,Where do I upload the new SSO certificate before it expires?,sso setup,,closed,"sso,identity,needs-review"
+fd-4302,2026-05-06T15:44:00Z,Domain verification for SSO,Why is domain verification failing during SSO setup?,sso setup,,closed,"sso,identity,needs-review"
+hs-4303,2026-05-07T07:52:00Z,SCIM before SSO enforcement,Can SCIM create users before they sign in with SSO?,sso setup,,closed,"sso,identity,needs-review"
+zd-4401,2026-05-07T12:30:00Z,CRM sync paused,Why did the CRM integration pause after the field mapping changed?,integration sync,,closed,"crm,sync,needs-review"
+fd-4402,2026-05-08T09:12:00Z,Duplicate contacts from CRM sync,How do I prevent duplicate contacts from the CRM sync?,integration sync,,closed,"crm,sync,needs-review"

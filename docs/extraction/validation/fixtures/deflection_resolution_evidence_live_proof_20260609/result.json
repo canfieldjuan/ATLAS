@@ -1,0 +1,117 @@
+{
+  "config": {
+    "as_of_date": null,
+    "custom_intent_rules": [],
+    "documentation_term_files": [],
+    "documentation_term_format": "auto",
+    "documentation_terms": [],
+    "faq_title": "Customer Ticket FAQ",
+    "max_evidence_per_item": 3,
+    "max_items": 0,
+    "max_text_chars": 1200,
+    "requested_max_items": 0,
+    "require_output_checks": true,
+    "rule_files": [],
+    "support_contact": null,
+    "title": "Support Ticket Deflection Report",
+    "vocabulary_gap_rules": [],
+    "window_days": null
+  },
+  "diagnostics": {
+    "item_count": 4,
+    "items": [
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "evidence_count": 3,
+        "first_source_id": "zd-4101",
+        "opportunity_score": 12,
+        "question": "How do I export attribution reports before our board meeting?",
+        "rank": 1,
+        "source_id_count": 4,
+        "step_count": 3,
+        "term_mapping_count": 0,
+        "ticket_count": 4,
+        "topic": "reporting friction"
+      },
+      {
+        "answer_evidence_status": "resolution_evidence",
+        "evidence_count": 3,
+        "first_source_id": "zd-4201",
+        "opportunity_score": 3,
+        "question": "Where can I download invoices for last quarter?",
+        "rank": 2,
+        "source_id_count": 3,
+        "step_count": 2,
+        "term_mapping_count": 0,
+        "ticket_count": 3,
+        "topic": "reporting friction"
+      },
+      {
+        "answer_evidence_status": "draft_needs_review",
+        "evidence_count": 3,
+        "first_source_id": "zd-4301",
+        "opportunity_score": 3,
+        "question": "Where do I upload the new SSO certificate before it expires?",
+        "rank": 3,
+        "source_id_count": 3,
+        "step_count": 3,
+        "term_mapping_count": 0,
+        "ticket_count": 3,
+        "topic": "sso setup"
+      },
+      {
+        "answer_evidence_status": "draft_needs_review",
+        "evidence_count": 2,
+        "first_source_id": "zd-4401",
+        "opportunity_score": 2,
+        "question": "Why did the CRM integration pause after the field mapping changed?",
+        "rank": 4,
+        "source_id_count": 2,
+        "step_count": 3,
+        "term_mapping_count": 0,
+        "ticket_count": 2,
+        "topic": "integration setup"
+      }
+    ]
+  },
+  "failed_output_checks": [],
+  "generated": 4,
+  "input": {
+    "path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/source.csv",
+    "source_format": "csv"
+  },
+  "output": {
+    "markdown_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md",
+    "result_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json",
+    "summary_path": "docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/summary.json"
+  },
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "resolution_evidence_scoped": true,
+    "uses_user_vocabulary": true
+  },
+  "source_count": 12,
+  "status": "ok",
+  "summary": {
+    "drafted_answer_count": 2,
+    "generated": 4,
+    "no_proven_answer_count": 2,
+    "output_checks": {
+      "condensed": true,
+      "has_action_items": true,
+      "resolution_evidence_scoped": true,
+      "uses_user_vocabulary": true
+    },
+    "source_count": 12,
+    "source_date_end": "2026-05-08",
+    "source_date_start": "2026-05-02",
+    "source_window_days": 7,
+    "support_ticket_resolution_evidence_count": 2,
+    "support_ticket_resolution_evidence_present": true,
+    "ticket_source_count": 12,
+    "top_opportunity_score": 12,
+    "top_question": "How do I export attribution reports before our board meeting?"
+  },
+  "ticket_source_count": 12
+}
