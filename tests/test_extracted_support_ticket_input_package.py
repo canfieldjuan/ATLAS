@@ -66,7 +66,7 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     assert request.inputs["measured_outcome_examples"] == []
     assert request.inputs["top_ticket_clusters"] == [
         {"label": "profile updates", "count": 1},
-        {"label": "Export dashboard", "count": 1},
+        {"label": "dashboard export renewal", "count": 1},
     ]
     assert request.inputs["customer_wording_examples"][0] == {
         "source_id": "ticket-1",
@@ -94,8 +94,19 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "vendor_name": "HelpDeskPro",
         "pain_category": "profile updates",
         "created_at": "2026-05-01",
+        "support_ticket_cluster": "profile updates",
+        "support_ticket_cluster_key": "explicit:profile-updates",
+        "support_ticket_cluster_source": "explicit",
     }
     assert package.metadata["included_row_count"] == 2
+    assert package.metadata["top_ticket_clusters"] == request.inputs["top_ticket_clusters"]
+    assert package.metadata["cluster_quality"] == {
+        "clustered_row_count": 2,
+        "uncategorized_row_count": 0,
+        "cluster_count": 2,
+        "singleton_cluster_count": 2,
+        "largest_cluster_count": 1,
+    }
 
 
 def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None:
@@ -127,6 +138,9 @@ def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None
             ),
             "company_name": "Riverbend Supply",
             "vendor_name": "LegacyCRM",
+            "support_ticket_cluster": "automation cleanup demo follow",
+            "support_ticket_cluster_key": "tokens:automation-cleanup-demo-follow",
+            "support_ticket_cluster_source": "token_set",
         }
     ]
     assert package.inputs["faq_questions"] == ["Can I automate demo follow-up?"]
@@ -359,6 +373,9 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
         ),
         "created_at": "2026-05-01T09:00:00Z",
         "contact_email": "maya@example.test",
+        "support_ticket_cluster": "code login mfa new",
+        "support_ticket_cluster_key": "tokens:code-login-mfa-new",
+        "support_ticket_cluster_source": "token_set",
     }
     assert rows[1]["source_id"] == "fd-200"
     assert rows[1]["source_title"] == "Where do I update billing?"
@@ -402,12 +419,185 @@ def test_support_ticket_clusters_do_not_use_synthetic_ticket_ids() -> None:
     ])
 
     assert package.inputs["top_ticket_clusters"] == [
-        {"label": "uncategorized", "count": 3}
+        {"label": "data export", "count": 1},
+        {"label": "billing", "count": 1},
+        {"label": "plan update", "count": 1},
     ]
+    assert all(
+        cluster["label"] not in {"ticket-1", "ticket-2", "ticket-3"}
+        for cluster in package.inputs["top_ticket_clusters"]
+    )
     assert package.inputs["customer_wording_examples"][0] == {
         "source_id": "ticket-1",
         "text": "How do I export data?",
     }
+
+
+def test_support_ticket_clusters_group_messy_untagged_export_rows() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "zd-1",
+            "subject": "Password reset help",
+            "description": "<p>How do I reset my password?</p>",
+        },
+        {
+            "ticket_id": "zd-2",
+            "subject": "Password reset not working",
+            "description": "I cannot reset password from the login screen",
+        },
+        {
+            "ticket_id": "hs-1",
+            "subject": "Change email address",
+            "description": "Where do I update my email?",
+        },
+        {
+            "ticket_id": "hs-2",
+            "subject": "Update account email",
+            "description": "Need to change email address",
+        },
+    ])
+
+    assert package.inputs["top_ticket_clusters"] == [
+        {"label": "login password reset", "count": 2},
+        {"label": "email update", "count": 2},
+    ]
+    assert package.metadata["cluster_quality"] == {
+        "clustered_row_count": 4,
+        "uncategorized_row_count": 0,
+        "cluster_count": 2,
+        "singleton_cluster_count": 0,
+        "largest_cluster_count": 2,
+    }
+    assert package.inputs["source_material"][0]["text"] == (
+        "Password reset help How do I reset my password?"
+    )
+    assert package.inputs["source_material"][0]["support_ticket_cluster"] == (
+        "login password reset"
+    )
+    assert "<p>" not in package.inputs["customer_wording_examples"][0]["text"]
+
+
+def test_support_ticket_clusters_group_topic_varied_anchor_rows() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "export-1",
+            "subject": "Attribution export blocked",
+            "description": "The attribution report export never starts.",
+        },
+        {
+            "ticket_id": "export-2",
+            "subject": "CSV export missing column",
+            "description": "The downloaded CSV leaves out the campaign column.",
+        },
+        {
+            "ticket_id": "export-3",
+            "subject": "Export timeout",
+            "description": "Report download times out before the file is ready.",
+        },
+        {
+            "ticket_id": "sso-1",
+            "subject": "SSO login loop",
+            "description": "Users return to the SSO screen after Okta.",
+        },
+        {
+            "ticket_id": "sso-2",
+            "subject": "SAML single sign on failure",
+            "description": "The identity provider rejects the SAML response.",
+        },
+        {
+            "ticket_id": "billing-1",
+            "subject": "Billing amount looks wrong",
+            "description": "The billing total changed after renewal.",
+        },
+        {
+            "ticket_id": "billing-2",
+            "subject": "Card charged twice this month",
+            "description": "The card was charged twice for the same workspace.",
+        },
+    ])
+
+    assert package.inputs["top_ticket_clusters"] == [
+        {"label": "export", "count": 3},
+        {"label": "sso", "count": 2},
+        {"label": "billing", "count": 2},
+    ]
+    assert package.metadata["cluster_quality"] == {
+        "clustered_row_count": 7,
+        "uncategorized_row_count": 0,
+        "cluster_count": 3,
+        "singleton_cluster_count": 0,
+        "largest_cluster_count": 3,
+    }
+    assert {
+        row["support_ticket_cluster"]
+        for row in package.inputs["source_material"]
+    } == {"export", "sso", "billing"}
+    assert all(
+        row["support_ticket_cluster_source"] == "token_anchor"
+        for row in package.inputs["source_material"]
+    )
+
+
+def test_support_ticket_clusters_derive_anchors_without_static_topic_list() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "login-1",
+            "subject": "Cannot log in",
+            "description": "Login fails after password reset.",
+        },
+        {
+            "ticket_id": "login-2",
+            "subject": "Login loop",
+            "description": "Users return to the same login page.",
+        },
+        {
+            "ticket_id": "login-3",
+            "subject": "Forgot credentials",
+            "description": "Login credentials reset email never arrives.",
+        },
+        {
+            "ticket_id": "api-1",
+            "subject": "Webhook not firing",
+            "description": "API callback never arrives.",
+        },
+        {
+            "ticket_id": "api-2",
+            "subject": "API 500 errors",
+            "description": "API request returns a 500 error.",
+        },
+        {
+            "ticket_id": "api-3",
+            "subject": "Integration broken",
+            "description": "API integration cannot sync records.",
+        },
+        {
+            "ticket_id": "dashboard-1",
+            "subject": "Dashboard blank",
+            "description": "Dashboard charts show a blank page.",
+        },
+        {
+            "ticket_id": "dashboard-2",
+            "subject": "Charts not loading",
+            "description": "Dashboard charts do not load.",
+        },
+    ])
+
+    assert package.inputs["top_ticket_clusters"] == [
+        {"label": "login", "count": 3},
+        {"label": "api", "count": 3},
+        {"label": "dashboard", "count": 2},
+    ]
+    assert package.metadata["cluster_quality"] == {
+        "clustered_row_count": 8,
+        "uncategorized_row_count": 0,
+        "cluster_count": 3,
+        "singleton_cluster_count": 0,
+        "largest_cluster_count": 3,
+    }
+    assert {
+        row["support_ticket_cluster"]
+        for row in package.inputs["source_material"]
+    } == {"login", "api", "dashboard"}
 
 
 def test_support_ticket_clusters_include_remaining_bucket() -> None:
@@ -574,6 +764,9 @@ def test_support_ticket_input_package_reports_skipped_and_truncated_rows() -> No
             "source_type": "support_ticket",
             "source_title": "ticket-2",
             "text": "How do I export data?",
+            "support_ticket_cluster": "data export",
+            "support_ticket_cluster_key": "tokens:data-export",
+            "support_ticket_cluster_source": "token_set",
         }
     ]
     assert package.metadata["source_row_count"] == 3

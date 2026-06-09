@@ -9,13 +9,18 @@ the existing FAQ, landing-page, and blog planners already understand.
 from __future__ import annotations
 
 import re
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 
 from .campaign_source_adapters import source_material_to_source_rows
 from .content_ops_input_provider import ContentOpsInputPackage
+from .support_ticket_clustering import (
+    assign_support_ticket_clusters,
+    support_ticket_cluster_quality,
+    support_ticket_cluster_summary,
+    support_ticket_plain_text,
+)
 from .support_ticket_context_contract import (
     SUPPORT_TICKET_DEFAULT_TOPIC,
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
@@ -207,6 +212,7 @@ def build_support_ticket_input_package(
         })
     skipped_row_count = len(raw_rows[:max_rows]) - len(normalized_rows)
     truncated_row_count = max(0, len(raw_rows) - max_rows)
+    normalized_rows = list(assign_support_ticket_clusters(normalized_rows))
     has_valid_date_window = _all_rows_have_dates(normalized_rows)
     source_period = (
         f"Last {window_days} days of support tickets"
@@ -293,6 +299,8 @@ def build_support_ticket_input_package(
             "support_ticket_resolution_evidence_count": resolution_evidence_count,
             "has_measured_outcomes": measured_outcome_count > 0,
             "measured_outcome_count": measured_outcome_count,
+            "top_ticket_clusters": top_ticket_clusters,
+            "cluster_quality": support_ticket_cluster_quality(normalized_rows),
         },
         warnings=tuple(warnings),
     )
@@ -308,7 +316,7 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
 def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     if not isinstance(row, Mapping):
         return {}
-    source_title = _first_text(row, _SOURCE_TITLE_KEYS)
+    source_title = support_ticket_plain_text(_first_text(row, _SOURCE_TITLE_KEYS))
     text = _ticket_text(row, source_title=source_title)
     if not text:
         return {}
@@ -321,7 +329,10 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
     }
     resolution_text = _first_text(row, _RESOLUTION_TEXT_KEYS)
     if resolution_text:
-        normalized["resolution_text"] = _clip_text(resolution_text, max_chars=500)
+        normalized["resolution_text"] = _clip_text(
+            support_ticket_plain_text(resolution_text),
+            max_chars=500,
+        )
     measured_outcome = _evidence_text(_first_value(row, _MEASURED_OUTCOME_KEYS))
     if measured_outcome:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
@@ -347,13 +358,13 @@ def _ticket_text(row: Mapping[str, Any], *, source_title: str) -> str:
     parts: list[str] = []
     if source_title:
         parts.append(source_title)
-    body = _first_text(row, _TEXT_KEYS)
+    body = support_ticket_plain_text(_first_text(row, _TEXT_KEYS))
     if body and body.lower() != source_title.lower():
         parts.append(body)
     comments = _comments_text(row)
     if comments:
         parts.append(comments)
-    return _compact("\n".join(parts))
+    return support_ticket_plain_text("\n".join(parts))
 
 
 def _comments_text(row: Mapping[str, Any]) -> str:
@@ -369,8 +380,8 @@ def _comments_text(row: Mapping[str, Any]) -> str:
         else:
             text = _clean(item)
         if text:
-            parts.append(text)
-    return _compact("\n".join(parts))
+            parts.append(support_ticket_plain_text(text))
+    return support_ticket_plain_text("\n".join(parts))
 
 
 def _ticket_questions(rows: Sequence[Mapping[str, Any]], *, limit: int = 6) -> list[str]:
@@ -413,39 +424,7 @@ def _top_ticket_clusters(
     *,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
-    counts: Counter[str] = Counter()
-    labels: dict[str, str] = {}
-    uncategorized_count = 0
-    for row in rows:
-        label = _cluster_label(row)
-        if not label:
-            uncategorized_count += 1
-            continue
-        key = label.lower()
-        labels.setdefault(key, label)
-        counts[key] += 1
-    clusters = [
-        {"label": labels[key], "count": count}
-        for key, count in counts.most_common(max(1, limit))
-    ]
-    shown_count = sum(int(item["count"]) for item in clusters)
-    remaining_count = sum(counts.values()) - shown_count
-    if remaining_count > 0:
-        clusters.append({"label": "remaining", "count": remaining_count})
-    if uncategorized_count > 0:
-        clusters.append({"label": "uncategorized", "count": uncategorized_count})
-    return clusters
-
-
-def _cluster_label(row: Mapping[str, Any]) -> str:
-    pain_category = _clean(row.get("pain_category"))
-    if pain_category:
-        return pain_category
-    source_title = _clean(row.get("source_title"))
-    source_id = _clean(row.get("source_id"))
-    if source_title and source_title != source_id:
-        return source_title
-    return ""
+    return support_ticket_cluster_summary(rows, limit=limit)
 
 
 def _customer_wording_examples(

@@ -14,6 +14,9 @@ from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
@@ -1872,6 +1875,53 @@ async def test_ticket_faq_service_generates_from_inline_source_material() -> Non
     assert result.as_dict()["generated"] == 1
     assert "How do I change my email address?" in result.markdown
     assert "`ticket-1` - Login email change" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_groups_package_cluster_hints_for_raw_rows() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "zd-1",
+            "subject": "Password reset help",
+            "description": "<p>How do I reset my password?</p>",
+        },
+        {
+            "ticket_id": "zd-2",
+            "subject": "Password reset not working",
+            "description": "I cannot reset password from the login screen",
+        },
+        {
+            "ticket_id": "hs-1",
+            "subject": "Change email address",
+            "description": "Where do I update my email?",
+        },
+        {
+            "ticket_id": "hs-2",
+            "subject": "Update account email",
+            "description": "Need to change email address",
+        },
+    ])
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material=package.inputs["source_material"],
+        max_items=10,
+    )
+
+    assert [(item["topic"], item["ticket_count"]) for item in result.items] == [
+        ("login password reset", 2),
+        ("email update", 2),
+    ]
+    assert all(
+        item["answer_evidence_status"] == "draft_needs_review"
+        for item in result.items
+    )
+    assert all(item["answer"].strip() for item in result.items)
+    assert "<p>" not in result.markdown
+    assert "`zd-1` - Password reset help" in result.markdown
+    assert "`hs-2` - Update account email" in result.markdown
 
 
 @pytest.mark.asyncio
