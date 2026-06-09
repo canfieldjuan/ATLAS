@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from extracted_content_pipeline.content_ops_input_provider import (
     content_ops_payload_from_input_package,
 )
@@ -8,6 +10,10 @@ from extracted_content_pipeline.control_surfaces import (
     request_from_mapping,
 )
 from extracted_content_pipeline.generation_plan import build_generation_plan
+from extracted_content_pipeline.support_ticket_clustering import (
+    support_ticket_plain_text,
+    support_ticket_tokens,
+)
 from extracted_content_pipeline.support_ticket_input_package import (
     DEFAULT_FAQ_REPORT_CTA_LABEL,
     build_support_ticket_input_package,
@@ -546,6 +552,73 @@ def test_support_ticket_input_package_strips_generic_provider_html_before_cluste
     assert "<" not in rows[0]["resolution_text"]
     assert package.inputs["customer_wording_examples"][0]["text"] == rows[0]["text"]
     assert package.inputs["faq_questions"][0] == "How do I reset my password?"
+
+
+def test_support_ticket_inline_provider_html_strips_link_attribute_tokens() -> None:
+    inline_html = (
+        'Please <a href="https://ex.com/reset?token=abc123xyz" '
+        'data-tracking-id="track-77">click here</a> to reset and '
+        "<b>confirm</b> your <u>email</u> <small>Use step</small> "
+        "<sup>2</sup><img src=\"https://cdn.example.test/screenshot.png\">"
+    )
+
+    assert support_ticket_plain_text(inline_html) == (
+        "Please click here to reset and confirm your email Use step 2"
+    )
+    tokens = support_ticket_tokens(inline_html)
+    assert {"click", "reset", "confirm", "email", "step"}.issubset(tokens)
+    assert tokens.isdisjoint(
+        {
+            "href",
+            "https",
+            "ex",
+            "com",
+            "token",
+            "abc123xyz",
+            "data",
+            "tracking",
+            "track",
+            "77",
+            "src",
+            "cdn",
+            "example",
+            "test",
+            "screenshot",
+            "png",
+        }
+    )
+    assert support_ticket_plain_text(
+        "Why did <email>user@example.test</email> fail when "
+        "<config>retries=3</config> was set?"
+    ) == (
+        "Why did <email>user@example.test</email> fail when "
+        "<config>retries=3</config> was set?"
+    )
+    assert support_ticket_plain_text("If a<b and c>d then fail") == (
+        "If a<b and c>d then fail"
+    )
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ('Please <a href="https://example.test/reset">reset link</a>', "Please reset link"),
+        ('Use <b class="agent-note">billing portal</b>', "Use billing portal"),
+        ("Use <b>billing portal</b>", "Use billing portal"),
+        ("Use <u>account email</u>", "Use account email"),
+        ("Read the <small>agent note</small>", "Read the agent note"),
+        ("Step <sub>2</sub> is missing", "Step 2 is missing"),
+        ("Error <sup>TM</sup> appears", "Error TM appears"),
+        ('Screenshot <img src="https://cdn.example.test/a.png"> attached', "Screenshot attached"),
+        ("Old <s>legacy answer</s>", "Old legacy answer"),
+        ("Old <strike>legacy answer</strike>", "Old legacy answer"),
+    ],
+)
+def test_support_ticket_common_inline_provider_tags_are_html_signals(
+    html: str,
+    expected: str,
+) -> None:
+    assert support_ticket_plain_text(html) == expected
 
 
 def test_support_ticket_clusters_group_topic_varied_anchor_rows() -> None:
