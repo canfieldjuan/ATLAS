@@ -44,6 +44,28 @@ Slice phase: Functional validation
    generators unless the live proof exposes a correctness blocker that prevents
    report generation from functioning.
 
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] `--outputs report` is accepted by the Gate A live-quality harness.
+  - [ ] Report preview and execution are bound to one explicit imported
+        support-ticket opportunity; missing or ambiguous bindings fail closed.
+  - [ ] The harness reviews and exports the exact saved report id through the
+        existing generated-assets/report export path.
+  - [ ] The committed proof artifacts show one hosted-model report row with
+        `generation_model=anthropic/claude-sonnet-4-5`, reference
+        `saas-demo-001`, three sections, and no local/Ollama route.
+  - [ ] Report remains a single-run output; the harness must not require
+        variant fanout for `report`.
+  - [ ] Existing `email_campaign`, `landing_page`, `blog_post`, and
+        `sales_brief` harness behavior remains unchanged.
+- Affected surfaces: Gate A live smoke harness, report review/export adapter
+  path, validation artifacts, focused harness tests, plan archive housekeeping.
+- Risk areas: false-green live proof, ambiguous opportunity binding, accidental
+  local model fallback, artifact/proof drift, and scope creep into generator
+  prompt behavior.
+- Reviewer rules triggered: R1, R2, R10, R12.
+
 ### Files touched
 
 - `docs/extraction/validation/content_ops_gate_a_report_live_2026-06-08.md`
@@ -161,8 +183,8 @@ Parked hardening: none.
 | `docs/extraction/validation/fixtures/content_ops_gate_a_report_live_20260608/review-results.json` | 11 |
 | `docs/extraction/validation/fixtures/content_ops_gate_a_report_live_20260608/summary.json` | 106 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Gate-A-Report-Live-Coverage.md` | 168 |
+| `plans/PR-Gate-A-Report-Live-Coverage.md` | 190 |
 | `plans/archive/PR-Gate-A-Email-Campaign-Input-Fit-Proof.md` | 0 |
 | `scripts/smoke_content_ops_gate_a_live_quality.py` | 90 |
 | `tests/test_smoke_content_ops_gate_a_live_quality.py` | 194 |
-| **Total** | **947** |
+| **Total** | **969** |
