@@ -260,7 +260,7 @@ export default function FaqDeflectionUpload() {
                 </p>
                 <p className="mt-2 text-xs leading-5 text-primary-100/80">
                   This tool does not use LLMs or generative AI to analyze your
-                  logs. We use exact mathematical clustering to sort your data.
+                  logs. We use deterministic clustering to sort your data.
                 </p>
               </div>
               <span className="mt-3 block text-xs text-surface-200/60">

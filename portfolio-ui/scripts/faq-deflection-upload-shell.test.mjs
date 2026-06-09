@@ -165,7 +165,8 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /repeatable clustering/);
   assert.match(uploadSource, /not\s+chatbot interpretation/);
   assert.match(uploadSource, /100% Deterministic Engine/);
-  assert.match(uploadSource, /This tool does not use LLMs or generative AI[\s\S]*exact mathematical clustering/);
+  assert.match(uploadSource, /This tool does not use LLMs or generative AI[\s\S]*deterministic clustering/);
+  assert.doesNotMatch(uploadSource, /exact mathematical clustering/);
   assert.match(uploadSource, /Workspace routing is handled server-side/);
   assert.match(uploadSource, /Your browser never[\s\S]*receives ATLAS service tokens/);
   assert.match(uploadSource, /Your CSV stays in private storage first/);
