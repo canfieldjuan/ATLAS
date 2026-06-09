@@ -28,7 +28,7 @@ Slice phase: Product polish
   - [ ] No mechanics change in intake upload/submit behavior.
 - Affected surfaces: `portfolio-ui` intake copy and upload-shell source test.
 - Risk areas: copy/test drift where wording changes without assertion updates.
-- Reviewer rule IDs triggered: R1, R2, R9, R12.
+- Reviewer rules triggered: R9, R12.
 
 ### Files touched
 
