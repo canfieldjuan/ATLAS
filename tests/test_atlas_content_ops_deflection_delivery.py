@@ -14,7 +14,17 @@ from atlas_brain.content_ops_deflection_delivery import (
     deflection_report_result_url,
     send_pending_deflection_report_deliveries,
 )
+from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
 from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
+
+
+def _incident_payloads(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if INCIDENT_LOG_MARKER in message:
+            payloads.append(json.loads(message.split(INCIDENT_LOG_MARKER, 1)[1].strip()))
+    return payloads
 
 
 class _Pool:
@@ -223,7 +233,9 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
 @pytest.mark.asyncio
 async def test_delivery_worker_rechecks_paid_and_status_before_sending(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("WARNING", logger="atlas.content_ops_deflection_delivery")
     pool = _Pool([_row()], sendable=False)
     sender = _Sender()
     _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
@@ -240,6 +252,14 @@ async def test_delivery_worker_rechecks_paid_and_status_before_sending(
     assert sender.requests == []
     assert pool.fetchrow_calls
     assert pool.execute_calls == []
+    assert _incident_payloads(caplog) == [
+        {
+            "account_id": "acct-123",
+            "incident_type": "paid_report_delivery_no_longer_sendable",
+            "request_id": "content-ops-abc123",
+            "severity": "warning",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -260,7 +280,10 @@ async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_marks_missing_email_failed() -> None:
+async def test_delivery_worker_marks_missing_email_failed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
     pool = _Pool([_row(delivery_email=" ")])
     sender = _Sender()
 
@@ -276,6 +299,16 @@ async def test_delivery_worker_marks_missing_email_failed() -> None:
     assert "delivery_status = 'failed'" in query
     assert "delivery_status = 'sending'" in query
     assert args == ("acct-123", "content-ops-abc123", "missing_delivery_email")
+    payloads = _incident_payloads(caplog)
+    assert payloads == [
+        {
+            "account_id": "acct-123",
+            "incident_type": "paid_report_delivery_missing_email",
+            "request_id": "content-ops-abc123",
+            "severity": "error",
+        }
+    ]
+    assert "buyer@example.com" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -298,7 +331,10 @@ async def test_delivery_worker_marks_unpaid_report_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delivery_worker_marks_provider_failure_failed_with_bounded_error() -> None:
+async def test_delivery_worker_marks_provider_failure_failed_with_bounded_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("ERROR", logger="atlas.content_ops_deflection_delivery")
     pool = _Pool([_row()])
     sender = _Sender(error=RuntimeError("provider down " + ("x" * 700)))
 
@@ -315,6 +351,13 @@ async def test_delivery_worker_marks_provider_failure_failed_with_bounded_error(
     assert args[0:2] == ("acct-123", "content-ops-abc123")
     assert args[2].startswith("RuntimeError: provider down")
     assert len(args[2]) == 500
+    payloads = _incident_payloads(caplog)
+    assert payloads[0]["incident_type"] == "paid_report_delivery_send_failed"
+    assert payloads[0]["account_id"] == "acct-123"
+    assert payloads[0]["request_id"] == "content-ops-abc123"
+    assert payloads[0]["severity"] == "error"
+    assert payloads[0]["error"].startswith("RuntimeError: provider down")
+    assert "buyer@example.com" not in caplog.text
 
 
 def test_deflection_report_result_url_uses_template_and_quotes_request_id() -> None:

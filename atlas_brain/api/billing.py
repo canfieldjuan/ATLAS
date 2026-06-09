@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
+from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incident
 from ..storage.database import get_db_pool
 from extracted_content_pipeline.deflection_report_access import (
     PostgresDeflectionReportArtifactStore,
@@ -404,6 +405,7 @@ async def stripe_webhook(request: Request):
                     pool,
                     obj,
                     meta,
+                    event_type=event_type,
                 )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
@@ -418,6 +420,7 @@ async def stripe_webhook(request: Request):
                     pool,
                     obj,
                     meta,
+                    event_type=event_type,
                 )
 
     elif event_type == "checkout.session.async_payment_failed":
@@ -613,6 +616,8 @@ async def _handle_content_ops_deflection_report_checkout_completed(
     pool: Any,
     session: Any,
     meta: Mapping[str, Any],
+    *,
+    event_type: str = "checkout.session.completed",
 ) -> None:
     """Handle one-time deflection report checkout completion."""
 
@@ -646,6 +651,17 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         )
         return
     if not _deflection_checkout_amount_is_valid(session):
+        emit_deflection_paid_funnel_incident(
+            logger,
+            incident_type="paid_report_checkout_terms_mismatch",
+            severity="error",
+            account_id=account_id_text,
+            request_id=request_id,
+            event_type=event_type,
+            stripe_session_id=session_id,
+            amount_total=_stripe_object_value(session, "amount_total"),
+            currency=_stripe_text(session, "currency"),
+        )
         logger.warning(
             "Deflection report checkout ignored: amount/currency mismatch session=%s",
             session_id,
@@ -658,6 +674,15 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         payment_reference=session_id or None,
     )
     if not marked:
+        emit_deflection_paid_funnel_incident(
+            logger,
+            incident_type="paid_report_missing_after_payment",
+            severity="error",
+            account_id=account_id_text,
+            request_id=request_id,
+            event_type=event_type,
+            stripe_session_id=session_id,
+        )
         logger.error(
             "Deflection report checkout completed but report was not found: account=%s request=%s session=%s",
             account_id_text,
@@ -783,6 +808,16 @@ async def _handle_content_ops_deflection_report_payment_revoked(
         payment_reference=payment_reference,
     )
     if not revoked:
+        emit_deflection_paid_funnel_incident(
+            logger,
+            incident_type="paid_report_revocation_missed_report",
+            severity="error",
+            account_id=account_id_text,
+            request_id=request_id,
+            event_type=event_type,
+            payment_reference=payment_reference or "",
+            stripe_object_id=_stripe_text(obj, "id") or "<missing>",
+        )
         logger.error(
             "Deflection report payment revocation missed report: "
             "event_type=%s account=%s request=%s payment_reference=%s object=%s",

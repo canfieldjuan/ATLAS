@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import logging
-from typing import Any, Mapping, Protocol
+from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import quote
 
+from .content_ops_deflection_incidents import emit_deflection_paid_funnel_incident
 from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
 from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
@@ -64,10 +65,22 @@ async def send_pending_deflection_report_deliveries(
         report_url = deflection_report_result_url(request_id=request_id, config=config)
         email = _clean(data.get("delivery_email"))
         if not bool(data.get("paid")):
+            _emit_delivery_incident(
+                "paid_report_delivery_report_not_paid",
+                account_id=account_id,
+                request_id=request_id,
+                severity="warning",
+            )
             await _mark_failed(pool, account_id, request_id, "report_not_paid")
             failed += 1
             continue
         if not email:
+            _emit_delivery_incident(
+                "paid_report_delivery_missing_email",
+                account_id=account_id,
+                request_id=request_id,
+                severity="error",
+            )
             await _mark_failed(pool, account_id, request_id, "missing_delivery_email")
             failed += 1
             continue
@@ -80,6 +93,12 @@ async def send_pending_deflection_report_deliveries(
                 request_id=request_id,
             )
             if not await _confirm_delivery_still_sendable(pool, account_id, request_id):
+                _emit_delivery_incident(
+                    "paid_report_delivery_no_longer_sendable",
+                    account_id=account_id,
+                    request_id=request_id,
+                    severity="warning",
+                )
                 logger.warning(
                     "Deflection report delivery skipped before send: "
                     "account=%s request=%s",
@@ -99,7 +118,15 @@ async def send_pending_deflection_report_deliveries(
                 )
             )
         except Exception as exc:
-            await _mark_failed(pool, account_id, request_id, _bounded_error(exc))
+            error = _bounded_error(exc)
+            _emit_delivery_incident(
+                "paid_report_delivery_send_failed",
+                account_id=account_id,
+                request_id=request_id,
+                severity="error",
+                error=error,
+            )
+            await _mark_failed(pool, account_id, request_id, error)
             failed += 1
             continue
         await _mark_delivered(
@@ -298,6 +325,24 @@ async def _confirm_delivery_still_sendable(
         request_id,
     )
     return row is not None
+
+
+def _emit_delivery_incident(
+    incident_type: str,
+    *,
+    account_id: str,
+    request_id: str,
+    severity: Literal["error", "warning", "info"] = "error",
+    **fields: Any,
+) -> None:
+    emit_deflection_paid_funnel_incident(
+        logger,
+        incident_type=incident_type,
+        severity=severity,
+        account_id=account_id,
+        request_id=request_id,
+        **fields,
+    )
 
 
 def _validate_config(config: DeflectionReportDeliveryConfig) -> None:
