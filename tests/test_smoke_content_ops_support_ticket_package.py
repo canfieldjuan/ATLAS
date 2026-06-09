@@ -76,7 +76,7 @@ def test_support_ticket_package_smoke_summarizes_undated_csv_without_window_filt
     assert summary["contact_email_count"] == 0
     assert summary["top_ticket_clusters"] == [
         {"label": "profile updates", "count": 1},
-        {"label": "Export dashboard", "count": 1},
+        {"label": "dashboard export renewal", "count": 1},
     ]
     assert summary["customer_wording_examples"][0] == {
         "source_id": "ticket-1",
@@ -257,7 +257,7 @@ def test_support_ticket_package_smoke_reports_cluster_rollup_and_truncation(
         {"label": "category-6", "count": 1},
         {"label": "category-7", "count": 1},
         {"label": "category-8", "count": 1},
-        {"label": "uncategorized", "count": 1},
+        {"label": "plan update", "count": 1},
     ]
     assert summary["warning_count"] == 1
     assert summary["warnings"][0]["code"] == "ticket_rows_truncated"

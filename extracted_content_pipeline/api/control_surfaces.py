@@ -1865,6 +1865,8 @@ def _with_deflection_submit_diagnostics(
                 "included_row_count",
                 "skipped_row_count",
                 "source_period",
+                "top_ticket_clusters",
+                "cluster_quality",
             )
             if key in package_metadata
         })

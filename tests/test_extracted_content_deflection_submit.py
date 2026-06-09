@@ -211,6 +211,13 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     assert "lead@acme.example" not in str(payload)
     assert payload["input_provider"]["metadata"] == {
         "blob_bytes": len(csv_data),
+        "cluster_quality": {
+            "cluster_count": 1,
+            "clustered_row_count": 2,
+            "largest_cluster_count": 2,
+            "singleton_cluster_count": 0,
+            "uncategorized_row_count": 0,
+        },
         "included_row_count": 2,
         "max_source_material_rows": 2,
         "skipped_row_count": 0,
@@ -219,6 +226,7 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
         "source_row_count": 3,
         "submitted_row_count": 2,
         "support_platform": "zendesk",
+        "top_ticket_clusters": [{"label": "exports", "count": 2}],
         "truncated_row_count": 1,
     }
     assert payload["input_provider"]["warnings"] == [{
@@ -301,6 +309,13 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
     assert "markdown" not in str(gated_result)
     assert "ticket-export-1" not in str(gated_result)
     assert payload["input_provider"]["metadata"] == {
+        "cluster_quality": {
+            "cluster_count": 1,
+            "clustered_row_count": 2,
+            "largest_cluster_count": 2,
+            "singleton_cluster_count": 0,
+            "uncategorized_row_count": 0,
+        },
         "included_row_count": 2,
         "max_source_material_rows": 2,
         "skipped_row_count": 0,
@@ -309,12 +324,62 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
         "source_row_count": 3,
         "submitted_row_count": 2,
         "support_platform": "help_scout",
+        "top_ticket_clusters": [{"label": "exports", "count": 2}],
         "truncated_row_count": 1,
         "uploaded_bytes": len(csv_data),
     }
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv() -> None:
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message",
+        "zd-1,Password reset help,<p>How do I reset my password?</p>",
+        "zd-2,Password reset not working,I cannot reset password from the login screen",
+        "hs-1,Change email address,Where do I update my email?",
+        "hs-2,Update account email,Need to change email address",
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["top_ticket_clusters"] == [
+        {"label": "login password reset", "count": 2},
+        {"label": "email update", "count": 2},
+    ]
+    assert metadata["cluster_quality"] == {
+        "cluster_count": 2,
+        "clustered_row_count": 4,
+        "largest_cluster_count": 2,
+        "singleton_cluster_count": 0,
+        "uncategorized_row_count": 0,
+    }
+
+    snapshot = payload["steps"][0]["result"]["snapshot"]
+    assert [
+        (item["ticket_count"], item["customer_wording"])
+        for item in snapshot["top_questions"]
+    ] == [
+        (2, "Password reset help How do I reset my password?"),
+        (2, "Change email address Where do I update my email?"),
+    ]
+    assert "<p>" not in str(snapshot)
+    assert payload["steps"][0]["result"]["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
 
 
 def test_deflection_submit_fastapi_dispatch_accepts_multipart_csv_bytes() -> None:

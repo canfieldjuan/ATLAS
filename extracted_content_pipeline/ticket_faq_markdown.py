@@ -14,6 +14,7 @@ from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_rows_to_campaign_opportunities,
 )
+from .support_ticket_clustering import support_ticket_plain_text
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -434,7 +435,7 @@ def build_ticket_faq_markdown(
             # Empty allowed set means "no filter" rather than "reject all".
             if allowed and source_type not in allowed:
                 continue
-            text = _compact(evidence.get("text"))
+            text = support_ticket_plain_text(evidence.get("text"))
             if not text:
                 continue
             source_id = _clean(
@@ -460,7 +461,9 @@ def build_ticket_faq_markdown(
                 "source_id": source_id or "unknown",
                 "source_key": source_key,
                 "source_type": source_type,
-                "source_title": _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                "source_title": support_ticket_plain_text(
+                    evidence.get("source_title") or opportunity.get("source_title")
+                ),
                 "source_date": source_date.isoformat() if source_date is not None else "",
                 "evidence_group_key": evidence_group_key,
                 "results_count": _first_present(evidence, opportunity, key="results_count"),
@@ -543,6 +546,9 @@ def _topic(
     *,
     intent_rules: Sequence[tuple[str, Sequence[str]]],
 ) -> str:
+    provided_cluster = _provided_support_ticket_cluster_topic(opportunity, evidence)
+    if provided_cluster:
+        return provided_cluster.lower()
     intent = _intent_topic(opportunity, evidence, intent_rules=intent_rules)
     if intent:
         return intent
@@ -553,6 +559,16 @@ def _topic(
             if text:
                 return text.lower()
     return (_compact(evidence.get("source_title") or opportunity.get("source_title")) or "customer support issues").lower()
+
+
+def _provided_support_ticket_cluster_topic(
+    *rows: Mapping[str, Any],
+) -> str:
+    for row in rows:
+        value = support_ticket_plain_text(row.get("support_ticket_cluster"))
+        if value:
+            return value
+    return ""
 
 
 def _evidence_group_key(resolution_text: Any) -> str:
@@ -837,7 +853,7 @@ def _source_weight(*rows: Mapping[str, Any]) -> int:
 def _resolution_text(*rows: Mapping[str, Any]) -> str:
     for row in rows:
         for key in _RESOLUTION_TEXT_KEYS:
-            text = _compact(_field_value(row, key))
+            text = support_ticket_plain_text(_field_value(row, key))
             if text:
                 return text
     return ""
@@ -845,9 +861,9 @@ def _resolution_text(*rows: Mapping[str, Any]) -> str:
 
 def _resolution_texts(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     values = (
-        _compact(row.get("resolution_text"))
+        support_ticket_plain_text(row.get("resolution_text"))
         for row in rows
-        if _compact(row.get("resolution_text"))
+        if support_ticket_plain_text(row.get("resolution_text"))
     )
     return tuple(dict.fromkeys(values))
 
@@ -1875,7 +1891,7 @@ def _rendered_ticket_source_count(items: Sequence[Mapping[str, Any]]) -> int:
 
 
 def _quote(value: Any, *, limit: int = 220) -> str:
-    text = _compact(value)
+    text = support_ticket_plain_text(value)
     if len(text) > limit:
         text = f"{text[:limit].rstrip()}..."
     return f'"{text}"'
