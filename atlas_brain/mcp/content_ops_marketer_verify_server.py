@@ -230,7 +230,7 @@ def _require_http_auth_token() -> str:
     return token
 
 
-def _configure_oauth_auth():
+def _configure_oauth_auth(target_mcp: Any | None = None):
     """Configure FastMCP OAuth auth for remote connector clients."""
     global _oauth_provider
 
@@ -260,22 +260,21 @@ def _configure_oauth_auth():
             "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_ACCOUNT_ID is required in oauth "
             "mode to issue tenant-bound tokens"
         )
-    mcp.settings.transport_security = _oauth_transport_security_settings(
+    configured_mcp = target_mcp or mcp
+    configured_mcp.settings.transport_security = _oauth_transport_security_settings(
         issuer_url=issuer_url,
         resource_url=resource_url,
     )
 
-    if _oauth_provider is not None:
-        return _oauth_provider
-
-    provider = ContentOpsMarketerVerifyOAuthProvider(
-        issuer_url=issuer_url,
-        approval_token=approval_token,
-        account_id=account_id,
-        scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
-        state_file=state_file,
-    )
-    mcp.settings.auth = AuthSettings(
+    if _oauth_provider is None:
+        _oauth_provider = ContentOpsMarketerVerifyOAuthProvider(
+            issuer_url=issuer_url,
+            approval_token=approval_token,
+            account_id=account_id,
+            scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+            state_file=state_file,
+        )
+    configured_mcp.settings.auth = AuthSettings(
         issuer_url=as_any_http_url(issuer_url),
         resource_server_url=as_any_http_url(resource_url),
         required_scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
@@ -285,10 +284,9 @@ def _configure_oauth_auth():
             default_scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
         ),
     )
-    mcp._auth_server_provider = provider
-    mcp._token_verifier = ProviderTokenVerifier(provider)
-    _oauth_provider = provider
-    return provider
+    configured_mcp._auth_server_provider = _oauth_provider
+    configured_mcp._token_verifier = ProviderTokenVerifier(_oauth_provider)
+    return _oauth_provider
 
 
 def _oauth_transport_security_settings(*, issuer_url: str, resource_url: str):

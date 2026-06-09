@@ -292,12 +292,11 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
             "and pass --approval-token."
         )
     print()
-    print("After a ChatGPT search/fetch adapter exists, verify that surface with:")
-    print(".venv/bin/python scripts/check_content_ops_marketer_verify_oauth_e2e.py \\")
-    print(f"  --issuer-url {issuer_url} \\")
-    print(f"  --resource-url {resource_url} \\")
-    print("  --client-profile chatgpt-search-fetch \\")
-    print("  --approval-token-file /path/to/local-approval-token")
+    print("For ChatGPT search/fetch adapter rollout, use the dedicated adapter launcher:")
+    print(
+        ".venv/bin/python scripts/start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py "
+        "--dry-run"
+    )
 
 
 def _main(argv: list[str] | None = None) -> int:

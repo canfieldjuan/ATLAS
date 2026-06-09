@@ -165,6 +165,10 @@ def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     verify.mcp.settings.transport_security = None
     verify.mcp._auth_server_provider = None
     verify.mcp._token_verifier = None
+    adapter.mcp.settings.auth = None
+    adapter.mcp.settings.transport_security = None
+    adapter.mcp._auth_server_provider = None
+    adapter.mcp._token_verifier = None
     adapter._verdict_cache.clear()
 
 
@@ -670,6 +674,62 @@ def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
     ]
     assert verify.mcp._auth_server_provider is provider
     assert verify.mcp._token_verifier.provider is provider
+
+
+def test_chatgpt_adapter_oauth_mode_configures_adapter_fastmcp_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    state_file = tmp_path / "content-ops-marketer-chatgpt-oauth-state.json"
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "oauth")
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_issuer_url",
+        "https://atlas.example.com/content-ops-marketer-chatgpt",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_resource_url",
+        "https://atlas.example.com/content-ops-marketer-chatgpt/mcp",
+    )
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_approval_token",
+        "approval-token-with-enough-entropy",
+    )
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "acct-oauth")
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_state_file",
+        str(state_file),
+    )
+
+    app = adapter._streamable_http_app()
+    provider = verify._oauth_provider
+
+    assert not isinstance(app, BearerAuthMiddleware)
+    assert provider is not None
+    assert provider.account_id == "acct-oauth"
+    assert provider.scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
+    assert provider.state_file == state_file
+    assert adapter.mcp.settings.auth.required_scopes == [DEFAULT_CONTENT_OPS_VERIFY_SCOPE]
+    assert adapter.mcp._auth_server_provider is provider
+    assert adapter.mcp._token_verifier.provider is provider
+
+
+def test_chatgpt_adapter_http_wraps_with_bearer_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_auth_mode", "bearer")
+    monkeypatch.setattr(
+        settings.mcp,
+        "auth_token",
+        "content-ops-bearer-token-with-enough-entropy",
+    )
+
+    app = adapter._streamable_http_app()
+
+    assert isinstance(app, BearerAuthMiddleware)
 
 
 def test_content_ops_marketer_verify_oauth_mode_requires_account_binding(
