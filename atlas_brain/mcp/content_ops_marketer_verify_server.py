@@ -8,10 +8,11 @@ from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from extracted_content_pipeline.claims_map import ExtractedClaim
 from extracted_content_pipeline.content_pr import (
@@ -54,6 +55,150 @@ _MALFORMED_COVERAGE_RULE_PREFIX = "MALFORMED-COVERAGE"
 _registry_reader_override: TenantClaimRegistryReader | None = None
 _account_resolver_override: ContentOpsAccountResolver | None = None
 _oauth_provider = None
+_QUALITY_FINDING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "severity": {
+            "type": "string",
+            "enum": ["blocker", "warning", "info"],
+        },
+        "field_name": {"type": "string"},
+    },
+}
+_QUALITY_REPORT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "passed": {"type": "boolean"},
+        "findings": {
+            "type": "array",
+            "items": _QUALITY_FINDING_SCHEMA,
+        },
+    },
+}
+VERIFY_DRAFT_PARAMETER_SCHEMA: dict[str, dict[str, Any]] = {
+    "asset_id": {
+        "type": "string",
+        "examples": ["landing-page-hero-v3"],
+    },
+    "rule_packet": {
+        "type": "object",
+        "properties": {
+            "brief": {"type": "string"},
+            "brand_voice": {"type": "string"},
+            "claim_registry": {"type": "string"},
+            "compliance": {"type": "string"},
+            "channel_schema": {"type": "string"},
+        },
+    },
+    "coverage": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "rule_id": {"type": "string"},
+                "requirement": {"type": "string"},
+                "required": {"type": "boolean", "default": True},
+                "status": {
+                    "type": "string",
+                    "enum": ["pass", "fail", "not_applicable", "unresolved"],
+                },
+                "evidence": {"type": "string"},
+            },
+        },
+    },
+    "extracted_claims": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "location": {"type": "string"},
+                "registry_id": {"type": "string"},
+            },
+        },
+    },
+    "quality_reports": {
+        "anyOf": [
+            _QUALITY_REPORT_SCHEMA,
+            {
+                "type": "array",
+                "items": _QUALITY_REPORT_SCHEMA,
+            },
+        ],
+    },
+    "brand_voice_payload": {
+        "type": "object",
+        "properties": {
+            "passed": {"type": "boolean"},
+            "warnings": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "banned_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+    },
+    "comments": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": [
+                        "brief",
+                        "brand_rule",
+                        "claim_registry",
+                        "compliance",
+                        "channel_constraint",
+                        "performance_hypothesis",
+                        "editorial_judgment",
+                        "nit",
+                    ],
+                },
+                "message": {"type": "string"},
+                "evidence": {"type": "string"},
+                "blocking": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    "as_of": {
+        "type": "string",
+        "format": "date",
+        "examples": ["2026-06-09"],
+    },
+}
+_VERIFY_DRAFT_PARAMETER_DESCRIPTIONS = {
+    "asset_id": "Stable identifier for the draft or asset being reviewed.",
+    "rule_packet": "Pinned rule-packet version ids used for this review.",
+    "coverage": "Requirement coverage rows extracted from the draft.",
+    "extracted_claims": "Claims extracted from the draft and mapped to the tenant registry.",
+    "quality_reports": "Deterministic quality-gate reports for the draft.",
+    "brand_voice_payload": "Brand-voice audit result for the draft.",
+    "comments": "Reviewer comments or blocking findings to include in the verdict.",
+    "as_of": "ISO review date used for registry expiration checks.",
+}
+
+
+def _schema_field(name: str):
+    return Field(
+        description=_VERIFY_DRAFT_PARAMETER_DESCRIPTIONS[name],
+        json_schema_extra=VERIFY_DRAFT_PARAMETER_SCHEMA[name],
+    )
+
+
+AssetIdArg = Annotated[Any, _schema_field("asset_id")]
+RulePacketArg = Annotated[Any, _schema_field("rule_packet")]
+CoverageArg = Annotated[Any, _schema_field("coverage")]
+ExtractedClaimsArg = Annotated[Any, _schema_field("extracted_claims")]
+QualityReportsArg = Annotated[Any, _schema_field("quality_reports")]
+BrandVoicePayloadArg = Annotated[Any, _schema_field("brand_voice_payload")]
+CommentsArg = Annotated[Any, _schema_field("comments")]
+AsOfArg = Annotated[Any, _schema_field("as_of")]
 
 
 @dataclass(frozen=True)
@@ -131,14 +276,14 @@ async def _oauth_approve(request):
 
 @mcp.tool(structured_output=True)
 async def verify_draft(
-    asset_id: Any = "",
-    rule_packet: Any = None,
-    coverage: Any = None,
-    extracted_claims: Any = None,
-    quality_reports: Any = None,
-    brand_voice_payload: Any = None,
-    comments: Any = None,
-    as_of: Any = "",
+    asset_id: AssetIdArg = "",
+    rule_packet: RulePacketArg = None,
+    coverage: CoverageArg = None,
+    extracted_claims: ExtractedClaimsArg = None,
+    quality_reports: QualityReportsArg = None,
+    brand_voice_payload: BrandVoicePayloadArg = None,
+    comments: CommentsArg = None,
+    as_of: AsOfArg = "",
 ) -> dict[str, Any]:
     """Verify structured draft evidence for the bound tenant."""
 

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Annotated, Any, get_args, get_origin, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
@@ -205,9 +206,74 @@ def _valid_payload() -> dict[str, object]:
     }
 
 
+def _annotated_args(hint):
+    if get_origin(hint) is Annotated:
+        return get_args(hint)
+    for item in get_args(hint):
+        if get_origin(item) is Annotated:
+            return get_args(item)
+    raise AssertionError(f"expected Annotated hint, got {hint!r}")
+
+
 def test_content_ops_marketer_verify_exposes_exact_tool_surface() -> None:
     assert _tool_names() == VERIFY_TOOLS
     assert _tool_names().isdisjoint(DENIED_TOOLS)
+
+
+def test_verify_draft_schema_hints_cover_nested_payload_shape() -> None:
+    schema = verify.VERIFY_DRAFT_PARAMETER_SCHEMA
+    hints = get_type_hints(verify.verify_draft, include_extras=True)
+
+    assert set(schema) == {
+        "asset_id",
+        "rule_packet",
+        "coverage",
+        "extracted_claims",
+        "quality_reports",
+        "brand_voice_payload",
+        "comments",
+        "as_of",
+    }
+    assert schema["coverage"]["items"]["properties"]["status"]["enum"] == [
+        "pass",
+        "fail",
+        "not_applicable",
+        "unresolved",
+    ]
+    assert set(schema["rule_packet"]["properties"]) == {
+        "brief",
+        "brand_voice",
+        "claim_registry",
+        "compliance",
+        "channel_schema",
+    }
+    quality_report_schema = schema["quality_reports"]["anyOf"][0]
+    quality_report_array_schema = schema["quality_reports"]["anyOf"][1]
+    finding_schema = quality_report_schema["properties"]["findings"]["items"]
+
+    assert set(quality_report_schema["properties"]) == {"passed", "findings"}
+    assert quality_report_array_schema["items"] == quality_report_schema
+    assert set(finding_schema["properties"]) == {
+        "code",
+        "message",
+        "severity",
+        "field_name",
+    }
+    assert finding_schema["properties"]["severity"]["enum"] == ["blocker", "warning", "info"]
+    assert set(schema["brand_voice_payload"]["properties"]) == {
+        "passed",
+        "warnings",
+        "banned_terms",
+    }
+    assert "editorial_judgment" in schema["comments"]["items"]["properties"]["category"]["enum"]
+    assert schema["as_of"]["format"] == "date"
+
+    for name, parameter_schema in schema.items():
+        args = _annotated_args(hints[name])
+        assert args[0] is Any
+        field_info = args[1]
+        assert field_info.description
+        assert field_info.json_schema_extra == parameter_schema
 
 
 def test_chatgpt_adapter_exposes_exact_search_fetch_surface() -> None:
@@ -301,6 +367,72 @@ async def test_chatgpt_adapter_contract_example_submits_without_schema_shape_blo
     assert "Missing brand voice audit passed flag" not in reasons
     assert "QUALITY-GATE:report" in coverage_rule_ids
     assert "BRAND-VOICE:audit" in coverage_rule_ids
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_accepts_adapter_contract_example_quality_report_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+    contract = await adapter.fetch(adapter.CONTRACT_ID)
+
+    result = await verify.verify_draft(**contract["metadata"]["example"])
+    reasons = "\n".join(str(reason) for reason in result["reasons"])
+
+    assert result["ok"] is True
+    assert result["decision"] == "approved"
+    assert "MALFORMED-COVERAGE" not in reasons
+    assert "QUALITY-GATE:malformed-finding" not in reasons
+    assert "Missing quality report passed flag" not in reasons
+    assert "Missing brand voice audit passed flag" not in reasons
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_schema_quality_finding_objects_avoid_malformed_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+    payload = _valid_payload()
+    payload["quality_reports"] = {
+        "passed": True,
+        "findings": [
+            {
+                "code": "tone-note",
+                "message": "Minor tone note",
+                "severity": "info",
+                "field_name": "body",
+            }
+        ],
+    }
+    payload["brand_voice_payload"] = {
+        "passed": True,
+        "warnings": [],
+        "banned_terms": [],
+    }
+
+    result = await verify.verify_draft(**payload)
+    coverage_rule_ids = {
+        row["rule_id"] for row in result["content_pr"]["coverage"] if isinstance(row, dict)
+    }
+
+    assert result["ok"] is True
+    assert result["decision"] == "approved"
+    assert "QUALITY-GATE:malformed-finding-1" not in coverage_rule_ids
+    assert "QUALITY-GATE:tone-note" in coverage_rule_ids
     assert reader.scopes == [TenantScope(account_id="acct-1")]
 
 
@@ -459,6 +591,40 @@ async def test_verify_draft_malformed_decoded_rows_block_without_raising(
     assert payload["decision"] == "blocked"
     assert "rule packet not pinned" in payload["reasons"][0]
     assert "unresolved required coverage: VOICE-01" in payload["reasons"]
+    assert "1 blocking comment(s)" in payload["reasons"]
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_schema_hints_do_not_make_decoded_inputs_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    payload = await verify.verify_draft(
+        asset_id=123,
+        rule_packet="not-a-rule-packet",
+        coverage={"status": "pass"},
+        extracted_claims="not-claim-rows",
+        quality_reports=123,
+        brand_voice_payload="not-a-brand-audit",
+        comments={"category": "nit", "blocking": True},
+        as_of=[],
+    )
+
+    assert payload["ok"] is False
+    assert payload["decision"] == "blocked"
+    assert "rule packet not pinned" in payload["reasons"][0]
+    assert any(
+        reason.startswith("unresolved required coverage: MALFORMED-COVERAGE-1")
+        for reason in payload["reasons"]
+    )
     assert "1 blocking comment(s)" in payload["reasons"]
     assert reader.scopes == [TenantScope(account_id="acct-1")]
 
