@@ -23,10 +23,6 @@ _HTML_CUSTOM_TAG_RE = re.compile(
     r"</?[a-z][a-z0-9:-]*-[a-z0-9:-]*(?:\s+[^<>]*)?/?>",
     re.IGNORECASE,
 )
-_HTML_PAIRED_TAG_RE = re.compile(
-    r"<([a-z][a-z0-9:-]*)(?:\s+[^<>]*)?>.*?</\1\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
 _TAG_FALLBACK_RE = re.compile(r"</?[^>]+>")
 _COMPACT_KEY_RE = re.compile(r"[^a-z0-9]+")
 _PHRASE_FOLDS = (
@@ -305,7 +301,6 @@ def _looks_like_html(text: str) -> bool:
     return bool(
         _HTML_SIGNAL_RE.search(text)
         or _HTML_CUSTOM_TAG_RE.search(text)
-        or _HTML_PAIRED_TAG_RE.search(text)
     )
 
 

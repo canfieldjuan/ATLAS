@@ -16,17 +16,19 @@ for this path, so the ATLAS normalization helper is on the public funnel.
 
 ## Scope (this PR)
 
-Ownership lane: content-ops/deflection-launch-readiness
+Ownership lane: go-live-deflection-cleanup
 Slice phase: Production hardening
 
 1. Broaden support-ticket HTML detection beyond the original common-tag list
    to real provider/custom wrapper tags.
-2. Strip generic paired HTML and custom hyphenated tags before source text,
-   customer wording examples, FAQ questions, resolution evidence, and cluster
-   tokens are produced.
+2. Strip known HTML tags and custom hyphenated provider tags before source
+   text, customer wording examples, FAQ questions, resolution evidence, and
+   cluster tokens are produced.
 3. Preserve non-HTML angle-bracket text such as `total < 10` and decoded
    literal markers such as `<manual_review>`.
-4. Add a regression test covering subject, description, comments, resolution
+4. Preserve raw paired non-HTML/XML-like ticket text such as
+   `<email>user@example.test</email>`.
+5. Add a regression test covering subject, description, comments, resolution
    text, script removal, cluster-label contamination, and customer wording.
 
 ### Review Contract
@@ -40,6 +42,8 @@ Slice phase: Production hardening
   - [ ] Plain non-HTML text containing `<` remains intact.
   - [ ] Decoded literal markers like `&lt;manual_review&gt;` are not
         accidentally treated as HTML.
+  - [ ] Raw paired non-HTML/XML-like tags such as `<email>...</email>` remain
+        intact rather than being routed through `HTMLParser`.
   - [ ] Existing common-tag stripping and messy untagged clustering behavior
         remain covered.
 - Affected surfaces: support-ticket text normalization and deterministic
@@ -58,9 +62,9 @@ Slice phase: Production hardening
 
 The support-ticket plain-text helper remains the single normalization path used by
 the input package and clustering path. The detector now treats text as HTML
-only when it sees a common real tag, a custom hyphenated provider tag, or a
-matched generic tag pair. Plain text bypasses the parser even if it contains an
-ordinary less-than comparison.
+only when it sees a common real tag or a custom hyphenated provider tag. Plain
+text bypasses the parser even if it contains an ordinary less-than comparison
+or raw paired non-HTML/XML-like tags.
 
 When HTML is detected, the existing `HTMLParser` boundary collects readable
 text, skips script/style content, decodes entities, and compacts whitespace.
@@ -73,8 +77,8 @@ The regression test builds a support-ticket package with HTML in subject,
 description, comments, and resolution text. It asserts that normalized source
 text and customer wording are stripped, script content is gone, tag names do
 not leak into the cluster label, a separate row containing `total < 10` keeps
-the literal comparison text, and a decoded `<manual_review>` marker stays
-literal.
+the literal comparison text, a decoded `<manual_review>` marker stays literal,
+and raw paired non-HTML tags stay intact.
 
 ## Intentional
 
@@ -99,7 +103,7 @@ Parked hardening: none.
 - `python -m pytest tests/test_extracted_support_ticket_input_package.py -q`
   - Result: `29 passed in 0.30s`.
 - `scripts/run_extracted_pipeline_checks.sh` via bash
-  - Result: `3552 passed, 10 skipped, 1 warning in 60.04s`; wrapper completed.
+  - Result: `3552 passed, 10 skipped, 1 warning in 53.82s`; wrapper completed.
 - `scripts/local_pr_review.sh` via bash with current body file
   `tmp/pr-body-deflection-html-strip-before-clustering.md`
   - Result: passed.
@@ -108,7 +112,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/support_ticket_clustering.py` | 35 |
-| `plans/PR-Deflection-Html-Strip-Before-Clustering.md` | 114 |
-| `tests/test_extracted_support_ticket_input_package.py` | 58 |
-| **Total** | **207** |
+| `extracted_content_pipeline/support_ticket_clustering.py` | 30 |
+| `plans/PR-Deflection-Html-Strip-Before-Clustering.md` | 118 |
+| `tests/test_extracted_support_ticket_input_package.py` | 71 |
+| **Total** | **219** |
