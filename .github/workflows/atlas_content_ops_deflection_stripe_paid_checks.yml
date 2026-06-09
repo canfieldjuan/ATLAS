@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml"
+      - "atlas_brain/alerts/**"
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"
       - "atlas_brain/api/billing.py"
@@ -16,6 +17,7 @@ on:
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
+      - "tests/test_alerts.py"
       - "tests/test_b2b_vendor_briefing.py"
       - "tests/test_content_ops_deflection_incidents.py"
       - "tests/test_mcp_content_ops_deflection_readonly.py"
@@ -24,6 +26,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml"
+      - "atlas_brain/alerts/**"
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"
       - "atlas_brain/api/billing.py"
@@ -36,6 +39,7 @@ on:
       - "tests/test_atlas_billing_content_ops_deflection_paid_flow.py"
       - "tests/test_atlas_billing_content_ops_deflection_stripe_paid.py"
       - "tests/test_atlas_billing_stripe_hardening.py"
+      - "tests/test_alerts.py"
       - "tests/test_b2b_vendor_briefing.py"
       - "tests/test_content_ops_deflection_incidents.py"
       - "tests/test_mcp_content_ops_deflection_readonly.py"
@@ -62,9 +66,11 @@ jobs:
       - name: Run Content Ops deflection Stripe paid tests
         run: |
           python -m pytest \
+            tests/test_alerts.py \
             tests/test_atlas_billing_stripe_hardening.py \
             tests/test_b2b_vendor_briefing.py \
             tests/test_atlas_billing_content_ops_deflection_stripe_paid.py \
             tests/test_atlas_billing_content_ops_deflection_paid_flow.py \
+            tests/test_content_ops_deflection_incidents.py \
             tests/test_mcp_content_ops_deflection_readonly.py \
             -q

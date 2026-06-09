@@ -259,3 +259,46 @@ class PresenceAlertEvent:
                 "person_name": person,
             },
         )
+
+
+@dataclass
+class PaidFunnelIncidentAlertEvent:
+    """Paid FAQ-deflection funnel incident for operator alerting."""
+
+    source_id: str
+    timestamp: datetime
+    incident_type: str
+    severity: str
+    account_id: str = ""
+    request_id: str = ""
+    event_type: str = "deflection_paid_funnel_incident"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def get_field(self, name: str, default: Any = None) -> Any:
+        """Get event-specific field for rule matching."""
+        field_map = {
+            "incident_type": self.incident_type,
+            "severity": self.severity,
+            "account_id": self.account_id,
+            "request_id": self.request_id,
+        }
+        return field_map.get(name, self.metadata.get(name, default))
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: dict[str, str],
+        *,
+        timestamp: Optional[datetime] = None,
+    ) -> "PaidFunnelIncidentAlertEvent":
+        """Create an alert event from a bounded paid-funnel incident payload."""
+        incident_type = payload.get("incident_type", "unknown")
+        return cls(
+            source_id=f"content_ops_deflection:{incident_type}",
+            timestamp=timestamp or datetime.now(timezone.utc),
+            incident_type=incident_type,
+            severity=payload.get("severity", "error"),
+            account_id=payload.get("account_id", ""),
+            request_id=payload.get("request_id", ""),
+            metadata=dict(payload),
+        )
