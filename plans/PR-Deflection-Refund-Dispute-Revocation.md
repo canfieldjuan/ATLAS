@@ -12,9 +12,10 @@ path for refund/dispute webhooks while keeping the paid gate server-owned.
 
 This intentionally exceeds the 400 LOC soft cap because the refund/dispute
 event class has several safety branches that must be proven in the same slice:
-direct metadata, Checkout Session lookup by `payment_intent`, unmapped events,
-delivery cancellation, and duplicate-event idempotency. Splitting the tests
-from the handler would leave a payment revocation path under-proven.
+direct metadata, Checkout Session lookup by `payment_intent`, lookup failure,
+partial refund no-op, delivery cancellation, in-flight delivery recheck,
+unmapped events, and duplicate-event idempotency. Splitting the tests from the
+handler would leave a payment revocation path under-proven.
 
 ## Scope (this PR)
 
@@ -29,11 +30,17 @@ Slice phase: Production hardening
    looking up the Checkout Session from the event's `payment_intent` because
    the portfolio checkout currently stores the deflection metadata on the
    Checkout Session.
-4. Emit structured revocation/missing-mapping logs and preserve the existing
+4. Treat only full `charge.refunded` reversals as access revocations; partial
+   refunds are observed without relocking the report.
+5. Emit structured revocation/missing-mapping logs and preserve the existing
    `billing_events` audit row for idempotency and operator traceability.
-5. Add focused regression tests for refund revocation, dispute revocation,
-   metadata fallback through `payment_intent`, missing metadata no-unlock, and
-   duplicate-event idempotency.
+6. Recheck report paid state and delivery status immediately before sending a
+   queued paid-report email so an in-flight delivery fails closed after
+   revocation.
+7. Add focused regression tests for refund revocation, dispute revocation,
+   metadata fallback through `payment_intent`, lookup failure retry,
+   partial-refund no-op, missing metadata no-unlock, in-flight delivery
+   suppression, and duplicate-event idempotency.
 
 ### Review Contract
 
@@ -45,15 +52,22 @@ Slice phase: Production hardening
   - [ ] Refund/dispute events can map through Checkout Session lookup by
         `payment_intent` when the Charge/Dispute object does not carry
         deflection metadata directly.
+  - [ ] Checkout lookup failures raise a 503 so Stripe retries instead of
+        silently leaving a report unlocked.
+  - [ ] Partial refunds do not revoke report access or cancel delivery.
   - [ ] Matching refund/dispute events cancel pending/sending delivery rows so
         a revoked report is not emailed after access is relocked.
+  - [ ] The delivery worker rechecks `paid=true` and `delivery_status=sending`
+        immediately before `sender.send` and suppresses an in-flight send when
+        revocation wins the race.
   - [ ] Unknown or unmapped refund/dispute events do not unlock, requeue
-        delivery, or mutate unrelated reports; they log an incident-shaped
-        warning/error and still get the existing Stripe event audit row.
+        delivery, or mutate unrelated reports; they log operator-readable
+        context and still get the existing Stripe event audit row.
   - [ ] Already-processed refund/dispute event IDs remain idempotent and do not
         run a second revocation.
 - Affected surfaces: Stripe webhook routing, deflection report access storage,
-  paid-funnel observability/audit logs, billing webhook tests.
+  paid-funnel observability/audit logs, billing webhook tests, report delivery
+  worker tests.
 - Risk areas: false-positive revocation, webhook idempotency, Stripe lookup
   failures, audit logging after side effects, account/request isolation.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R8, R10.
@@ -61,10 +75,12 @@ Slice phase: Production hardening
 ### Files touched
 
 - `atlas_brain/api/billing.py`
+- `atlas_brain/content_ops_deflection_delivery.py`
 - `extracted_content_pipeline/deflection_report_access.py`
 - `plans/PR-Deflection-Refund-Dispute-Revocation.md`
 - `tests/test_atlas_billing_content_ops_deflection_paid_flow.py`
 - `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
+- `tests/test_atlas_content_ops_deflection_delivery.py`
 - `tests/test_content_ops_deflection_report.py`
 
 ## Mechanism
@@ -86,15 +102,25 @@ only.
 
 The revocation helper rejects malformed or unmapped events without mutating
 reports, logs stable operator-readable context, and then lets the existing
-webhook audit insert record the Stripe event. Duplicate event IDs still return
-`already_processed` before side effects through the existing billing-events
-idempotency gate.
+webhook audit insert record the Stripe event. Checkout lookup failures raise a
+503 so Stripe retries instead of recording a false-green no-op. Duplicate event
+IDs still return `already_processed` before side effects through the existing
+billing-events idempotency gate.
+
+For delivery, the worker still claims rows as `sending`, but it performs a
+second guarded database transition immediately before `sender.send`. That
+transition only returns a row while the delivery is still `sending` and the
+joined report is still `paid=true`, so a refund/dispute that lands after claim
+but before send suppresses the email.
 
 ## Intentional
 
 - This slice does not add new report-state columns such as `revoked_at` or
   `revocation_reason`; relocking the existing `paid` flag is the narrow launch
   fix and preserves the current artifact contract.
+- Partial refunds are logged and audited but do not relock the report. A
+  refund revokes access only when Stripe marks the Charge fully refunded or the
+  refunded amount covers the captured amount.
 - The handler uses a Stripe Checkout Session lookup as a fallback instead of
   changing the portfolio checkout metadata shape in this ATLAS PR. A portfolio
   follow-up can add `payment_intent_data[metadata]` to make Charge events
@@ -112,6 +138,9 @@ idempotency gate.
 
 - #1386 follow-up: route paid-funnel incident events into the production alert
   sink once the sink contract is selected.
+- #1386 follow-up: add a dispute-closed/manual-restore path. This slice makes
+  revocation one-way for disputes so disputed access fails closed until an
+  operator restores it.
 - Portfolio follow-up: copy deflection metadata onto `payment_intent_data` so
   refund/dispute Charge events are self-describing without a Checkout Session
   lookup.
@@ -121,12 +150,15 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q`
-  - Result: `34 passed, 1 warning in 2.39s`.
+  - Result: `36 passed, 1 warning in 2.37s`.
+- `python -m pytest tests/test_atlas_content_ops_deflection_delivery.py -q`
+  - Result: `12 passed in 0.19s`.
 - `python -m pytest tests/test_atlas_billing_content_ops_deflection_paid_flow.py -q`
-  - Result: `1 passed, 1 warning in 2.44s`.
+  - Result: `1 passed, 1 warning in 2.57s`.
 - `python -m pytest tests/test_content_ops_deflection_report.py -q`
-  - Result: `37 passed in 0.15s`.
-- Python compile check for `atlas_brain/api/billing.py` and
+  - Result: `37 passed in 0.16s`.
+- Python compile check for `atlas_brain/api/billing.py`,
+  `atlas_brain/content_ops_deflection_delivery.py`, and
   `extracted_content_pipeline/deflection_report_access.py`
   - Result: passed.
 - `git diff --check`
@@ -144,10 +176,12 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/billing.py` | 169 |
+| `atlas_brain/api/billing.py` | 207 |
+| `atlas_brain/content_ops_deflection_delivery.py` | 33 |
 | `extracted_content_pipeline/deflection_report_access.py` | 67 |
-| `plans/PR-Deflection-Refund-Dispute-Revocation.md` | 153 |
+| `plans/PR-Deflection-Refund-Dispute-Revocation.md` | 187 |
 | `tests/test_atlas_billing_content_ops_deflection_paid_flow.py` | 2 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 296 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 419 |
+| `tests/test_atlas_content_ops_deflection_delivery.py` | 39 |
 | `tests/test_content_ops_deflection_report.py` | 35 |
-| **Total** | **722** |
+| **Total** | **989** |

@@ -728,12 +728,24 @@ async def _handle_content_ops_deflection_report_payment_revoked(
 ) -> None:
     """Relock a deflection report after a refund or dispute webhook."""
 
+    if event_type == "charge.refunded" and not _stripe_charge_refund_is_full(obj):
+        logger.info(
+            "Deflection report partial refund observed without revocation: "
+            "event_type=%s object=%s amount_refunded=%s amount_captured=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+            _stripe_object_value(obj, "amount_refunded"),
+            _stripe_object_value(obj, "amount_captured")
+            or _stripe_object_value(obj, "amount"),
+        )
+        return
+
     meta, payment_reference = _content_ops_deflection_revocation_metadata(
         stripe_module,
         obj,
     )
     if meta.get("source") != "content_ops_deflection_report":
-        logger.warning(
+        logger.info(
             "Deflection report payment revocation could not be mapped: "
             "event_type=%s object=%s payment_intent=%s",
             event_type,
@@ -856,11 +868,37 @@ def _checkout_session_for_payment_intent(
             "Deflection report payment revocation checkout lookup failed: payment_intent=%s",
             payment_intent,
         )
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection report payment revocation lookup failed",
+        )
     data = _stripe_object_value(sessions, "data")
     if isinstance(data, Sequence) and data:
         return data[0]
     return None
+
+
+def _stripe_charge_refund_is_full(obj: Any) -> bool:
+    if _stripe_object_value(obj, "refunded") is True:
+        return True
+    amount_refunded = _stripe_int(obj, "amount_refunded")
+    amount_captured = _stripe_int(obj, "amount_captured") or _stripe_int(obj, "amount")
+    return (
+        amount_refunded is not None
+        and amount_captured is not None
+        and amount_captured > 0
+        and amount_refunded >= amount_captured
+    )
+
+
+def _stripe_int(obj: Any, key: str) -> int | None:
+    value = _stripe_object_value(obj, key)
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _payment_intent_from_payment_event(obj: Any) -> str:
