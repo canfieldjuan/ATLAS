@@ -253,7 +253,7 @@ def _streamable_http_app():
     """Build the authenticated streamable HTTP app for ChatGPT adapter tools."""
     if verify_server._http_auth_mode() == verify_server._AUTH_MODE_OAUTH:
         verify_server._configure_oauth_auth(target_mcp=mcp)
-        return mcp.streamable_http_app()
+        return verify_server._apply_content_ops_public_client_metadata(mcp.streamable_http_app())
 
     from .auth import BearerAuthMiddleware
 

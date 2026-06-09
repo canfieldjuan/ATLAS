@@ -676,6 +676,50 @@ def test_content_ops_marketer_verify_oauth_mode_configures_fastmcp_auth(
     assert verify.mcp._token_verifier.provider is provider
 
 
+def test_content_ops_oauth_metadata_advertises_public_and_confidential_clients() -> None:
+    metadata = verify._content_ops_oauth_metadata(
+        issuer_url="https://atlas.example.com/content-ops-marketer/",
+        scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+    )
+
+    assert metadata["issuer"] == "https://atlas.example.com/content-ops-marketer"
+    assert metadata["authorization_endpoint"] == "https://atlas.example.com/content-ops-marketer/authorize"
+    assert metadata["token_endpoint"] == "https://atlas.example.com/content-ops-marketer/token"
+    assert metadata["registration_endpoint"] == "https://atlas.example.com/content-ops-marketer/register"
+    assert metadata["token_endpoint_auth_methods_supported"] == [
+        "none",
+        "client_secret_post",
+        "client_secret_basic",
+    ]
+    assert metadata["code_challenge_methods_supported"] == ["S256"]
+
+
+@pytest.mark.asyncio
+async def test_content_ops_public_client_metadata_replaces_only_auth_metadata_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_metadata = types.SimpleNamespace(path="/.well-known/oauth-authorization-server")
+    token_route = types.SimpleNamespace(path="/token")
+    app = types.SimpleNamespace(router=types.SimpleNamespace(routes=[old_metadata, token_route]))
+    monkeypatch.setattr(
+        settings.mcp,
+        "content_ops_marketer_verify_oauth_issuer_url",
+        "https://atlas.example.com/content-ops-marketer",
+    )
+
+    patched = verify._apply_content_ops_public_client_metadata(app)
+    metadata_route, remaining_route = patched.router.routes
+    response = await metadata_route.endpoint(types.SimpleNamespace(method="GET"))
+    options = await metadata_route.endpoint(types.SimpleNamespace(method="OPTIONS"))
+
+    assert patched is app
+    assert metadata_route.path == "/.well-known/oauth-authorization-server"
+    assert remaining_route is token_route
+    assert json.loads(response.body)["token_endpoint_auth_methods_supported"][0] == "none"
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert options.status_code == 204
+
+
 def test_chatgpt_adapter_oauth_mode_configures_adapter_fastmcp_auth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
