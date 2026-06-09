@@ -171,6 +171,47 @@ def _report_user_prompt(prior_invalid_response: str = "") -> str:
     )
 
 
+def _clean_id_values(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        values = (value,)
+    return tuple(
+        text
+        for item in values
+        if (text := str(item or "").strip())
+    )
+
+
+def _section_local_claim_id(section_id: str, index: int) -> str:
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", section_id).strip("_").lower()
+    if not slug:
+        return f"section_{index}_claim"
+    return f"{slug}_claim_{index}"
+
+
+def _narrative_plan_claim_ids_by_section(
+    opportunity: Mapping[str, Any] | None,
+) -> dict[str, tuple[str, ...]]:
+    if opportunity is None:
+        return {}
+    context = normalize_campaign_reasoning_context(opportunity)
+    plan = context.canonical_reasoning.get("narrative_plan")
+    if not isinstance(plan, Mapping):
+        return {}
+    by_section: dict[str, tuple[str, ...]] = {}
+    for section in plan.get("sections") or ():
+        if not isinstance(section, Mapping):
+            continue
+        section_id = str(section.get("id") or "").strip()
+        claim_ids = _clean_id_values(section.get("claim_ids"))
+        if section_id and claim_ids:
+            by_section[section_id] = claim_ids
+    return by_section
+
+
 class ReportGenerationService:
     """Generate structured report drafts through product-owned ports."""
 
@@ -475,18 +516,33 @@ class ReportGenerationService:
         default_report_type: str | None = None,
         opportunity: Mapping[str, Any] | None = None,
     ) -> ReportDraft:
-        sections = tuple(
-            ReportSection(
-                id=str(s.get("id") or "").strip(),
-                title=str(s.get("title") or "").strip(),
-                body_markdown=str(s.get("body_markdown") or "").strip(),
-                claim_ids=tuple(str(c) for c in (s.get("claim_ids") or ())),
-                evidence_ids=tuple(str(e) for e in (s.get("evidence_ids") or ())),
-                metadata=dict(s.get("metadata") or {}),
+        plan_claim_ids_by_section = _narrative_plan_claim_ids_by_section(opportunity)
+        built_sections: list[ReportSection] = []
+        for index, section in enumerate(parsed.get("sections") or (), start=1):
+            if not isinstance(section, Mapping):
+                continue
+            section_id = str(section.get("id") or "").strip()
+            evidence_ids = _clean_id_values(section.get("evidence_ids"))
+            claim_ids = _clean_id_values(section.get("claim_ids"))
+            metadata = dict(section.get("metadata") or {})
+            if not claim_ids:
+                claim_ids = plan_claim_ids_by_section.get(section_id, ())
+                if claim_ids:
+                    metadata["claim_id_source"] = "narrative_plan"
+            if not claim_ids and evidence_ids:
+                claim_ids = (_section_local_claim_id(section_id, index),)
+                metadata["claim_id_source"] = "derived_section"
+            built_sections.append(
+                ReportSection(
+                    id=section_id,
+                    title=str(section.get("title") or "").strip(),
+                    body_markdown=str(section.get("body_markdown") or "").strip(),
+                    claim_ids=claim_ids,
+                    evidence_ids=evidence_ids,
+                    metadata=metadata,
+                )
             )
-            for s in parsed.get("sections") or ()
-            if isinstance(s, Mapping)
-        )
+        sections = tuple(built_sections)
         # Aggregate reference_ids: explicit list union per-section evidence ids.
         ref_seen: list[str] = []
         for value in parsed.get("reference_ids") or ():

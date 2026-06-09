@@ -26,10 +26,11 @@ Field rules:
 - `title`: descriptive, includes the entity name; do NOT include date stamps unless the opportunity provides one.
 - `summary`: factual, evidence-grounded; no marketing language; reference specific findings rather than restating the opportunity.
 - `sections`: at least one. Each section needs a non-empty `title` and `body_markdown`. Cite supporting evidence in `evidence_ids` using the source ids that appear in the opportunity / reasoning context.
+- `sections[].claim_ids`: required for every evidence-backed section. If the reasoning context or narrative plan provides claim ids for the section, copy those ids exactly. If no upstream claim ids exist, emit one stable section-local id using `<section_id>_claim_<1-based section index>`; when the section id is blank or unavailable, use `section_<index>_claim`. Do not leave `claim_ids` empty when `evidence_ids` is non-empty.
 - `reference_ids`: union of every `evidence_ids` value across sections, plus any opportunity-level source ids you cited. No duplicates.
 - `report_type`: one of `vendor_pressure`, `market_intel`, `customer_health`, `account_brief`, or another snake_case label that fits the opportunity's `target_mode`. Default to `vendor_pressure` when in doubt.
 
-When the reasoning context provides a `narrative_plan`, copy each plan section's `id`/`title` verbatim and write prose grounded in the plan's `claim_ids` and `evidence_requirements`. Do not invent claim ids that aren't in the reasoning context.
+When the reasoning context provides a `narrative_plan`, copy each plan section's `id`/`title` verbatim and write prose grounded in the plan's `claim_ids` and `evidence_requirements`. Do not invent upstream claim-ledger ids that aren't in the reasoning context; use the section-local fallback only when the plan gives no claim ids for that section.
 
 Review/source-row evidence policy:
 - If opportunity evidence has `source_type: "review"` or came from source rows, treat it as third-party market evidence.

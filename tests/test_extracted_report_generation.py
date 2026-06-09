@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -248,6 +249,16 @@ def test_parse_report_response_strips_think_blocks_before_decoding() -> None:
     parsed = parse_report_response(payload)
     assert parsed is not None
     assert parsed["title"] == "Title"
+
+
+def test_report_prompt_requires_section_claim_ids() -> None:
+    prompt = Path(
+        "extracted_content_pipeline/skills/digest/report_generation.md"
+    ).read_text(encoding="utf-8")
+
+    assert "sections[].claim_ids" in prompt
+    assert "required for every evidence-backed section" in prompt
+    assert "section-local fallback" in prompt
 
 
 # -----------------------
@@ -516,6 +527,104 @@ async def test_generate_aggregates_section_evidence_ids_into_reference_ids() -> 
     draft = reports.saved[0]["drafts"][0]
     # Top-level reference_ids preserved + section evidence ids unioned without dupes.
     assert draft.reference_ids == ("r0", "r1", "r2", "r3")
+
+
+@pytest.mark.asyncio
+async def test_generate_preserves_supplied_section_claim_ids() -> None:
+    service, _intel, reports, _llm, _skills, _rp = _service()
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("c1",)
+    assert "claim_id_source" not in section.metadata
+
+
+@pytest.mark.asyncio
+async def test_generate_derives_section_claim_id_when_evidence_section_omits_claim_ids() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "pricing pressure",
+                "title": "Pricing pressure",
+                "body_markdown": "body",
+                "evidence_ids": ["r1", "r2"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(responses=[response])
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("pricing_pressure_claim_1",)
+    assert section.metadata["claim_id_source"] == "derived_section"
+
+
+@pytest.mark.asyncio
+async def test_generate_derives_section_claim_id_when_section_id_blank() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "",
+                "title": "Pricing pressure",
+                "body_markdown": "body",
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    service, _intel, reports, _llm, _skills, _rp = _service(responses=[response])
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("section_1_claim",)
+    assert section.metadata["claim_id_source"] == "derived_section"
+
+
+@pytest.mark.asyncio
+async def test_generate_fills_missing_claim_ids_from_narrative_plan() -> None:
+    response = json.dumps({
+        "title": "Title",
+        "summary": "Summary text long enough to be valid.",
+        "report_type": "vendor_pressure",
+        "sections": [
+            {
+                "id": "drivers",
+                "title": "Drivers",
+                "body_markdown": "body",
+                "evidence_ids": ["r1"],
+            }
+        ],
+        "reference_ids": ["r1"],
+    })
+    context = CampaignReasoningContext(
+        canonical_reasoning={
+            "narrative_plan": {
+                "sections": [
+                    {"id": "drivers", "title": "Drivers", "claim_ids": ["c-plan"]}
+                ]
+            }
+        },
+    )
+    service, _intel, reports, _llm, _skills, _rp = _service(
+        responses=[response],
+        reasoning_context=context,
+    )
+
+    await service.generate(scope=TenantScope(account_id="acct-1"), target_mode="vendor")
+
+    section = reports.saved[0]["drafts"][0].sections[0]
+    assert section.claim_ids == ("c-plan",)
+    assert section.metadata["claim_id_source"] == "narrative_plan"
 
 
 # -----------------------
