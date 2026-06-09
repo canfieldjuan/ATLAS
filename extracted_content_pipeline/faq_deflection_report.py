@@ -324,7 +324,7 @@ def _support_tax_section(
         "## Support Tax Confirmation",
         "",
         (
-            f"ATLAS found {_count(repeat_ticket_count)} repeat-ticket hits across "
+            f"This report found {_count(repeat_ticket_count)} repeat-ticket hits across "
             f"{_count(_int(summary.get('generated')))} ranked questions. At the "
             f"Gartner {_ASSISTED_CONTACT_COST_LABEL} assisted-contact benchmark, "
             f"that uploaded work sizes to about {_format_money(batch_cost)} of "
@@ -348,7 +348,7 @@ def _support_tax_section(
         lines.extend([
             "",
             (
-                "ATLAS did not receive a complete source-date window for every "
+                "This report did not receive a complete source-date window for every "
                 "contributing ticket, so this report does not infer a monthly or "
                 "annual reporting period. If this uploaded batch is monthly pace, "
                 f"the 12-month run-rate would be about {_format_money(monthly_pace)}."
@@ -386,9 +386,9 @@ def _help_desk_seo_targeting_section(
         "",
         (
             "Use these source-backed phrases as help-center headings, "
-            "internal-search synonyms, and FAQ wording. ATLAS mined them from "
-            "the tickets you uploaded; it does not claim keyword volume, search "
-            "rank, or traffic."
+            "internal-search synonyms, and FAQ wording. These were mined from "
+            "the tickets you uploaded; this report does not claim keyword "
+            "volume, search rank, or traffic."
         ),
         "",
     ]
