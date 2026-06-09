@@ -153,6 +153,14 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
             "file or export ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN "
             "and pass --approval-token."
         )
+    print()
+    print("After the rich verifier is also public, run the dual-client rollout smoke:")
+    print(".venv/bin/python scripts/check_content_ops_marketer_verify_dual_client_rollout.py \\")
+    print(f"  --rich-issuer-url {rich_launcher.DEFAULT_ISSUER_URL} \\")
+    print(f"  --rich-resource-url {rich_launcher.DEFAULT_RESOURCE_URL} \\")
+    print(f"  --chatgpt-adapter-issuer-url {issuer_url} \\")
+    print(f"  --chatgpt-adapter-resource-url {resource_url} \\")
+    print(f"  --approval-token-file {shlex.quote(token_file)}")
 
 
 def _main(argv: list[str] | None = None) -> int:
