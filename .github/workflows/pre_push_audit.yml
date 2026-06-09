@@ -39,4 +39,4 @@ jobs:
       - name: PR-review tooling unit tests
         run: |
           python -m pip install --quiet pytest pytest-asyncio
-          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py -q
+          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py -q
