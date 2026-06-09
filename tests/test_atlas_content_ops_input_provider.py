@@ -1085,6 +1085,8 @@ async def test_preview_route_surfaces_support_ticket_loader_truncation_warning()
             "source": "support_ticket_input_package",
             "source_period": "Uploaded support tickets",
             "source_row_count": 1005,
+            "support_ticket_resolution_evidence_count": 0,
+            "support_ticket_resolution_evidence_present": False,
             "truncated_row_count": 5,
         },
         "warnings": [{

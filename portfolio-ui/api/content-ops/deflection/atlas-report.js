@@ -101,12 +101,18 @@ function projectSnapshot(snapshot) {
   const generated = finiteNumber(snapshot.summary.generated);
   const draftedAnswerCount = finiteNumber(snapshot.summary.drafted_answer_count);
   const noProvenAnswerCount = finiteNumber(snapshot.summary.no_proven_answer_count);
+  const resolutionEvidencePresent = snapshot.summary.support_ticket_resolution_evidence_present;
+  const resolutionEvidenceCount = finiteNumber(
+    snapshot.summary.support_ticket_resolution_evidence_count,
+  );
   if (
     generated === null ||
     draftedAnswerCount === null ||
-    noProvenAnswerCount === null
+    noProvenAnswerCount === null ||
+    typeof resolutionEvidencePresent !== "boolean" ||
+    resolutionEvidenceCount === null
   ) {
-    errors.push("snapshot.summary metrics must be finite numbers");
+    errors.push("snapshot.summary metrics must include finite counts and resolution evidence");
   }
 
   const topQuestions = snapshot.top_questions.map((item) => {
@@ -138,6 +144,8 @@ function projectSnapshot(snapshot) {
         generated,
         drafted_answer_count: draftedAnswerCount,
         no_proven_answer_count: noProvenAnswerCount,
+        support_ticket_resolution_evidence_present: resolutionEvidencePresent,
+        support_ticket_resolution_evidence_count: resolutionEvidenceCount,
       },
       top_questions: topQuestions,
     },

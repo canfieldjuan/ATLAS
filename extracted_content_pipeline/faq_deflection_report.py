@@ -165,6 +165,12 @@ def build_deflection_snapshot(
         "generated": _int(summary.get("generated")),
         "drafted_answer_count": _int(summary.get("drafted_answer_count")),
         "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
+        "support_ticket_resolution_evidence_present": _resolution_evidence_present(
+            summary
+        ),
+        "support_ticket_resolution_evidence_count": _resolution_evidence_count(
+            summary
+        ),
         "repeat_ticket_count": sum(_ticket_count(item) for item in items),
     }
     source_date_window = _complete_source_date_window(summary, items)
@@ -259,6 +265,8 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         "ticket_source_count": int(faq_result.ticket_source_count),
         "drafted_answer_count": len(proven),
         "no_proven_answer_count": len(needs_review),
+        "support_ticket_resolution_evidence_present": len(proven) > 0,
+        "support_ticket_resolution_evidence_count": len(proven),
         "output_checks": dict(faq_result.output_checks),
         "top_question": _text(items[0].get("question")) if items else "",
         "top_opportunity_score": _int(items[0].get("opportunity_score")) if items else 0,
@@ -566,6 +574,19 @@ def _artifact_items(
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
         return ()
     return tuple(_item(item) for item in items if isinstance(item, Mapping))
+
+
+def _resolution_evidence_count(summary: Mapping[str, Any]) -> int:
+    if "support_ticket_resolution_evidence_count" in summary:
+        return _int(summary.get("support_ticket_resolution_evidence_count"))
+    return _int(summary.get("drafted_answer_count"))
+
+
+def _resolution_evidence_present(summary: Mapping[str, Any]) -> bool:
+    explicit = summary.get("support_ticket_resolution_evidence_present")
+    if isinstance(explicit, bool):
+        return explicit
+    return _resolution_evidence_count(summary) > 0
 
 
 def _snapshot_customer_wording(item: Mapping[str, Any], question: str) -> str:

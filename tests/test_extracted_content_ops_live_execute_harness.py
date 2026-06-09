@@ -1019,6 +1019,8 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "generated": 4,
         "drafted_answer_count": 4,
         "no_proven_answer_count": 0,
+        "support_ticket_resolution_evidence_count": 4,
+        "support_ticket_resolution_evidence_present": True,
         "repeat_ticket_count": 4,
         "source_date_start": "2026-05-01",
         "source_date_end": "2026-05-20",
