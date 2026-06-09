@@ -8,6 +8,10 @@ hardening item is the restore side of that lifecycle: if a disputed payment is
 closed as won, the report should become paid again and eligible for delivery
 without an operator hand-edit.
 
+Diff budget note: the PR exceeds 400 LOC after the AI reconciliation fix
+because the stale-reference guard needs a same-class regression that proves the
+full old-dispute-win -> newer-refund sequence, not just a one-line assertion.
+
 ## Scope (this PR)
 Ownership lane: go-live-deflection-cleanup
 Slice phase: Production hardening
@@ -29,6 +33,8 @@ Slice phase: Production hardening
   - [ ] A won-dispute restore that maps to no report emits
         `paid_report_restore_missed_report` without leaking customer email,
         raw ticket text, evidence, or report content.
+  - [ ] A stale older dispute-win restore preserves a newer stored
+        `payment_reference` so later newer-payment refunds can still relock.
   - [ ] Existing full-refund/dispute-created revocation behavior remains
         unchanged, including full-refund-only revocation and pending/sending
         delivery cancellation.
@@ -49,9 +55,11 @@ Slice phase: Production hardening
 The webhook router adds a `charge.dispute.closed` branch for the deflection
 paid-report flow. A new handler checks the dispute status first; only `won`
 continues to the same Stripe payment-event metadata mapping used by the
-revocation handler. After account/request validation, the handler calls the
-existing `PostgresDeflectionReportArtifactStore.mark_paid(...)` inverse and
-then `_queue_content_ops_deflection_report_delivery(...)`, which already
+revocation handler. After account/request validation, the handler reads the
+current report row. If the row already has a different `payment_reference`, the
+restore passes `None` into `mark_paid(...)` and delivery requeueing so the
+existing reference is preserved by the current `COALESCE` semantics. Otherwise
+the restored Checkout Session reference is kept. The delivery upsert already
 preserves delivered/sending rows and moves revoked/failed/pending rows back to
 `pending`.
 
@@ -69,6 +77,8 @@ PII-safe incident envelope style under a new incident type.
   already model the restore transition.
 - Only `status="won"` restores access. Stripe closed statuses such as `lost`
   and `warning_closed` do not restore access.
+- AI reconciliation finding fixed: stale older dispute-win restores no longer
+  overwrite a newer stored payment reference.
 
 ## Deferred
 
@@ -80,9 +90,9 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` -- 42 passed, 1 warning.
+- `python -m pytest tests/test_atlas_billing_content_ops_deflection_stripe_paid.py -q` -- 43 passed, 1 warning.
 - `python -m pytest tests/test_atlas_billing_content_ops_deflection_paid_flow.py -q` -- 1 passed, 1 warning.
-- `python -m pytest tests/test_alerts.py tests/test_atlas_billing_stripe_hardening.py tests/test_b2b_vendor_briefing.py tests/test_atlas_billing_content_ops_deflection_stripe_paid.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_content_ops_deflection_incidents.py tests/test_mcp_content_ops_deflection_readonly.py -q` -- 180 passed, 1 warning.
+- `python -m pytest tests/test_alerts.py tests/test_atlas_billing_stripe_hardening.py tests/test_b2b_vendor_briefing.py tests/test_atlas_billing_content_ops_deflection_stripe_paid.py tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_content_ops_deflection_incidents.py tests/test_mcp_content_ops_deflection_readonly.py -q` -- 181 passed, 1 warning.
 - Python syntax compile over changed Python files and `git diff --check` -- passed.
 - Push-wrapper local review -- passed.
 
@@ -90,7 +100,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/billing.py` | 110 |
-| `plans/PR-Deflection-Dispute-Restore-Hardening.md` | 96 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 193 |
-| **Total** | **399** |
+| `atlas_brain/api/billing.py` | 154 |
+| `plans/PR-Deflection-Dispute-Restore-Hardening.md` | 106 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 310 |
+| **Total** | **570** |

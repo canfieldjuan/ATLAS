@@ -67,7 +67,8 @@ class _Pool:
                 return "UPDATE 1"
             if row is not None:
                 row["paid"] = True
-                row["payment_reference"] = payment_reference
+                if payment_reference is not None:
+                    row["payment_reference"] = payment_reference
             return self.update_result
         if "UPDATE content_ops_deflection_report_deliveries" in query:
             account_id, request_id, delivery_error = args
@@ -78,10 +79,15 @@ class _Pool:
             return "UPDATE 1"
         if "INSERT INTO content_ops_deflection_report_deliveries" in query:
             account_id, request_id, payment_reference = args
+            existing = self.delivery_rows.get((str(account_id), str(request_id)))
             self.delivery_rows[(str(account_id), str(request_id))] = {
                 "account_id": account_id,
                 "request_id": request_id,
-                "payment_reference": payment_reference,
+                "payment_reference": (
+                    payment_reference
+                    if payment_reference is not None
+                    else (existing or {}).get("payment_reference")
+                ),
                 "delivery_status": "pending",
             }
             return "INSERT 0 1"
@@ -1100,6 +1106,113 @@ async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
     assert pool.report_rows[(account_id, "req-123")]["paid"] is True
     assert pool.delivery_rows[(account_id, "req-123")]["delivery_status"] == "pending"
     assert "access restored after Stripe dispute win" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_stale_won_dispute_preserves_newer_payment_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    older_session = _session(
+        account_id=account_id,
+        session_id="cs_test_older_disputed_payment",
+    )
+    older_dispute = _payment_event_object(
+        object_id="du_test_older_payment_won",
+        payment_intent="pi_test_older_payment",
+        status="won",
+    )
+    older_won_event = SimpleNamespace(
+        id="evt_deflection_older_dispute_won",
+        type="charge.dispute.closed",
+        data=SimpleNamespace(object=older_dispute),
+    )
+    newer_session = _session(
+        account_id=account_id,
+        session_id="cs_test_newer_payment",
+    )
+    newer_refund = _payment_event_object(
+        object_id="ch_test_newer_payment_refund",
+        payment_intent="pi_test_newer_payment",
+        refunded=True,
+        amount_refunded=150000,
+        amount_captured=150000,
+    )
+    newer_refund_event = SimpleNamespace(
+        id="evt_deflection_newer_payment_refund",
+        type="charge.refunded",
+        data=SimpleNamespace(object=newer_refund),
+    )
+    pool = _Pool()
+    pool.add_report(
+        account_id=account_id,
+        paid=False,
+        payment_reference="cs_test_newer_payment",
+    )
+    pool.delivery_rows[(account_id, "req-123")] = {
+        "account_id": account_id,
+        "request_id": "req-123",
+        "payment_reference": "cs_test_newer_payment",
+        "delivery_status": "revoked",
+        "delivery_error": "payment_revoked:charge.dispute.created",
+    }
+
+    older_stripe, older_session_list = _stripe_module_for_event(
+        older_won_event,
+        checkout_sessions=[older_session],
+    )
+    assert await _run_stripe_webhook(
+        monkeypatch,
+        event=older_won_event,
+        pool=pool,
+        stripe_module=older_stripe,
+    ) == {"status": "ok"}
+
+    assert older_session_list.calls == [
+        {"payment_intent": "pi_test_older_payment", "limit": 1, "timeout": 10}
+    ]
+    restore_updates = [
+        call
+        for call in pool.execute_calls
+        if "UPDATE content_ops_deflection_reports" in call[0]
+    ]
+    restore_delivery_calls = [
+        call
+        for call in pool.execute_calls
+        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
+    ]
+    assert restore_updates[0][1] == (account_id, "req-123", None)
+    assert restore_delivery_calls[0][1] == (account_id, "req-123", None)
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is True
+    assert pool.report_rows[(account_id, "req-123")]["payment_reference"] == (
+        "cs_test_newer_payment"
+    )
+    assert pool.delivery_rows[(account_id, "req-123")]["payment_reference"] == (
+        "cs_test_newer_payment"
+    )
+    assert "preserved newer payment reference" in caplog.text
+
+    newer_stripe, newer_session_list = _stripe_module_for_event(
+        newer_refund_event,
+        checkout_sessions=[newer_session],
+    )
+    assert await _run_stripe_webhook(
+        monkeypatch,
+        event=newer_refund_event,
+        pool=pool,
+        stripe_module=newer_stripe,
+    ) == {"status": "ok"}
+
+    assert newer_session_list.calls == [
+        {"payment_intent": "pi_test_newer_payment", "limit": 1, "timeout": 10}
+    ]
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    assert pool.report_rows[(account_id, "req-123")]["payment_reference"] == (
+        "cs_test_newer_payment"
+    )
+    assert pool.delivery_rows[(account_id, "req-123")]["delivery_status"] == "revoked"
 
 
 @pytest.mark.asyncio

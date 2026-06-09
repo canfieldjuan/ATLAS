@@ -934,10 +934,54 @@ async def _handle_content_ops_deflection_report_dispute_closed(
         return
 
     store = PostgresDeflectionReportArtifactStore(pool=pool)
+    record = await store.get_artifact_record(
+        account_id=account_id_text,
+        request_id=request_id,
+    )
+    if record is None:
+        await emit_deflection_paid_funnel_incident_alert(
+            logger,
+            incident_type="paid_report_restore_missed_report",
+            severity="error",
+            account_id=account_id_text,
+            request_id=request_id,
+            event_type=event_type,
+            payment_reference=payment_reference or "",
+            stripe_object_id=_stripe_text(obj, "id") or "<missing>",
+        )
+        logger.error(
+            "Deflection report dispute restore missed report: "
+            "event_type=%s account=%s request=%s payment_reference=%s object=%s",
+            event_type,
+            account_id_text,
+            request_id,
+            payment_reference or "<missing>",
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+
+    restore_reference = payment_reference
+    if (
+        record.payment_reference
+        and payment_reference
+        and record.payment_reference != payment_reference
+    ):
+        restore_reference = None
+        logger.warning(
+            "Deflection report dispute restore preserved newer payment reference: "
+            "event_type=%s account=%s request=%s restored_reference=%s existing_reference=%s object=%s",
+            event_type,
+            account_id_text,
+            request_id,
+            payment_reference,
+            record.payment_reference,
+            _stripe_text(obj, "id") or "<missing>",
+        )
+
     restored = await store.mark_paid(
         account_id=account_id_text,
         request_id=request_id,
-        payment_reference=payment_reference,
+        payment_reference=restore_reference,
     )
     if not restored:
         await emit_deflection_paid_funnel_incident_alert(
@@ -965,7 +1009,7 @@ async def _handle_content_ops_deflection_report_dispute_closed(
         pool,
         account_id=account_id_text,
         request_id=request_id,
-        payment_reference=payment_reference,
+        payment_reference=restore_reference,
     )
     logger.warning(
         "Deflection report access restored after Stripe dispute win: "
