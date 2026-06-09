@@ -244,6 +244,9 @@
       "target": "extracted_content_pipeline/content_pr.py"
     },
     {
+      "target": "extracted_content_pipeline/claim_evidence_benchmark.py"
+    },
+    {
       "target": "extracted_content_pipeline/coverage_rows.py"
     },
     {
