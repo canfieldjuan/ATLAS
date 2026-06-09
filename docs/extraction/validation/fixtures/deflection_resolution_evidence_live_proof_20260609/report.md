@@ -2,7 +2,7 @@
 
 ## Support Tax Confirmation
 
-ATLAS found 12 repeat-ticket hits across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that uploaded work sizes to about $162 of assisted-contact handling.
+This report found 12 repeat-ticket hits across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that uploaded work sizes to about $162 of assisted-contact handling.
 
 The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured daily pace, that is about $8,447 over 12 months.
 
@@ -20,7 +20,7 @@ docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20
 
 ## Your Help-Desk SEO Targeting List
 
-Use these source-backed phrases as help-center headings, internal-search synonyms, and FAQ wording. ATLAS mined them from the tickets you uploaded; it does not claim keyword volume, search rank, or traffic.
+Use these source-backed phrases as help-center headings, internal-search synonyms, and FAQ wording. These were mined from the tickets you uploaded; this report does not claim keyword volume, search rank, or traffic.
 
 1. How do I export attribution reports before our board meeting?
 2. Where can I download invoices for last quarter?
