@@ -34,8 +34,19 @@ _HTML_CUSTOM_TAG_RE = re.compile(
 _TAG_FALLBACK_RE = re.compile(r"</?[^>]+>")
 _COMPACT_KEY_RE = re.compile(r"[^a-z0-9]+")
 _PHRASE_FOLDS = (
+    (re.compile(r"\bsign[-\s]?in\b", re.IGNORECASE), "login"),
     (re.compile(r"\blog\s+in\b", re.IGNORECASE), "login"),
-    (re.compile(r"\bsign\s+in\b", re.IGNORECASE), "login"),
+    (re.compile(r"\blog[-\s]?in\b", re.IGNORECASE), "login"),
+    (re.compile(r"\blocked\s+out\b", re.IGNORECASE), "login"),
+    (re.compile(r"\baccount\s+access\b", re.IGNORECASE), "login"),
+    (
+        re.compile(
+            r"\b(?:can(?:not|'t)|cant|unable\s+to)\s+access\s+(?:my\s+|the\s+)?account\b",
+            re.IGNORECASE,
+        ),
+        "login",
+    ),
+    (re.compile(r"\baccess\s+(?:my\s+|the\s+)?account\b", re.IGNORECASE), "login"),
     (re.compile(r"\bsingle[-\s]?sign[-\s]?on\b", re.IGNORECASE), "sso"),
     (re.compile(r"\bsingle\s+sign\s+on\b", re.IGNORECASE), "sso"),
     (re.compile(r"\be[-\s]?mail\b", re.IGNORECASE), "email"),
@@ -210,6 +221,11 @@ _SINGLE_TOKEN_CLUSTER_LABELS = {
 }
 _LOW_SIGNAL_ANCHOR_TOKENS = {
     "arrive",
+    "auth",
+    "authenticate",
+    "authenticated",
+    "authenticating",
+    "authentication",
     "broken",
     "error",
     "failed",
