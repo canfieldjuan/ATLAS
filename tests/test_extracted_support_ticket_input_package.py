@@ -185,6 +185,36 @@ def test_support_ticket_input_package_surfaces_explicit_resolution_evidence() ->
     assert package.metadata["support_ticket_resolution_evidence_count"] == 1
 
 
+def test_support_ticket_input_package_rejects_generic_response_metadata_as_resolution() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "How do I reset MFA?",
+            "description": "The customer cannot access MFA settings.",
+            "first_response": "Thanks for contacting support; we received your ticket.",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Where is the export button?",
+            "description": "The customer needs the report export button.",
+            "last_response": "First response SLA met in 22 minutes.",
+        },
+        {
+            "ticket_id": "ticket-3",
+            "subject": "Can I update billing contacts?",
+            "description": "The customer asks where billing contacts live.",
+            "reply_text": "Auto-ack sent by routing workflow.",
+        },
+    ])
+
+    assert package.inputs["support_ticket_resolution_evidence_present"] is False
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 0
+    assert package.inputs["support_ticket_resolution_examples"] == []
+    assert all("resolution_text" not in row for row in package.inputs["source_material"])
+    assert package.metadata["support_ticket_resolution_evidence_present"] is False
+    assert package.metadata["support_ticket_resolution_evidence_count"] == 0
+
+
 def test_support_ticket_input_package_counts_faq_output_resolution_evidence() -> None:
     package = build_support_ticket_input_package({
         "generated": 2,

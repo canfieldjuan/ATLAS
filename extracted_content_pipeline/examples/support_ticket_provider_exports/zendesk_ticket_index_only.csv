@@ -1,0 +1,3 @@
+ID,Subject,Status,Requester Email,Created At,Group
+zd-index-1,Ticket 1001,open,index-one@example.test,2026-05-09T10:00:00Z,Support
+zd-index-2,Ticket 1002,pending,index-two@example.test,2026-05-09T11:00:00Z,Support

@@ -1,0 +1,4 @@
+Conversation ID,Conversation title,User email,Conversation created at,Initial message,Admin Reply,Topic
+ic-8101,Change account email,founder@example.test,2026-05-07T15:00:00Z,"How do I change the account owner email?","Open Settings, choose Team, then transfer ownership before changing the owner email.",Account
+ic-8102,Update login email,opslead@example.test,2026-05-07T16:25:00Z,"Where do I update the email used for login?","Open Profile, choose Login email, then confirm the verification link.",Account
+ic-8201,Cancel before renewal,ceo@example.test,2026-05-08T09:10:00Z,"Can I cancel before the renewal date?",,Billing

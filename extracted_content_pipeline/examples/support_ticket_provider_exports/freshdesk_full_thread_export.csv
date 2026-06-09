@@ -1,0 +1,4 @@
+Ticket ID,Ticket Subject,Ticket Description,Created Time,Contact Email Address,Agent Reply,Group
+fd-6101,Report export failed,"How do I export the attribution report before our board meeting?",2026-05-03 08:45:00,finance@example.test,"Open Analytics, choose Attribution, then select Download CSV.",Reports
+fd-6102,CSV export missing fields,"Why is the export missing owner and source columns?",2026-05-03 09:20:00,ops@example.test,"Choose the Detailed CSV template, then include owner and source columns before export.",Reports
+fd-6201,SSO certificate rotation,"Where do I upload the new SSO certificate before it expires?",2026-05-04 14:05:00,it@example.test,,Access

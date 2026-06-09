@@ -229,6 +229,45 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     assert "support@example.com" in result.markdown
 
 
+def test_build_ticket_faq_markdown_rejects_generic_response_metadata_as_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Response metadata is not resolution evidence",
+            "support_ticket_cluster": "metadata response fields",
+            "evidence": [
+                {
+                    "text": "How do I reset MFA?",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                    "first_response": "Thanks for contacting support; we received your ticket.",
+                },
+                {
+                    "text": "Where is the export button?",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                    "last_response": "First response SLA met in 22 minutes.",
+                },
+                {
+                    "text": "Can I update billing contacts?",
+                    "source_id": "ticket-3",
+                    "source_type": "support_ticket",
+                    "reply_text": "Auto-ack sent by routing workflow.",
+                },
+            ],
+        }]
+    )
+
+    assert result.items
+    assert {
+        item["answer_evidence_status"] for item in result.items
+    } == {"draft_needs_review"}
+    assert {item["resolution_source_count"] for item in result.items} == {0}
+    assert "Thanks for contacting support" not in result.markdown
+    assert "SLA met" not in result.markdown
+    assert "Auto-ack" not in result.markdown
+
+
 def test_build_ticket_faq_markdown_fails_closed_when_resolution_has_no_question_scope() -> None:
     result = build_ticket_faq_markdown(
         [{

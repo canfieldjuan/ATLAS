@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+from pathlib import Path
 import socket
 import urllib.error
 from typing import Any
@@ -19,6 +20,15 @@ from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
 )
 from extracted_content_pipeline.faq_deflection_report import FAQDeflectionReportService
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROVIDER_FIXTURE_DIR = (
+    ROOT
+    / "extracted_content_pipeline"
+    / "examples"
+    / "support_ticket_provider_exports"
+)
 
 
 def _route(router: Any, path: str, method: str) -> Any:
@@ -393,6 +403,48 @@ async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv
 
     stored_snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await stored_snapshot.endpoint(request_id=payload["request_id"]) == snapshot
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_accepts_provider_export_fixture_with_resolution_diagnostics() -> None:
+    csv_data = (
+        PROVIDER_FIXTURE_DIR / "zendesk_full_thread_export.csv"
+    ).read_bytes()
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data, filename="zendesk_full_thread_export.csv"),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 3
+    assert metadata["submitted_row_count"] == 3
+    assert metadata["included_row_count"] == 3
+    assert metadata["skipped_row_count"] == 0
+    assert metadata["truncated_row_count"] == 0
+    assert metadata["support_platform"] == "zendesk"
+    assert metadata["support_ticket_resolution_evidence_count"] == 2
+    assert metadata["support_ticket_resolution_evidence_present"] is True
+    assert metadata["cluster_quality"]["largest_cluster_count"] >= 2
+    assert metadata["uploaded_bytes"] == len(csv_data)
+    assert payload["input_provider"]["warnings"] == []
+
+    snapshot = payload["steps"][0]["result"]["snapshot"]
+    assert snapshot["summary"]["support_ticket_resolution_evidence_count"] == 2
+    assert snapshot["summary"]["support_ticket_resolution_evidence_present"] is True
+    assert snapshot["summary"]["drafted_answer_count"] >= 1
+    assert "<p>" not in str(snapshot)
+    assert "maya@example.test" not in str(payload)
+    assert payload["steps"][0]["result"]["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
 
 
 def test_deflection_submit_fastapi_dispatch_accepts_multipart_csv_bytes() -> None:
