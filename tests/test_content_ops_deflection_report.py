@@ -366,6 +366,44 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
     assert "source_ids" not in encoded
 
 
+def test_deflection_snapshot_marks_question_only_exports_absent_resolution_evidence() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I reset my password?",
+                "question_source": "customer_wording",
+                "weighted_frequency": 5,
+                "ticket_count": 2,
+                "steps": ["Review before publishing."],
+                "evidence_quotes": ("ticket-login-1 asked how to reset a password",),
+                "source_ids": ("ticket-login-1",),
+                "answer_evidence_status": "draft_needs_review",
+            },
+            {
+                "question": "Where do I update my email?",
+                "question_source": "customer_wording",
+                "weighted_frequency": 4,
+                "ticket_count": 2,
+                "steps": ["Review before publishing."],
+                "evidence_quotes": ("ticket-email-1 asked where to update email",),
+                "source_ids": ("ticket-email-1",),
+                "answer_evidence_status": "draft_needs_review",
+            },
+        ),
+    )
+
+    snapshot = build_deflection_snapshot(build_deflection_report_artifact(result)).as_dict()
+
+    assert snapshot["summary"]["support_ticket_resolution_evidence_count"] == 0
+    assert snapshot["summary"]["support_ticket_resolution_evidence_present"] is False
+    assert snapshot["summary"]["drafted_answer_count"] == 0
+    assert snapshot["summary"]["no_proven_answer_count"] == 2
+
+
 def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",

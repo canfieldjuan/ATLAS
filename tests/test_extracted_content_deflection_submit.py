@@ -391,6 +391,9 @@ async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv
         "reason": "payment_required",
     }
 
+    stored_snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
+    assert await stored_snapshot.endpoint(request_id=payload["request_id"]) == snapshot
+
 
 def test_deflection_submit_fastapi_dispatch_accepts_multipart_csv_bytes() -> None:
     csv_data = _csv_bytes([
