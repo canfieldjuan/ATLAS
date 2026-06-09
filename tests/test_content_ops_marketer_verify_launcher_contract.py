@@ -33,12 +33,8 @@ def _load_script_module(script_name: str):
 def _valid_launcher_env(launcher) -> dict[str, str]:
     return {
         "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_AUTH_MODE": "oauth",
-        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL": (
-            "https://atlas.example.com/content-ops-marketer"
-        ),
-        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL": (
-            "https://atlas.example.com/content-ops-marketer/mcp"
-        ),
+        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL": launcher.DEFAULT_ISSUER_URL,
+        "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL": launcher.DEFAULT_RESOURCE_URL,
         "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_APPROVAL_TOKEN": (
             "approval-token-with-enough-entropy"
         ),
@@ -103,8 +99,8 @@ def test_launcher_discovery_command_satisfies_discovery_checker_parser(
         ".venv/bin/python",
         "scripts/check_content_ops_marketer_verify_oauth_discovery.py",
     ]
-    assert args.issuer_url == "https://atlas.example.com/content-ops-marketer"
-    assert args.resource_url == "https://atlas.example.com/content-ops-marketer/mcp"
+    assert args.issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.resource_url == launcher.DEFAULT_RESOURCE_URL
 
 
 def test_launcher_e2e_command_satisfies_e2e_checker_parser(
@@ -124,12 +120,14 @@ def test_launcher_e2e_command_satisfies_e2e_checker_parser(
         ".venv/bin/python",
         "scripts/check_content_ops_marketer_verify_oauth_e2e.py",
     ]
-    assert args.issuer_url == "https://atlas.example.com/content-ops-marketer"
-    assert args.resource_url == "https://atlas.example.com/content-ops-marketer/mcp"
+    assert args.issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.resource_url == launcher.DEFAULT_RESOURCE_URL
     assert args.client_profile == "claude-rich"
     assert args.approval_token_file == "/path/to/local-approval-token"
     assert args.approval_token == ""
-    assert "chatgpt-search-fetch" in _operator_guidance(launcher)
+    assert "start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py" in (
+        _operator_guidance(launcher)
+    )
 
 
 def test_launcher_required_env_covers_server_oauth_account_binding(monkeypatch) -> None:
@@ -168,3 +166,52 @@ def test_launcher_required_env_covers_server_oauth_account_binding(monkeypatch) 
     ]
     with pytest.raises(RuntimeError, match="ACCOUNT_ID"):
         verify._configure_oauth_auth()
+
+
+def test_chatgpt_adapter_launcher_discovery_command_satisfies_checker_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_checker_env(monkeypatch)
+    launcher = _load_script_module(
+        "start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py"
+    )
+    discovery = _load_script_module("check_content_ops_marketer_verify_oauth_discovery.py")
+
+    command = _command_for_script(
+        _operator_guidance(launcher),
+        "scripts/check_content_ops_marketer_verify_oauth_discovery.py",
+    )
+    args = discovery._build_parser().parse_args(command[2:])
+
+    assert command[:2] == [
+        ".venv/bin/python",
+        "scripts/check_content_ops_marketer_verify_oauth_discovery.py",
+    ]
+    assert args.issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.resource_url == launcher.DEFAULT_RESOURCE_URL
+
+
+def test_chatgpt_adapter_launcher_e2e_command_satisfies_checker_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_checker_env(monkeypatch)
+    launcher = _load_script_module(
+        "start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py"
+    )
+    e2e = _load_script_module("check_content_ops_marketer_verify_oauth_e2e.py")
+
+    command = _command_for_script(
+        _operator_guidance(launcher),
+        "scripts/check_content_ops_marketer_verify_oauth_e2e.py",
+    )
+    args = e2e._build_parser().parse_args(command[2:])
+
+    assert command[:2] == [
+        ".venv/bin/python",
+        "scripts/check_content_ops_marketer_verify_oauth_e2e.py",
+    ]
+    assert args.issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.resource_url == launcher.DEFAULT_RESOURCE_URL
+    assert args.client_profile == "chatgpt-search-fetch"
+    assert args.approval_token_file == "/path/to/local-approval-token"
+    assert args.approval_token == ""

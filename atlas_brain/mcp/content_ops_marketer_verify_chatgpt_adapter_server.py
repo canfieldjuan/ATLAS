@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +35,12 @@ mcp = FastMCP(
     ),
     lifespan=verify_server._lifespan,
 )
+
+
+@mcp.custom_route("/oauth/approve", methods=["GET", "POST"], include_in_schema=False)
+async def _oauth_approve(request):
+    """Operator approval page for remote OAuth connectors."""
+    return await verify_server._oauth_approve(request)
 
 
 @mcp.tool(structured_output=True)
@@ -242,5 +249,52 @@ def _clean(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _streamable_http_app():
+    """Build the authenticated streamable HTTP app for ChatGPT adapter tools."""
+    if verify_server._http_auth_mode() == verify_server._AUTH_MODE_OAUTH:
+        verify_server._configure_oauth_auth(target_mcp=mcp)
+        return mcp.streamable_http_app()
+
+    from .auth import BearerAuthMiddleware
+
+    return BearerAuthMiddleware(
+        mcp.streamable_http_app(),
+        token=verify_server._require_http_auth_token(),
+    )
+
+
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    if "--sse" in sys.argv:
+        import anyio
+        import uvicorn
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        from ..config import settings
+        from ..config_defaults import (
+            DEFAULT_CONTENT_OPS_MARKETER_VERIFY_PORT,
+            DEFAULT_MCP_HOST,
+        )
+
+        host = settings.mcp.host or DEFAULT_MCP_HOST
+        port = settings.mcp.content_ops_marketer_verify_port or DEFAULT_CONTENT_OPS_MARKETER_VERIFY_PORT
+
+        mcp.settings.host = host
+        mcp.settings.port = port
+        if verify_server._http_auth_mode() == verify_server._AUTH_MODE_BEARER:
+            mcp.settings.transport_security = TransportSecuritySettings(
+                enable_dns_rebinding_protection=False,
+            )
+
+        async def _serve():
+            config = uvicorn.Config(
+                _streamable_http_app(),
+                host=host,
+                port=port,
+                log_level="info",
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        anyio.run(_serve)
+    else:
+        mcp.run(transport="stdio")

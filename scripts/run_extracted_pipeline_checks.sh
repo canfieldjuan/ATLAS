@@ -105,6 +105,7 @@ pytest \
   tests/test_extracted_content_ops_execution_smoke.py \
   tests/test_atlas_content_ops_infrastructure.py \
   tests/test_atlas_content_ops_review_workflow.py \
+  tests/test_start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py \
   tests/test_start_content_ops_marketer_verify_oauth_server.py \
   tests/test_content_ops_marketer_verify_launcher_contract.py \
   tests/test_check_content_ops_marketer_verify_oauth_discovery.py \
