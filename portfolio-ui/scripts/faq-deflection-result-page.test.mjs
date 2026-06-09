@@ -210,6 +210,41 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   assert.doesNotMatch(emptyHtml, /aria-label="Customer wording examples"/);
 });
 
+await test("hosted result page flags absent resolution evidence as gap list only", () => {
+  const html = renderResultPage({
+    requestId: "content-ops-question-only",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: {
+          generated: 2,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 2,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
+        top_questions: [
+          {
+            rank: 1,
+            question: "How do I reset my password?",
+            weighted_frequency: 5,
+            customer_wording: "Password reset help How do I reset my password?",
+          },
+        ],
+      },
+      artifact_status: "locked",
+    },
+  });
+
+  assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-resolution-evidence-present="false"/);
+  assert.match(html, /Resolution evidence/);
+  assert.match(html, /Absent/);
+  assert.match(html, /gap list only/);
+  assert.match(html, /publishable answers need agent replies or resolved ticket notes/);
+});
+
 await test("checkout endpoint validates request and configured account identifiers", async () => {
   const env = { ATLAS_ACCOUNT_ID: "2b2b950d-f64b-4852-bc30-f92a34cdf169" };
   const valid = validatePayload({
