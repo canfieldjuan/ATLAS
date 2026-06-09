@@ -13,10 +13,18 @@ from typing import Any
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_HTML_TAG_NAMES_RE = (
+    r"(?:a|abbr|article|aside|b|blockquote|body|br|button|cite|code|dd|"
+    r"del|div|dl|dt|em|figcaption|figure|footer|h[1-6]|header|hr|html|i|"
+    r"img|ins|li|main|mark|nav|ol|p|pre|s|section|small|span|strike|strong|"
+    r"sub|sup|table|tbody|td|tfoot|th|thead|time|tr|u|ul)"
+)
+_HTML_ATTR_RE = (
+    r"(?:\s+[a-z_:][a-z0-9_:.-]*\s*=\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s\"'=<>`]+))"
+)
 _HTML_SIGNAL_RE = re.compile(
-    r"</?(?:article|aside|blockquote|body|br|code|dd|div|dl|dt|em|footer|"
-    r"h[1-6]|header|html|i|li|main|nav|ol|p|pre|section|span|strong|table|"
-    r"tbody|td|tfoot|th|thead|tr|ul)\b",
+    rf"</?{_HTML_TAG_NAMES_RE}(?:{_HTML_ATTR_RE})*\s*/?>",
     re.IGNORECASE,
 )
 _HTML_CUSTOM_TAG_RE = re.compile(
