@@ -111,6 +111,24 @@ async def test_resend_sender_builds_payload_and_returns_message_id():
     }]
 
 
+@pytest.mark.asyncio
+async def test_resend_sender_includes_attachments_when_requested():
+    client = _HTTPClient(_Response({"id": "resend-1"}))
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
+
+    await sender.send(
+        _request(
+            attachments=(
+                {"filename": "support-deflection-report.pdf", "content": "JVBERi0="},
+            ),
+        )
+    )
+
+    assert client.calls[0]["json"]["attachments"] == [
+        {"filename": "support-deflection-report.pdf", "content": "JVBERi0="},
+    ]
+
+
 def test_resend_sender_requires_api_key():
     with pytest.raises(ValueError, match="api_key is required"):
         ResendCampaignSender(ResendSenderConfig(api_key=""))
@@ -158,6 +176,23 @@ async def test_ses_sender_builds_payload_and_returns_message_id():
 def test_ses_sender_requires_from_email():
     with pytest.raises(ValueError, match="from_email is required"):
         SESCampaignSender(SESSenderConfig(from_email=""), client=_SESClient())
+
+
+@pytest.mark.asyncio
+async def test_ses_sender_fails_closed_for_unsupported_attachments():
+    sender = SESCampaignSender(
+        SESSenderConfig(from_email="sender@example.com"),
+        client=_SESClient(),
+    )
+
+    with pytest.raises(NotImplementedError, match="attachments are not supported"):
+        await sender.send(
+            _request(
+                attachments=(
+                    {"filename": "support-deflection-report.pdf", "content": "JVBERi0="},
+                ),
+            )
+        )
 
 
 def test_create_campaign_sender_builds_resend_sender():

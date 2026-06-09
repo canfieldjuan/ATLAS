@@ -423,6 +423,7 @@ async def test_campaign_sender_adapter_converts_legacy_kwargs_to_send_request() 
         subject="Briefing",
         body="<p>Body</p>",
         tags=[{"name": "type", "value": "vendor_briefing"}],
+        attachments=[{"filename": "briefing.pdf", "content": "JVBERi0="}],
         metadata={"campaign_id": "cmp-1"},
     )
 
@@ -434,6 +435,7 @@ async def test_campaign_sender_adapter_converts_legacy_kwargs_to_send_request() 
         subject="Briefing",
         html_body="<p>Body</p>",
         tags=({"name": "type", "value": "vendor_briefing"},),
+        attachments=({"filename": "briefing.pdf", "content": "JVBERi0="},),
         metadata={"campaign_id": "cmp-1"},
     )
 

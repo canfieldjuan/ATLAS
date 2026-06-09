@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
+import logging
 from typing import Any, Mapping, Protocol
 from urllib.parse import quote
 
 from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
+from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
 
 DEFAULT_DEFLECTION_DELIVERY_SUBJECT = "Your FAQ deflection report is ready"
 DELIVERY_CLAIM_STALE_AFTER = "15 minutes"
 MAX_DELIVERY_ERROR_CHARS = 500
+
+logger = logging.getLogger("atlas.content_ops_deflection_delivery")
 
 
 class DeflectionReportDeliverySender(Protocol):
@@ -70,12 +75,17 @@ async def send_pending_deflection_report_deliveries(
             dry_run += 1
             continue
         try:
+            attachments = _pdf_attachments(
+                artifact=data.get("artifact"),
+                request_id=request_id,
+            )
             result = await sender.send(
                 _send_request(
                     account_id=account_id,
                     request_id=request_id,
                     email=email,
                     report_url=report_url,
+                    attachments=attachments,
                     config=config,
                 )
             )
@@ -124,16 +134,19 @@ def _send_request(
     request_id: str,
     email: str,
     report_url: str,
+    attachments: tuple[dict[str, str], ...] = (),
     config: DeflectionReportDeliveryConfig,
 ) -> SendRequest:
+    has_attachment = bool(attachments)
     return SendRequest(
         campaign_id=f"content_ops_deflection_report:{account_id}:{request_id}",
         to_email=email,
         from_email=_required_text(config.from_email, "from_email"),
         reply_to=_clean(config.reply_to) or None,
         subject=_required_text(config.subject, "subject"),
-        html_body=_render_html(report_url),
-        text_body=_render_text(report_url),
+        html_body=_render_html(report_url, has_attachment=has_attachment),
+        text_body=_render_text(report_url, has_attachment=has_attachment),
+        attachments=attachments,
         tags=(
             {"name": "source", "value": "content_ops_deflection_report"},
             {"name": "request_id", "value": request_id},
@@ -146,25 +159,71 @@ def _send_request(
     )
 
 
-def _render_html(report_url: str) -> str:
+def _render_html(report_url: str, *, has_attachment: bool = False) -> str:
     safe_url = _escape(report_url)
+    attachment_copy = (
+        "<p>The full report PDF is attached for sharing and offline review.</p>"
+        if has_attachment
+        else ""
+    )
     return (
         "<h1>Your FAQ deflection report is ready</h1>"
         "<p>Your paid report is available at the secure results page below.</p>"
+        f"{attachment_copy}"
         f'<p><a href="{safe_url}">Open your report</a></p>'
-        "<p>This email only carries the access link; the report stays behind "
-        "the paid results page.</p>"
+        "<p>The secure results page remains the system of record for this report.</p>"
     )
 
 
-def _render_text(report_url: str) -> str:
+def _render_text(report_url: str, *, has_attachment: bool = False) -> str:
+    attachment_copy = (
+        "The full report PDF is attached for sharing and offline review.\n\n"
+        if has_attachment
+        else ""
+    )
     return (
         "Your FAQ deflection report is ready\n\n"
         "Your paid report is available at the secure results page below:\n\n"
+        f"{attachment_copy}"
         f"{report_url}\n\n"
-        "This email only carries the access link; the report stays behind "
-        "the paid results page.\n"
+        "The secure results page remains the system of record for this report.\n"
     )
+
+
+def _pdf_attachments(
+    *,
+    artifact: Any,
+    request_id: str,
+) -> tuple[dict[str, str], ...]:
+    decoded_artifact = decode_jsonb_field(artifact, default={})
+    if not isinstance(decoded_artifact, Mapping):
+        logger.warning(
+            "Skipping deflection report PDF attachment for %s: missing artifact",
+            request_id,
+        )
+        return ()
+    try:
+        from .deflection_pdf_renderer import render_deflection_full_report_pdf
+
+        pdf_bytes = render_deflection_full_report_pdf(decoded_artifact)
+    except Exception:
+        logger.exception(
+            "Deflection report PDF render failed for %s; sending link-only email",
+            request_id,
+        )
+        return ()
+    return ({
+        "filename": f"{_attachment_slug(request_id)}-support-deflection-report.pdf",
+        "content": base64.b64encode(pdf_bytes).decode("ascii"),
+    },)
+
+
+def _attachment_slug(value: str) -> str:
+    slug = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "-"
+        for char in value
+    )
+    return slug.strip("-_") or "deflection-report"
 
 
 async def _mark_delivered(
@@ -262,7 +321,8 @@ SELECT
     d.account_id,
     d.request_id,
     r.delivery_email,
-    r.paid
+    r.paid,
+    r.artifact
 FROM content_ops_deflection_report_deliveries d
 JOIN content_ops_deflection_reports r
   ON r.account_id = d.account_id
@@ -302,5 +362,6 @@ RETURNING
     d.account_id,
     d.request_id,
     r.delivery_email,
-    r.paid
+    r.paid,
+    r.artifact
 """

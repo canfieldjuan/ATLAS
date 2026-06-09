@@ -26,6 +26,7 @@ class CampaignSenderAdapter:
         text: str | None = None,
         reply_to: str | None = None,
         headers: Mapping[str, str] | None = None,
+        attachments: Sequence[Mapping[str, str]] | None = None,
         metadata: Mapping[str, Any] | None = None,
         **_: Any,
     ) -> dict[str, Any]:
@@ -39,6 +40,7 @@ class CampaignSenderAdapter:
             reply_to=reply_to,
             headers=dict(headers or {}),
             tags=tuple(tags or ()),
+            attachments=tuple(dict(item) for item in attachments or ()),
             metadata=dict(metadata or {}),
         )
         result = await self._inner.send(request)

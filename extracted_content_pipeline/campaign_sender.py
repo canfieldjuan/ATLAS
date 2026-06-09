@@ -72,6 +72,8 @@ class ResendCampaignSender:
         tags = normalize_tags(request.tags)
         if tags:
             payload["tags"] = tags
+        if request.attachments:
+            payload["attachments"] = [dict(item) for item in request.attachments]
 
         headers = {
             "Authorization": f"Bearer {self._config.api_key}",
@@ -129,6 +131,8 @@ class SESCampaignSender:
         self._client = boto3.client("sesv2", **kwargs)
 
     async def send(self, request: SendRequest) -> SendResult:
+        if request.attachments:
+            raise NotImplementedError("SES campaign attachments are not supported")
         body: dict[str, Any] = {
             "Html": {"Data": request.html_body, "Charset": "UTF-8"},
         }
