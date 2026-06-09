@@ -4,6 +4,21 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
+from extracted_content_pipeline.campaign_source_adapters import (
+    load_source_rows_from_file,
+)
+from extracted_content_pipeline.faq_deflection_report import (
+    deflection_report_summary,
+)
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
+from extracted_content_pipeline.ticket_faq_markdown import (
+    build_ticket_faq_markdown,
+)
+
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -11,6 +26,34 @@ _SCRIPT_PATH = (
     / "smoke_content_ops_support_ticket_package.py"
 )
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_PROVIDER_FIXTURE_DIR = (
+    _REPO_ROOT
+    / "extracted_content_pipeline"
+    / "examples"
+    / "support_ticket_provider_exports"
+)
+_FULL_THREAD_PROVIDER_FIXTURES = (
+    (
+        "zendesk_full_thread_export.csv",
+        "How do I reset MFA?",
+        "Open Profile, Security",
+    ),
+    (
+        "freshdesk_full_thread_export.csv",
+        "How do I export the attribution report before our board meeting?",
+        "Open Analytics, choose Attribution",
+    ),
+    (
+        "help_scout_full_thread_export.csv",
+        "Can I download a receipt for last month's invoice?",
+        "Open Billing, select Invoices",
+    ),
+    (
+        "intercom_conversation_export.csv",
+        "How do I change the account owner email?",
+        "Open Settings, choose Team",
+    ),
+)
 _SCRIPT_SPEC = importlib.util.spec_from_file_location(
     "smoke_content_ops_support_ticket_package",
     _SCRIPT_PATH,
@@ -187,6 +230,85 @@ def test_support_ticket_package_smoke_accepts_platform_export_fixture() -> None:
             "Where do I export my invoice before month-end?"
         ),
     }
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_question", "expected_resolution"),
+    _FULL_THREAD_PROVIDER_FIXTURES,
+)
+def test_support_ticket_package_smoke_accepts_provider_full_thread_exports(
+    filename: str,
+    expected_question: str,
+    expected_resolution: str,
+) -> None:
+    fixture = _PROVIDER_FIXTURE_DIR / filename
+
+    summary = build_support_ticket_package_smoke_summary(
+        fixture,
+        require_included_rows=True,
+    )
+
+    assert summary["source_row_count"] == 3
+    assert summary["included_ticket_row_count"] == 3
+    assert summary["skipped_ticket_row_count"] == 0
+    assert summary["contact_email_count"] == 3
+    assert summary["question_like_ticket_count"] >= 3
+    assert summary["support_ticket_resolution_evidence_present"] is True
+    assert summary["support_ticket_resolution_evidence_count"] == 2
+    assert summary["support_ticket_resolution_example_count"] == 2
+    assert summary["warning_count"] == 0
+    assert expected_question in summary["faq_questions"]
+    assert expected_resolution in str(summary["support_ticket_resolution_examples"])
+    assert "<p>" not in str(summary["customer_wording_examples"])
+    assert "&amp;" not in str(summary["customer_wording_examples"])
+    assert summary["metadata"]["cluster_quality"]["largest_cluster_count"] >= 2
+
+
+@pytest.mark.parametrize(
+    ("filename", "_expected_question", "expected_resolution"),
+    _FULL_THREAD_PROVIDER_FIXTURES,
+)
+def test_provider_full_thread_exports_generate_publishable_deflection_items(
+    filename: str,
+    _expected_question: str,
+    expected_resolution: str,
+) -> None:
+    rows = load_source_rows_from_file(
+        _PROVIDER_FIXTURE_DIR / filename,
+        file_format="csv",
+    )
+    package = build_support_ticket_input_package(rows)
+
+    result = build_ticket_faq_markdown(
+        package.inputs["source_material"],
+        max_items=4,
+    )
+    summary = deflection_report_summary(result)
+
+    assert summary["support_ticket_resolution_evidence_present"] is True
+    assert summary["drafted_answer_count"] >= 1
+    assert "resolution_evidence" in {
+        item["answer_evidence_status"] for item in result.items
+    }
+    assert expected_resolution in result.markdown
+    assert "<p>" not in result.markdown
+    assert "example.test" not in result.markdown
+
+
+def test_support_ticket_package_smoke_marks_ticket_index_only_export_gap_list_only() -> None:
+    fixture = _PROVIDER_FIXTURE_DIR / "zendesk_ticket_index_only.csv"
+
+    summary = build_support_ticket_package_smoke_summary(
+        fixture,
+        require_included_rows=True,
+    )
+
+    assert summary["source_row_count"] == 2
+    assert summary["included_ticket_row_count"] == 2
+    assert summary["question_like_ticket_count"] == 0
+    assert summary["support_ticket_resolution_evidence_present"] is False
+    assert summary["support_ticket_resolution_evidence_count"] == 0
+    assert summary["faq_questions"] == []
 
 
 def test_support_ticket_package_smoke_reports_measured_outcome_evidence(

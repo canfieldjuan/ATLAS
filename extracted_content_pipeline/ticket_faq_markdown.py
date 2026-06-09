@@ -209,7 +209,16 @@ _RESOLUTION_TEXT_KEYS = (
     "resolved_text",
     "resolution_summary",
     "support_resolution",
+    "support_response",
+    "support_reply",
     "agent_resolution",
+    "agent_response",
+    "agent_reply",
+    "admin_reply",
+    "latest_agent_reply",
+    "last_agent_reply",
+    "public_agent_reply",
+    "staff_reply",
     "answer_text",
 )
 _VOCABULARY_GAP_RULES = (

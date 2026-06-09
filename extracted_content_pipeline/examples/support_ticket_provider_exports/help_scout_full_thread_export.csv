@@ -1,0 +1,4 @@
+Conversation ID,Subject,Customer Email,Created At,Customer Message,Support Reply,Mailbox
+hs-7101,Billing receipt missing,billing@example.test,2026-05-05T12:00:00Z,"Can I download a receipt for last month's invoice?","Open Billing, select Invoices, then click Download receipt for the invoice month.",Support
+hs-7102,Invoice PDF export,ap@example.test,2026-05-05T12:35:00Z,"Where can I export invoice PDFs for finance?","Open Billing, select Invoices, then download the PDF from the invoice row.",Support
+hs-7201,Webhook delivery paused,dev@example.test,2026-05-06T13:10:00Z,"Why did webhook delivery pause after the endpoint changed?",,Support

@@ -1,0 +1,4 @@
+ID,Subject,Requester Email,Created At,Requester Comment,Latest Agent Reply,Tags
+zd-5101,How do I reset MFA?,maya@example.test,2026-05-01T09:00:00Z,"<p>I moved phones and cannot get the login code. How do I reset MFA?</p>","Open Profile, Security, then reset the MFA device after verifying the backup code.","login;mfa"
+zd-5102,Login code never arrives,noah@example.test,2026-05-01T10:15:00Z,"The login code is not reaching my email. Can I use a backup code?","Ask the user to verify the backup email, then resend the MFA code from Security settings.","login;mfa"
+zd-5201,Where do I export invoices?,ops@example.test,2026-05-02T11:30:00Z,"Where do I export invoices for last month?",,billing
