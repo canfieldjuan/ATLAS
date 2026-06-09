@@ -9,8 +9,10 @@ on:
       - "atlas_brain/autonomous/tasks/content_ops_deflection_report_delivery.py"
       - "atlas_brain/config.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
+      - "atlas_brain/deflection_pdf_renderer.py"
       - "scripts/send_content_ops_deflection_report_deliveries.py"
       - "tests/test_atlas_content_ops_deflection_delivery.py"
+      - "tests/test_deflection_pdf_renderer.py"
       - "tests/test_deflection_report_delivery_task.py"
       - "tests/test_send_content_ops_deflection_report_deliveries.py"
   push:
@@ -23,8 +25,10 @@ on:
       - "atlas_brain/autonomous/tasks/content_ops_deflection_report_delivery.py"
       - "atlas_brain/config.py"
       - "atlas_brain/content_ops_deflection_delivery.py"
+      - "atlas_brain/deflection_pdf_renderer.py"
       - "scripts/send_content_ops_deflection_report_deliveries.py"
       - "tests/test_atlas_content_ops_deflection_delivery.py"
+      - "tests/test_deflection_pdf_renderer.py"
       - "tests/test_deflection_report_delivery_task.py"
       - "tests/test_send_content_ops_deflection_report_deliveries.py"
 
@@ -51,6 +55,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_deflection_delivery.py \
+            tests/test_deflection_pdf_renderer.py \
             tests/test_deflection_report_delivery_task.py \
             tests/test_send_content_ops_deflection_report_deliveries.py \
             -q

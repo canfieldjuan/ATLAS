@@ -138,6 +138,7 @@ class SendRequest:
     reply_to: str | None = None
     headers: Mapping[str, str] = field(default_factory=dict)
     tags: Sequence[Mapping[str, str]] = field(default_factory=tuple)
+    attachments: Sequence[Mapping[str, str]] = field(default_factory=tuple)
     metadata: JsonDict = field(default_factory=dict)
 
 

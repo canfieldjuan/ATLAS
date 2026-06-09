@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
+import sys
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -23,6 +27,7 @@ class _Pool:
         self.fetch_calls.append((query, args))
         assert "content_ops_deflection_report_deliveries" in query
         assert "content_ops_deflection_reports" in query
+        assert "r.artifact" in query
         return self.rows[: int(args[0])]
 
     async def execute(self, query: str, *args: Any) -> str:
@@ -48,6 +53,13 @@ def _row(**overrides: Any) -> dict[str, Any]:
         "request_id": "content-ops-abc123",
         "delivery_email": "buyer@example.com",
         "paid": True,
+        "artifact": json.dumps({
+            "markdown": (
+                "# Support Ticket Deflection Report\n\n"
+                "## Support Tax Confirmation\n\n"
+                "Customers ask about invoices repeatedly.\n"
+            ),
+        }),
     }
     row.update(overrides)
     return row
@@ -64,10 +76,22 @@ def _config(**overrides: Any) -> DeflectionReportDeliveryConfig:
     return DeflectionReportDeliveryConfig(**values)
 
 
+def _install_fake_pdf_renderer(
+    monkeypatch: pytest.MonkeyPatch,
+    renderer: Any,
+) -> None:
+    module = ModuleType("atlas_brain.deflection_pdf_renderer")
+    module.render_deflection_full_report_pdf = renderer
+    monkeypatch.setitem(sys.modules, "atlas_brain.deflection_pdf_renderer", module)
+
+
 @pytest.mark.asyncio
-async def test_delivery_worker_sends_pending_paid_report_link() -> None:
+async def test_delivery_worker_sends_pending_paid_report_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     pool = _Pool([_row()])
     sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
 
     summary = await send_pending_deflection_report_deliveries(
         pool,
@@ -96,12 +120,67 @@ async def test_delivery_worker_sends_pending_paid_report_link() -> None:
     assert expected_url in (request.text_body or "")
     assert "markdown" not in request.html_body.lower()
     assert "resolution_evidence" not in request.html_body
+    assert request.attachments
+    assert request.attachments[0]["filename"] == (
+        "content-ops-abc123-support-deflection-report.pdf"
+    )
+    assert base64.b64decode(request.attachments[0]["content"]) == b"%PDF-fake-bytes"
+    assert "full report PDF is attached" in request.html_body
+    assert "full report PDF is attached" in (request.text_body or "")
 
     update_query, update_args = pool.execute_calls[0]
     assert "delivery_status = 'delivered'" in update_query
     assert "delivery_status = 'sending'" in update_query
     assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
     assert "buyer@example.com" not in str(update_args)
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_renders_pdf_with_lazy_renderer_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([_row()])
+    sender = _Sender()
+
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-lazy-renderer")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    attachment = sender.requests[0].attachments[0]
+    assert base64.b64decode(attachment["content"]) == b"%PDF-lazy-renderer"
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_falls_back_to_link_only_when_pdf_render_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([_row()])
+    sender = _Sender()
+
+    def _raise_pdf(_artifact: Any) -> bytes:
+        raise RuntimeError("pdf down")
+
+    _install_fake_pdf_renderer(monkeypatch, _raise_pdf)
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.sent == 1
+    request = sender.requests[0]
+    assert request.attachments == ()
+    assert "full report PDF is attached" not in request.html_body
+    assert "full report PDF is attached" not in (request.text_body or "")
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'delivered'" in update_query
+    assert update_args == ("acct-123", "content-ops-abc123", "resend:email-123")
 
 
 @pytest.mark.asyncio

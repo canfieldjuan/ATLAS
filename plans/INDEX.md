@@ -1,6 +1,6 @@
 # Plan archive index
 
-914 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+915 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -611,6 +611,7 @@
 - [PR-Deflection-Paid-Report-Reframe](archive/PR-Deflection-Paid-Report-Reframe.md) - lane: content-ops/faq-deflection-paid-report | phase: Product polish
 - [PR-Deflection-Question-Evidence-Scoping](archive/PR-Deflection-Question-Evidence-Scoping.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Raw-CSV-Cluster-Preview](archive/PR-Deflection-Raw-CSV-Cluster-Preview.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
+- [PR-Deflection-Real-Data-Proof](archive/PR-Deflection-Real-Data-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Resolution-Copy-Polish](archive/PR-Deflection-Resolution-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-SaaS-Demo-Dotenv-Preflight](archive/PR-Deflection-SaaS-Demo-Dotenv-Preflight.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Session-Amount-Gate](archive/PR-Deflection-Session-Amount-Gate.md) - lane: ai-content-ops/faq-deflection-monetization | phase: Production hardening
