@@ -171,7 +171,7 @@ named in Deferred or explicitly marked none.
 **Rule results (triggered rules only, see docs/REVIEWER_RULES.md):**
 - R1 Requirements match: Pass/Fail/N-A
 - R2 Test evidence: Pass/Fail/N-A
-- R3 Security/auth ... R12 Deployment+CI enrollment: Pass/Fail/N-A
+- R3 Security/auth ... R13 Fix-the-class: Pass/Fail/N-A
 (List only the rules the changed paths trigger; cite file:line on any Fail.)
 
 **AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
@@ -420,6 +420,15 @@ Locked-in regression tests for deferred follow-ups should name the
 future slice in their docstring (e.g. *"after PR-Foo-V2 lands this
 test is removed"*) so the test's lifetime is explicit.
 
+Test quality is part of the contract. For meaningful logic changes, a
+single trivial happy-path assertion is not enough. Add realistic
+non-happy-path coverage proportional to the risk: negative cases,
+malformed/sparse inputs, boundary values, varied producer shapes,
+failure branches, and representative real-world fixtures. If the slice
+intentionally ships only happy-path coverage, the plan's `Intentional`
+or `Deferred` section must say why that is acceptable and what will
+cover the missing cases.
+
 **CI enrollment is part of test authoring — same PR.** A test only
 protects the codebase if CI runs it. The Atlas Intel UI workflow
 (`.github/workflows/atlas_intel_ui_checks.yml`) runs an **explicit
@@ -550,13 +559,33 @@ If a branch is intentionally not covered in the PR, the plan's `Intentional` or
 `Deferred` section must name why it is safe to leave out and what future slice
 will cover it. "Covered by the happy path" is not enough for detection logic.
 
+### 3j. Class fixes need unseen probes
+
+When a review finding names a defect class rather than one isolated example,
+the builder must prove the class is fixed, not only the cited case. Before
+claiming the fix complete:
+
+1. Reproduce the reviewer-cited example.
+2. Generate or write **5-10 same-class cases the reviewer did not mention**.
+   Prefer property/parametrized tests that generate the cases; if that is not
+   practical, use fresh fixtures and explain why they exercise the class.
+   The cases must be diverse enough to exercise the class, not trivial
+   near-duplicates of the cited example.
+3. Add the proof to CI-facing tests or a committed artifact whenever possible.
+4. If only the cited example was tested, say so explicitly and do not claim the
+   class is fixed.
+
+Hardcoding the reviewer's strings, values, paths, or exact examples is an R13
+failure (`docs/REVIEWER_RULES.md`). A fix that can pass only the visible review
+example is not done.
+
 ---
 
 ## 4. Reviewer workflow
 
 The reviewer's job is **not** "review the code" -- it is to **prove whether
 the PR satisfies its Review Contract and violates none of the rules in
-`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R12) and maps to
+`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R13) and maps to
 a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
 go in the §2a template.
 
@@ -783,7 +812,7 @@ defines:
 
 Read `docs/REVIEWER_RULES.md` before your first review. Your job is
 not "review the code" -- it is to prove the PR satisfies its Review
-Contract and violates none of R1-R12. Cite a rule ID on every finding.
+Contract and violates none of R1-R13. Cite a rule ID on every finding.
 
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.

@@ -36,6 +36,7 @@ the same way a builder's repeated lapse gets front-loaded into the bootstrap.
 | Date | Escaped issue | Missed by (human / AI / CI) | Root cause | New gate added | Owner |
 |---|---|---|---|---|---|
 | _seed_ | _First real entry goes here. Until then this row documents the format._ | - | - | - | - |
+| 2026-06-09 | Repeated "fixed the cited example, not the class" pattern across blog-prose quality and raw-ticket clustering recall review rounds. | human/process | Review comments supplied concrete examples without making hardcoding unable to pass; builder did not self-probe with unseen same-class cases before claiming done. | R13 in `docs/REVIEWER_RULES.md` + AGENTS/bootstrap self-probe requirement for 5-10 unseen same-class cases. | reviewer + builder |
 
 ## Lifecycle (so this stays a queue, not an archive)
 
