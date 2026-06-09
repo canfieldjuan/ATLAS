@@ -226,6 +226,8 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
         "source_row_count": 3,
         "submitted_row_count": 2,
         "support_platform": "zendesk",
+        "support_ticket_resolution_evidence_count": 2,
+        "support_ticket_resolution_evidence_present": True,
         "top_ticket_clusters": [{"label": "exports", "count": 2}],
         "truncated_row_count": 1,
     }
@@ -240,6 +242,8 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     snapshot_payload = await snapshot.endpoint(request_id=payload["request_id"])
     assert snapshot_payload == gated_result["snapshot"]
+    assert snapshot_payload["summary"]["support_ticket_resolution_evidence_count"] == 2
+    assert snapshot_payload["summary"]["support_ticket_resolution_evidence_present"] is True
     assert "lead@acme.example" not in str(snapshot_payload)
     assert "lead@acme.example" not in str(gated_result["snapshot"])
 
@@ -320,13 +324,15 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
         "max_source_material_rows": 2,
         "skipped_row_count": 0,
         "source": "portfolio_deflection_submit",
-        "source_period": "Uploaded support tickets",
-        "source_row_count": 3,
-        "submitted_row_count": 2,
-        "support_platform": "help_scout",
-        "top_ticket_clusters": [{"label": "exports", "count": 2}],
-        "truncated_row_count": 1,
-        "uploaded_bytes": len(csv_data),
+            "source_period": "Uploaded support tickets",
+            "source_row_count": 3,
+            "submitted_row_count": 2,
+            "support_platform": "help_scout",
+            "support_ticket_resolution_evidence_count": 2,
+            "support_ticket_resolution_evidence_present": True,
+            "top_ticket_clusters": [{"label": "exports", "count": 2}],
+            "truncated_row_count": 1,
+            "uploaded_bytes": len(csv_data),
     }
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
@@ -366,8 +372,12 @@ async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv
         "singleton_cluster_count": 0,
         "uncategorized_row_count": 0,
     }
+    assert metadata["support_ticket_resolution_evidence_count"] == 0
+    assert metadata["support_ticket_resolution_evidence_present"] is False
 
     snapshot = payload["steps"][0]["result"]["snapshot"]
+    assert snapshot["summary"]["support_ticket_resolution_evidence_count"] == 0
+    assert snapshot["summary"]["support_ticket_resolution_evidence_present"] is False
     assert [
         (item["ticket_count"], item["customer_wording"])
         for item in snapshot["top_questions"]

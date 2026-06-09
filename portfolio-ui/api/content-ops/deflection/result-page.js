@@ -42,6 +42,10 @@ function formatNumber(value) {
   return Number.isFinite(value) ? String(value) : "0";
 }
 
+function finiteCount(value) {
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 function customerWordingExamples(questions) {
   return questions
     .map((question) => clean(question && question.customer_wording))
@@ -66,6 +70,26 @@ function renderCustomerWordingCard(questions) {
           </div>`;
 }
 
+function renderResolutionEvidenceDiagnostic(summary) {
+  const present = summary.support_ticket_resolution_evidence_present === true;
+  const count = finiteCount(summary.support_ticket_resolution_evidence_count);
+  const label = present ? "Present" : "Absent";
+  const copy = present
+    ? `${formatNumber(count)} resolved ticket rows can support publishable answer drafting.`
+    : "This export supports a gap list only; publishable answers need agent replies or resolved ticket notes.";
+  return `<div
+            class="resolution-evidence ${present ? "present" : "absent"}"
+            data-atlas-deflection-resolution-evidence
+            data-resolution-evidence-present="${present ? "true" : "false"}"
+          >
+            <div>
+              <span>Resolution evidence</span>
+              <strong>${label}</strong>
+            </div>
+            <p>${escapeHtml(copy)}</p>
+          </div>`;
+}
+
 function renderSnapshot(report) {
   if (!report || !report.ok || !report.snapshot) {
     return `<section class="snapshot" aria-labelledby="snapshot-title">
@@ -84,6 +108,7 @@ function renderSnapshot(report) {
             <div><span>Evidence-backed answers</span><strong>${escapeHtml(formatNumber(summary.drafted_answer_count))}</strong></div>
             <div><span>Needs support proof</span><strong>${escapeHtml(formatNumber(summary.no_proven_answer_count))}</strong></div>
           </div>
+          ${renderResolutionEvidenceDiagnostic(summary)}
           <h2>Help-desk SEO targeting list</h2>
           <p class="muted">Use actual customer phrases from the uploaded tickets for help-center titles, internal-search synonyms, and FAQ wording. No keyword volume, ranking, or traffic promise is implied.</p>
           ${renderCustomerWordingCard(questions)}
@@ -218,6 +243,12 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .metrics div { border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 14px; background: rgba(2, 6, 23, .35); }
     .metrics span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
     .metrics strong { display: block; margin-top: 8px; font-size: 28px; }
+    .resolution-evidence { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; margin: 0 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 16px; background: rgba(2, 6, 23, .35); }
+    .resolution-evidence span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
+    .resolution-evidence strong { display: block; margin-top: 6px; font-size: 18px; }
+    .resolution-evidence p { max-width: 560px; margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .resolution-evidence.present strong { color: #86efac; }
+    .resolution-evidence.absent strong { color: #fde68a; }
     .customer-wording-card { margin: 18px 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .35); padding: 18px; }
     .customer-wording-header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
     .customer-wording-header p { margin: 0; font-weight: 700; }
@@ -233,7 +264,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
     .success { color: #bbf7d0; background: rgba(34, 197, 94, .1); border-color: rgba(34, 197, 94, .28); }
     .muted { color: rgba(226, 232, 240, .68); line-height: 1.65; }
-    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header { align-items: flex-start; flex-direction: column; } }
+    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header, .resolution-evidence { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>

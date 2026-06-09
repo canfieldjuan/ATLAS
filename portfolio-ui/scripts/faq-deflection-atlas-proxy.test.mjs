@@ -22,6 +22,8 @@ const SNAPSHOT = {
     generated: 3,
     drafted_answer_count: 2,
     no_proven_answer_count: 1,
+    support_ticket_resolution_evidence_present: true,
+    support_ticket_resolution_evidence_count: 2,
   },
   top_questions: [
     {
@@ -198,7 +200,31 @@ await test("snapshot projection only returns known safe fields", async () => {
   assert.equal(JSON.stringify(result).includes("markdown"), false);
   assert.equal(JSON.stringify(result).includes("answer_steps"), false);
   assert.deepEqual(snapshotErrors({ summary: {}, top_questions: [] }), [
-    "snapshot.summary metrics must be finite numbers",
+    "snapshot.summary metrics must include finite counts and resolution evidence",
+  ]);
+});
+
+await test("proxy rejects snapshots that omit resolution evidence diagnostics", async () => {
+  const missingResolutionEvidence = {
+    ...SNAPSHOT,
+    summary: {
+      generated: 3,
+      drafted_answer_count: 2,
+      no_proven_answer_count: 1,
+    },
+  };
+  const result = await loadDeflectionReport({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    env: ENV,
+    fetchImpl: mockFetch([response(missingResolutionEvidence, 200)]).fetchImpl,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.statusCode, 502);
+  assert.equal(result.error, "atlas_snapshot_contract_violation");
+  assert.deepEqual(result.details, [
+    "snapshot.summary metrics must include finite counts and resolution evidence",
   ]);
 });
 
@@ -297,6 +323,11 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
     },
   });
   assert.match(html, /Questions found/);
+  assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-resolution-evidence-present="true"/);
+  assert.match(html, /Resolution evidence/);
+  assert.match(html, /Present/);
+  assert.match(html, /2 resolved ticket rows can support publishable answer drafting/);
   assert.match(html, />3</);
   assert.match(html, /How do I reset billing access\?/);
   assert.match(html, /artifact_status/);
@@ -306,6 +337,35 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /Continue to Checkout/);
   assertUnlockCta(html, { disabled: false });
   assert.doesNotMatch(html, /# Paid report/);
+  assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+});
+
+await test("hosted result page flags question-only exports as gap list only", () => {
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    report: {
+      ok: true,
+      snapshot: {
+        ...SNAPSHOT,
+        summary: {
+          ...SNAPSHOT.summary,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 3,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
+      },
+      artifact_status: "locked",
+    },
+  });
+
+  assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-resolution-evidence-present="false"/);
+  assert.match(html, /Resolution evidence/);
+  assert.match(html, /Absent/);
+  assert.match(html, /gap list only/);
+  assert.match(html, /publishable answers need agent replies or resolved ticket notes/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
 

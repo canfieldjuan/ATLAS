@@ -160,6 +160,8 @@ _INPUT_PROVIDER_RESPONSE_METADATA_KEYS = frozenset({
     "included_row_count",
     "skipped_row_count",
     "truncated_row_count",
+    "support_ticket_resolution_evidence_present",
+    "support_ticket_resolution_evidence_count",
 })
 _FAQ_SOURCE_MATERIAL_LIMITED_OUTPUTS = frozenset({
     "faq_markdown",
@@ -1185,6 +1187,9 @@ def create_content_ops_control_surface_router(
                 teaser_preview_count=(
                     resolved_config.deflection_snapshot_teaser_preview_count
                 ),
+                preview_summary_metadata=_deflection_resolution_preview_summary(
+                    payload_mapping
+                ),
                 delivery_email=_delivery_email_from_payload(payload_mapping),
             )
             result = _with_input_provider_diagnostics(result, payload_mapping)
@@ -1867,6 +1872,8 @@ def _with_deflection_submit_diagnostics(
                 "source_period",
                 "top_ticket_clusters",
                 "cluster_quality",
+                "support_ticket_resolution_evidence_present",
+                "support_ticket_resolution_evidence_count",
             )
             if key in package_metadata
         })
@@ -2660,6 +2667,7 @@ async def _gate_deflection_report_artifacts(
     request_id: str,
     top_n: int,
     teaser_preview_count: int,
+    preview_summary_metadata: Mapping[str, Any] | None = None,
     delivery_email: str | None = None,
 ) -> dict[str, Any]:
     gated = dict(result)
@@ -2686,6 +2694,10 @@ async def _gate_deflection_report_artifacts(
                 top_n=top_n,
                 teaser_preview_count=teaser_preview_count,
             ).as_dict()
+            if preview_summary_metadata:
+                snapshot_summary = dict(snapshot.get("summary") or {})
+                snapshot_summary.update(dict(preview_summary_metadata))
+                snapshot["summary"] = snapshot_summary
             await store.save_report(
                 account_id=account_id,
                 request_id=request_id,
@@ -2723,6 +2735,44 @@ def _delivery_email_from_payload(payload: Mapping[str, Any]) -> str | None:
     if not isinstance(inputs, Mapping):
         return None
     return _clean(inputs.get("contact_email")) or None
+
+
+def _deflection_resolution_preview_summary(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, Mapping):
+        return {}
+    if (
+        "support_ticket_resolution_evidence_present" not in inputs
+        and "support_ticket_resolution_evidence_count" not in inputs
+    ):
+        return {}
+    count = _nonnegative_int(inputs.get("support_ticket_resolution_evidence_count"))
+    explicit_present = inputs.get("support_ticket_resolution_evidence_present")
+    present = (
+        explicit_present
+        if isinstance(explicit_present, bool)
+        else count > 0
+    )
+    return {
+        "support_ticket_resolution_evidence_present": bool(present),
+        "support_ticket_resolution_evidence_count": count,
+    }
+
+
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float) and value.is_integer():
+        return max(0, int(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdigit():
+            return int(text)
+    return 0
 
 
 def _is_completed_deflection_report_step(step: Any) -> bool:

@@ -339,6 +339,8 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
             "generated": 2,
             "drafted_answer_count": 1,
             "no_proven_answer_count": 1,
+            "support_ticket_resolution_evidence_count": 1,
+            "support_ticket_resolution_evidence_present": True,
             "repeat_ticket_count": 5,
         },
         "top_questions": [
@@ -360,7 +362,8 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
     }
     assert "Open Analytics" not in encoded
     assert "ticket-export-1" not in encoded
-    assert "evidence" not in encoded
+    assert "evidence_quotes" not in encoded
+    assert "source_ids" not in encoded
 
 
 def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> None:

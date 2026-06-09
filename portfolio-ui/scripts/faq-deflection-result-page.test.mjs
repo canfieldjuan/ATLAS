@@ -93,6 +93,9 @@ await test("result page exposes validation markers and checkout metadata", () =>
     assert.match(resultPageSource, new RegExp(marker));
     assert.match(html, new RegExp(marker));
   }
+  for (const source of [pageSource, resultPageSource]) {
+    assert.match(source, /data-atlas-deflection-resolution-evidence/);
+  }
   assert.match(pageSource, /content_ops_deflection_report/);
   assert.match(html, /content_ops_deflection_report/);
   assert.match(html, /content-ops-abc123/);
@@ -149,13 +152,23 @@ await test("real snapshot page groups bounded customer wording examples", () => 
     report: {
       ok: true,
       snapshot: {
-        summary: { generated: 6, drafted_answer_count: 2, no_proven_answer_count: 4 },
+        summary: {
+          generated: 6,
+          drafted_answer_count: 2,
+          no_proven_answer_count: 4,
+          support_ticket_resolution_evidence_present: true,
+          support_ticket_resolution_evidence_count: 2,
+        },
         top_questions: topQuestions,
       },
       artifact_status: "locked",
     },
   });
   assert.match(html, /Help-desk SEO targeting list/);
+  assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-resolution-evidence-present="true"/);
+  assert.match(html, /Resolution evidence/);
+  assert.match(html, /Present/);
   assert.match(html, /Customer wording/);
   assert.match(html, /aria-label="Customer wording examples"/);
   assert.match(html, /No keyword volume, ranking, or traffic promise is implied/);
@@ -180,7 +193,13 @@ await test("real snapshot page groups bounded customer wording examples", () => 
     report: {
       ok: true,
       snapshot: {
-        summary: { generated: 0, drafted_answer_count: 0, no_proven_answer_count: 0 },
+        summary: {
+          generated: 0,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 0,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
         top_questions: [],
       },
       artifact_status: "locked",
@@ -234,7 +253,13 @@ await test("hosted result page loads report with configured account when URL omi
         return JSON.stringify(
           calls.length === 1
             ? {
-                summary: { generated: 1, drafted_answer_count: 0, no_proven_answer_count: 1 },
+                summary: {
+                  generated: 1,
+                  drafted_answer_count: 0,
+                  no_proven_answer_count: 1,
+                  support_ticket_resolution_evidence_present: false,
+                  support_ticket_resolution_evidence_count: 0,
+                },
                 top_questions: [
                   {
                     rank: 1,
@@ -505,7 +530,13 @@ await test("hosted result page handles the Checkout cancel return token", () => 
     report: {
       ok: true,
       snapshot: {
-        summary: { generated: 1, drafted_answer_count: 0, no_proven_answer_count: 1 },
+        summary: {
+          generated: 1,
+          drafted_answer_count: 0,
+          no_proven_answer_count: 1,
+          support_ticket_resolution_evidence_present: false,
+          support_ticket_resolution_evidence_count: 0,
+        },
         top_questions: [],
       },
       artifact_status: "locked",

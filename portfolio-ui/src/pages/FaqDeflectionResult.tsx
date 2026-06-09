@@ -32,6 +32,8 @@ type DeflectionSnapshot = {
     generated: number;
     drafted_answer_count: number;
     no_proven_answer_count: number;
+    support_ticket_resolution_evidence_present: boolean;
+    support_ticket_resolution_evidence_count: number;
   };
   top_questions: Array<{
     rank: number;
@@ -87,12 +89,21 @@ function parseSnapshot(value: unknown): SnapshotState {
   const generated = finiteNumber(value.summary.generated);
   const draftedAnswerCount = finiteNumber(value.summary.drafted_answer_count);
   const noProvenAnswerCount = finiteNumber(value.summary.no_proven_answer_count);
+  const resolutionEvidencePresent = value.summary.support_ticket_resolution_evidence_present;
+  const resolutionEvidenceCount = finiteNumber(
+    value.summary.support_ticket_resolution_evidence_count,
+  );
   if (
     generated === null ||
     draftedAnswerCount === null ||
-    noProvenAnswerCount === null
+    noProvenAnswerCount === null ||
+    typeof resolutionEvidencePresent !== "boolean" ||
+    resolutionEvidenceCount === null
   ) {
-    return { status: "invalid", reason: "Snapshot summary metrics were incomplete." };
+    return {
+      status: "invalid",
+      reason: "Snapshot summary metrics or resolution evidence were incomplete.",
+    };
   }
 
   const topQuestions = value.top_questions.map((item) => {
@@ -124,6 +135,8 @@ function parseSnapshot(value: unknown): SnapshotState {
         generated,
         drafted_answer_count: draftedAnswerCount,
         no_proven_answer_count: noProvenAnswerCount,
+        support_ticket_resolution_evidence_present: resolutionEvidencePresent,
+        support_ticket_resolution_evidence_count: resolutionEvidenceCount,
       },
       top_questions: topQuestions as DeflectionSnapshot["top_questions"],
     },
@@ -173,6 +186,20 @@ export default function FaqDeflectionResult() {
       .map((question) => question.customer_wording.trim())
       .filter((phrase) => phrase.length > 0)
       .slice(0, 5);
+  }, [snapshotState]);
+
+  const resolutionEvidence = useMemo(() => {
+    if (snapshotState.status !== "available") return null;
+    const { summary } = snapshotState.snapshot;
+    const present = summary.support_ticket_resolution_evidence_present;
+    const count = summary.support_ticket_resolution_evidence_count;
+    return {
+      present,
+      label: present ? "Present" : "Absent",
+      copy: present
+        ? `${formatCount(count)} resolved ticket rows can support publishable answer drafting.`
+        : "This export supports a gap list only; publishable answers need agent replies or resolved ticket notes.",
+    };
   }, [snapshotState]);
 
   const startCheckout = async () => {
@@ -277,6 +304,30 @@ export default function FaqDeflectionResult() {
                 </div>
               )}
             </div>
+
+            {resolutionEvidence && (
+              <div
+                className="mt-4 flex flex-col gap-3 rounded-lg border border-surface-700/60 bg-surface-800/40 p-5 sm:flex-row sm:items-start sm:justify-between"
+                data-atlas-deflection-resolution-evidence
+                data-resolution-evidence-present={resolutionEvidence.present ? "true" : "false"}
+              >
+                <div>
+                  <p className="text-sm text-surface-200/70">Resolution evidence</p>
+                  <p
+                    className={
+                      resolutionEvidence.present
+                        ? "mt-2 text-lg font-semibold text-primary-300"
+                        : "mt-2 text-lg font-semibold text-amber-200"
+                    }
+                  >
+                    {resolutionEvidence.label}
+                  </p>
+                </div>
+                <p className="max-w-xl text-sm leading-6 text-surface-200/75">
+                  {resolutionEvidence.copy}
+                </p>
+              </div>
+            )}
 
             {snapshotState.status === "invalid" && (
               <div className="mt-6 flex items-start gap-3 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">

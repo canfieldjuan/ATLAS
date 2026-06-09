@@ -206,6 +206,8 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
         "source_date_start",
         "source_date_end",
         "source_window_days",
+        "support_ticket_resolution_evidence_count",
+        "support_ticket_resolution_evidence_present",
     }
     for question in payload["top_questions"]:
         assert set(question) == {

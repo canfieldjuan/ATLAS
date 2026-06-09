@@ -159,6 +159,8 @@
     "drafted_answer_count": 1,
     "generated": 2,
     "no_proven_answer_count": 1,
+    "support_ticket_resolution_evidence_count": 1,
+    "support_ticket_resolution_evidence_present": true,
     "output_checks": {
       "condensed": true,
       "has_action_items": true,
