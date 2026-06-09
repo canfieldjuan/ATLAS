@@ -254,6 +254,20 @@ export default function FaqDeflectionUpload() {
                 accept=".csv,text/csv"
                 onChange={(event) => setUpload(fileState(event.target.files?.[0]))}
               />
+              <div
+                className="mt-4 space-y-2 text-xs leading-5 text-surface-200/70"
+                data-atlas-deflection-export-guidance
+              >
+                <p className="font-semibold text-surface-100">
+                  Best input: full ticket threads with customer questions plus
+                  agent replies, resolution text, or resolved ticket notes.
+                </p>
+                <p>
+                  Question-only exports still work for clustering and a gap
+                  list, but publishable answers require uploaded resolution
+                  evidence.
+                </p>
+              </div>
               <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
                 <p className="text-sm font-semibold text-primary-100">
                   🛡️ 100% Deterministic Engine
