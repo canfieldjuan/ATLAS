@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import os
+import secrets
 import sys
 import urllib.error
 import urllib.parse
@@ -50,6 +53,16 @@ def _authorization_url(
         }
     )
     return f"{root_url}/authorize?{query}"
+
+
+def _pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _new_pkce_challenge() -> str:
+    verifier = secrets.token_urlsafe(64)
+    return _pkce_challenge(verifier)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -128,7 +141,7 @@ def _main(argv: list[str] | None = None) -> int:
         redirect_uri=args.redirect_uri.strip(),
         scope=args.scope.strip(),
         state="content-ops-claude-hosted-smoke",
-        code_challenge="content-ops-claude-hosted-smoke-challenge",
+        code_challenge=_new_pkce_challenge(),
     )
     try:
         status, headers = _open_no_redirect(url, args.timeout)
