@@ -275,9 +275,17 @@ rather than hand-formatting:
   the **single** local-review runner; if the managed hook is missing or
   intentionally skipped, the wrapper runs `local_pr_review.sh` before pushing.
   The wrapper rejects `--no-verify`.
+- `bash scripts/open_pr.sh <pr-body-file> [gh-pr-create-args...]` — creates a
+  PR for the current branch, or updates the existing PR body, using
+  `--body-file - < <pr-body-file>`. Do not hand-roll
+  `gh pr create/edit --body-file <path>`; under sandboxing `gh` can fail to
+  open direct file paths. The shell redirect reads the file and `gh` receives
+  the body on stdin. If the PR already exists, this wrapper updates only the
+  body; use `gh pr edit` manually for title/base/label changes.
 
 Flow: `bash scripts/new_pr_plan.sh` -> implement ->
-`python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh`.
+`python scripts/sync_pr_plan.py` -> `bash scripts/push_pr.sh` ->
+`bash scripts/open_pr.sh`.
 Do **not** run a separate manual `local_pr_review.sh` immediately before
 `push_pr.sh`; that duplicates the same mechanical bundle and burns context.
 Use manual local review for ad hoc triage or when you are not about to push.
