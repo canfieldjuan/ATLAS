@@ -17,6 +17,7 @@ from atlas_brain.alerts.events import (
     AlertEvent,
     AudioAlertEvent,
     HAStateAlertEvent,
+    PaidFunnelIncidentAlertEvent,
     PresenceAlertEvent,
     ReminderAlertEvent,
     SecurityAlertEvent,
@@ -568,6 +569,7 @@ class TestAlertManager:
             "reminder_due",
             "presence_arrival",
             "presence_departure",
+            "deflection_paid_funnel_incident",
         }
         assert expected_names.issubset(rule_names)
 
@@ -687,6 +689,29 @@ class TestAlertManager:
             result = await mgr.process_event(event)
 
         assert result == "Person detected!"
+
+    @pytest.mark.asyncio
+    async def test_process_event_triggers_paid_funnel_incident_rule(self):
+        mgr = AlertManager()
+        mgr.initialize()
+        event = PaidFunnelIncidentAlertEvent.from_payload({
+            "incident_type": "paid_report_missing_after_payment",
+            "severity": "error",
+            "account_id": "acct-123",
+            "request_id": "req-123",
+            "error": "provider echoed buyer@example.com",
+        })
+
+        with patch("atlas_brain.alerts.manager.settings") as mock_settings:
+            mock_settings.alerts.enabled = True
+            mock_settings.alerts.persist_alerts = False
+            result = await mgr.process_event(event)
+
+        assert result == (
+            "Paid deflection funnel incident: paid_report_missing_after_payment "
+            "(error) account=acct-123 request=req-123"
+        )
+        assert "buyer@example.com" not in result
 
     @pytest.mark.asyncio
     async def test_process_event_disabled(self):

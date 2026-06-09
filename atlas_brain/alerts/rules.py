@@ -127,7 +127,8 @@ class AlertRule:
 
         for key in ["class_name", "detection_type", "sound_class", "new_state",
                     "old_state", "domain", "label", "priority", "confidence",
-                    "message", "reminder_id", "repeat_pattern"]:
+                    "message", "reminder_id", "repeat_pattern",
+                    "incident_type", "severity", "account_id", "request_id"]:
             value = event.get_field(key)
             if value is not None:
                 format_data[key] = value

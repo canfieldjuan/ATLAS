@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
-from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incident
+from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incident_alert
 from ..storage.database import get_db_pool
 from extracted_content_pipeline.deflection_report_access import (
     PostgresDeflectionReportArtifactStore,
@@ -651,7 +651,7 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         )
         return
     if not _deflection_checkout_amount_is_valid(session):
-        emit_deflection_paid_funnel_incident(
+        await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_checkout_terms_mismatch",
             severity="error",
@@ -674,7 +674,7 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         payment_reference=session_id or None,
     )
     if not marked:
-        emit_deflection_paid_funnel_incident(
+        await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_missing_after_payment",
             severity="error",
@@ -808,7 +808,7 @@ async def _handle_content_ops_deflection_report_payment_revoked(
         payment_reference=payment_reference,
     )
     if not revoked:
-        emit_deflection_paid_funnel_incident(
+        await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_revocation_missed_report",
             severity="error",

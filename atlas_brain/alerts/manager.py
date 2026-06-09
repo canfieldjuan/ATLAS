@@ -138,6 +138,19 @@ class AlertManager:
             priority=5,
         ))
 
+        self.add_rule(AlertRule(
+            name="deflection_paid_funnel_incident",
+            event_types=["deflection_paid_funnel_incident"],
+            source_pattern="*",
+            conditions={},
+            message_template=(
+                "Paid deflection funnel incident: {incident_type} ({severity}) "
+                "account={account_id} request={request_id}"
+            ),
+            cooldown_seconds=0,
+            priority=15,
+        ))
+
     def add_rule(self, rule: AlertRule) -> None:
         """Add or update an alert rule."""
         self._rules[rule.name] = rule

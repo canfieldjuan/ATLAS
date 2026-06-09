@@ -20,6 +20,7 @@ from .events import (
     AlertEvent,
     AudioAlertEvent,
     HAStateAlertEvent,
+    PaidFunnelIncidentAlertEvent,
     PresenceAlertEvent,
     ReminderAlertEvent,
     SecurityAlertEvent,
@@ -47,6 +48,7 @@ __all__ = [
     "ReminderAlertEvent",
     "SecurityAlertEvent",
     "PresenceAlertEvent",
+    "PaidFunnelIncidentAlertEvent",
     # Rules
     "AlertRule",
     "create_vision_rule",
