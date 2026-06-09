@@ -2,7 +2,7 @@
 
 > The reviewer's job is **not** to "review the code." It is to **prove whether
 > the PR satisfies its Review Contract and violates none of the rules below.**
-> Every review finding cites a rule ID (R1-R12). This pack is the checklist the
+> Every review finding cites a rule ID (R1-R13). This pack is the checklist the
 > reviewer runs; the recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the
 > same checklist front-loaded into the builder so the repeats stop.
 
@@ -56,8 +56,10 @@ cleanups beyond the slice's contract.
 Every meaningful behavior change has a test, or a documented reason it cannot.
 **Block if:** new logic has no direct test; a bug fix has no regression test; a
 critical path has only manual testing; tests assert implementation details
-instead of behavior. For detectors/validators/gates, the failure branch is
-proven to fire (`AGENTS.md` 3i), not just the happy path.
+instead of behavior; tests cover only a trivial happy path while realistic
+negative, edge, malformed, sparse, or varied-input cases remain unexercised.
+For detectors/validators/gates, the failure branch is proven to fire
+(`AGENTS.md` 3i), not just the happy path.
 
 ### R3 - Security and authorization
 Any user input, permission check, token, secret, file upload, webhook, or admin
@@ -132,6 +134,18 @@ high-risk change; **a new or renamed test is not wired into the CI workflow that
 runs it** (adding a `test:*` script does not make CI run it - the matching
 `run:` step ships in the same PR).
 
+### R13 - Fix the class, not the example
+Review findings that identify a defect class must be fixed at the class level,
+not by hardcoding the reviewer's cited strings, values, paths, or examples.
+**Block if:** the patch hardcodes the reviewer's example values; the tests reuse
+only the examples named in the finding; the mechanism cannot pass a held-out
+same-class probe; or the builder claims the class is fixed without showing
+fresh same-class cases the reviewer did not provide. Preferred proof is a
+property/parametrized test that generates cases; when generation is not
+practical, use multiple unseen fixtures plus a short explanation of the
+generalized mechanism. Generated or unseen cases must be diverse enough to
+exercise the class, not trivial near-duplicates that satisfy the easy path.
+
 ---
 
 ## Path-based rule triggers
@@ -151,11 +165,29 @@ these for the paths it touches:
 | `atlas_brain/config.py`, env/config | R11, R12 |
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
+| Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
 
 Phase 1 of this convention is documentation + reviewer discipline. A later
 slice adds a mechanical audit that derives the required rule IDs from the diff
 and fails when the plan's triggered-rules line omits one (see
 `AGENTS.md` 4 and the workflow-redesign issue).
+
+---
+
+## Class-defect review framing
+
+When a reviewer finds a class defect, the finding should say so explicitly:
+"This is a CLASS defect; the example below is illustrative, not the target."
+Name the cited example, name at least one visible same-class probe, and state
+that the reviewer may keep a held-out probe for re-review. This prevents the
+review comment from becoming a hardcoding target.
+
+The reviewer should reject a "fixed" response that only proves the cited
+example. Before LGTM on an R13-triggering finding, verify one of:
+
+- a property/parametrized test generates diverse same-class cases;
+- unseen fixtures cover varied cases not listed in the original finding; or
+- the reviewer reran a held-out probe and the verdict records it.
 
 ---
 

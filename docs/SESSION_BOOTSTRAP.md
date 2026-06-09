@@ -27,9 +27,11 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >    - **Lookup-and-backfill fails safe on ambiguity:** match an external resource only on a *unique* result; 0 *or* >1 matches → don't guess.
 >    - **Per-tenant credentials fail closed:** an unprovisioned tenant must not silently borrow shared/global credentials.
 >    - **CI is truth:** "passed locally" ≠ green. Run the test the way CI does and check `gh pr checks` is green before claiming done.
+>    - **Tests must be meaningful, not just green:** for logic changes, a trivial happy-path test is not enough. Add negative/edge/malformed/sparse/varied-input coverage proportional to risk, or explicitly name why it is deferred.
 >    - **Fixtures must match real producer output**, not hand-crafted shapes.
 >    - **The PR body's stated safety claim must be *enforced in code*, not just named.**
 >    - **Content Ops live model route:** generated-content validation must use the configured cloud/OpenRouter route (currently Claude via OpenRouter), not local Ollama/qwen. For live smokes, set `EXTRACTED_CAMPAIGN_LLM_AUTO_ACTIVATE_OLLAMA=false` so a missing cloud route fails closed instead of silently falling back to a local model.
+>    - **Fix the class, not the example:** when review names a defect class, do not hardcode the reviewer's cited strings/values or test only the cited example. Reproduce the cited case, then generate or write 5-10 same-class cases the reviewer did not mention (property/parametrized tests preferred) and include that proof before claiming done. The cases must be diverse enough to exercise the class, not trivial near-duplicates. If you only tested the cited example, say so.
 >
 > 5. **Plan first** (`plans/PR-<Slice>.md`, the 7 sections, <400 LOC soft cap), open PRs ready-for-review (not draft), and run the per-package validation gauntlet before pushing (see CLAUDE.md "Per-package validation gauntlets").
 >    - **PR-prep helpers — use these; don't hand-format the plan shape or push raw:**
