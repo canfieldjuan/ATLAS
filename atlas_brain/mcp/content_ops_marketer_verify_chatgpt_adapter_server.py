@@ -15,6 +15,16 @@ from . import content_ops_marketer_verify_server as verify_server
 
 CONTRACT_ID = "content-ops-verify-draft-contract"
 _RESULT_PREFIX = "content-ops-verdict:"
+_ACCEPTED_FIELDS = (
+    "asset_id",
+    "rule_packet",
+    "coverage",
+    "extracted_claims",
+    "quality_reports",
+    "brand_voice_payload",
+    "comments",
+    "as_of",
+)
 
 
 @dataclass(frozen=True)
@@ -164,11 +174,14 @@ def _contract_search_result(*, query: Any, limit: Any) -> dict[str, Any]:
 
 def _contract_document() -> dict[str, Any]:
     text = (
-        "Submit one JSON object through search with these fields: asset_id, "
-        "rule_packet, coverage, extracted_claims, quality_reports, "
-        "brand_voice_payload, comments, and as_of. The adapter returns a "
-        "tenant-bound verdict ID. Call fetch with that ID to read the full "
-        "Content Ops review verdict."
+        "Empty or non-JSON search query values return this contract. A "
+        "JSON-encoded string whose decoded value is an object is treated as one "
+        "Content Ops review submission with these fields: asset_id, rule_packet, "
+        "coverage, extracted_claims, quality_reports, brand_voice_payload, "
+        "comments, and as_of. Pass submissions as query=json.dumps(example); "
+        "query is a string in the tool schema, not an object. The adapter "
+        "returns a tenant-bound verdict ID. Call fetch with that ID to read the "
+        "full Content Ops review verdict."
     )
     return {
         "id": CONTRACT_ID,
@@ -179,16 +192,142 @@ def _contract_document() -> dict[str, Any]:
             "ok": True,
             "found": True,
             "type": "adapter_contract",
-            "accepted_fields": [
-                "asset_id",
-                "rule_packet",
-                "coverage",
-                "extracted_claims",
-                "quality_reports",
-                "brand_voice_payload",
-                "comments",
-                "as_of",
-            ],
+            "accepted_fields": list(_ACCEPTED_FIELDS),
+            "dispatch": _contract_dispatch(),
+            "schema": _contract_schema(),
+            "example": _contract_example(),
+        },
+    }
+
+
+def _contract_dispatch() -> dict[str, Any]:
+    example = _contract_example()
+    return {
+        "contract_shape": {"query": ""},
+        "submit_shape": {"query": "<JSON-encoded string of an object matching schema/example>"},
+        "submit_example_query": json.dumps(example, sort_keys=True),
+        "rule": (
+            "empty or non-string-typed query returns this contract; a JSON-encoded "
+            "string whose decoded value is an object submits a review"
+        ),
+    }
+
+
+def _contract_example() -> dict[str, Any]:
+    return {
+        "asset_id": "draft-123",
+        "rule_packet": {
+            "brief": "rules/brief.v3",
+            "brand_voice": "rules/brand_voice.v2",
+            "claim_registry": "rules/claims.v5",
+            "compliance": "rules/compliance.v1",
+            "channel_schema": "rules/channel_schema.v2",
+        },
+        "coverage": [
+            {
+                "rule_id": "CLAIM-001",
+                "requirement": "Every claim must map to approved registry wording",
+                "required": True,
+                "status": "pass",
+                "evidence": "Claim mapped to approved registry entry feature.sso",
+            }
+        ],
+        "quality_reports": {
+            "passed": True,
+            "findings": [],
+        },
+        "brand_voice_payload": {
+            "passed": True,
+            "warnings": [],
+            "banned_terms": [],
+        },
+        "extracted_claims": [
+            {
+                "text": "SSO is included on every plan",
+                "location": "draft:section-2",
+                "registry_id": "feature.sso",
+            }
+        ],
+        "comments": [
+            {
+                "category": "nit",
+                "message": "Optional reviewer note",
+                "evidence": "",
+                "blocking": False,
+            }
+        ],
+        "as_of": "2026-06-09",
+    }
+
+
+def _contract_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": list(_ACCEPTED_FIELDS),
+        "properties": {
+            "asset_id": {"type": "string"},
+            "rule_packet": {
+                "type": "object",
+                "properties": {
+                    "brief": {"type": "string"},
+                    "brand_voice": {"type": "string"},
+                    "claim_registry": {"type": "string"},
+                    "compliance": {"type": "string"},
+                    "channel_schema": {"type": "string"},
+                },
+            },
+            "coverage": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rule_id": {"type": "string"},
+                        "requirement": {"type": "string"},
+                        "required": {"type": "boolean"},
+                        "status": {"enum": ["pass", "fail", "not_applicable", "unresolved"]},
+                        "evidence": {"type": "string"},
+                    },
+                },
+            },
+            "extracted_claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "location": {"type": "string"},
+                        "registry_id": {"type": "string"},
+                    },
+                },
+            },
+            "quality_reports": {
+                "type": "object",
+                "properties": {
+                    "passed": {"type": "boolean"},
+                    "findings": {"type": "array"},
+                },
+            },
+            "brand_voice_payload": {
+                "type": "object",
+                "properties": {
+                    "passed": {"type": "boolean"},
+                    "warnings": {"type": "array", "items": {"type": "string"}},
+                    "banned_terms": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+            "comments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string"},
+                        "message": {"type": "string"},
+                        "evidence": {"type": "string"},
+                        "blocking": {"type": "boolean"},
+                    },
+                },
+            },
+            "as_of": {"type": "string", "format": "date"},
         },
     }
 

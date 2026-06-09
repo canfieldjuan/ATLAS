@@ -243,6 +243,65 @@ async def test_chatgpt_adapter_non_json_search_returns_contract_document() -> No
     assert fetched["metadata"]["ok"] is True
     assert fetched["metadata"]["type"] == "adapter_contract"
     assert "asset_id" in fetched["metadata"]["accepted_fields"]
+    assert fetched["metadata"]["dispatch"]["contract_shape"] == {"query": ""}
+    assert "JSON-encoded string" in fetched["metadata"]["dispatch"]["submit_shape"]["query"]
+    assert "query=json.dumps(example)" in fetched["text"]
+    assert fetched["metadata"]["dispatch"]["submit_example_query"] == json.dumps(
+        fetched["metadata"]["example"],
+        sort_keys=True,
+    )
+    assert fetched["metadata"]["schema"]["properties"]["coverage"]["items"]["properties"][
+        "status"
+    ]["enum"] == ["pass", "fail", "not_applicable", "unresolved"]
+    assert fetched["metadata"]["example"]["quality_reports"]["passed"] is True
+    assert fetched["metadata"]["example"]["brand_voice_payload"]["passed"] is True
+    assert fetched["metadata"]["example"]["brand_voice_payload"]["warnings"] == []
+    assert fetched["metadata"]["example"]["brand_voice_payload"]["banned_terms"] == []
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_raw_object_query_returns_contract_instead_of_submission() -> None:
+    contract = await adapter.fetch(adapter.CONTRACT_ID)
+
+    result = await adapter.search(query=contract["metadata"]["example"])
+
+    assert result["metadata"]["ok"] is True
+    assert result["metadata"]["mode"] == "contract"
+    assert result["results"][0]["id"] == adapter.CONTRACT_ID
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_contract_example_submits_without_schema_shape_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+    contract = await adapter.fetch(adapter.CONTRACT_ID)
+
+    search_result = await adapter.search(query=json.dumps(contract["metadata"]["example"]))
+    verdict_id = search_result["results"][0]["id"]
+    fetched = await adapter.fetch(verdict_id)
+    verdict = fetched["metadata"]["verdict"]
+    reasons = "\n".join(str(reason) for reason in verdict["reasons"])
+    coverage_rule_ids = {
+        row["rule_id"] for row in verdict["content_pr"]["coverage"] if isinstance(row, dict)
+    }
+
+    assert search_result["metadata"]["ok"] is True
+    assert search_result["metadata"]["decision"] == "approved"
+    assert fetched["metadata"]["ok"] is True
+    assert verdict["decision"] == "approved"
+    assert "MALFORMED-COVERAGE" not in reasons
+    assert "Missing quality report passed flag" not in reasons
+    assert "Missing brand voice audit passed flag" not in reasons
+    assert "QUALITY-GATE:report" in coverage_rule_ids
+    assert "BRAND-VOICE:audit" in coverage_rule_ids
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
 
 
 @pytest.mark.asyncio
