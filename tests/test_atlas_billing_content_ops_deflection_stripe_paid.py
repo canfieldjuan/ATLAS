@@ -9,6 +9,18 @@ from typing import Any
 import pytest
 
 from atlas_brain.api import billing
+from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
+
+
+def _incident_payloads(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    import json
+
+    payloads: list[dict[str, Any]] = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if INCIDENT_LOG_MARKER in message:
+            payloads.append(json.loads(message.split(INCIDENT_LOG_MARKER, 1)[1].strip()))
+    return payloads
 
 
 class _Pool:
@@ -329,6 +341,69 @@ async def test_deflection_checkout_completion_fails_closed_when_report_missing()
     query, args = pool.execute_calls[0]
     assert "UPDATE content_ops_deflection_reports" in query
     assert args == (account_id, "req-123", "cs_test_deflection")
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_emits_incident_when_report_missing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    pool = _Pool()
+    pool.update_result = "UPDATE 0"
+
+    with pytest.raises(billing.HTTPException):
+        await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+        )
+
+    payloads = _incident_payloads(caplog)
+    assert payloads == [
+        {
+            "account_id": account_id,
+            "event_type": "checkout.session.completed",
+            "incident_type": "paid_report_missing_after_payment",
+            "request_id": "req-123",
+            "severity": "error",
+            "stripe_session_id": "cs_test_deflection",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_emits_incident_for_terms_mismatch(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, amount_total=149999)
+    pool = _Pool()
+    pool.add_report(account_id=account_id)
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+    )
+
+    assert returned is None
+    assert pool.execute_calls == []
+    payloads = _incident_payloads(caplog)
+    assert payloads == [
+        {
+            "account_id": account_id,
+            "amount_total": "149999",
+            "currency": "usd",
+            "event_type": "checkout.session.completed",
+            "incident_type": "paid_report_checkout_terms_mismatch",
+            "request_id": "req-123",
+            "severity": "error",
+            "stripe_session_id": "cs_test_deflection",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -941,6 +1016,56 @@ async def test_stripe_webhook_dispute_relocks_paid_deflection_report_from_direct
     assert "SET paid = false" in update_calls[0][0]
     assert pool.report_rows[(account_id, "req-123")]["paid"] is False
     assert pool.delivery_rows == {}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_revocation_miss_emits_paid_funnel_incident(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    checkout_session = _session(
+        account_id=account_id,
+        session_id="cs_test_missing_report_refund",
+    )
+    charge = _payment_event_object(
+        payment_intent="pi_missing_report_refund",
+        refunded=True,
+        amount_refunded=150000,
+        amount_captured=150000,
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_refund_missing_report",
+        type="charge.refunded",
+        data=SimpleNamespace(object=charge),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(
+        event,
+        checkout_sessions=[checkout_session],
+    )
+    pool = _Pool()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+    )
+
+    assert response == {"status": "ok"}
+    payloads = _incident_payloads(caplog)
+    assert payloads == [
+        {
+            "account_id": account_id,
+            "event_type": "charge.refunded",
+            "incident_type": "paid_report_revocation_missed_report",
+            "payment_reference": "cs_test_missing_report_refund",
+            "request_id": "req-123",
+            "severity": "error",
+            "stripe_object_id": "ch_test_deflection_refund",
+        }
+    ]
 
 
 @pytest.mark.asyncio
