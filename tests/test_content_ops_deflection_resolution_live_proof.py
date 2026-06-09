@@ -132,9 +132,10 @@ def test_resolution_live_proof_regenerates_from_committed_csv(tmp_path: Path) ->
     output = tmp_path / "report.md"
     summary_output = tmp_path / "summary.json"
     result_output = tmp_path / "result.json"
+    source_arg = SOURCE.relative_to(ROOT).as_posix()
 
     exit_code = MODULE.main([
-        str(SOURCE),
+        source_arg,
         "--source-format",
         "csv",
         "--output",
@@ -153,6 +154,4 @@ def test_resolution_live_proof_regenerates_from_committed_csv(tmp_path: Path) ->
     assert regenerated["status"] == "ok"
     assert regenerated["failed_output_checks"] == []
     assert regenerated["summary"] == _json(SUMMARY)
-    assert "Publishable Help-Center Copy From Proven Resolutions" in output.read_text(
-        encoding="utf-8"
-    )
+    assert output.read_text(encoding="utf-8") == REPORT.read_text(encoding="utf-8")
