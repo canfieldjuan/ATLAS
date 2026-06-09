@@ -39,6 +39,8 @@ logger = logging.getLogger("atlas.mcp.content_ops.marketer_verify")
 _AUTH_MODE_BEARER = "bearer"
 _AUTH_MODE_OAUTH = "oauth"
 _MIN_HTTP_AUTH_TOKEN_LENGTH = 24
+_OAUTH_AUTHORIZATION_METADATA_PATH = "/.well-known/oauth-authorization-server"
+_PUBLIC_CLIENT_TOKEN_AUTH_METHODS = ("none", "client_secret_post", "client_secret_basic")
 _PLACEHOLDER_HTTP_AUTH_TOKENS = {
     "<token>",
     "changeme",
@@ -184,7 +186,7 @@ def _streamable_http_app():
     """Build the authenticated streamable HTTP app for verify-only tools."""
     if _http_auth_mode() == _AUTH_MODE_OAUTH:
         _configure_oauth_auth()
-        return mcp.streamable_http_app()
+        return _apply_content_ops_public_client_metadata(mcp.streamable_http_app())
 
     from .auth import BearerAuthMiddleware
 
@@ -287,6 +289,80 @@ def _configure_oauth_auth(target_mcp: Any | None = None):
     configured_mcp._auth_server_provider = _oauth_provider
     configured_mcp._token_verifier = ProviderTokenVerifier(_oauth_provider)
     return _oauth_provider
+
+
+def _content_ops_oauth_metadata(*, issuer_url: str, scopes: list[str]) -> dict[str, Any]:
+    """Return OAuth metadata matching FastMCP's routes plus public clients."""
+    issuer = issuer_url.strip().rstrip("/")
+    return {
+        "issuer": issuer,
+        "authorization_endpoint": f"{issuer}/authorize",
+        "token_endpoint": f"{issuer}/token",
+        "registration_endpoint": f"{issuer}/register",
+        "scopes_supported": scopes,
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": list(_PUBLIC_CLIENT_TOKEN_AUTH_METHODS),
+        "code_challenge_methods_supported": ["S256"],
+    }
+
+
+def _oauth_metadata_cors_headers() -> dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "mcp-protocol-version",
+    }
+
+
+def _content_ops_oauth_metadata_endpoint(*, issuer_url: str, scopes: list[str]):
+    async def _metadata(request):
+        from starlette.responses import JSONResponse, Response
+
+        if request.method == "OPTIONS":
+            return Response(status_code=204, headers=_oauth_metadata_cors_headers())
+        return JSONResponse(
+            _content_ops_oauth_metadata(issuer_url=issuer_url, scopes=scopes),
+            headers=_oauth_metadata_cors_headers(),
+        )
+
+    return _metadata
+
+
+def _apply_content_ops_public_client_metadata(app):
+    """Replace FastMCP's auth metadata route with Content Ops public-client metadata."""
+    router = getattr(app, "router", None)
+    routes = list(getattr(router, "routes", []) or [])
+    if router is None or not routes:
+        return app
+
+    from starlette.routing import Route
+
+    from ..config import settings
+    from .content_ops_marketer_verify_oauth import DEFAULT_CONTENT_OPS_VERIFY_SCOPE
+
+    issuer_url = _clean(settings.mcp.content_ops_marketer_verify_oauth_issuer_url)
+    metadata_route = Route(
+        _OAUTH_AUTHORIZATION_METADATA_PATH,
+        endpoint=_content_ops_oauth_metadata_endpoint(
+            issuer_url=issuer_url,
+            scopes=[DEFAULT_CONTENT_OPS_VERIFY_SCOPE],
+        ),
+        methods=["GET", "OPTIONS"],
+        include_in_schema=False,
+    )
+    replacement = []
+    replaced = False
+    for route in routes:
+        if getattr(route, "path", "") == _OAUTH_AUTHORIZATION_METADATA_PATH:
+            replacement.append(metadata_route)
+            replaced = True
+        else:
+            replacement.append(route)
+    if not replaced:
+        replacement.insert(0, metadata_route)
+    router.routes = replacement
+    return app
 
 
 def _oauth_transport_security_settings(*, issuer_url: str, resource_url: str):
