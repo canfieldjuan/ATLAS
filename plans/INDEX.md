@@ -1,6 +1,6 @@
 # Plan archive index
 
-920 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+921 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -603,6 +603,7 @@
 - [PR-Deflection-Delivery-Email-Metadata](archive/PR-Deflection-Delivery-Email-Metadata.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Delivery-Privacy-Regressions](archive/PR-Deflection-Delivery-Privacy-Regressions.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Delivery-Row-Claim](archive/PR-Deflection-Delivery-Row-Claim.md) - lane: ai-content-ops/faq-deflection-paid-unlock | phase: Production hardening
+- [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-Html-Strip-Before-Clustering](archive/PR-Deflection-Html-Strip-Before-Clustering.md) - lane: go-live-deflection-cleanup | phase: Production hardening
