@@ -213,6 +213,20 @@ def test_deflection_report_result_url_uses_template_and_quotes_request_id() -> N
     assert url == "https://portfolio.example.com/r/content%20ops%2Fabc?checkout=success"
 
 
+def test_deflection_report_result_url_defaults_to_live_portfolio_result_route() -> None:
+    url = deflection_report_result_url(
+        request_id="content ops/abc",
+        config=_config(result_base_url="https://juancanfield.com/"),
+    )
+
+    assert (
+        url
+        == "https://juancanfield.com/systems/support-ticket-deflection/results/"
+        "content%20ops%2Fabc?checkout=success"
+    )
+    assert "/services/faq-deflection" not in url
+
+
 def test_deflection_report_result_url_requires_configured_destination() -> None:
     with pytest.raises(ValueError, match="result_base_url or result_url_template"):
         deflection_report_result_url(request_id="req-123", config=_config(result_base_url=""))
