@@ -147,6 +147,7 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-submit",
     "data-atlas-deflection-upload-endpoint",
     "data-atlas-deflection-upload-progress",
+    "data-atlas-deflection-export-guidance",
     "data-atlas-deflection-retry",
   ]) {
     assert.match(uploadSource, new RegExp(marker));
@@ -166,6 +167,10 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /not\s+chatbot interpretation/);
   assert.match(uploadSource, /100% Deterministic Engine/);
   assert.match(uploadSource, /This tool does not use LLMs or generative AI[\s\S]*deterministic clustering/);
+  assert.match(uploadSource, /full ticket threads[\s\S]*customer questions[\s\S]*agent replies/);
+  assert.match(uploadSource, /resolution text[\s\S]*resolved ticket notes/);
+  assert.match(uploadSource, /Question-only exports[\s\S]*clustering[\s\S]*gap\s+list/);
+  assert.match(uploadSource, /publishable answers require uploaded resolution\s+evidence/);
   assert.doesNotMatch(uploadSource, /exact mathematical clustering/);
   assert.match(uploadSource, /Workspace routing is handled server-side/);
   assert.match(uploadSource, /Your browser never[\s\S]*receives ATLAS service tokens/);
