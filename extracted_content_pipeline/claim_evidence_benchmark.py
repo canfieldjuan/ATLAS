@@ -17,6 +17,9 @@ EASY = "easy"
 HARD = "hard"
 VALID_DIFFICULTIES = frozenset({EASY, HARD})
 CONFIDENCE_COUNTS_MIN = 4
+FINAL_EASY_SUPPORTS_TARGET = 15
+FINAL_EASY_NOT_SUPPORTS_TARGET = 15
+FINAL_HARD_TARGET = 10
 
 
 def _required_text(data: Mapping[str, object], key: str) -> str | None:
@@ -182,6 +185,100 @@ class StabilityScore:
 class BenchmarkVerdict:
     passed: bool
     failure_reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BenchmarkFixture:
+    """Decoded operator-labeled benchmark fixture rows."""
+
+    triples: tuple[ClaimEvidenceTriple, ...]
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+    @property
+    def easy_supports_count(self) -> int:
+        return sum(
+            1
+            for triple in self.triples
+            if triple.difficulty == EASY and triple.expected_supports
+        )
+
+    @property
+    def easy_not_supports_count(self) -> int:
+        return sum(
+            1
+            for triple in self.triples
+            if triple.difficulty == EASY and not triple.expected_supports
+        )
+
+    @property
+    def hard_count(self) -> int:
+        return sum(1 for triple in self.triples if triple.difficulty == HARD)
+
+
+def validate_claim_evidence_fixture(
+    rows: object,
+    *,
+    require_final_shape: bool = False,
+) -> BenchmarkFixture:
+    """Validate decoded operator-labeled benchmark rows.
+
+    ``require_final_shape=False`` supports early seed sets. Final benchmark
+    validation enforces the #1435 15/15/10 composition.
+    """
+
+    if not isinstance(rows, list):
+        return BenchmarkFixture((), ("fixture rows must be a list of objects",))
+
+    triples: list[ClaimEvidenceTriple] = []
+    errors: list[str] = []
+    seen: dict[str, int] = {}
+    for index, row in enumerate(rows, start=1):
+        triple, row_errors = ClaimEvidenceTriple.from_mapping(row)
+        if row_errors:
+            errors.extend(f"row {index}: {error}" for error in row_errors)
+            continue
+        assert triple is not None
+        previous_index = seen.get(triple.triple_id)
+        if previous_index is not None:
+            errors.append(
+                f"row {index}: triple_id duplicated from row {previous_index}: "
+                f"{triple.triple_id}"
+            )
+            continue
+        seen[triple.triple_id] = index
+        triples.append(triple)
+
+    fixture = BenchmarkFixture(tuple(triples), tuple(errors))
+    if require_final_shape and fixture.ok:
+        errors.extend(_final_shape_errors(fixture))
+        fixture = BenchmarkFixture(fixture.triples, tuple(errors))
+    return fixture
+
+
+def _final_shape_errors(fixture: BenchmarkFixture) -> tuple[str, ...]:
+    errors: list[str] = []
+    if fixture.easy_supports_count != FINAL_EASY_SUPPORTS_TARGET:
+        errors.append(
+            "final fixture requires "
+            f"{FINAL_EASY_SUPPORTS_TARGET} easy support rows; got "
+            f"{fixture.easy_supports_count}"
+        )
+    if fixture.easy_not_supports_count != FINAL_EASY_NOT_SUPPORTS_TARGET:
+        errors.append(
+            "final fixture requires "
+            f"{FINAL_EASY_NOT_SUPPORTS_TARGET} easy non-support rows; got "
+            f"{fixture.easy_not_supports_count}"
+        )
+    if fixture.hard_count != FINAL_HARD_TARGET:
+        errors.append(
+            f"final fixture requires {FINAL_HARD_TARGET} hard rows; got "
+            f"{fixture.hard_count}"
+        )
+    return tuple(errors)
 
 
 def score_model(
