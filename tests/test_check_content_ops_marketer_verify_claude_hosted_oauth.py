@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import urllib.parse
 from pathlib import Path
 
 
@@ -54,12 +55,25 @@ def test_redirect_errors_cover_failure_branches() -> None:
     assert "root authorize redirect missing request_id" in errors
 
 
+def test_pkce_challenge_uses_s256_shape() -> None:
+    module = _load_script_module()
+
+    challenge = module._pkce_challenge("verifier")
+
+    assert challenge == "iMnq5o6zALKXGivsnlom_0F5_WYda32GHkxlV7mq7hQ"
+    assert len(challenge) == 43
+    assert "=" not in challenge
+
+
 def test_main_reports_success_from_mocked_redirect(monkeypatch, capsys) -> None:
     module = _load_script_module()
 
     def fake_open(url: str, timeout: float):
         assert url.startswith("https://atlas.example.com/authorize?")
-        assert "resource=https%3A%2F%2Fatlas.example.com%2Fcontent-ops-marketer%2Fmcp" in url
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        assert query["resource"] == [RESOURCE]
+        assert query["code_challenge_method"] == ["S256"]
+        assert query["code_challenge"] == [module._pkce_challenge("verifier")]
         assert timeout == 3.0
         return (
             302,
@@ -67,6 +81,7 @@ def test_main_reports_success_from_mocked_redirect(monkeypatch, capsys) -> None:
         )
 
     monkeypatch.setattr(module, "_open_no_redirect", fake_open)
+    monkeypatch.setattr(module.secrets, "token_urlsafe", lambda _bytes: "verifier")
 
     result = module._main(
         [
