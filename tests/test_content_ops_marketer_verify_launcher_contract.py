@@ -130,6 +130,33 @@ def test_launcher_e2e_command_satisfies_e2e_checker_parser(
     )
 
 
+def test_launcher_claude_hosted_command_satisfies_checker_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_checker_env(monkeypatch)
+    launcher = _load_script_module("start_content_ops_marketer_verify_oauth_server.py")
+    checker = _load_script_module(
+        "check_content_ops_marketer_verify_claude_hosted_oauth.py"
+    )
+
+    command = _command_for_script(
+        _operator_guidance(launcher),
+        "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py",
+    )
+    args = checker._build_parser().parse_args(
+        command[2:-2] + ["--client-id", "client-1"]
+    )
+
+    assert command[:2] == [
+        ".venv/bin/python",
+        "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py",
+    ]
+    assert command[-2:] == ["--client-id", "<claude-hosted-oauth-client-id>"]
+    assert args.issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.resource_url == launcher.DEFAULT_RESOURCE_URL
+    assert args.client_id == "client-1"
+
+
 def test_launcher_required_env_covers_server_oauth_account_binding(monkeypatch) -> None:
     launcher = _load_script_module("start_content_ops_marketer_verify_oauth_server.py")
     from atlas_brain.config import settings

@@ -19,6 +19,13 @@ DEFAULT_PORT = "8068"
 DEFAULT_ISSUER_URL = "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer"
 DEFAULT_RESOURCE_URL = "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer/mcp"
 PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
+CLAUDE_HOSTED_ROOT_OAUTH_PATHS = (
+    "/.well-known/oauth-authorization-server",
+    "/register",
+    "/authorize",
+    "/token",
+    "/oauth/approve",
+)
 MIN_APPROVAL_TOKEN_LENGTH = 24
 LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1"}
 SECRET_KEYS = {
@@ -249,6 +256,11 @@ def _funnel_metadata_path(resource_url: str) -> str:
     return f"{PROTECTED_RESOURCE_METADATA_PATH}{app_path}"
 
 
+def _claude_hosted_root_oauth_routes() -> tuple[tuple[str, str], ...]:
+    """Root aliases Claude hosted connectors can require for manual clients."""
+    return tuple((path, path) for path in CLAUDE_HOSTED_ROOT_OAUTH_PATHS)
+
+
 def _print_operator_guidance(config: LaunchConfig) -> None:
     issuer_url = config.env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL"]
     resource_url = config.env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL"]
@@ -272,6 +284,23 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
     print("tailscale funnel --bg --yes \\")
     print(f"  --set-path {metadata_path} \\")
     print(f"  http://127.0.0.1:{config.port}{metadata_path}")
+    print()
+    print("Claude hosted connector compatibility routes:")
+    for public_path, target_path in _claude_hosted_root_oauth_routes():
+        print("tailscale funnel --bg --yes \\")
+        print(f"  --set-path {public_path} \\")
+        print(f"  http://127.0.0.1:{config.port}{target_path}")
+    print()
+    print("Manual Claude hosted OAuth settings:")
+    print("- MCP URL: " + resource_url)
+    print("- OAuth Client Secret: leave blank")
+    print("- Redirect URI: https://claude.ai/api/mcp/auth_callback")
+    print()
+    print("After adding the Claude hosted compatibility routes, verify the root OAuth redirect:")
+    print(".venv/bin/python scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py \\")
+    print(f"  --issuer-url {issuer_url} \\")
+    print(f"  --resource-url {resource_url} \\")
+    print("  --client-id <claude-hosted-oauth-client-id>")
     print()
     print("After startup, verify public discovery:")
     print(".venv/bin/python scripts/check_content_ops_marketer_verify_oauth_discovery.py \\")

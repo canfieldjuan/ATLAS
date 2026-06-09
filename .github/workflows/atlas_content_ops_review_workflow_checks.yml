@@ -14,9 +14,11 @@ on:
       - "scripts/check_content_ops_marketer_verify_oauth_discovery.py"
       - "scripts/check_content_ops_marketer_verify_oauth_e2e.py"
       - "scripts/check_content_ops_marketer_verify_dual_client_rollout.py"
+      - "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "scripts/start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py"
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
+      - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "tests/test_check_content_ops_marketer_verify_oauth_e2e.py"
       - "tests/test_check_content_ops_marketer_verify_dual_client_rollout.py"
       - "tests/test_content_ops_marketer_verify_launcher_contract.py"
@@ -37,9 +39,11 @@ on:
       - "scripts/check_content_ops_marketer_verify_oauth_discovery.py"
       - "scripts/check_content_ops_marketer_verify_oauth_e2e.py"
       - "scripts/check_content_ops_marketer_verify_dual_client_rollout.py"
+      - "scripts/check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "scripts/start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py"
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
+      - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "tests/test_check_content_ops_marketer_verify_oauth_e2e.py"
       - "tests/test_check_content_ops_marketer_verify_dual_client_rollout.py"
       - "tests/test_content_ops_marketer_verify_launcher_contract.py"
@@ -69,6 +73,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_review_workflow.py \
+            tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py \
             tests/test_check_content_ops_marketer_verify_dual_client_rollout.py \
             tests/test_check_content_ops_marketer_verify_oauth_e2e.py \
             tests/test_content_ops_marketer_verify_launcher_contract.py \

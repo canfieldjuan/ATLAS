@@ -261,6 +261,18 @@ def test_funnel_paths_derive_parent_path_for_mcp_resource() -> None:
     )
 
 
+def test_claude_hosted_root_oauth_routes_cover_observed_paths() -> None:
+    module = _load_script_module()
+
+    assert module._claude_hosted_root_oauth_routes() == (
+        ("/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server"),
+        ("/register", "/register"),
+        ("/authorize", "/authorize"),
+        ("/token", "/token"),
+        ("/oauth/approve", "/oauth/approve"),
+    )
+
+
 def test_guidance_masks_secrets_and_prints_content_ops_smokes(capsys) -> None:
     module = _load_script_module()
     env = _valid_env()
@@ -283,6 +295,14 @@ def test_guidance_masks_secrets_and_prints_content_ops_smokes(capsys) -> None:
     assert "--set-path /content-ops-marketer" in captured.out
     assert "http://127.0.0.1:9000" in captured.out
     assert "--set-path /.well-known/oauth-protected-resource/content-ops-marketer" in captured.out
+    assert "--set-path /.well-known/oauth-authorization-server" in captured.out
+    assert "--set-path /register" in captured.out
+    assert "--set-path /authorize" in captured.out
+    assert "--set-path /token" in captured.out
+    assert "--set-path /oauth/approve" in captured.out
+    assert "check_content_ops_marketer_verify_claude_hosted_oauth.py" in captured.out
+    assert "OAuth Client Secret: leave blank" in captured.out
+    assert "Redirect URI: https://claude.ai/api/mcp/auth_callback" in captured.out
     assert "check_content_ops_marketer_verify_oauth_discovery.py" in captured.out
     assert "check_content_ops_marketer_verify_oauth_e2e.py" in captured.out
     assert "--approval-token-file /path/to/local-approval-token" in captured.out
