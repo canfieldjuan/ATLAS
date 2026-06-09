@@ -215,3 +215,30 @@ def test_chatgpt_adapter_launcher_e2e_command_satisfies_checker_parser(
     assert args.client_profile == "chatgpt-search-fetch"
     assert args.approval_token_file == "/path/to/local-approval-token"
     assert args.approval_token == ""
+
+
+def test_chatgpt_adapter_launcher_dual_client_command_satisfies_checker_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_checker_env(monkeypatch)
+    launcher = _load_script_module(
+        "start_content_ops_marketer_verify_chatgpt_adapter_oauth_server.py"
+    )
+    dual = _load_script_module("check_content_ops_marketer_verify_dual_client_rollout.py")
+
+    command = _command_for_script(
+        _operator_guidance(launcher),
+        "scripts/check_content_ops_marketer_verify_dual_client_rollout.py",
+    )
+    args = dual._build_parser().parse_args(command[2:])
+
+    assert command[:2] == [
+        ".venv/bin/python",
+        "scripts/check_content_ops_marketer_verify_dual_client_rollout.py",
+    ]
+    assert args.rich_issuer_url == launcher.rich_launcher.DEFAULT_ISSUER_URL
+    assert args.rich_resource_url == launcher.rich_launcher.DEFAULT_RESOURCE_URL
+    assert args.chatgpt_adapter_issuer_url == launcher.DEFAULT_ISSUER_URL
+    assert args.chatgpt_adapter_resource_url == launcher.DEFAULT_RESOURCE_URL
+    assert args.approval_token_file == "/path/to/local-approval-token"
+    assert args.approval_token == ""
