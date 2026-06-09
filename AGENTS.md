@@ -255,6 +255,22 @@ not automatically owned. A PR that "looks abandoned" is not owned. A PR
 opened by another session is not owned unless the operator explicitly
 reassigns it and the map is updated first.
 
+Starting a new slice is gated the same way as touching a PR. Before you
+scaffold a plan or pass `--lane` to `new_pr_plan.sh`, confirm that lane
+matches the `current lane` in `SESSION_STATE.local.md`. Opening a new PR in
+another lane is the most common silent drift: parallel sessions are
+indistinguishable in git, so another lane's slice looks exactly like your
+own. If the slice belongs to a different lane:
+
+1. Stop. Do not scaffold the plan or open the PR.
+2. Confirm with the operator that the reassignment is intended, and update
+   `current lane` in the map first.
+
+Same product area is not the same lane. `clustering/raw-data` and
+`PDF/delivery` are both deflection yet are two different sessions' lanes; a
+clustering session that opens a PDF/delivery PR has drifted even though the
+work is on-topic.
+
 ### 3a.2. PR-prep helpers
 
 Three scripts remove the PR-shape and failed-push friction — use them
