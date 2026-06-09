@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -19,6 +20,7 @@ class _MockFastMCP:
     def __init__(self, *args, **kwargs) -> None:
         self.settings = MagicMock()
         self._tool_manager = _MockToolManager()
+        self.lifespan = kwargs.get("lifespan")
 
     def tool(self, *args, **kwargs):
         def _register(fn):
@@ -106,6 +108,7 @@ _shared_auth_mod.OAuthToken = _OAuthRecord
 sys.modules.setdefault("mcp.shared.auth", _shared_auth_mod)
 
 from atlas_brain.config import settings
+from atlas_brain.mcp import content_ops_marketer_verify_chatgpt_adapter_server as adapter
 from atlas_brain.mcp import content_ops_marketer_verify_server as verify
 from atlas_brain.mcp.auth import BearerAuthMiddleware
 from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
@@ -119,6 +122,7 @@ from extracted_content_pipeline.review_contract import RiskTier
 
 
 VERIFY_TOOLS = {"verify_draft"}
+CHATGPT_ADAPTER_TOOLS = {"search", "fetch"}
 DENIED_TOOLS = {
     "add_registry_claim",
     "approve",
@@ -161,6 +165,7 @@ def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     verify.mcp.settings.transport_security = None
     verify.mcp._auth_server_provider = None
     verify.mcp._token_verifier = None
+    adapter._verdict_cache.clear()
 
 
 def _tool_names() -> set[str]:
@@ -199,6 +204,130 @@ def _valid_payload() -> dict[str, object]:
 def test_content_ops_marketer_verify_exposes_exact_tool_surface() -> None:
     assert _tool_names() == VERIFY_TOOLS
     assert _tool_names().isdisjoint(DENIED_TOOLS)
+
+
+def test_chatgpt_adapter_exposes_exact_search_fetch_surface() -> None:
+    tool_names = set(adapter.mcp._tool_manager._tools)
+
+    assert tool_names == CHATGPT_ADAPTER_TOOLS
+    assert tool_names.isdisjoint(VERIFY_TOOLS)
+    assert tool_names.isdisjoint(DENIED_TOOLS - {"fetch", "search"})
+
+
+def test_chatgpt_adapter_reuses_verifier_database_lifespan() -> None:
+    assert adapter.mcp.lifespan is verify._lifespan
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_non_json_search_returns_contract_document() -> None:
+    result = await adapter.search(query="how do I verify a draft?", limit=10)
+    fetched = await adapter.fetch(adapter.CONTRACT_ID)
+
+    assert result["metadata"] == {
+        "ok": True,
+        "mode": "contract",
+        "query": "how do I verify a draft?",
+        "count": 1,
+    }
+    assert result["results"] == [
+        {
+            "id": adapter.CONTRACT_ID,
+            "title": "Content Ops verify draft JSON contract",
+            "url": f"atlas://content-ops/marketer-verify/{adapter.CONTRACT_ID}",
+        }
+    ]
+    assert fetched["metadata"]["ok"] is True
+    assert fetched["metadata"]["type"] == "adapter_contract"
+    assert "asset_id" in fetched["metadata"]["accepted_fields"]
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_search_delegates_to_bound_tenant_and_fetches_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver(" acct-1 "),
+    )
+
+    search_result = await adapter.search(query=json.dumps(_valid_payload()), limit=5)
+    verdict_id = search_result["results"][0]["id"]
+    fetched = await adapter.fetch(verdict_id)
+
+    assert search_result["metadata"]["ok"] is True
+    assert search_result["metadata"]["mode"] == "verification"
+    assert search_result["metadata"]["decision"] == "approved"
+    assert verdict_id.startswith("content-ops-verdict:")
+    assert fetched["metadata"]["ok"] is True
+    assert fetched["metadata"]["found"] is True
+    assert fetched["metadata"]["verdict"]["decision"] == "approved"
+    assert "Decision: approved" in fetched["text"]
+    assert reader.scopes == [TenantScope(account_id="acct-1")]
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_blocks_json_search_without_account_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver(" "),
+    )
+
+    result = await adapter.search(query=json.dumps(_valid_payload()))
+
+    assert result["results"] == []
+    assert result["metadata"]["ok"] is False
+    assert result["metadata"]["error"] == "account_binding_required"
+    assert reader.scopes == []
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_fetch_fails_closed_for_other_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+    search_result = await adapter.search(query=json.dumps(_valid_payload()))
+    verdict_id = search_result["results"][0]["id"]
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-2"),
+    )
+
+    fetched = await adapter.fetch(verdict_id)
+
+    assert fetched["metadata"]["ok"] is False
+    assert fetched["metadata"]["error"] == "verdict_not_found"
+    assert "verdict" not in fetched["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_fetch_requires_bound_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver(" "),
+    )
+
+    fetched = await adapter.fetch("content-ops-verdict:missing")
+
+    assert fetched["metadata"]["ok"] is False
+    assert fetched["metadata"]["error"] == "account_binding_required"
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
       - "atlas_brain/_content_ops_review_workflow.py"
+      - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
@@ -23,6 +24,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
       - "atlas_brain/_content_ops_review_workflow.py"
+      - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
