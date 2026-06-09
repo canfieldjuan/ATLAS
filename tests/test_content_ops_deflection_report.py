@@ -808,6 +808,15 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
                 key = (str(account_id), str(request_id))
                 if key not in self.rows:
                     return "UPDATE 0"
+                if "SET paid = false" in query:
+                    stored_reference = self.rows[key].get("payment_reference")
+                    if payment_reference and stored_reference not in {
+                        None,
+                        payment_reference,
+                    }:
+                        return "UPDATE 0"
+                    self.rows[key]["paid"] = False
+                    return "UPDATE 1"
                 self.rows[key]["paid"] = True
                 self.rows[key]["payment_reference"] = payment_reference
                 return "UPDATE 1"
@@ -892,7 +901,28 @@ async def test_postgres_deflection_report_store_round_trips_paid_gate() -> None:
     assert preserved.delivery_email == "buyer@example.com"
     assert preserved.paid is True
     assert preserved.payment_reference == "checkout-session:test"
+    assert await store.mark_unpaid(
+        account_id="acct-1",
+        request_id="request-1",
+        payment_reference="other-checkout-session",
+    ) is False
+    assert await store.mark_unpaid(
+        account_id="acct-1",
+        request_id="request-1",
+        payment_reference="checkout-session:test",
+    ) is True
+    relocked = await store.get_artifact_record(
+        account_id="acct-1",
+        request_id="request-1",
+    )
+    assert relocked is not None
+    assert relocked.paid is False
+    assert relocked.payment_reference == "checkout-session:test"
     assert await store.mark_paid(
+        account_id="acct-1",
+        request_id="missing",
+    ) is False
+    assert await store.mark_unpaid(
         account_id="acct-1",
         request_id="missing",
     ) is False
@@ -920,6 +950,7 @@ async def test_in_memory_list_reports_filters_tenant_paid_state_and_orders_newes
         artifact={},
     )
     await store.mark_paid(account_id="acct-1", request_id="request-old")
+    await store.mark_unpaid(account_id="acct-1", request_id="request-old")
 
     all_rows = await store.list_reports(account_id="acct-1", limit=10)
     paid_rows = await store.list_reports(account_id="acct-1", limit=10, paid=True)
@@ -927,8 +958,8 @@ async def test_in_memory_list_reports_filters_tenant_paid_state_and_orders_newes
     unbounded_rows = await store.list_reports(account_id="acct-1", limit=None)
 
     assert [row.request_id for row in all_rows] == ["request-new", "request-old"]
-    assert [row.request_id for row in paid_rows] == ["request-old"]
-    assert [row.request_id for row in unpaid_rows] == ["request-new"]
+    assert [row.request_id for row in paid_rows] == []
+    assert [row.request_id for row in unpaid_rows] == ["request-new", "request-old"]
     assert [row.request_id for row in unbounded_rows] == ["request-new", "request-old"]
 
 

@@ -198,6 +198,8 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
         "drafted_answer_count": 1,
         "no_proven_answer_count": 2,
         "repeat_ticket_count": 4,
+        "support_ticket_resolution_evidence_count": 1,
+        "support_ticket_resolution_evidence_present": True,
     }
     encoded_gated_result = str(gated_result)
     assert "markdown" not in encoded_gated_result
