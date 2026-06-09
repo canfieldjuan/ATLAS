@@ -110,6 +110,19 @@ def test_adapter_launcher_cli_port_overrides_dedicated_env(tmp_path) -> None:
     assert config.env[module.RUNTIME_PORT_ENV] == "8071"
 
 
+def test_adapter_launcher_help_names_adapter_defaults() -> None:
+    module = _load_script_module()
+
+    help_text = module._build_parser().format_help()
+
+    assert module.ADAPTER_PORT_ENV in help_text
+    assert "8069" in help_text
+    assert "marketer-chatgpt" in help_text
+    assert "marketer-chatgpt/mcp" in help_text
+    assert "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT or 8068" not in help_text
+    assert "marketer/mcp" not in help_text
+
+
 def test_adapter_launcher_reuses_hardened_env_validation() -> None:
     module = _load_script_module()
     env = _valid_env(module)
