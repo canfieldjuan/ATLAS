@@ -18,6 +18,8 @@ import start_content_ops_marketer_verify_oauth_server as rich_launcher
 
 DEFAULT_HOST = rich_launcher.DEFAULT_HOST
 DEFAULT_PORT = "8069"
+ADAPTER_PORT_ENV = "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_CHATGPT_PORT"
+RUNTIME_PORT_ENV = "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT"
 DEFAULT_ISSUER_URL = "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer-chatgpt"
 DEFAULT_RESOURCE_URL = (
     "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer-chatgpt/mcp"
@@ -49,9 +51,9 @@ def _build_launch_config(args: argparse.Namespace) -> LaunchConfig:
     env.update(rich_launcher.os.environ)
     env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_AUTH_MODE"] = "oauth"
     env["ATLAS_MCP_HOST"] = (args.host or env.get("ATLAS_MCP_HOST") or DEFAULT_HOST).strip()
-    env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT"] = (
-        args.port or env.get("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT") or DEFAULT_PORT
-    ).strip()
+    resolved_port = (args.port or env.get(ADAPTER_PORT_ENV) or DEFAULT_PORT).strip()
+    env[ADAPTER_PORT_ENV] = resolved_port
+    env[RUNTIME_PORT_ENV] = resolved_port
     env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL"] = (
         args.issuer_url
         or env.get("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL")
@@ -70,7 +72,7 @@ def _build_launch_config(args: argparse.Namespace) -> LaunchConfig:
         env=env,
         python=args.python,
         host=env["ATLAS_MCP_HOST"],
-        port=env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT"],
+        port=env[RUNTIME_PORT_ENV],
         dry_run=args.dry_run,
         approval_token_file=args.approval_token_file,
     )
@@ -94,7 +96,8 @@ def _print_operator_guidance(config: LaunchConfig) -> None:
     for line in _masked_env_report(config.env):
         print(f"- {line}")
     print(f"- ATLAS_MCP_HOST={config.host}")
-    print(f"- ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT={config.port}")
+    print(f"- {ADAPTER_PORT_ENV}={config.port}")
+    print(f"- {RUNTIME_PORT_ENV}={config.port}")
     print()
     print("Required Funnel route for the ChatGPT adapter path:")
     print("tailscale funnel --bg --yes \\")

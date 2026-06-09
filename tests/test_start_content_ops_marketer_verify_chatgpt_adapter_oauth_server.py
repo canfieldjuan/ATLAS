@@ -56,12 +56,58 @@ def test_adapter_launcher_defaults_to_chatgpt_path_and_port() -> None:
     config = module._build_launch_config(_args())
 
     assert config.port == "8069"
+    assert config.env[module.ADAPTER_PORT_ENV] == "8069"
+    assert config.env[module.RUNTIME_PORT_ENV] == "8069"
     assert config.env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_ISSUER_URL"] == (
         "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer-chatgpt"
     )
     assert config.env["ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_OAUTH_RESOURCE_URL"] == (
         "https://atlas-brain.tailc7bd29.ts.net/content-ops-marketer-chatgpt/mcp"
     )
+
+
+def test_adapter_launcher_ignores_rich_port_from_shared_dotenv(tmp_path) -> None:
+    module = _load_script_module()
+    env_file = tmp_path / ".env"
+    env_file.write_text("ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT=8068\n")
+
+    config = module._build_launch_config(_args(env_file=[str(env_file)]))
+
+    assert config.port == "8069"
+    assert config.env[module.ADAPTER_PORT_ENV] == "8069"
+    assert config.env[module.RUNTIME_PORT_ENV] == "8069"
+
+
+def test_adapter_launcher_accepts_dedicated_adapter_port_env(tmp_path) -> None:
+    module = _load_script_module()
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "ATLAS_MCP_CONTENT_OPS_MARKETER_VERIFY_PORT=8068",
+                f"{module.ADAPTER_PORT_ENV}=8070",
+            ]
+        )
+        + "\n"
+    )
+
+    config = module._build_launch_config(_args(env_file=[str(env_file)]))
+
+    assert config.port == "8070"
+    assert config.env[module.ADAPTER_PORT_ENV] == "8070"
+    assert config.env[module.RUNTIME_PORT_ENV] == "8070"
+
+
+def test_adapter_launcher_cli_port_overrides_dedicated_env(tmp_path) -> None:
+    module = _load_script_module()
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{module.ADAPTER_PORT_ENV}=8070\n")
+
+    config = module._build_launch_config(_args(env_file=[str(env_file)], port="8071"))
+
+    assert config.port == "8071"
+    assert config.env[module.ADAPTER_PORT_ENV] == "8071"
+    assert config.env[module.RUNTIME_PORT_ENV] == "8071"
 
 
 def test_adapter_launcher_reuses_hardened_env_validation() -> None:
@@ -108,6 +154,8 @@ def test_adapter_guidance_prints_chatgpt_profile_and_masks_secrets(capsys) -> No
     captured = capsys.readouterr()
     assert "ChatGPT adapter OAuth launch configuration" in captured.out
     assert "--set-path /content-ops-marketer-chatgpt" in captured.out
+    assert f"{module.ADAPTER_PORT_ENV}=8069" in captured.out
+    assert f"{module.RUNTIME_PORT_ENV}=8069" in captured.out
     assert "chatgpt-search-fetch" in captured.out
     assert "claude-rich" not in captured.out
     assert "approval-token-with-enough-entropy" not in captured.out
