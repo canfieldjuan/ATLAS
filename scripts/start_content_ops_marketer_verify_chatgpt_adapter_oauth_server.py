@@ -42,7 +42,30 @@ def _build_parser() -> argparse.ArgumentParser:
         "verify search/fetch adapter in OAuth connector mode."
     )
     parser.set_defaults(port=None, issuer_url=None, resource_url=None)
+    _set_option_help(
+        parser,
+        "--port",
+        f"Bind port. Defaults to env {ADAPTER_PORT_ENV} or {DEFAULT_PORT}.",
+    )
+    _set_option_help(
+        parser,
+        "--issuer-url",
+        f"OAuth issuer URL. Defaults to env value or {DEFAULT_ISSUER_URL}.",
+    )
+    _set_option_help(
+        parser,
+        "--resource-url",
+        f"OAuth resource URL. Defaults to env value or {DEFAULT_RESOURCE_URL}.",
+    )
     return parser
+
+
+def _set_option_help(parser: argparse.ArgumentParser, option: str, help_text: str) -> None:
+    for action in parser._actions:
+        if option in action.option_strings:
+            action.help = help_text
+            return
+    raise RuntimeError(f"adapter launcher parser missing {option}")
 
 
 def _build_launch_config(args: argparse.Namespace) -> LaunchConfig:
