@@ -46,6 +46,11 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >      before pushing. Reconstructing the plan shape by hand or pushing
 >      without the body env is what burns the formatting/failed-push loop. See
 >      AGENTS.md §3a.2.
+>      After the push, open or update GitHub with
+>      `bash scripts/open_pr.sh <pr-body-file> [gh-pr-create-args...]`. Never
+>      hand-roll `gh pr create/edit --body-file <path>`; use the wrapper, or
+>      the stdin shape `--body-file - < file`, so `gh` reads fd 0 instead of
+>      opening a sandboxed file path.
 >
 > 6. **Context discipline (keeps the session from compacting mid-work):**
 >    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
