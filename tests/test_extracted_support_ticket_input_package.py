@@ -682,6 +682,62 @@ def test_support_ticket_clusters_group_topic_varied_anchor_rows() -> None:
     )
 
 
+def test_support_ticket_clusters_group_login_access_synonyms_without_shared_raw_token() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "login-syn-1",
+            "subject": "Locked out after MFA reset",
+            "description": "The app refuses my session.",
+        },
+        {
+            "ticket_id": "login-syn-2",
+            "subject": "Account access denied",
+            "description": "I cannot enter the workspace.",
+        },
+        {
+            "ticket_id": "login-syn-3",
+            "subject": "Sign-in rejected",
+            "description": "Authentication bounces after Okta.",
+        },
+        {
+            "ticket_id": "file-access-1",
+            "subject": "File access request",
+            "description": "Need S3 permissions for the export bucket.",
+        },
+        {
+            "ticket_id": "api-auth-1",
+            "subject": "API authentication header invalid",
+            "description": "Webhook authentication failed during token rotation.",
+        },
+    ])
+
+    assert package.inputs["top_ticket_clusters"][0] == {"label": "login", "count": 3}
+    assert package.metadata["cluster_quality"] == {
+        "clustered_row_count": 5,
+        "uncategorized_row_count": 0,
+        "cluster_count": 3,
+        "singleton_cluster_count": 2,
+        "largest_cluster_count": 3,
+    }
+    rows = package.inputs["source_material"]
+    assert {
+        row["support_ticket_cluster"]
+        for row in rows[:3]
+    } == {"login"}
+    assert all(
+        row["support_ticket_cluster_source"] == "token_anchor"
+        for row in rows[:3]
+    )
+    assert rows[3]["support_ticket_cluster"] != "login"
+    assert "login" in support_ticket_tokens(rows[0]["text"])
+    assert "login" in support_ticket_tokens(rows[1]["text"])
+    assert "login" in support_ticket_tokens(rows[2]["text"])
+    assert "login" not in support_ticket_tokens(rows[3]["text"])
+    assert rows[4]["support_ticket_cluster"] != "login"
+    assert "login" not in support_ticket_tokens(rows[4]["text"])
+    assert "api" in support_ticket_tokens(rows[4]["text"])
+
+
 def test_support_ticket_clusters_derive_anchors_without_static_topic_list() -> None:
     package = build_support_ticket_input_package([
         {
