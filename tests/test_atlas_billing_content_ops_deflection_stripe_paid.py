@@ -152,6 +152,7 @@ def _payment_event_object(
     refunded: bool | None = None,
     amount_refunded: int | None = None,
     amount_captured: int | None = None,
+    status: str | None = None,
 ) -> SimpleNamespace:
     payload = {
         "id": object_id,
@@ -164,6 +165,8 @@ def _payment_event_object(
         payload["amount_refunded"] = amount_refunded
     if amount_captured is not None:
         payload["amount_captured"] = amount_captured
+    if status is not None:
+        payload["status"] = status
     return SimpleNamespace(
         id=object_id,
         payment_intent=payment_intent,
@@ -171,6 +174,7 @@ def _payment_event_object(
         refunded=refunded,
         amount_refunded=amount_refunded,
         amount_captured=amount_captured,
+        status=status,
         to_dict=lambda: dict(payload),
     )
 
@@ -1016,6 +1020,195 @@ async def test_stripe_webhook_dispute_relocks_paid_deflection_report_from_direct
     assert "SET paid = false" in update_calls[0][0]
     assert pool.report_rows[(account_id, "req-123")]["paid"] is False
     assert pool.delivery_rows == {}
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_won_dispute_restores_paid_deflection_report(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    account_id = str(uuid.uuid4())
+    checkout_session = _session(
+        account_id=account_id,
+        session_id="cs_test_deflection_dispute_won",
+    )
+    dispute = _payment_event_object(
+        object_id="du_test_deflection_won",
+        payment_intent="pi_test_dispute_won",
+        status="won",
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_dispute_won",
+        type="charge.dispute.closed",
+        data=SimpleNamespace(object=dispute),
+    )
+    fake_stripe, session_list = _stripe_module_for_event(
+        event,
+        checkout_sessions=[checkout_session],
+    )
+    pool = _Pool()
+    pool.add_report(
+        account_id=account_id,
+        paid=False,
+        payment_reference="cs_test_deflection_dispute_won",
+    )
+    pool.delivery_rows[(account_id, "req-123")] = {
+        "account_id": account_id,
+        "request_id": "req-123",
+        "payment_reference": "cs_test_deflection_dispute_won",
+        "delivery_status": "revoked",
+        "delivery_error": "payment_revoked:charge.dispute.created",
+    }
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+    )
+
+    assert response == {"status": "ok"}
+    assert session_list.calls == [
+        {"payment_intent": "pi_test_dispute_won", "limit": 1, "timeout": 10}
+    ]
+    update_calls = [
+        call
+        for call in pool.execute_calls
+        if "UPDATE content_ops_deflection_reports" in call[0]
+    ]
+    delivery_calls = [
+        call
+        for call in pool.execute_calls
+        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
+    ]
+    billing_event_calls = [
+        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
+    ]
+    assert update_calls[0][1] == (
+        account_id,
+        "req-123",
+        "cs_test_deflection_dispute_won",
+    )
+    assert "SET paid = true" in update_calls[0][0]
+    assert delivery_calls[0][1] == (
+        account_id,
+        "req-123",
+        "cs_test_deflection_dispute_won",
+    )
+    assert billing_event_calls[0][1][1] == "evt_deflection_dispute_won"
+    assert billing_event_calls[0][1][2] == "charge.dispute.closed"
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is True
+    assert pool.delivery_rows[(account_id, "req-123")]["delivery_status"] == "pending"
+    assert "access restored after Stripe dispute win" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_non_won_dispute_close_does_not_restore_report(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    checkout_session = _session(account_id=account_id)
+    dispute = _payment_event_object(
+        object_id="du_test_deflection_lost",
+        payment_intent="pi_test_dispute_lost",
+        status="lost",
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_dispute_lost",
+        type="charge.dispute.closed",
+        data=SimpleNamespace(object=dispute),
+    )
+    fake_stripe, session_list = _stripe_module_for_event(
+        event,
+        checkout_sessions=[checkout_session],
+    )
+    pool = _Pool()
+    pool.add_report(
+        account_id=account_id,
+        paid=False,
+        payment_reference="cs_test_deflection",
+    )
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+    )
+
+    assert response == {"status": "ok"}
+    assert session_list.calls == []
+    assert pool.report_rows[(account_id, "req-123")]["paid"] is False
+    assert [
+        call for call in pool.execute_calls if "UPDATE content_ops_deflection_reports" in call[0]
+    ] == []
+    assert [
+        call
+        for call in pool.execute_calls
+        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
+    ] == []
+    billing_event_calls = [
+        call for call in pool.execute_calls if "INSERT INTO billing_events" in call[0]
+    ]
+    assert billing_event_calls[0][1][1] == "evt_deflection_dispute_lost"
+    assert billing_event_calls[0][1][2] == "charge.dispute.closed"
+    assert "dispute closed without restore" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_won_dispute_restore_miss_emits_paid_funnel_incident(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    checkout_session = _session(
+        account_id=account_id,
+        session_id="cs_test_missing_report_dispute_won",
+    )
+    dispute = _payment_event_object(
+        object_id="du_test_missing_report_won",
+        payment_intent="pi_missing_report_won",
+        status="won",
+    )
+    event = SimpleNamespace(
+        id="evt_deflection_dispute_won_missing_report",
+        type="charge.dispute.closed",
+        data=SimpleNamespace(object=dispute),
+    )
+    fake_stripe, _session_list = _stripe_module_for_event(
+        event,
+        checkout_sessions=[checkout_session],
+    )
+    pool = _Pool()
+
+    response = await _run_stripe_webhook(
+        monkeypatch,
+        event=event,
+        pool=pool,
+        stripe_module=fake_stripe,
+    )
+
+    assert response == {"status": "ok"}
+    assert [
+        call
+        for call in pool.execute_calls
+        if "INSERT INTO content_ops_deflection_report_deliveries" in call[0]
+    ] == []
+    payloads = _incident_payloads(caplog)
+    assert payloads == [
+        {
+            "account_id": account_id,
+            "event_type": "charge.dispute.closed",
+            "incident_type": "paid_report_restore_missed_report",
+            "payment_reference": "cs_test_missing_report_dispute_won",
+            "request_id": "req-123",
+            "severity": "error",
+            "stripe_object_id": "du_test_missing_report_won",
+        }
+    ]
 
 
 @pytest.mark.asyncio

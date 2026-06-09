@@ -436,6 +436,14 @@ async def stripe_webhook(request: Request):
             event_type=event_type,
         )
 
+    elif event_type == "charge.dispute.closed":
+        await _handle_content_ops_deflection_report_dispute_closed(
+            pool,
+            stripe,
+            obj,
+            event_type=event_type,
+        )
+
     elif event_type == "invoice.paid":
         account_id = await _handle_invoice_paid(pool, obj)
 
@@ -866,6 +874,108 @@ async def _cancel_content_ops_deflection_report_delivery(
         account_id,
         request_id,
         f"payment_revoked:{event_type}",
+    )
+
+
+async def _handle_content_ops_deflection_report_dispute_closed(
+    pool: Any,
+    stripe_module: Any,
+    obj: Any,
+    *,
+    event_type: str,
+) -> None:
+    """Restore a deflection report after Stripe closes a dispute as won."""
+
+    dispute_status = _stripe_text(obj, "status").lower()
+    if dispute_status != "won":
+        logger.info(
+            "Deflection report dispute closed without restore: "
+            "event_type=%s object=%s status=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+            dispute_status or "<missing>",
+        )
+        return
+
+    meta, payment_reference = _content_ops_deflection_revocation_metadata(
+        stripe_module,
+        obj,
+    )
+    if meta.get("source") != "content_ops_deflection_report":
+        logger.info(
+            "Deflection report dispute restore could not be mapped: "
+            "event_type=%s object=%s payment_intent=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+            _payment_intent_from_payment_event(obj) or "<missing>",
+        )
+        return
+
+    account_id_text = _clean_metadata(meta.get("account_id"))
+    request_id = _clean_metadata(meta.get("request_id"))
+    if not account_id_text or not request_id:
+        logger.error(
+            "Deflection report dispute restore missing account_id/request_id: "
+            "event_type=%s object=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+    try:
+        _uuid.UUID(account_id_text)
+    except ValueError:
+        logger.error(
+            "Deflection report dispute restore has invalid account_id: "
+            "event_type=%s account=%s object=%s",
+            event_type,
+            account_id_text,
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    restored = await store.mark_paid(
+        account_id=account_id_text,
+        request_id=request_id,
+        payment_reference=payment_reference,
+    )
+    if not restored:
+        await emit_deflection_paid_funnel_incident_alert(
+            logger,
+            incident_type="paid_report_restore_missed_report",
+            severity="error",
+            account_id=account_id_text,
+            request_id=request_id,
+            event_type=event_type,
+            payment_reference=payment_reference or "",
+            stripe_object_id=_stripe_text(obj, "id") or "<missing>",
+        )
+        logger.error(
+            "Deflection report dispute restore missed report: "
+            "event_type=%s account=%s request=%s payment_reference=%s object=%s",
+            event_type,
+            account_id_text,
+            request_id,
+            payment_reference or "<missing>",
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+
+    delivery_result = await _queue_content_ops_deflection_report_delivery(
+        pool,
+        account_id=account_id_text,
+        request_id=request_id,
+        payment_reference=payment_reference,
+    )
+    logger.warning(
+        "Deflection report access restored after Stripe dispute win: "
+        "event_type=%s account=%s request=%s payment_reference=%s object=%s delivery=%s",
+        event_type,
+        account_id_text,
+        request_id,
+        payment_reference or "<missing>",
+        _stripe_text(obj, "id") or "<missing>",
+        delivery_result,
     )
 
 
