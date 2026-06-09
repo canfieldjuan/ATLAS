@@ -2,7 +2,7 @@
 
 import logging
 import uuid as _uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from typing import Any
 
@@ -425,6 +425,14 @@ async def stripe_webhook(request: Request):
         if meta.get("source") == "content_ops_deflection_report":
             _log_content_ops_deflection_report_async_payment_failed(obj, meta)
 
+    elif event_type in {"charge.refunded", "charge.dispute.created"}:
+        await _handle_content_ops_deflection_report_payment_revoked(
+            pool,
+            stripe,
+            obj,
+            event_type=event_type,
+        )
+
     elif event_type == "invoice.paid":
         account_id = await _handle_invoice_paid(pool, obj)
 
@@ -709,6 +717,203 @@ async def _queue_content_ops_deflection_report_delivery(
         payment_reference,
     )
     return "queued"
+
+
+async def _handle_content_ops_deflection_report_payment_revoked(
+    pool: Any,
+    stripe_module: Any,
+    obj: Any,
+    *,
+    event_type: str,
+) -> None:
+    """Relock a deflection report after a refund or dispute webhook."""
+
+    if event_type == "charge.refunded" and not _stripe_charge_refund_is_full(obj):
+        logger.info(
+            "Deflection report partial refund observed without revocation: "
+            "event_type=%s object=%s amount_refunded=%s amount_captured=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+            _stripe_object_value(obj, "amount_refunded"),
+            _stripe_object_value(obj, "amount_captured")
+            or _stripe_object_value(obj, "amount"),
+        )
+        return
+
+    meta, payment_reference = _content_ops_deflection_revocation_metadata(
+        stripe_module,
+        obj,
+    )
+    if meta.get("source") != "content_ops_deflection_report":
+        logger.info(
+            "Deflection report payment revocation could not be mapped: "
+            "event_type=%s object=%s payment_intent=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+            _payment_intent_from_payment_event(obj) or "<missing>",
+        )
+        return
+
+    account_id_text = _clean_metadata(meta.get("account_id"))
+    request_id = _clean_metadata(meta.get("request_id"))
+    if not account_id_text or not request_id:
+        logger.error(
+            "Deflection report payment revocation missing account_id/request_id: "
+            "event_type=%s object=%s",
+            event_type,
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+    try:
+        _uuid.UUID(account_id_text)
+    except ValueError:
+        logger.error(
+            "Deflection report payment revocation has invalid account_id: "
+            "event_type=%s account=%s object=%s",
+            event_type,
+            account_id_text,
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+
+    store = PostgresDeflectionReportArtifactStore(pool=pool)
+    revoked = await store.mark_unpaid(
+        account_id=account_id_text,
+        request_id=request_id,
+        payment_reference=payment_reference,
+    )
+    if not revoked:
+        logger.error(
+            "Deflection report payment revocation missed report: "
+            "event_type=%s account=%s request=%s payment_reference=%s object=%s",
+            event_type,
+            account_id_text,
+            request_id,
+            payment_reference or "<missing>",
+            _stripe_text(obj, "id") or "<missing>",
+        )
+        return
+
+    await _cancel_content_ops_deflection_report_delivery(
+        pool,
+        account_id=account_id_text,
+        request_id=request_id,
+        event_type=event_type,
+    )
+    logger.warning(
+        "Deflection report access revoked after Stripe payment reversal: "
+        "event_type=%s account=%s request=%s payment_reference=%s object=%s",
+        event_type,
+        account_id_text,
+        request_id,
+        payment_reference or "<missing>",
+        _stripe_text(obj, "id") or "<missing>",
+    )
+
+
+async def _cancel_content_ops_deflection_report_delivery(
+    pool: Any,
+    *,
+    account_id: str,
+    request_id: str,
+    event_type: str,
+) -> None:
+    await pool.execute(
+        """
+        UPDATE content_ops_deflection_report_deliveries
+        SET delivery_status = 'revoked',
+            delivery_error = $3,
+            updated_at = NOW()
+        WHERE account_id = $1
+          AND request_id = $2
+          AND delivery_status IN ('pending', 'sending')
+        """,
+        account_id,
+        request_id,
+        f"payment_revoked:{event_type}",
+    )
+
+
+def _content_ops_deflection_revocation_metadata(
+    stripe_module: Any,
+    obj: Any,
+) -> tuple[Mapping[str, Any], str | None]:
+    payment_intent = _payment_intent_from_payment_event(obj)
+    session = _checkout_session_for_payment_intent(stripe_module, payment_intent)
+    if session is not None:
+        meta = _stripe_metadata(session)
+        if meta.get("source") == "content_ops_deflection_report":
+            return meta, _stripe_text(session, "id") or None
+
+    meta = _stripe_metadata(obj)
+    if meta.get("source") == "content_ops_deflection_report":
+        return meta, None
+    return {}, None
+
+
+def _checkout_session_for_payment_intent(
+    stripe_module: Any,
+    payment_intent: str,
+) -> Any | None:
+    if not payment_intent:
+        return None
+    try:
+        sessions = stripe_module.checkout.Session.list(
+            payment_intent=payment_intent,
+            limit=1,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception(
+            "Deflection report payment revocation checkout lookup failed: payment_intent=%s",
+            payment_intent,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Deflection report payment revocation lookup failed",
+        )
+    data = _stripe_object_value(sessions, "data")
+    if isinstance(data, Sequence) and data:
+        return data[0]
+    return None
+
+
+def _stripe_charge_refund_is_full(obj: Any) -> bool:
+    if _stripe_object_value(obj, "refunded") is True:
+        return True
+    amount_refunded = _stripe_int(obj, "amount_refunded")
+    amount_captured = _stripe_int(obj, "amount_captured") or _stripe_int(obj, "amount")
+    return (
+        amount_refunded is not None
+        and amount_captured is not None
+        and amount_captured > 0
+        and amount_refunded >= amount_captured
+    )
+
+
+def _stripe_int(obj: Any, key: str) -> int | None:
+    value = _stripe_object_value(obj, key)
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _payment_intent_from_payment_event(obj: Any) -> str:
+    payment_intent = _stripe_text(obj, "payment_intent")
+    if payment_intent:
+        return payment_intent
+    charge = _stripe_object_value(obj, "charge")
+    if charge is not None and not isinstance(charge, str):
+        return _stripe_text(charge, "payment_intent")
+    return ""
+
+
+def _stripe_metadata(obj: Any) -> Mapping[str, Any]:
+    metadata = _stripe_object_value(obj, "metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
 
 
 def _log_content_ops_deflection_report_payment_pending(

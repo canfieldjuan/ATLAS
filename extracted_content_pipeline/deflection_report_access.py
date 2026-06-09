@@ -88,6 +88,15 @@ class DeflectionReportArtifactStore(Protocol):
     ) -> bool:
         """Mark a report paid. Returns False when no tenant/request row exists."""
 
+    async def mark_unpaid(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        payment_reference: str | None = None,
+    ) -> bool:
+        """Relock a paid report. Returns False when no matching row exists."""
+
 
 class InMemoryDeflectionReportArtifactStore:
     """Test store with the same tenant/request semantics as the Postgres store."""
@@ -191,6 +200,35 @@ class InMemoryDeflectionReportArtifactStore:
             artifact=dict(row.artifact or {}) if row.artifact is not None else None,
             paid=True,
             payment_reference=_clean(payment_reference) or row.payment_reference,
+            delivery_email=row.delivery_email,
+        )
+        return True
+
+    async def mark_unpaid(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        payment_reference: str | None = None,
+    ) -> bool:
+        key = (account_id, request_id)
+        row = self._rows.get(key)
+        if row is None:
+            return False
+        expected_reference = _clean(payment_reference)
+        if (
+            expected_reference
+            and row.payment_reference
+            and row.payment_reference != expected_reference
+        ):
+            return False
+        self._rows[key] = DeflectionReportAccessRecord(
+            account_id=row.account_id,
+            request_id=row.request_id,
+            snapshot=dict(row.snapshot),
+            artifact=dict(row.artifact or {}) if row.artifact is not None else None,
+            paid=False,
+            payment_reference=row.payment_reference,
             delivery_email=row.delivery_email,
         )
         return True
@@ -322,7 +360,34 @@ class PostgresDeflectionReportArtifactStore:
             """,
             account_id,
             request_id,
-            _clean(payment_reference),
+            _clean(payment_reference) or None,
+        )
+        return parse_command_tag(result)
+
+    async def mark_unpaid(
+        self,
+        *,
+        account_id: str,
+        request_id: str,
+        payment_reference: str | None = None,
+    ) -> bool:
+        result = await self.pool.execute(
+            """
+            UPDATE content_ops_deflection_reports
+            SET paid = false,
+                paid_at = NULL,
+                updated_at = NOW()
+            WHERE account_id = $1
+              AND request_id = $2
+              AND (
+                $3::text IS NULL
+                OR payment_reference IS NULL
+                OR payment_reference = $3
+              )
+            """,
+            account_id,
+            request_id,
+            _clean(payment_reference) or None,
         )
         return parse_command_tag(result)
 

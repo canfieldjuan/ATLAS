@@ -79,6 +79,15 @@ async def send_pending_deflection_report_deliveries(
                 artifact=data.get("artifact"),
                 request_id=request_id,
             )
+            if not await _confirm_delivery_still_sendable(pool, account_id, request_id):
+                logger.warning(
+                    "Deflection report delivery skipped before send: "
+                    "account=%s request=%s",
+                    account_id,
+                    request_id,
+                )
+                failed += 1
+                continue
             result = await sender.send(
                 _send_request(
                     account_id=account_id,
@@ -265,6 +274,30 @@ async def _mark_failed(pool: Any, account_id: str, request_id: str, error: str) 
         request_id,
         _bounded_text(error),
     )
+
+
+async def _confirm_delivery_still_sendable(
+    pool: Any,
+    account_id: str,
+    request_id: str,
+) -> bool:
+    row = await pool.fetchrow(
+        """
+        UPDATE content_ops_deflection_report_deliveries d
+        SET updated_at = NOW()
+        FROM content_ops_deflection_reports r
+        WHERE d.account_id = $1
+          AND d.request_id = $2
+          AND r.account_id = d.account_id
+          AND r.request_id = d.request_id
+          AND d.delivery_status = 'sending'
+          AND r.paid = true
+        RETURNING d.request_id
+        """,
+        account_id,
+        request_id,
+    )
+    return row is not None
 
 
 def _validate_config(config: DeflectionReportDeliveryConfig) -> None:

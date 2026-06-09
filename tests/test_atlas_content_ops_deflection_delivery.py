@@ -18,9 +18,11 @@ from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
 
 
 class _Pool:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(self, rows: list[dict[str, Any]], *, sendable: bool = True) -> None:
         self.rows = rows
+        self.sendable = sendable
         self.fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrow_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_calls: list[tuple[str, tuple[Any, ...]]] = []
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
@@ -29,6 +31,16 @@ class _Pool:
         assert "content_ops_deflection_reports" in query
         assert "r.artifact" in query
         return self.rows[: int(args[0])]
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.fetchrow_calls.append((query, args))
+        assert "content_ops_deflection_report_deliveries" in query
+        assert "content_ops_deflection_reports" in query
+        assert "delivery_status = 'sending'" in query
+        assert "r.paid = true" in query
+        if not self.sendable:
+            return None
+        return {"request_id": args[1]}
 
     async def execute(self, query: str, *args: Any) -> str:
         self.execute_calls.append((query, args))
@@ -107,6 +119,9 @@ async def test_delivery_worker_sends_pending_paid_report_link(
     assert "SET delivery_status = 'sending'" in claim_query
     assert claim_args == (20,)
     assert len(sender.requests) == 1
+    confirm_query, confirm_args = pool.fetchrow_calls[0]
+    assert "RETURNING d.request_id" in confirm_query
+    assert confirm_args == ("acct-123", "content-ops-abc123")
     request = sender.requests[0]
     assert request.to_email == "buyer@example.com"
     assert request.from_email == "Atlas Content Ops <reports@example.com>"
@@ -202,6 +217,28 @@ async def test_delivery_worker_dry_run_does_not_send_or_update() -> None:
     assert "WHERE d.delivery_status = 'pending'" in pending_query
     assert pending_args == (20,)
     assert sender.requests == []
+    assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_rechecks_paid_and_status_before_sending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pool = _Pool([_row()], sendable=False)
+    sender = _Sender()
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool,
+        sender=sender,
+        config=_config(),
+    )
+
+    assert summary.scanned == 1
+    assert summary.sent == 0
+    assert summary.failed == 1
+    assert sender.requests == []
+    assert pool.fetchrow_calls
     assert pool.execute_calls == []
 
 
