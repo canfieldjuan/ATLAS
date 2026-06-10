@@ -493,11 +493,13 @@ def build_ticket_faq_markdown(
 
     # #1460: topic-degraded groups (scope "topic:*") measure bucket
     # membership, not question repetition. Split them into question
-    # sub-clusters; only clusters with >= 2 tickets stay as FAQ groups, and
-    # excluded singletons are counted and surfaced instead of silently
-    # rendering as "repeat" work. Resolution-scoped groups are untouched.
+    # sub-clusters; only clusters asked by >= 2 DISTINCT source tickets stay
+    # as FAQ groups (one ticket contributing several evidence rows is not a
+    # repeat), and excluded singletons are counted and surfaced instead of
+    # silently rendering as "repeat" work. Resolution-scoped groups are
+    # untouched.
     subclustered_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
-    non_repeat_ticket_count = 0
+    excluded_singleton_keys: set[str] = set()
     non_repeat_question_count = 0
     token_hashes: dict[str, int] = {}
     for (topic, scope), rows in groups.items():
@@ -507,13 +509,21 @@ def build_ticket_faq_markdown(
         for cluster_index, cluster_rows in enumerate(
             _question_subclusters(rows, token_hashes=token_hashes)
         ):
-            if len(cluster_rows) < 2:
-                non_repeat_ticket_count += len(cluster_rows)
+            cluster_keys = _row_source_keys(cluster_rows)
+            if len(cluster_keys) < 2:
+                excluded_singleton_keys.update(cluster_keys)
                 non_repeat_question_count += 1
                 continue
             subclustered_groups[(topic, f"{scope}:question:{cluster_index}")] = list(
                 cluster_rows
             )
+    # A ticket only counts as non-repeat if none of its evidence rows landed
+    # in any kept group; this keeps the condensed-coverage accounting exact
+    # (rendered distinct tickets + non-repeat distinct tickets == sources).
+    kept_keys: set[str] = set()
+    for rows in subclustered_groups.values():
+        kept_keys.update(_row_source_keys(rows))
+    non_repeat_ticket_count = len(excluded_singleton_keys - kept_keys)
     warnings: list[dict[str, Any]] = []
     if non_repeat_ticket_count:
         warnings.append({
@@ -668,6 +678,14 @@ def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _row_source_keys(rows: Sequence[Mapping[str, str]]) -> set[str]:
+    return {
+        key
+        for row in rows
+        if (key := str(row.get("source_key") or "").strip())
+    }
 
 
 def _question_subclusters(

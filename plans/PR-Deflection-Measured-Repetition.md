@@ -67,11 +67,12 @@ Slice phase: Production hardening
   contract docs, fixtures/goldens, smoke harnesses, tests.
 - Risk areas: correctness of the repeat definition, determinism,
   performance at full volume, golden/contract drift.
-- Reviewer rules triggered: R1, R2, R10.
+- Reviewer rules triggered: R1, R2, R9, R10, R12.
 
 ### Files touched
 
 - `.github/workflows/atlas_content_ops_input_provider_checks.yml`
+- `atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs`
 - `docs/extraction/validation/deflection_resolution_evidence_live_proof_2026-06-09.md`
 - `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md`
 - `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json`
@@ -189,6 +190,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_content_ops_input_provider_checks.yml` | 3 |
+| `atlas-intel-ui/scripts/content-ops-deflection-report-ui.test.mjs` | 2 |
 | `docs/extraction/validation/deflection_resolution_evidence_live_proof_2026-06-09.md` | 13 |
 | `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md` | 6 |
 | `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json` | 2 |
@@ -204,8 +206,8 @@ Parked hardening: none.
 | `extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv` | 74 |
 | `extracted_content_pipeline/examples/support_ticket_sources.csv` | 4 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 37 |
-| `extracted_content_pipeline/ticket_faq_markdown.py` | 184 |
-| `plans/PR-Deflection-Measured-Repetition.md` | 225 |
+| `extracted_content_pipeline/ticket_faq_markdown.py` | 202 |
+| `plans/PR-Deflection-Measured-Repetition.md` | 227 |
 | `scripts/smoke_content_ops_faq_output_proof.py` | 25 |
 | `scripts/smoke_extracted_content_ops_execution.py` | 41 |
 | `tests/test_atlas_content_ops_execution_services.py` | 88 |
@@ -218,8 +220,8 @@ Parked hardening: none.
 | `tests/test_extracted_content_ops_execution.py` | 32 |
 | `tests/test_extracted_content_ops_live_execute_harness.py` | 33 |
 | `tests/test_extracted_support_ticket_input_provider.py` | 11 |
-| `tests/test_extracted_ticket_faq_markdown.py` | 1187 |
+| `tests/test_extracted_ticket_faq_markdown.py` | 1348 |
 | `tests/test_smoke_content_ops_cfpb_faq_markdown.py` | 11 |
 | `tests/test_smoke_content_ops_faq_scale_run.py` | 37 |
 | `tests/test_support_ticket_provider_landing_blog_execute.py` | 2 |
-| **Total** | **2432** |
+| **Total** | **2615** |

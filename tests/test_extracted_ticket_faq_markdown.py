@@ -132,6 +132,41 @@ def _run_ticket_faq_cli(path: Path, *args: str) -> subprocess.CompletedProcess[s
     )
 
 
+def test_single_ticket_with_multiple_evidence_rows_is_not_a_repeat() -> None:
+    # Codex review finding on PR #1486: density must be measured in DISTINCT
+    # source tickets, not evidence rows. One ticket contributing two rows of
+    # the same question is still one ticket asking once.
+    opportunities = [
+        {
+            "source_id": "ticket-solo-1",
+            "source_type": "support_ticket",
+            "evidence": [
+                {
+                    "text": "How do I rotate the workspace signing key safely?",
+                    "source_id": "ticket-solo-1",
+                    "source_type": "support_ticket",
+                },
+                {
+                    "text": (
+                        "Follow-up: how do I rotate the workspace signing "
+                        "key safely?"
+                    ),
+                    "source_id": "ticket-solo-1",
+                    "source_type": "support_ticket",
+                },
+            ],
+        },
+    ]
+
+    result = build_ticket_faq_markdown(opportunities)
+
+    assert result.items == ()
+    assert result.non_repeat_ticket_count == 1
+    assert result.non_repeat_question_count >= 1
+    warning_codes = [warning["code"] for warning in result.warnings]
+    assert "non_repeat_tickets_excluded" in warning_codes
+
+
 def test_build_ticket_faq_markdown_groups_grounded_ticket_evidence() -> None:
     loaded = load_source_campaign_opportunities_from_file(SUPPORT_TICKET_CSV, file_format="csv")
 
@@ -762,9 +797,17 @@ def test_build_ticket_faq_markdown_weights_aggregated_search_frequency() -> None
                     "source_id": "search-export-1",
                     "source_type": "search_log",
                 },
+            ],
+        },
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-2",
+            "search_query": "export attribution reports",
+            "search_count": "5",
+            "evidence": [
                 {
                     "text": "export attribution reports",
-                    "source_id": "search-export-1",
+                    "source_id": "search-export-2",
                     "source_type": "search_log",
                 },
             ],
@@ -793,39 +836,50 @@ def test_build_ticket_faq_markdown_weights_aggregated_search_frequency() -> None
         "reporting friction",
         "email and profile updates",
     ]
-    assert result.items[0]["frequency"] == 20
-    assert result.items[0]["weighted_frequency"] == 20
-    assert result.items[0]["ticket_count"] == 1
-    assert result.items[0]["source_ids"] == ("search-export-1",)
-    assert result.items[0]["opportunity_score"] == 20
+    assert result.items[0]["frequency"] == 25
+    assert result.items[0]["weighted_frequency"] == 25
+    assert result.items[0]["ticket_count"] == 2
+    assert result.items[0]["source_ids"] == ("search-export-1", "search-export-2")
+    assert result.items[0]["opportunity_score"] == 25
     assert result.items[1]["frequency"] == 2
     assert result.items[1]["weighted_frequency"] == 2
 
 
 def test_build_ticket_faq_markdown_prefers_explicit_aggregate_weight_fields() -> None:
-    result = build_ticket_faq_markdown([{
-        "source_type": "search_log",
-        "query_id": "search-export-1",
-        "search_query": "export attribution report",
-        "frequency": "1",
-        "search_count": "25",
-        "evidence": [
-            {
-                "text": "export attribution report",
-                "source_id": "search-export-1",
-                "source_type": "search_log",
-            },
-            {
-                "text": "export attribution reports",
-                "source_id": "search-export-1",
-                "source_type": "search_log",
-            },
-        ],
-    }])
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-1",
+            "search_query": "export attribution report",
+            "frequency": "1",
+            "search_count": "25",
+            "evidence": [
+                {
+                    "text": "export attribution report",
+                    "source_id": "search-export-1",
+                    "source_type": "search_log",
+                },
+            ],
+        },
+        {
+            "source_type": "search_log",
+            "query_id": "search-export-2",
+            "search_query": "export attribution reports",
+            "frequency": "1",
+            "search_count": "5",
+            "evidence": [
+                {
+                    "text": "export attribution reports",
+                    "source_id": "search-export-2",
+                    "source_type": "search_log",
+                },
+            ],
+        },
+    ])
 
-    assert result.items[0]["frequency"] == 25
-    assert result.items[0]["weighted_frequency"] == 25
-    assert result.items[0]["ticket_count"] == 1
+    assert result.items[0]["frequency"] == 30
+    assert result.items[0]["weighted_frequency"] == 30
+    assert result.items[0]["ticket_count"] == 2
 
 
 def test_weighted_source_volume_by_group_accepts_unnormalized_weight_fields() -> None:
@@ -3250,22 +3304,31 @@ def test_build_ticket_faq_markdown_normalizes_source_type_and_keeps_unidentified
 
 
 def test_build_ticket_faq_markdown_counts_distinct_source_ids_per_item() -> None:
-    result = build_ticket_faq_markdown([{
-        "source_type": "support_ticket",
-        "pain_points": ["exports"],
-        "evidence": [
-            {"text": "Export failed on Monday.", "source_id": "ticket-1", "source_type": "support_ticket"},
-            {"text": "Export failed again on Monday.", "source_id": "ticket-1", "source_type": "support_ticket"},
-        ],
-    }])
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "support_ticket",
+            "pain_points": ["exports"],
+            "evidence": [
+                {"text": "Export failed on Monday.", "source_id": "ticket-1", "source_type": "support_ticket"},
+                {"text": "Export failed again on Monday.", "source_id": "ticket-1", "source_type": "support_ticket"},
+            ],
+        },
+        {
+            "source_type": "support_ticket",
+            "pain_points": ["exports"],
+            "evidence": [
+                {"text": "Export failed on Monday.", "source_id": "ticket-2", "source_type": "support_ticket"},
+            ],
+        },
+    ])
 
-    assert result.items[0]["evidence_count"] == 2
-    assert result.items[0]["source_ids"] == ("ticket-1",)
-    assert result.items[0]["frequency"] == 1
+    assert result.items[0]["evidence_count"] == 3
+    assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
+    assert result.items[0]["frequency"] == 2
     assert result.items[0]["failure_risk_score"] == 1
-    assert result.items[0]["opportunity_score"] == 2
-    assert result.ticket_source_count == 1
-    assert "A customer asked about reporting friction" in result.markdown
+    assert result.items[0]["opportunity_score"] == 4
+    assert result.ticket_source_count == 2
+    assert "Customers are asking about reporting friction" in result.markdown
 
 
 def test_build_ticket_faq_markdown_counts_distinct_ticket_sources_for_output_checks() -> None:
@@ -3284,26 +3347,40 @@ def test_build_ticket_faq_markdown_counts_distinct_ticket_sources_for_output_che
                 "source_type": "support_ticket",
                 "source_title": "Password reset again",
             },
+            {
+                "text": "How do I reset my account password?",
+                "source_id": "ticket-2",
+                "source_type": "support_ticket",
+            },
         ],
     }])
 
-    assert result.ticket_source_count == 1
-    assert result.items[0]["source_ids"] == ("ticket-1",)
+    assert result.ticket_source_count == 2
+    assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2")
     assert result.output_checks["condensed"] is True
 
 
 def test_build_ticket_faq_markdown_counts_unidentified_source_rows_once() -> None:
-    result = build_ticket_faq_markdown([{
-        "source_type": "support_ticket",
-        "source_title": "Login reset",
-        "evidence": [
-            {"text": "How do I reset my password?", "source_type": "support_ticket"},
-            {"text": "How do I reset my account password?", "source_type": "support_ticket"},
-        ],
-    }])
+    result = build_ticket_faq_markdown([
+        {
+            "source_type": "support_ticket",
+            "source_title": "Login reset",
+            "evidence": [
+                {"text": "How do I reset my password?", "source_type": "support_ticket"},
+                {"text": "How do I reset my account password?", "source_type": "support_ticket"},
+            ],
+        },
+        {
+            "source_type": "support_ticket",
+            "source_title": "Login reset",
+            "evidence": [
+                {"text": "How can I reset my password?", "source_type": "support_ticket"},
+            ],
+        },
+    ])
 
-    assert result.ticket_source_count == 1
-    assert result.items[0]["source_ids"] == ("row:1",)
+    assert result.ticket_source_count == 2
+    assert result.items[0]["source_ids"] == ("row:1", "row:2")
     assert result.output_checks["condensed"] is True
 
 
