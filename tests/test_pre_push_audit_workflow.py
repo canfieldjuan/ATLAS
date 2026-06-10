@@ -21,3 +21,9 @@ def test_pre_push_audit_workflow_keeps_push_to_main_without_pr_body() -> None:
 
     assert 'if [ "$EVENT_NAME" = "pull_request" ]; then' in text
     assert "else\n            bash scripts/local_pr_review.sh\n          fi" in text
+
+
+def test_pre_push_audit_workflow_enrolls_push_pr_wrapper_tests() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "tests/test_push_pr_wrapper.py" in text
