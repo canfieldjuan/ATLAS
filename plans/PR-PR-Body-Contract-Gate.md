@@ -29,8 +29,8 @@ Slice phase: Production hardening
 
 1. Add `scripts/audit_pr_body.py`: validates a PR-body file for the Plan
    lead line (and that the named plan doc exists in the checkout), a Slice
-   phase line before the first section, and the five required sections in
-   order.
+   phase line and a one-paragraph why before the first section, and the five
+   required sections in order.
 2. Add `.github/workflows/pr_body_contract.yml`: on pull_request
    opened/edited/reopened/synchronize, write `github.event.pull_request.body`
    to a file (no GitHub API call - immune to the token-401 flake class) and
@@ -65,8 +65,9 @@ Slice phase: Production hardening
 `audit_pr_body(body, root)` is a pure function over the body text: the first
 non-empty line must be a Plan lead line naming a doc under the plans
 directory, and that doc must exist under the repo root; a `Slice phase:`
-line must appear before the first `##` heading; the five required `##`
-sections must all be present and in relative order (other sections may be
+line and at least one why line (a non-empty lead line that is neither the
+Plan nor the Slice phase line) must appear before the first `##` heading;
+the five required `##` sections must all be present and in relative order (other sections may be
 interleaved - the contract fixes the order of the required ones, not
 exclusivity). Failures are returned as a list and printed one per line;
 exit 1 on any failure, 2 on usage errors.
@@ -107,7 +108,8 @@ Parked hardening: none.
 ## Verification
 
 - Passed: pytest tests/test_audit_pr_body.py
-  - 9 passed.
+  - 10 passed (incl. the one-paragraph-why miss from the Codex review
+    finding on this PR).
 - Passed: dogfood against live PR bodies - merged PR #1452's body passes;
   PR #1476's pre-fix body fails with the two genuinely missing sections
   named (Parked hardening, Diff size).
@@ -122,7 +124,7 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/pr_body_contract.yml` | 23 |
 | `.github/workflows/pre_push_audit.yml` | 2 |
-| `plans/PR-PR-Body-Contract-Gate.md` | 128 |
-| `scripts/audit_pr_body.py` | 109 |
-| `tests/test_audit_pr_body.py` | 144 |
-| **Total** | **406** |
+| `plans/PR-PR-Body-Contract-Gate.md` | 130 |
+| `scripts/audit_pr_body.py` | 121 |
+| `tests/test_audit_pr_body.py` | 171 |
+| **Total** | **447** |

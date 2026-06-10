@@ -65,6 +65,18 @@ def audit_pr_body(body: str, *, root: Path = ROOT) -> list[str]:
         failures.append(
             "missing 'Slice phase: <phase>' line before the first '##' section"
         )
+    why_lines = [
+        line.strip()
+        for line in lead_lines
+        if line.strip()
+        and PLAN_LINE_RE.match(line.strip()) is None
+        and SLICE_PHASE_RE.match(line.strip()) is None
+    ]
+    if not why_lines:
+        failures.append(
+            "missing the one-paragraph why between the lead lines and the "
+            "first '##' section"
+        )
 
     headings = [
         match.group("title")

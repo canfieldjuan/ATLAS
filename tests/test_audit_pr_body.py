@@ -74,6 +74,33 @@ def test_nonexistent_plan_doc_fails(tmp_path: Path) -> None:
     assert any("does not exist" in failure for failure in failures)
 
 
+def test_missing_one_paragraph_why_fails(tmp_path: Path) -> None:
+    root = _write_plan(tmp_path)
+    body = "\n".join([
+        "Plan: plans/PR-Example.md",
+        "Slice phase: Production hardening",
+        "",
+        "## Intentional",
+        "- a trade-off",
+        "",
+        "## Deferred",
+        "- a follow-up",
+        "",
+        "## Parked hardening",
+        "None.",
+        "",
+        "## Verification",
+        "- pytest passed",
+        "",
+        "## Diff size",
+        "2 files, +10 / -2",
+    ])
+
+    failures = audit_pr_body(body, root=root)
+
+    assert any("one-paragraph why" in failure for failure in failures)
+
+
 def test_missing_slice_phase_fails(tmp_path: Path) -> None:
     root = _write_plan(tmp_path)
     body = _valid_body().replace("Slice phase: Production hardening\n", "")
