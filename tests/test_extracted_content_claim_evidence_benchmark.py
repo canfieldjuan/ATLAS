@@ -22,6 +22,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     intra_model_stability,
     load_claim_evidence_fixture_text,
     pairwise_agreements,
+    render_claim_evidence_result_markdown,
     run_claim_evidence_provider,
     score_model,
     validate_claim_evidence_fixture,
@@ -760,6 +761,94 @@ def test_result_artifact_rejects_malformed_stability_reruns() -> None:
         "gpt: unknown row triple_id: unknown",
     ):
         assert expected in artifact.errors
+
+
+def test_result_writeup_renders_passing_artifact_sections() -> None:
+    triples = (
+        _triple("easy", True, EASY),
+        _triple("hard", False, HARD),
+    )
+    claude_run = _model_run(
+        "claude",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    gpt_run = _model_run(
+        "gpt",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    artifact = build_claim_evidence_result_artifact(
+        triples,
+        (gpt_run, claude_run),
+        stability_runs_by_model_id={
+            "gpt": (gpt_run, gpt_run),
+            "claude": (claude_run, claude_run),
+        },
+        thresholds=BenchmarkThresholds(
+            easy_accuracy_min=1.0,
+            hard_accuracy_min=1.0,
+            inter_model_agreement_min=1.0,
+            intra_model_stability_min=1.0,
+            high_confidence_accuracy_min=0.90,
+        ),
+    )
+
+    markdown = render_claim_evidence_result_markdown(artifact)
+
+    assert markdown.startswith("# Claim Evidence Benchmark Result\n")
+    assert "- Go/no-go: GO" in markdown
+    assert "- Artifact ok: yes" in markdown
+    assert "| Easy accuracy | >= 100.0% |" in markdown
+    assert "| High-confidence accuracy | > 90.0% |" in markdown
+    assert "| claude | 100.0% | 100.0% | 100.0% | none | none |" in markdown
+    assert "| claude / gpt | 100.0% | 2 |" in markdown
+    assert "| claude | 100.0% | 2 |" in markdown
+    assert "## Verdict Failures\n\n- None." in markdown
+    assert "No failure cases." in markdown
+
+
+def test_result_writeup_renders_no_go_failure_cases_without_raising() -> None:
+    triples = (
+        _triple("wrong", True, EASY),
+        _triple("missing", False, HARD),
+        _triple("malformed", True, EASY),
+        _triple("low", True, EASY),
+    )
+    run = _model_run(
+        "gpt",
+        {
+            "wrong": _response(False, 5),
+            "low": _response(True, 2),
+        },
+        rows=(
+            _run_row("gpt", "malformed", None, ("reason missing",)),
+        ),
+    )
+    artifact = build_claim_evidence_result_artifact(triples, (run,))
+
+    markdown = render_claim_evidence_result_markdown(artifact)
+
+    assert "- Go/no-go: NO_GO" in markdown
+    assert "- Artifact ok: no" in markdown
+    assert "gpt: missing responses" in markdown
+    assert "| gpt | wrong | incorrect_support | True | false | 5 | none |" in markdown
+    assert "| gpt | missing | missing_response | False | n/a | n/a | none |" in markdown
+    assert (
+        "| gpt | malformed | malformed_response | True | n/a | n/a | "
+        "reason missing |"
+    ) in markdown
+    assert "| gpt | low | low_confidence | True | true | 2 | none |" in markdown
+    assert "## Artifact Errors\n\n- None." in markdown
+
+
+def test_result_writeup_fails_closed_on_malformed_renderer_input() -> None:
+    markdown = render_claim_evidence_result_markdown({"not": "an artifact"})
+
+    assert "- Go/no-go: NO_GO" in markdown
+    assert "- Artifact ok: no" in markdown
+    assert "- Verdict passed: no" in markdown
+    assert "artifact must be ClaimEvidenceResultArtifact" in markdown
+    assert "No model scores." in markdown
+    assert "No failure cases." in markdown
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:

@@ -416,6 +416,129 @@ class ClaimEvidenceResultArtifact:
         return payload
 
 
+def render_claim_evidence_result_markdown(artifact: object) -> str:
+    """Render a benchmark result artifact as an operator-facing Markdown report."""
+
+    typed_artifact = (
+        artifact
+        if isinstance(artifact, ClaimEvidenceResultArtifact)
+        else _failed_result_artifact(
+            DEFAULT_THRESHOLDS,
+            ("artifact must be ClaimEvidenceResultArtifact",),
+        )
+    )
+    lines = [
+        "# Claim Evidence Benchmark Result",
+        "",
+        "## Decision",
+        "",
+        f"- Go/no-go: {typed_artifact.go_no_go.upper()}",
+        f"- Artifact ok: {_yes_no(typed_artifact.ok)}",
+        f"- Verdict passed: {_yes_no(typed_artifact.verdict.passed)}",
+        "",
+        "## Thresholds",
+        "",
+    ]
+    lines.extend(
+        _markdown_table(
+            ("Metric", "Threshold"),
+            (
+                (
+                    "Easy accuracy",
+                    f">= {_format_percent(typed_artifact.thresholds.easy_accuracy_min)}",
+                ),
+                (
+                    "Hard accuracy",
+                    f">= {_format_percent(typed_artifact.thresholds.hard_accuracy_min)}",
+                ),
+                (
+                    "Inter-model agreement",
+                    (
+                        ">= "
+                        f"{_format_percent(typed_artifact.thresholds.inter_model_agreement_min)}"
+                    ),
+                ),
+                (
+                    "Intra-model stability",
+                    (
+                        ">= "
+                        f"{_format_percent(typed_artifact.thresholds.intra_model_stability_min)}"
+                    ),
+                ),
+                (
+                    "High-confidence accuracy",
+                    (
+                        "> "
+                        f"{_format_percent(typed_artifact.thresholds.high_confidence_accuracy_min)}"
+                    ),
+                ),
+            ),
+        )
+    )
+    lines.extend(("", "## Model Scores", ""))
+    lines.extend(
+        _markdown_table(
+            (
+                "Model",
+                "Easy",
+                "Hard",
+                "High confidence",
+                "Missing responses",
+                "Low confidence",
+            ),
+            tuple(
+                (
+                    score.model_id,
+                    _format_percent(score.easy_accuracy),
+                    _format_percent(score.hard_accuracy),
+                    _format_percent(score.high_confidence_accuracy),
+                    _comma_list(score.missing_response_ids),
+                    _comma_list(score.low_confidence_response_ids),
+                )
+                for score in typed_artifact.model_scores
+            ),
+            empty_label="No model scores.",
+        )
+    )
+    lines.extend(("", "## Inter-Model Agreement", ""))
+    lines.extend(
+        _markdown_table(
+            ("Pair", "Agreement", "Total"),
+            tuple(
+                (
+                    f"{row.left_model_id} / {row.right_model_id}",
+                    _format_percent(row.agreement),
+                    row.total,
+                )
+                for row in typed_artifact.agreement_matrix
+            ),
+            empty_label="No agreement rows.",
+        )
+    )
+    lines.extend(("", "## Intra-Model Stability", ""))
+    lines.extend(
+        _markdown_table(
+            ("Model", "Stability", "Total"),
+            tuple(
+                (
+                    row.model_id,
+                    _format_percent(row.stability),
+                    row.total,
+                )
+                for row in typed_artifact.stability_scores
+            ),
+            empty_label="No stability rows.",
+        )
+    )
+    lines.extend(("", "## Verdict Failures", ""))
+    lines.extend(_markdown_bullets(typed_artifact.verdict.failure_reasons))
+    lines.extend(("", "## Artifact Errors", ""))
+    lines.extend(_markdown_bullets(typed_artifact.errors))
+    lines.extend(("", "## Failure Cases", ""))
+    lines.extend(_failure_case_table(typed_artifact.failure_cases))
+    return "\n".join(lines).rstrip() + "\n"
+
+
 @dataclass(frozen=True)
 class BenchmarkFixture:
     """Decoded operator-labeled benchmark fixture rows."""
@@ -1035,6 +1158,106 @@ def _failure_case(
         "response_reason": response.reason if response is not None else "",
         "row_errors": row_errors,
     }
+
+
+def _format_percent(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value * 100:.1f}%"
+
+
+def _yes_no(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _comma_list(values: Sequence[object]) -> str:
+    if not values:
+        return "none"
+    return ", ".join(str(value) for value in values)
+
+
+def _markdown_cell(value: object) -> str:
+    text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def _markdown_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[object]],
+    *,
+    empty_label: str | None = None,
+) -> list[str]:
+    lines = [
+        "| " + " | ".join(_markdown_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    if not rows and empty_label is not None:
+        lines.append(
+            "| "
+            + _markdown_cell(empty_label)
+            + " | "
+            + " | ".join("" for _ in headers[1:])
+            + " |"
+        )
+        return lines
+    for row in rows:
+        lines.append("| " + " | ".join(_markdown_cell(value) for value in row) + " |")
+    return lines
+
+
+def _markdown_bullets(values: Sequence[object]) -> list[str]:
+    if not values:
+        return ["- None."]
+    return [f"- {_markdown_cell(value)}" for value in values]
+
+
+def _failure_case_table(
+    failure_cases: Sequence[Mapping[str, object]],
+) -> list[str]:
+    return _markdown_table(
+        (
+            "Model",
+            "Triple",
+            "Failure",
+            "Expected",
+            "Actual",
+            "Confidence",
+            "Row errors",
+        ),
+        tuple(
+            (
+                failure.get("model_id", ""),
+                failure.get("triple_id", ""),
+                failure.get("failure", ""),
+                failure.get("expected_supports", ""),
+                _markdown_optional_bool_text(failure.get("actual_supports")),
+                _markdown_optional_text(failure.get("confidence")),
+                _comma_list(_tuple_or_empty(failure.get("row_errors"))),
+            )
+            for failure in failure_cases
+        ),
+        empty_label="No failure cases.",
+    )
+
+
+def _tuple_or_empty(value: object) -> tuple[object, ...]:
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, list):
+        return tuple(value)
+    return ()
+
+
+def _markdown_optional_bool_text(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    return "n/a"
+
+
+def _markdown_optional_text(value: object) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
 
 
 def _failed_result_artifact(
