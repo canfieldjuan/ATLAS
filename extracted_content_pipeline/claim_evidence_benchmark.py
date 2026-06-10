@@ -9,9 +9,10 @@ structured witness responses against the reliability thresholds from issue
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence as RuntimeSequence
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 EASY = "easy"
@@ -25,6 +26,7 @@ FIXTURE_FORMAT_JSON = "json"
 FIXTURE_FORMAT_JSONL = "jsonl"
 VALID_FIXTURE_FORMATS = frozenset({FIXTURE_FORMAT_JSON, FIXTURE_FORMAT_JSONL})
 VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION = "verify_claim_evidence.v1"
+CLAIM_EVIDENCE_RESPONSE_FIELDS = frozenset({"supports", "confidence", "reason"})
 
 
 def _required_text(data: Mapping[str, object], key: str) -> str | None:
@@ -128,6 +130,11 @@ class ClaimEvidenceResponse:
             return None, ("response must be an object",)
 
         errors: list[str] = []
+        unexpected_fields = sorted(
+            str(key) for key in data.keys() if key not in CLAIM_EVIDENCE_RESPONSE_FIELDS
+        )
+        if unexpected_fields:
+            errors.append(f"unexpected fields: {', '.join(unexpected_fields)}")
         supports = _required_bool(data, "supports")
         confidence = _required_confidence(data, "confidence")
         reason = _required_text(data, "reason")
@@ -157,6 +164,11 @@ class ClaimEvidencePromptContract:
     contract_version: str
     prompt: str
     response_schema: Mapping[str, object]
+
+
+ClaimEvidenceProvider = Callable[
+    [str, ClaimEvidenceTriple, ClaimEvidencePromptContract], object
+]
 
 
 def claim_evidence_response_json_schema() -> dict[str, object]:
@@ -220,6 +232,114 @@ def build_claim_evidence_prompt_contract(
         contract_version=VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION,
         prompt=prompt,
         response_schema=claim_evidence_response_json_schema(),
+    )
+
+
+@dataclass(frozen=True)
+class ClaimEvidenceRunRow:
+    """One provider response attempt for one benchmark triple."""
+
+    model_id: str
+    triple_id: str
+    contract_version: str
+    response: ClaimEvidenceResponse | None
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return self.response is not None and not self.errors
+
+
+@dataclass(frozen=True)
+class ClaimEvidenceModelRun:
+    """Decoded provider run for one model across benchmark triples."""
+
+    model_id: str
+    rows: tuple[ClaimEvidenceRunRow, ...]
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors and all(row.ok for row in self.rows)
+
+    @property
+    def responses_by_triple_id(self) -> dict[str, ClaimEvidenceResponse]:
+        return {
+            row.triple_id: row.response
+            for row in self.rows
+            if row.response is not None and not row.errors
+        }
+
+
+def run_claim_evidence_provider(
+    model_id: object,
+    triples: Sequence[object],
+    provider: object,
+) -> ClaimEvidenceModelRun:
+    """Run the prompt/schema contract through an injected provider boundary."""
+
+    normalized_model_id = (
+        model_id.strip() if isinstance(model_id, str) and model_id.strip() else None
+    )
+    if normalized_model_id is None:
+        return ClaimEvidenceModelRun("", (), ("model_id missing",))
+    if not callable(provider):
+        return ClaimEvidenceModelRun(
+            normalized_model_id,
+            (),
+            ("provider must be callable",),
+        )
+    if not isinstance(triples, RuntimeSequence) or isinstance(triples, (str, bytes)):
+        return ClaimEvidenceModelRun(
+            normalized_model_id,
+            (),
+            ("triples must be a sequence",),
+        )
+    if not triples:
+        return ClaimEvidenceModelRun(
+            normalized_model_id,
+            (),
+            ("triples missing",),
+        )
+
+    run_errors: list[str] = []
+    rows: list[ClaimEvidenceRunRow] = []
+    typed_provider = provider
+    for index, triple in enumerate(triples, start=1):
+        if not isinstance(triple, ClaimEvidenceTriple):
+            run_errors.append(f"row {index}: triple must be ClaimEvidenceTriple")
+            continue
+
+        contract = build_claim_evidence_prompt_contract(triple)
+        try:
+            raw_response = typed_provider(normalized_model_id, triple, contract)
+        except Exception as error:
+            rows.append(
+                ClaimEvidenceRunRow(
+                    model_id=normalized_model_id,
+                    triple_id=triple.triple_id,
+                    contract_version=contract.contract_version,
+                    response=None,
+                    errors=(f"provider error: {error.__class__.__name__}",),
+                )
+            )
+            continue
+
+        response, response_errors = ClaimEvidenceResponse.from_mapping(raw_response)
+        rows.append(
+            ClaimEvidenceRunRow(
+                model_id=normalized_model_id,
+                triple_id=triple.triple_id,
+                contract_version=contract.contract_version,
+                response=response,
+                errors=response_errors,
+            )
+        )
+
+    return ClaimEvidenceModelRun(
+        normalized_model_id,
+        tuple(rows),
+        tuple(run_errors),
     )
 
 

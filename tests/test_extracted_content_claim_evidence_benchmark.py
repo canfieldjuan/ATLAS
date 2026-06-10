@@ -19,6 +19,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     intra_model_stability,
     load_claim_evidence_fixture_text,
     pairwise_agreements,
+    run_claim_evidence_provider,
     score_model,
     validate_claim_evidence_fixture,
 )
@@ -307,6 +308,23 @@ def test_response_decoder_reports_missing_and_wrong_typed_fields() -> None:
     )
 
 
+def test_response_decoder_rejects_extra_fields_like_schema() -> None:
+    response, errors = ClaimEvidenceResponse.from_mapping(
+        {
+            "supports": True,
+            "confidence": 5,
+            "reason": "quote directly supports the claim",
+            "internal_metadata": {"model_version": "x.y.z"},
+            "leaked_chain_of_thought": "Let me think step by step.",
+        }
+    )
+
+    assert response is None
+    assert errors == (
+        "unexpected fields: internal_metadata, leaked_chain_of_thought",
+    )
+
+
 def test_prompt_contract_renders_required_triple_fields_and_guardrails() -> None:
     contract = build_claim_evidence_prompt_contract(
         ClaimEvidenceTriple(
@@ -356,6 +374,7 @@ def test_response_json_schema_rejects_whitespace_reason_like_decoder() -> None:
     schema = claim_evidence_response_json_schema()
     whitespace_reason = {"supports": True, "confidence": 4, "reason": "   "}
 
+    assert schema["additionalProperties"] is False
     assert schema["properties"]["reason"]["pattern"] == "\\S"
     assert not any(
         character.strip() for character in str(whitespace_reason["reason"])
@@ -367,6 +386,23 @@ def test_response_json_schema_rejects_whitespace_reason_like_decoder() -> None:
     assert errors == ("reason missing",)
 
 
+def test_response_json_schema_rejects_extra_fields_like_decoder() -> None:
+    schema = claim_evidence_response_json_schema()
+    response_with_extra = {
+        "supports": True,
+        "confidence": 4,
+        "reason": "quote states it",
+        "extra": "not in schema",
+    }
+
+    assert schema["additionalProperties"] is False
+
+    response, errors = ClaimEvidenceResponse.from_mapping(response_with_extra)
+
+    assert response is None
+    assert errors == ("unexpected fields: extra",)
+
+
 def test_response_json_schema_returns_fresh_mapping() -> None:
     schema = claim_evidence_response_json_schema()
     schema["required"] = []
@@ -376,6 +412,134 @@ def test_response_json_schema_returns_fresh_mapping() -> None:
         "confidence",
         "reason",
     ]
+
+
+def test_runner_calls_provider_with_prompt_contract_for_each_triple() -> None:
+    triples = (
+        _triple("a", True, EASY),
+        _triple("b", False, HARD),
+    )
+    calls = []
+
+    def provider(model_id, triple, contract):
+        calls.append((model_id, triple.triple_id, contract))
+        return {
+            "supports": triple.expected_supports,
+            "confidence": 5,
+            "reason": "quote directly supports the claim",
+        }
+
+    run = run_claim_evidence_provider(" opus ", triples, provider)
+
+    assert run.ok is True
+    assert run.errors == ()
+    assert [row.triple_id for row in run.rows] == ["a", "b"]
+    assert [call[0] for call in calls] == ["opus", "opus"]
+    assert [call[1] for call in calls] == ["a", "b"]
+    assert calls[0][2].contract_version == "verify_claim_evidence.v1"
+    assert "Claim: Claim statement a" in calls[0][2].prompt
+    assert calls[0][2].response_schema["required"] == [
+        "supports",
+        "confidence",
+        "reason",
+    ]
+    assert run.responses_by_triple_id == {
+        "a": _response(True, 5),
+        "b": _response(False, 5),
+    }
+
+
+def test_runner_records_malformed_response_without_scoring_it() -> None:
+    def provider(model_id, triple, contract):
+        return {"supports": True, "confidence": 4, "reason": "   "}
+
+    run = run_claim_evidence_provider("gpt", (_triple("bad", True, EASY),), provider)
+
+    assert run.ok is False
+    assert run.errors == ()
+    assert len(run.rows) == 1
+    assert run.rows[0].response is None
+    assert run.rows[0].errors == ("reason missing",)
+    assert run.responses_by_triple_id == {}
+
+
+def test_runner_records_extra_field_response_without_scoring_it() -> None:
+    def provider(model_id, triple, contract):
+        return {
+            "supports": True,
+            "confidence": 4,
+            "reason": "quote directly supports the claim",
+            "extra": "provider drift",
+        }
+
+    run = run_claim_evidence_provider("gpt", (_triple("extra", True, EASY),), provider)
+
+    assert run.ok is False
+    assert run.errors == ()
+    assert run.rows[0].response is None
+    assert run.rows[0].errors == ("unexpected fields: extra",)
+    assert run.responses_by_triple_id == {}
+
+
+def test_runner_records_provider_exception_and_continues_later_triples() -> None:
+    triples = (
+        _triple("raises", True, EASY),
+        _triple("after", False, HARD),
+    )
+
+    def provider(model_id, triple, contract):
+        if triple.triple_id == "raises":
+            raise RuntimeError("vendor timeout with sensitive details")
+        return {"supports": False, "confidence": 4, "reason": "quote does not say it"}
+
+    run = run_claim_evidence_provider("sonnet", triples, provider)
+
+    assert run.ok is False
+    assert run.errors == ()
+    assert [row.triple_id for row in run.rows] == ["raises", "after"]
+    assert run.rows[0].errors == ("provider error: RuntimeError",)
+    assert "sensitive" not in run.rows[0].errors[0]
+    assert run.rows[1].ok is True
+    assert run.responses_by_triple_id == {
+        "after": ClaimEvidenceResponse(
+            supports=False,
+            confidence=4,
+            reason="quote does not say it",
+        )
+    }
+
+
+def test_runner_fails_closed_on_invalid_harness_inputs() -> None:
+    def provider(model_id, triple, contract):
+        return {
+            "supports": True,
+            "confidence": 5,
+            "reason": "quote directly supports the claim",
+        }
+
+    assert run_claim_evidence_provider(None, (), provider).errors == (
+        "model_id missing",
+    )
+    assert run_claim_evidence_provider("model", (), None).errors == (
+        "provider must be callable",
+    )
+    assert run_claim_evidence_provider("model", None, provider).errors == (
+        "triples must be a sequence",
+    )
+    assert run_claim_evidence_provider("model", (), provider).errors == (
+        "triples missing",
+    )
+
+    run = run_claim_evidence_provider(
+        "model",
+        ({"triple_id": "decoded"}, _triple("valid", True, EASY)),
+        provider,
+    )
+
+    assert run.ok is False
+    assert run.errors == ("row 1: triple must be ClaimEvidenceTriple",)
+    assert [row.triple_id for row in run.rows] == ["valid"]
+    assert run.responses_by_triple_id == {"valid": _response(True, 5)}
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:
