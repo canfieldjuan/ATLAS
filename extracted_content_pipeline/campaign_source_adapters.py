@@ -366,7 +366,7 @@ def load_source_campaign_opportunities_from_file(
     """Load review/transcript/document rows as campaign opportunities."""
 
     source = Path(path)
-    rows = _load_source_rows(source, file_format=file_format)
+    rows, load_warnings = _load_source_rows(source, file_format=file_format)
     result = source_rows_to_campaign_opportunities(
         rows,
         target_mode=target_mode,
@@ -375,7 +375,7 @@ def load_source_campaign_opportunities_from_file(
     )
     return CampaignOpportunityLoadResult(
         opportunities=result.opportunities,
-        warnings=result.warnings,
+        warnings=load_warnings + result.warnings,
         source=str(source),
     )
 
@@ -386,6 +386,20 @@ def load_source_rows_from_file(
     file_format: SourceDataFormat = "auto",
 ) -> list[Any]:
     """Load source rows from a CSV, JSON, or JSONL file without opportunity mapping."""
+
+    rows, _warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format=file_format,
+    )
+    return rows
+
+
+def load_source_rows_with_warnings_from_file(
+    path: str | Path,
+    *,
+    file_format: SourceDataFormat = "auto",
+) -> tuple[list[Any], tuple[CampaignOpportunityWarning, ...]]:
+    """Load source rows plus non-fatal load warnings (e.g. skipped prologue rows)."""
 
     return _load_source_rows(Path(path), file_format=file_format)
 
@@ -614,7 +628,11 @@ def source_row_to_campaign_opportunity(
     return normalize_campaign_opportunity(opportunity), tuple(warnings)
 
 
-def _load_source_rows(path: Path, *, file_format: SourceDataFormat) -> list[Any]:
+def _load_source_rows(
+    path: Path,
+    *,
+    file_format: SourceDataFormat,
+) -> tuple[list[Any], tuple[CampaignOpportunityWarning, ...]]:
     resolved_format = _resolve_format(path, file_format)
     if resolved_format == "csv":
         return _load_source_csv_rows(path)
@@ -624,13 +642,13 @@ def _load_source_rows(path: Path, *, file_format: SourceDataFormat) -> list[Any]
             text = line.strip()
             if text:
                 rows.append(json.loads(text))
-        return rows
+        return rows, ()
     data = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(data, list):
-        return list(data)
+        return list(data), ()
     if not isinstance(data, Mapping):
         raise ValueError("Source JSON must be an object or array")
-    return _source_rows_from_bundle(data)
+    return _source_rows_from_bundle(data), ()
 
 
 def _source_rows_from_bundle(
@@ -697,7 +715,9 @@ def _is_safe_parent_value(value: Any) -> bool:
     return False
 
 
-def _load_source_csv_rows(path: Path) -> list[dict[str, Any]]:
+def _load_source_csv_rows(
+    path: Path,
+) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
     return _load_csv_dict_rows(path)
 
 
@@ -902,6 +922,7 @@ __all__ = [
     "SourceDataFormat",
     "load_source_campaign_opportunities_from_file",
     "load_source_rows_from_file",
+    "load_source_rows_with_warnings_from_file",
     "parse_default_fields",
     "parse_default_fields_with_booking_url_or_exit",
     "parse_default_fields_or_exit",

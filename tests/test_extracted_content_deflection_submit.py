@@ -134,12 +134,13 @@ async def test_deflection_submit_upload_parses_bom_semicolon_csv() -> None:
         "ticket-1;Export help;How do I export attribution reports?\n"
     ).encode("utf-8")
 
-    rows, byte_count = await api_module._load_deflection_submit_upload_rows(
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
         _Upload(data),
         max_bytes=1024,
     )
 
     assert byte_count == len(data)
+    assert load_warnings == ()
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
@@ -161,12 +162,13 @@ async def test_deflection_submit_upload_parses_embedded_quotes_and_newlines() ->
         },
     ])
 
-    rows, byte_count = await api_module._load_deflection_submit_upload_rows(
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
         _Upload(data),
         max_bytes=2048,
     )
 
     assert byte_count == len(data)
+    assert load_warnings == ()
     assert rows == [{
         "ticket_id": "ticket-quoted-1",
         "subject": 'Need help with "classes"',
@@ -186,12 +188,16 @@ async def test_deflection_submit_upload_skips_provider_metadata_header() -> None
         "ticket-1,Export help,How do I export attribution reports?",
     ])
 
-    rows, byte_count = await api_module._load_deflection_submit_upload_rows(
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
         _Upload(data),
         max_bytes=1024,
     )
 
     assert byte_count == len(data)
+    assert len(load_warnings) == 1
+    assert load_warnings[0]["code"] == "csv_leading_rows_skipped"
+    assert load_warnings[0]["row_index"] == 1
+    assert "Zendesk ticket export" in load_warnings[0]["message"]
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
@@ -516,6 +522,77 @@ async def test_deflection_submit_rejects_all_non_english_language_marked_rows() 
         "source_row_count": 1,
         "language_filtered_row_count": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_surfaces_skipped_prologue_row_warning() -> None:
+    csv_data = _csv_bytes([
+        "Zendesk ticket export",
+        "ticket_id,subject,message,resolution_text",
+        (
+            "ticket-1,Export attribution,"
+            "How do I export attribution reports?,"
+            "Open Analytics and click Download report."
+        ),
+        (
+            "ticket-2,Report download,"
+            "Where is the report download for attribution exports?,"
+            "Open Analytics and click Download report."
+        ),
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 2
+    assert metadata["submitted_row_count"] == 2
+    warnings = payload["input_provider"]["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "csv_leading_rows_skipped"
+    assert warnings[0]["row_index"] == 1
+    assert "Zendesk ticket export" in warnings[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "en",
+        "EN",
+        "eng",
+        "English",
+        "en-US",
+        "en_GB",
+        "English (US)",
+        "English (United Kingdom)",
+        "english(us)",
+        "en (US)",
+    ],
+)
+def test_is_english_language_accepts_common_and_display_forms(value: str) -> None:
+    assert api_module._is_english_language(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "de",
+        "German",
+        "Deutsch (Deutschland)",
+        "es-MX",
+        "fr_FR",
+        "(US)",
+    ],
+)
+def test_is_english_language_rejects_non_english_forms(value: str) -> None:
+    assert api_module._is_english_language(value) is False
 
 
 @pytest.mark.asyncio

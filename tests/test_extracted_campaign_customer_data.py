@@ -151,7 +151,11 @@ def test_load_campaign_opportunities_from_csv_skips_leading_metadata_row(
 
     loaded = load_campaign_opportunities_from_file(path)
 
-    assert loaded.warnings == ()
+    assert len(loaded.warnings) == 1
+    skip_warning = loaded.warnings[0]
+    assert skip_warning.code == "csv_leading_rows_skipped"
+    assert skip_warning.row_index == 1
+    assert "Zendesk ticket export" in skip_warning.message
     assert loaded.opportunities[0]["target_id"] == "opp-1"
     assert loaded.opportunities[0]["company_name"] == "Acme"
 

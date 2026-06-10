@@ -45,7 +45,7 @@ from ..campaign_ports import TenantScope
 from ..brand_voice import BrandVoiceProfile, brand_voice_profile_from_mapping
 from ..campaign_postgres_import import import_campaign_opportunities
 from ..campaign_source_adapters import source_material_to_source_rows
-from ..campaign_source_adapters import load_source_rows_from_file
+from ..campaign_source_adapters import load_source_rows_with_warnings_from_file
 from ..content_ops_execution import (
     ContentOpsExecutionServices,
     execute_content_ops_from_mapping,
@@ -1223,7 +1223,13 @@ def create_content_ops_control_surface_router(
     async def submit_deflection_report(
         request: Request,
     ) -> dict[str, Any]:
-        data, rows, byte_count, byte_count_key = await _load_deflection_submit_rows_from_request(
+        (
+            data,
+            rows,
+            byte_count,
+            byte_count_key,
+            csv_load_warnings,
+        ) = await _load_deflection_submit_rows_from_request(
             request,
             max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
         )
@@ -1292,6 +1298,7 @@ def create_content_ops_control_surface_router(
             source_row_count=raw_row_count,
             submitted_row_count=len(submitted_rows),
             language_filtered_row_count=language_filtered_row_count,
+            csv_load_warnings=csv_load_warnings,
             package=package.as_dict(),
             support_platform=data["support_platform"],
             byte_count_key=byte_count_key,
@@ -1304,7 +1311,7 @@ async def _load_deflection_submit_rows_from_request(
     request: Any,
     *,
     max_bytes: int,
-) -> tuple[dict[str, Any], list[Any], int, str]:
+) -> tuple[dict[str, Any], list[Any], int, str, tuple[dict[str, Any], ...]]:
     if _is_deflection_submit_http_request(request):
         content_type = _request_content_type(request)
         if "multipart/form-data" in content_type:
@@ -1320,11 +1327,11 @@ async def _load_deflection_submit_rows_from_request(
             if csv_file is None:
                 raise HTTPException(status_code=422, detail="csv_file is required")
             data = _deflection_submit_form_to_mapping(form)
-            rows, byte_count = await _load_deflection_submit_upload_rows(
+            rows, byte_count, load_warnings = await _load_deflection_submit_upload_rows(
                 csv_file,
                 max_bytes=max_bytes,
             )
-            return data, rows, byte_count, "uploaded_bytes"
+            return data, rows, byte_count, "uploaded_bytes", load_warnings
 
         try:
             payload = await request.json()
@@ -1334,18 +1341,18 @@ async def _load_deflection_submit_rows_from_request(
                 detail="JSON deflection submit body could not be parsed.",
             ) from exc
         data = _deflection_submit_payload_to_mapping(payload)
-        rows, byte_count = await _load_deflection_submit_blob_rows(
+        rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
             data["blob_url"],
             max_bytes=max_bytes,
         )
-        return data, rows, byte_count, "blob_bytes"
+        return data, rows, byte_count, "blob_bytes", load_warnings
 
     data = _deflection_submit_payload_to_mapping(request)
-    rows, byte_count = await _load_deflection_submit_blob_rows(
+    rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
         data["blob_url"],
         max_bytes=max_bytes,
     )
-    return data, rows, byte_count, "blob_bytes"
+    return data, rows, byte_count, "blob_bytes", load_warnings
 
 
 def _is_deflection_submit_http_request(value: Any) -> bool:
@@ -1472,7 +1479,7 @@ async def _load_deflection_submit_blob_rows(
     blob_url: str,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     return await asyncio.to_thread(
         _load_deflection_submit_blob_rows_sync,
         blob_url,
@@ -1484,7 +1491,7 @@ async def _load_deflection_submit_upload_rows(
     csv_file: Any,
     *,
     max_bytes: int,
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     try:
         data = await csv_file.read(max_bytes + 1)
     except OSError as exc:
@@ -1514,7 +1521,7 @@ async def _load_deflection_submit_upload_rows(
 def _load_deflection_submit_blob_rows_sync(
     blob_url: str,
     max_bytes: int,
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
     if not data:
         raise HTTPException(
@@ -1531,7 +1538,7 @@ def _parse_deflection_submit_csv_bytes(
     data: bytes,
     *,
     parse_error_detail: str,
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1542,13 +1549,18 @@ def _parse_deflection_submit_csv_bytes(
             temp_path = Path(handle.name)
             handle.write(data)
         try:
-            rows = load_source_rows_from_file(temp_path, file_format="csv")
+            rows, load_warnings = load_source_rows_with_warnings_from_file(
+                temp_path,
+                file_format="csv",
+            )
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,
                 detail=parse_error_detail,
             ) from exc
-        return rows, len(data)
+        return rows, len(data), tuple(
+            warning.as_dict() for warning in load_warnings
+        )
     finally:
         if temp_path is not None:
             try:
@@ -1826,7 +1838,15 @@ def _deflection_submit_language(row: Any) -> str:
 
 def _is_english_language(value: str) -> bool:
     normalized = value.strip().lower().replace("_", "-")
-    return normalized in {"en", "eng", "english"} or normalized.startswith("en-")
+    # Provider exports may use display forms such as "English (US)" or
+    # "English (United Kingdom)"; the parenthetical region is not a
+    # language signal, so strip it before matching.
+    normalized = normalized.split("(", 1)[0].strip()
+    return (
+        normalized in {"en", "eng", "english"}
+        or normalized.startswith("en-")
+        or normalized.startswith("english")
+    )
 
 
 def _deflection_submit_title(data: Mapping[str, Any]) -> str:
@@ -1916,6 +1936,7 @@ def _with_deflection_submit_diagnostics(
     package: Mapping[str, Any],
     support_platform: str,
     byte_count_key: str = "blob_bytes",
+    csv_load_warnings: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     out = dict(response)
     existing = out.get("input_provider")
@@ -1954,6 +1975,11 @@ def _with_deflection_submit_diagnostics(
         for warning in diagnostics.get("warnings") or ()
         if isinstance(warning, Mapping)
     ]
+    warnings.extend(
+        dict(warning)
+        for warning in csv_load_warnings
+        if isinstance(warning, Mapping)
+    )
     if language_filtered_row_count:
         warnings.append({
             "code": "deflection_submit_non_english_rows_filtered",

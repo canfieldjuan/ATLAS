@@ -125,14 +125,15 @@ def load_campaign_opportunities_from_file(
 
     source = Path(path)
     resolved_format = _resolve_format(source, file_format)
+    load_warnings: tuple[CampaignOpportunityWarning, ...] = ()
     if resolved_format == "csv":
-        rows = _load_csv_rows(source)
+        rows, load_warnings = _load_csv_rows(source)
     else:
         rows = _load_json_rows(source)
     result = normalize_campaign_opportunity_rows(rows, target_mode=target_mode)
     return CampaignOpportunityLoadResult(
         opportunities=result.opportunities,
-        warnings=result.warnings,
+        warnings=load_warnings + result.warnings,
         source=str(source),
     )
 
@@ -254,7 +255,9 @@ def _load_json_rows(path: Path) -> list[Any]:
     return [dict(data)]
 
 
-def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
+def _load_csv_rows(
+    path: Path,
+) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
     return _load_csv_dict_rows(path, value_coercer=_coerce_csv_value)
 
 
@@ -262,7 +265,7 @@ def _load_csv_dict_rows(
     path: Path,
     *,
     value_coercer: Callable[[Any], Any] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
     rows: list[dict[str, Any]] = []
     text = _read_csv_text(path)
     if not text.strip():
@@ -272,6 +275,7 @@ def _load_csv_dict_rows(
     header_index = _csv_header_index(raw_rows)
     if header_index is None:
         raise ValueError("CSV customer data must include a header row.")
+    load_warnings = _leading_rows_skipped_warnings(raw_rows, header_index)
     header_width = len(raw_rows[header_index])
     header_fields = tuple(
         (index, str(field or "").strip())
@@ -298,7 +302,41 @@ def _load_csv_dict_rows(
             if cleaned_value not in (None, ""):
                 cleaned[cleaned_key] = cleaned_value
         rows.append(cleaned)
-    return rows
+    return rows, load_warnings
+
+
+def _leading_rows_skipped_warnings(
+    raw_rows: Sequence[Sequence[Any]],
+    header_index: int,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    skipped: list[tuple[int, Sequence[Any]]] = []
+    for index, row in enumerate(raw_rows[:header_index]):
+        if any(str(cell or "").strip() for cell in row):
+            skipped.append((index + 1, row))
+    if not skipped:
+        return ()
+    first_row_number, first_row = skipped[0]
+    preview = _csv_row_preview(first_row)
+    return (
+        CampaignOpportunityWarning(
+            code="csv_leading_rows_skipped",
+            message=(
+                f"Skipped {len(skipped)} leading row(s) before the CSV header "
+                f"on row {header_index + 1}; "
+                f"first skipped row {first_row_number}: {preview}"
+            ),
+            row_index=first_row_number,
+        ),
+    )
+
+
+def _csv_row_preview(row: Sequence[Any], *, max_chars: int = 80) -> str:
+    text = ", ".join(
+        str(cell).strip() for cell in row if str(cell or "").strip()
+    )
+    if len(text) > max_chars:
+        return text[: max_chars - 3] + "..."
+    return text
 
 
 def _csv_header_index(rows: Sequence[Sequence[Any]]) -> int | None:

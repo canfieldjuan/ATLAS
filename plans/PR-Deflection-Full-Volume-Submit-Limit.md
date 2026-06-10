@@ -76,6 +76,7 @@ Slice phase: Functional validation
 
 - `extracted_content_pipeline/api/control_surfaces.py`
 - `extracted_content_pipeline/campaign_customer_data.py`
+- `extracted_content_pipeline/campaign_source_adapters.py`
 - `plans/PR-Deflection-Full-Volume-Submit-Limit.md`
 - `scripts/build_deflection_messy_csv_fixtures.py`
 - `scripts/smoke_content_ops_deflection_submit_handoff.py`
@@ -107,7 +108,19 @@ the real no-usable-wording failure instead of a parser-level header failure.
 The submit route applies an English-only filter only when row metadata includes
 a language marker. Rows without a language marker continue through the existing
 path. Filtered non-English counts are reported in submit diagnostics instead of
-being treated as row-limit truncation.
+being treated as row-limit truncation. The English matcher accepts locale codes
+(`en`, `en-US`, `en_GB`, `eng`) and human display forms such as
+`English (United Kingdom)` by stripping a trailing parenthetical region before
+matching.
+
+Per the review-closeout and the #1467 admission-contract direction, a skipped
+provider prologue row is no longer silent: `_load_csv_dict_rows` returns a
+`csv_leading_rows_skipped` warning naming the skipped row(s), the campaign
+opportunity loaders merge it into their existing warnings channel, and the
+funnel path exposes it through the new
+`load_source_rows_with_warnings_from_file` adapter so the submit response
+surfaces it in `input_provider.warnings` alongside the existing non-English
+filter and truncation warnings.
 
 The generic `/execute` validator continues to use `_MAX_INGESTION_ROWS`, so
 large inline `source_material` payloads outside the portfolio submit handoff do
@@ -164,6 +177,16 @@ Parked hardening: none.
   - Passed.
 - Passed: git diff --check
   - Passed.
+- Review closeout (display-form language match + prologue-skip warning):
+  - Passed: pytest tests/test_extracted_content_deflection_submit.py
+    tests/test_extracted_campaign_customer_data.py
+    tests/test_extracted_campaign_source_adapters.py
+    tests/test_build_deflection_messy_csv_fixtures.py
+    tests/test_smoke_content_ops_support_ticket_package.py
+    - 153 passed.
+  - Passed: bash scripts/run_extracted_pipeline_checks.sh
+    - 3712 passed, 10 skipped.
+  - Passed: bash scripts/check_ascii_python.sh
 - Pending before push:
   - python scripts/sync_pr_plan.py plans/PR-Deflection-Full-Volume-Submit-Limit.md --check
   - bash scripts/local_pr_review.sh
@@ -172,13 +195,14 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/api/control_surfaces.py` | 118 |
-| `extracted_content_pipeline/campaign_customer_data.py` | 107 |
-| `plans/PR-Deflection-Full-Volume-Submit-Limit.md` | 184 |
+| `extracted_content_pipeline/api/control_surfaces.py` | 174 |
+| `extracted_content_pipeline/campaign_customer_data.py` | 155 |
+| `extracted_content_pipeline/campaign_source_adapters.py` | 35 |
+| `plans/PR-Deflection-Full-Volume-Submit-Limit.md` | 208 |
 | `scripts/build_deflection_messy_csv_fixtures.py` | 4 |
 | `scripts/smoke_content_ops_deflection_submit_handoff.py` | 21 |
 | `tests/test_build_deflection_messy_csv_fixtures.py` | 3 |
-| `tests/test_extracted_campaign_customer_data.py` | 9 |
-| `tests/test_extracted_content_deflection_submit.py` | 187 |
+| `tests/test_extracted_campaign_customer_data.py` | 13 |
+| `tests/test_extracted_content_deflection_submit.py` | 266 |
 | `tests/test_smoke_content_ops_deflection_submit_handoff.py` | 42 |
-| **Total** | **675** |
+| **Total** | **921** |
