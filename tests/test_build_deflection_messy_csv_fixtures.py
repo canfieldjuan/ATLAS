@@ -91,6 +91,7 @@ def test_build_deflection_messy_csv_fixtures_writes_manifest_and_cases(tmp_path:
         ("cp1252_semicolon.csv", 4),
         ("tab_delimited.csv", 4),
         ("html_bodies.csv", 4),
+        ("leading_metadata_row.csv", 3),
         ("quoted_multiline.csv", 3),
         ("ragged_short_rows.csv", 1),
     ],
@@ -126,7 +127,7 @@ def test_generated_html_case_produces_non_empty_deflection_report_items(tmp_path
     assert "Needs review & policy check." in result.markdown
 
 
-@pytest.mark.parametrize("filename", ["leading_metadata_row.csv", "ragged_extra_cells.csv"])
+@pytest.mark.parametrize("filename", ["ragged_extra_cells.csv"])
 def test_generated_bad_messy_csv_cases_fail_loud(tmp_path: Path, filename: str) -> None:
     output_dir = _build_fixtures(tmp_path)
 

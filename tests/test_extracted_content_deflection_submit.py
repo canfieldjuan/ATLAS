@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import http.client
+from io import StringIO
 from pathlib import Path
 import socket
 import urllib.error
@@ -86,6 +88,18 @@ def _csv_bytes(rows: list[str]) -> bytes:
     return ("\n".join(rows) + "\n").encode("utf-8")
 
 
+def _csv_dict_bytes(rows: list[dict[str, str]]) -> bytes:
+    out = StringIO()
+    writer = csv.DictWriter(
+        out,
+        fieldnames=tuple(rows[0]),
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue().encode("utf-8")
+
+
 def _install_blob(
     monkeypatch: pytest.MonkeyPatch,
     data: bytes,
@@ -120,12 +134,13 @@ async def test_deflection_submit_upload_parses_bom_semicolon_csv() -> None:
         "ticket-1;Export help;How do I export attribution reports?\n"
     ).encode("utf-8")
 
-    rows, byte_count = await api_module._load_deflection_submit_upload_rows(
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
         _Upload(data),
         max_bytes=1024,
     )
 
     assert byte_count == len(data)
+    assert load_warnings == ()
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
@@ -134,21 +149,60 @@ async def test_deflection_submit_upload_parses_bom_semicolon_csv() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deflection_submit_upload_fails_loud_on_metadata_header() -> None:
+async def test_deflection_submit_upload_parses_embedded_quotes_and_newlines() -> None:
+    data = _csv_dict_bytes([
+        {
+            "ticket_id": "ticket-quoted-1",
+            "subject": 'Need help with "classes"',
+            "message": (
+                'The portal says "classes" are missing.\n'
+                "I already tried the setup wizard."
+            ),
+            "answer": 'Open Settings, choose "Classes", then select Sync.',
+        },
+    ])
+
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
+        _Upload(data),
+        max_bytes=2048,
+    )
+
+    assert byte_count == len(data)
+    assert load_warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-quoted-1",
+        "subject": 'Need help with "classes"',
+        "message": (
+            'The portal says "classes" are missing.\n'
+            "I already tried the setup wizard."
+        ),
+        "answer": 'Open Settings, choose "Classes", then select Sync.',
+    }]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_skips_provider_metadata_header() -> None:
     data = _csv_bytes([
         "Zendesk ticket export",
         "ticket_id,subject,message",
         "ticket-1,Export help,How do I export attribution reports?",
     ])
 
-    with pytest.raises(api_module.HTTPException) as excinfo:
-        await api_module._load_deflection_submit_upload_rows(
-            _Upload(data),
-            max_bytes=1024,
-        )
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
+        _Upload(data),
+        max_bytes=1024,
+    )
 
-    assert excinfo.value.status_code == 400
-    assert excinfo.value.detail == "Uploaded CSV could not be parsed."
+    assert byte_count == len(data)
+    assert len(load_warnings) == 1
+    assert load_warnings[0]["code"] == "csv_leading_rows_skipped"
+    assert load_warnings[0]["row_index"] == 1
+    assert "Zendesk ticket export" in load_warnings[0]["message"]
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export attribution reports?",
+    }]
 
 
 def _router(
@@ -347,6 +401,198 @@ async def test_deflection_submit_accepts_multipart_csv_bytes() -> None:
 
     snapshot = _route(router, "/ops/deflection-reports/{request_id}/snapshot", "GET")
     assert await snapshot.endpoint(request_id=payload["request_id"]) == gated_result["snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_defaults_to_all_rows_that_fit_upload_guard() -> None:
+    row_count = api_module._MAX_INGESTION_ROWS + 5
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message,resolution_text,pain_category",
+        *(
+            (
+                f"ticket-export-{index},Export reports,"
+                f"How do I export report batch {index}?,"
+                "Open Analytics and click Download report.,exports"
+            )
+            for index in range(row_count)
+        ),
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == row_count
+    assert metadata["submitted_row_count"] == row_count
+    assert metadata["included_row_count"] == row_count
+    assert metadata["truncated_row_count"] == 0
+    assert metadata["max_source_material_rows"] == row_count
+    assert payload["input_provider"]["warnings"] == []
+    assert payload["steps"][0]["result"]["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_filters_non_english_huggingface_shaped_rows() -> None:
+    csv_data = _csv_dict_bytes([
+        {
+            "subject": "Instructions for Returning Products",
+            "body": "How do I return a recent purchase from your store?",
+            "answer": (
+                "Items should be returned within 30 days in their original "
+                "condition. Start the return in the online returns portal."
+            ),
+            "language": "en",
+            "queue": "Returns and Exchanges",
+        },
+        {
+            "subject": "Synchronisationsproblem",
+            "body": "Ich erfahre Schwierigkeiten bei der Synchronisation.",
+            "answer": "Bitte senden Sie aktuelle Fehlerprotokolle.",
+            "language": "de",
+            "queue": "Technical Support",
+        },
+    ])
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["loaded_source_row_count"] == 2
+    assert metadata["source_row_count"] == 1
+    assert metadata["submitted_row_count"] == 1
+    assert metadata["included_row_count"] == 1
+    assert metadata["language_filtered_row_count"] == 1
+    assert metadata["support_ticket_resolution_evidence_count"] == 1
+    assert payload["input_provider"]["warnings"] == [{
+        "code": "deflection_submit_non_english_rows_filtered",
+        "message": "Skipped 1 non-English support-ticket rows.",
+        "row_count": 2,
+        "filtered_row_count": 1,
+    }]
+    snapshot = payload["steps"][0]["result"]["snapshot"]
+    assert snapshot["summary"]["support_ticket_resolution_evidence_count"] == 1
+    assert snapshot["summary"]["drafted_answer_count"] == 1
+    assert "Synchronisationsproblem" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_all_non_english_language_marked_rows() -> None:
+    csv_data = _csv_dict_bytes([
+        {
+            "subject": "Synchronisationsproblem",
+            "body": "Ich erfahre Schwierigkeiten bei der Synchronisation.",
+            "answer": "Bitte senden Sie aktuelle Fehlerprotokolle.",
+            "language": "de",
+        },
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "csv_file": _Upload(csv_data),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+        }))
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == {
+        "reason": "deflection_submit_no_english_rows",
+        "message": "Submitted CSV did not contain English support-ticket rows.",
+        "source_row_count": 1,
+        "language_filtered_row_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_surfaces_skipped_prologue_row_warning() -> None:
+    csv_data = _csv_bytes([
+        "Zendesk ticket export",
+        "ticket_id,subject,message,resolution_text",
+        (
+            "ticket-1,Export attribution,"
+            "How do I export attribution reports?,"
+            "Open Analytics and click Download report."
+        ),
+        (
+            "ticket-2,Report download,"
+            "Where is the report download for attribution exports?,"
+            "Open Analytics and click Download report."
+        ),
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 2
+    assert metadata["submitted_row_count"] == 2
+    warnings = payload["input_provider"]["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "csv_leading_rows_skipped"
+    assert warnings[0]["row_index"] == 1
+    assert "Zendesk ticket export" in warnings[0]["message"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "en",
+        "EN",
+        "eng",
+        "English",
+        "en-US",
+        "en_GB",
+        "English (US)",
+        "English (United Kingdom)",
+        "english(us)",
+        "en (US)",
+    ],
+)
+def test_is_english_language_accepts_common_and_display_forms(value: str) -> None:
+    assert api_module._is_english_language(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "de",
+        "German",
+        "Deutsch (Deutschland)",
+        "es-MX",
+        "fr_FR",
+        "(US)",
+    ],
+)
+def test_is_english_language_rejects_non_english_forms(value: str) -> None:
+    assert api_module._is_english_language(value) is False
 
 
 @pytest.mark.asyncio
@@ -650,7 +896,7 @@ async def test_deflection_submit_rejects_csv_without_usable_ticket_text(
         "reason": "deflection_submit_no_usable_rows",
         "message": "Blob CSV did not include usable support-ticket wording.",
         "source_row_count": 1,
-        "max_source_material_rows": 1000,
+        "max_source_material_rows": 1,
     }
 
 
