@@ -26,6 +26,14 @@ has_managed_pre_push_hook() {
     [ -x "$hook_path" ] && grep -q "ATLAS_LOCAL_PR_REVIEW_HOOK" "$hook_path"
 }
 
+refresh_base_ref() {
+    echo "Refreshing origin/main before local PR review..."
+    if ! git fetch --quiet origin main; then
+        echo "push_pr.sh: failed to refresh origin/main; fetch/rebase before pushing" >&2
+        exit 1
+    fi
+}
+
 if [ "$#" -lt 1 ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     usage
     exit 2
@@ -57,6 +65,7 @@ if has_managed_pre_push_hook && [ "${ATLAS_SKIP_LOCAL_PR_REVIEW:-}" != "1" ]; th
 fi
 
 if [ "${ATLAS_PUSH_PR_DRY_RUN:-}" = "1" ]; then
+    echo "DRY RUN: git fetch --quiet origin main"
     if [ "$run_wrapper_review" -eq 1 ]; then
         echo "DRY RUN: ATLAS_CURRENT_PR_BODY_FILE=$body_file bash scripts/local_pr_review.sh --current-pr-body-file $body_file"
     else
@@ -65,6 +74,8 @@ if [ "${ATLAS_PUSH_PR_DRY_RUN:-}" = "1" ]; then
     echo "DRY RUN: ATLAS_CURRENT_PR_BODY_FILE=$body_file git push $*"
     exit 0
 fi
+
+refresh_base_ref
 
 if [ "$run_wrapper_review" -eq 1 ]; then
     echo "Running local PR review with PR body: $body_file"
