@@ -3,6 +3,7 @@ import { CHECKOUT_SOURCE, resultPath } from "./checkout.js";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LIGHT_REPEAT_TICKET_THRESHOLD = 10;
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -90,6 +91,26 @@ function renderResolutionEvidenceDiagnostic(summary) {
           </div>`;
 }
 
+function renderRepeatVolumeDiagnostic(summary) {
+  const count = finiteCount(summary.repeat_ticket_count);
+  const light = count < LIGHT_REPEAT_TICKET_THRESHOLD;
+  const label = count > 0 ? `${formatNumber(count)} repeat-ticket hits` : "No repeated clusters yet";
+  const copy = light
+    ? "This export is light on repeat volume. Review the free snapshot before paying for the full report."
+    : "This export has enough repeated ticket volume for a substantial paid report preview.";
+  return `<div
+            class="repeat-volume ${light ? "light" : "ready"}"
+            data-atlas-deflection-repeat-volume
+            data-repeat-volume-light="${light ? "true" : "false"}"
+          >
+            <div>
+              <span>Repeat-ticket volume</span>
+              <strong>${escapeHtml(label)}</strong>
+            </div>
+            <p>${escapeHtml(copy)}</p>
+          </div>`;
+}
+
 function renderSnapshot(report) {
   if (!report || !report.ok || !report.snapshot) {
     return `<section class="snapshot" aria-labelledby="snapshot-title">
@@ -105,9 +126,11 @@ function renderSnapshot(report) {
           <h2 id="snapshot-title">Free snapshot</h2>
           <div class="metrics">
             <div><span>Questions found</span><strong>${escapeHtml(formatNumber(summary.generated))}</strong></div>
+            <div><span>Repeat-ticket hits</span><strong>${escapeHtml(formatNumber(finiteCount(summary.repeat_ticket_count)))}</strong></div>
             <div><span>Evidence-backed answers</span><strong>${escapeHtml(formatNumber(summary.drafted_answer_count))}</strong></div>
             <div><span>Needs support proof</span><strong>${escapeHtml(formatNumber(summary.no_proven_answer_count))}</strong></div>
           </div>
+          ${renderRepeatVolumeDiagnostic(summary)}
           ${renderResolutionEvidenceDiagnostic(summary)}
           <h2>Help-desk SEO targeting list</h2>
           <p class="muted">Use actual customer phrases from the uploaded tickets for help-center titles, internal-search synonyms, and FAQ wording. No keyword volume, ranking, or traffic promise is implied.</p>
@@ -239,16 +262,19 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     button { width: 100%; border: 0; border-radius: 8px; background: #22c55e; color: #020617; padding: 13px 16px; font-weight: 800; cursor: pointer; }
     button:disabled { background: #1e293b; color: rgba(226, 232, 240, .55); cursor: not-allowed; }
     .snapshot { margin-top: 32px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(15, 23, 42, .42); padding: 24px; }
-    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0 24px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0 24px; }
     .metrics div { border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 14px; background: rgba(2, 6, 23, .35); }
     .metrics span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
     .metrics strong { display: block; margin-top: 8px; font-size: 28px; }
-    .resolution-evidence { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; margin: 0 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 16px; background: rgba(2, 6, 23, .35); }
-    .resolution-evidence span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
-    .resolution-evidence strong { display: block; margin-top: 6px; font-size: 18px; }
-    .resolution-evidence p { max-width: 560px; margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .resolution-evidence, .repeat-volume { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; margin: 0 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; padding: 16px; background: rgba(2, 6, 23, .35); }
+    .repeat-volume { margin-bottom: 12px; }
+    .resolution-evidence span, .repeat-volume span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
+    .resolution-evidence strong, .repeat-volume strong { display: block; margin-top: 6px; font-size: 18px; }
+    .resolution-evidence p, .repeat-volume p { max-width: 560px; margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
     .resolution-evidence.present strong { color: #86efac; }
     .resolution-evidence.absent strong { color: #fde68a; }
+    .repeat-volume.ready strong { color: #86efac; }
+    .repeat-volume.light strong { color: #fde68a; }
     .customer-wording-card { margin: 18px 0 24px; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .35); padding: 18px; }
     .customer-wording-header { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; }
     .customer-wording-header p { margin: 0; font-weight: 700; }
@@ -264,7 +290,8 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
     .success { color: #bbf7d0; background: rgba(34, 197, 94, .1); border-color: rgba(34, 197, 94, .28); }
     .muted { color: rgba(226, 232, 240, .68); line-height: 1.65; }
-    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header, .resolution-evidence { align-items: flex-start; flex-direction: column; } }
+    @media (max-width: 920px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header, .resolution-evidence, .repeat-volume { align-items: flex-start; flex-direction: column; } }
   </style>
 </head>
 <body>
