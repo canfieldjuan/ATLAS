@@ -341,7 +341,10 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
             "no_proven_answer_count": 1,
             "support_ticket_resolution_evidence_count": 1,
             "support_ticket_resolution_evidence_present": True,
-            "repeat_ticket_count": 5,
+            # #1460: only questions asked at least twice count as repeats; the
+            # single-ticket SSO item is reported separately.
+            "repeat_ticket_count": 4,
+            "non_repeat_ticket_count": 1,
         },
         "top_questions": [
             {
@@ -474,6 +477,7 @@ def test_deflection_snapshot_exposes_complete_source_date_window() -> None:
                 "source_title": "SSO setup",
                 "text": "Can I enable SSO for my workspace?",
                 "created_at": "2026-05-15",
+                "resolution_text": "Open Settings, choose Security, then enable SSO.",
             },
         ],
         max_items=2,
@@ -1257,19 +1261,32 @@ def test_deflection_report_cli_fails_required_output_checks_for_weak_rows(
             str(result_output),
         ])
 
-    assert str(exc_info.value) == "Deflection report output checks failed: condensed"
+    # #1460: two one-off questions no longer count as repeat FAQ items, so no
+    # items are generated and every required output check fails.
+    assert str(exc_info.value) == (
+        "Deflection report output checks failed: condensed, has_action_items, "
+        "resolution_evidence_scoped, uses_user_vocabulary"
+    )
     assert not output.exists()
     assert not summary_output.exists()
     result = json.loads(result_output.read_text(encoding="utf-8"))
     assert result["status"] == "failed_output_checks"
-    assert result["failed_output_checks"] == ["condensed"]
+    assert result["failed_output_checks"] == [
+        "condensed",
+        "has_action_items",
+        "resolution_evidence_scoped",
+        "uses_user_vocabulary",
+    ]
+    assert result["generated"] == 0
     assert result["summary"]["source_count"] == 2
     assert result["summary"]["ticket_source_count"] == 2
+    assert result["summary"]["non_repeat_ticket_count"] == 2
+    assert result["summary"]["non_repeat_question_count"] == 2
     assert result["output"]["markdown_path"] == str(output)
     assert result["output"]["summary_path"] == str(summary_output)
     assert result["output"]["result_path"] == str(result_output)
-    assert result["diagnostics"]["item_count"] == 2
-    assert result["diagnostics"]["items"][0]["source_id_count"] == 1
+    assert result["diagnostics"]["item_count"] == 0
+    assert result["diagnostics"]["items"] == []
     assert "markdown" not in result
 
 
@@ -1283,13 +1300,13 @@ def test_deflection_report_cli_applies_custom_intent_rules(tmp_path: Path) -> No
                 "ticket_id": "ticket-access-1",
                 "source_type": "support_ticket",
                 "subject": "Invite links",
-                "message": "The invite link expired before a contractor could join.",
+                "message": "The invite link for the new teammate login email expired.",
             },
             {
                 "ticket_id": "ticket-access-2",
                 "source_type": "support_ticket",
                 "subject": "Login email",
-                "message": "How do I change the login email for a new teammate?",
+                "message": "How do I get the expired invite link for the new teammate login email?",
             },
         ]),
         encoding="utf-8",
@@ -1340,7 +1357,7 @@ def test_deflection_report_cli_accepts_json_rule_file(tmp_path: Path) -> None:
                 "ticket_id": "ticket-rule-2",
                 "source_type": "support_ticket",
                 "subject": "Connector lag",
-                "message": "Can connector lag delay SSO provisioning?",
+                "message": "Can we enable SSO after the warehouse sync?",
             },
         ]),
         encoding="utf-8",
