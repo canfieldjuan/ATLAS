@@ -436,7 +436,7 @@ async def test_support_ticket_provider_feeds_real_landing_page_generation() -> N
     assert "Uploaded support tickets" in system_prompt
     assert "Last 90 days of support tickets" not in system_prompt
     assert "How do I change my login email?" in system_prompt
-    assert "How do we export campaign attribution data before renewal?" in system_prompt
+    assert "How do we export the campaign reporting dashboard before renewal?" in system_prompt
     assert "Generate one landing page" in user_prompt
 
 

@@ -312,7 +312,7 @@ async def test_support_ticket_provider_feeds_landing_page_execute_context() -> N
     assert context["cta_url"] == "/systems/ai-content-ops/intake"
     assert context["faq_questions"] == [
         "How do I change my login email?",
-        "How do we export campaign attribution data before renewal?",
+        "How do we export the campaign reporting dashboard before renewal?",
     ]
     assert context["has_dated_window"] is False
     assert context["support_ticket_resolution_evidence_present"] is False
