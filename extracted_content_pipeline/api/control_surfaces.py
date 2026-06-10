@@ -1952,6 +1952,8 @@ def _with_deflection_submit_diagnostics(
                 "source_period",
                 "top_ticket_clusters",
                 "cluster_quality",
+                "cluster_preview_skipped",
+                "cluster_preview_token_set_row_count",
                 "support_ticket_resolution_evidence_present",
                 "support_ticket_resolution_evidence_count",
             )
@@ -1979,6 +1981,13 @@ def _with_deflection_submit_diagnostics(
         dict(warning)
         for warning in csv_load_warnings
         if isinstance(warning, Mapping)
+    )
+    package_warnings = package.get("warnings") if isinstance(package, Mapping) else ()
+    warnings.extend(
+        dict(warning)
+        for warning in package_warnings or ()
+        if isinstance(warning, Mapping)
+        and warning.get("code") == "cluster_preview_skipped_large_upload"
     )
     if language_filtered_row_count:
         warnings.append({

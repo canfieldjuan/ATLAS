@@ -239,6 +239,14 @@ _LOW_SIGNAL_ANCHOR_TOKENS = {
     "same",
     "update",
 }
+# Token-set clustering compares each row's tokens against every prior
+# token set, which is quadratic in row count (measured ~6.7s at 2k rows and
+# ~40 minutes extrapolated at 35k on real long-form text, #1454). Above this
+# many token-set rows the preview is skipped and reported instead of running.
+# The legacy submit path capped uploads at 1,000 rows, so this threshold
+# never skips an input shape the path previously clustered.
+MAX_TOKEN_SET_CLUSTER_ROWS = 2000
+
 _EXPLICIT_LABEL_KEYS = ("pain_category", "category", "intent", "topic")
 _TEXT_KEYS = (
     "source_title",
@@ -391,16 +399,48 @@ def support_ticket_cluster_hint(row: Mapping[str, Any]) -> SupportTicketClusterH
 
 def assign_support_ticket_clusters(
     rows: Sequence[Mapping[str, Any]],
+    *,
+    max_token_set_rows: int | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """Return rows annotated with stable deterministic support-ticket clusters."""
 
+    annotated, _diagnostics = assign_support_ticket_clusters_with_diagnostics(
+        rows,
+        max_token_set_rows=max_token_set_rows,
+    )
+    return annotated
+
+
+def assign_support_ticket_clusters_with_diagnostics(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    max_token_set_rows: int | None = None,
+) -> tuple[tuple[dict[str, Any], ...], dict[str, Any]]:
+    """Cluster rows and report whether the token-set preview was skipped.
+
+    Token-set hints (rows without an explicit category) require pairwise
+    token comparison that is quadratic in row count, so above
+    ``max_token_set_rows`` those rows are deliberately left uncategorized
+    instead of silently wedging the worker (#1454). Explicit, provided, and
+    keyword hints always cluster; they use cheap key-equality bucketing.
+    """
+
+    if max_token_set_rows is None:
+        max_token_set_rows = MAX_TOKEN_SET_CLUSTER_ROWS
     buckets: list[_ClusterBucket] = []
     assignments: list[_ClusterBucket | None] = []
     hints = tuple(support_ticket_cluster_hint(row) for row in rows)
     token_row_counts = _token_row_counts(hints)
+    token_set_row_count = sum(
+        1 for hint in hints if hint is not None and hint.source == "token_set"
+    )
+    skip_token_set_preview = token_set_row_count > max_token_set_rows
 
     for hint in hints:
         if hint is None:
+            assignments.append(None)
+            continue
+        if skip_token_set_preview and hint.source == "token_set":
             assignments.append(None)
             continue
         bucket = _bucket_for_hint(
@@ -423,7 +463,12 @@ def assign_support_ticket_clusters(
             next_row["support_ticket_cluster_key"] = _bucket_key(bucket, label)
             next_row["support_ticket_cluster_source"] = bucket.source
         out.append(next_row)
-    return tuple(out)
+    diagnostics: dict[str, Any] = {
+        "token_set_row_count": token_set_row_count,
+        "max_token_set_rows": max_token_set_rows,
+        "cluster_preview_skipped": skip_token_set_preview,
+    }
+    return tuple(out), diagnostics
 
 
 def support_ticket_cluster_summary(
@@ -637,8 +682,10 @@ def _compact_key(value: Any) -> str:
 
 
 __all__ = [
+    "MAX_TOKEN_SET_CLUSTER_ROWS",
     "SupportTicketClusterHint",
     "assign_support_ticket_clusters",
+    "assign_support_ticket_clusters_with_diagnostics",
     "support_ticket_cluster_hint",
     "support_ticket_cluster_quality",
     "support_ticket_cluster_summary",
