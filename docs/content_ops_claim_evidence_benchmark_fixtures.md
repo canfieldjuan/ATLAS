@@ -124,6 +124,25 @@ Field rules:
 
 Extra response fields are not part of the contract.
 
+## Runner Harness
+
+The benchmark runner harness is intentionally provider-injected. It renders the
+prompt/schema contract for each valid fixture row, calls a supplied provider
+boundary, and decodes the returned response through the same structured-response
+validator documented above.
+
+Runner output is a per-model in-memory result:
+
+- valid rows expose decoded responses keyed by `triple_id` for the existing
+  scorer;
+- malformed provider responses are recorded as row errors and excluded from the
+  response map;
+- provider exceptions are recorded by exception class name and do not stop later
+  rows from running.
+
+The harness does not choose models, read credentials, call network providers,
+write benchmark result files, or expose verifier/MCP behavior.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
