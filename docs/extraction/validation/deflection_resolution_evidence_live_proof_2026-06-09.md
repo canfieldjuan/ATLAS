@@ -4,6 +4,14 @@ Date: 2026-06-09
 
 Issue: #1419
 
+> Re-baselined 2026-06-10 for #1460 (measured repetition): FAQ grouping now
+> requires the same question to repeat, not just shared topic membership. The
+> unresolved-lane fixture rows were reworded so each theme genuinely repeats
+> the same question (SSO certificate upload x3, CRM sync pause x2), and the
+> committed report/summary/result artifacts were regenerated with the same
+> documented command. Headline counts are unchanged; the summary gained
+> `non_repeat_ticket_count` / `non_repeat_question_count` (both 0 here).
+
 ## What Ran
 
 This validation proves the paid FAQ deflection report can produce publishable
@@ -54,8 +62,9 @@ The generated report includes both required customer-facing lanes:
   - attribution/report export, backed by 4 resolved tickets;
   - invoice download, backed by 3 resolved tickets.
 - `## No Proven Answer Yet` contains two unresolved themes:
-  - SSO setup, backed by 3 tickets but no resolution text;
-  - CRM sync, backed by 2 tickets but no resolution text.
+  - SSO certificate upload, asked by 3 tickets but no resolution text;
+  - CRM sync pause after a field-mapping change, asked by 2 tickets but no
+    resolution text.
 
 ## Launch Implication
 

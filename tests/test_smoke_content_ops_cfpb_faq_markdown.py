@@ -82,9 +82,11 @@ def test_cfpb_faq_smoke_builds_grounded_markdown(monkeypatch, tmp_path: Path) ->
         "fetch_cfpb_source_rows_with_profile",
         lambda **kwargs: calls.append(kwargs)
         or (
+            # #1460: both complaints repeat the same overdraft-fee question
+            # so the smoke still yields a billable FAQ cluster.
             [
                 _row("1", "I was charged overdraft fees after I closed the account."),
-                _row("2", "My payment was applied to the wrong loan balance."),
+                _row("2", "I was charged overdraft fees after closing my account."),
             ],
             _profile(source_count=2, scanned_count=4),
         ),
@@ -140,7 +142,12 @@ def test_cfpb_faq_smoke_accepts_source_policy_questions_for_weak_rows(
         smoke,
         "fetch_cfpb_source_rows_with_profile",
         lambda **_kwargs: (
-            [_row("1", "Fee appeared after closure."), _row("2", "Fees changed.")],
+            # #1460: the weak rows repeat the same gist so the
+            # source-policy question path still yields an item.
+            [
+                _row("1", "Fee appeared after closure."),
+                _row("2", "Fee appeared again after closure."),
+            ],
             _profile(source_count=2),
         ),
     )

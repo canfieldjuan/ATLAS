@@ -58,6 +58,9 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "resolution_text": "Enable Report Downloads for the analyst role before exporting.",
         "pain_category": "reporting friction",
     },
+    # #1460: questions without resolution evidence need a repeat partner to
+    # stay billable FAQ clusters; one-off questions are excluded and counted
+    # via non_repeat_ticket_count.
     {
         "source_type": "search_log",
         "source_id": "search-export-1",
@@ -67,10 +70,25 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "results_count": "0",
     },
     {
+        "source_type": "search_log",
+        "source_id": "search-export-2",
+        "source_title": "Zero-result export search",
+        "text": "export the attribution report",
+        "search_count": "11",
+        "results_count": "0",
+    },
+    {
         "source_type": "support_ticket",
         "source_id": "ticket-sso-1",
         "source_title": "Integration SSO setup",
         "text": "How do I configure SSO for my team integration?",
+        "pain_category": "integration setup",
+    },
+    {
+        "source_type": "support_ticket",
+        "source_id": "ticket-sso-2",
+        "source_title": "Integration SSO setup",
+        "text": "How can I configure SSO for our team integration?",
         "pain_category": "integration setup",
     },
     {
@@ -84,6 +102,13 @@ DEFAULT_ROWS: tuple[dict[str, str], ...] = (
         "source_id": "ticket-billing-1",
         "source_title": "Invoice charge dispute",
         "text": "Why was I charged a fee after the invoice was already paid?",
+        "pain_category": "billing and payments",
+    },
+    {
+        "source_type": "support_ticket",
+        "source_id": "ticket-billing-2",
+        "source_title": "Invoice charge dispute",
+        "text": "Why was I charged a fee after the invoice was paid?",
         "pain_category": "billing and payments",
     },
 )

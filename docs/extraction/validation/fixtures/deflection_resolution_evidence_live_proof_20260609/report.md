@@ -108,12 +108,12 @@ No verified support resolution was present in the uploaded data. Support should 
 **Source IDs (full list):** zd-4301, fd-4302, hs-4303
 
 - `zd-4301` - SSO certificate rotation: "Where do I upload the new SSO certificate before it expires?"
-- `fd-4302` - Domain verification for SSO: "Why is domain verification failing during SSO setup?"
-- `hs-4303` - SCIM before SSO enforcement: "Can SCIM create users before they sign in with SSO?"
+- `fd-4302` - SSO certificate rotation: "Where should I upload the new SSO certificate before it expires?"
+- `hs-4303` - SSO certificate upload: "Where do we upload the new SSO certificate before it expires?"
 
 ### 4. Why did the CRM integration pause after the field mapping changed?
 
 **Source IDs (full list):** zd-4401, fd-4402
 
 - `zd-4401` - CRM sync paused: "Why did the CRM integration pause after the field mapping changed?"
-- `fd-4402` - Duplicate contacts from CRM sync: "How do I prevent duplicate contacts from the CRM sync?"
+- `fd-4402` - CRM sync paused after mapping change: "Why did the CRM integration sync pause after the field mapping change?"

@@ -291,6 +291,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _payload(args: argparse.Namespace) -> dict[str, Any]:
+    source_rows = [
+        {
+            "id": args.source_id,
+            "company": args.target_account,
+            "vendor": args.source_vendor,
+            "source_type": args.source_type,
+            "source_title": args.source_title,
+            "text": args.source_material,
+            "contact_email": args.source_contact_email,
+        }
+    ]
+    outputs = [
+        item.strip()
+        for item in str(args.outputs or "").split(",")
+        if item.strip()
+    ]
+    if "faq_markdown" in outputs:
+        # #1460: FAQ items require the same question from >= 2 tickets;
+        # one-off questions are excluded. Repeat the smoke ticket once so
+        # the deterministic FAQ path still yields an item.
+        source_rows.append({**source_rows[0], "id": f"{args.source_id}-repeat"})
     payload: dict[str, Any] = {
         "preset": str(args.preset or "").strip() or "full_campaign",
         "target_mode": str(args.target_mode or "").strip() or "vendor_retention",
@@ -303,27 +324,13 @@ def _payload(args: argparse.Namespace) -> dict[str, Any]:
             "opportunity_id": args.opportunity_id,
             "audience": args.audience,
             "campaign_name": args.campaign_name,
-            "source_material": [
-                {
-                    "id": args.source_id,
-                    "company": args.target_account,
-                    "vendor": args.source_vendor,
-                    "source_type": args.source_type,
-                    "source_title": args.source_title,
-                    "text": args.source_material,
-                    "contact_email": args.source_contact_email,
-                }
-            ],
+            "source_material": source_rows,
         },
     }
     if args.source_max_text_chars is not None:
         payload["inputs"]["source_max_text_chars"] = args.source_max_text_chars
-    if args.outputs:
-        payload["outputs"] = [
-            item.strip()
-            for item in str(args.outputs).split(",")
-            if item.strip()
-        ]
+    if outputs:
+        payload["outputs"] = outputs
     return payload
 
 
