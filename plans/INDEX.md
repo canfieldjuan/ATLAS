@@ -1,6 +1,6 @@
 # Plan archive index
 
-921 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+922 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -861,6 +861,7 @@
 - [PR-Refresh-CLAUDE-Md](archive/PR-Refresh-CLAUDE-Md.md)
 - [PR-Reviewer-Miss-Metrics](archive/PR-Reviewer-Miss-Metrics.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Path-Trigger-Audit](archive/PR-Reviewer-Path-Trigger-Audit.md) - lane: dev-workflow/review-contract | phase: Workflow/process
+- [PR-Reviewer-R14-Review-Body-Linter](archive/PR-Reviewer-R14-Review-Body-Linter.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Reviewer-Reconciliation-Audit](archive/PR-Reviewer-Reconciliation-Audit.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-Reviewer-Rules-Contract](archive/PR-Reviewer-Rules-Contract.md) - lane: dev-workflow/review-contract | phase: Workflow/process
 - [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
