@@ -13,6 +13,8 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     ModelScore,
     PairwiseAgreement,
     StabilityScore,
+    build_claim_evidence_prompt_contract,
+    claim_evidence_response_json_schema,
     evaluate_thresholds,
     intra_model_stability,
     load_claim_evidence_fixture_text,
@@ -26,6 +28,7 @@ def _triple(triple_id: str, expected: bool, difficulty: str) -> ClaimEvidenceTri
     return ClaimEvidenceTriple(
         triple_id=triple_id,
         claim_id=f"claim-{triple_id}",
+        claim_text=f"Claim statement {triple_id}",
         evidence_quote=f"evidence {triple_id}",
         source_id=f"source-{triple_id}",
         expected_supports=expected,
@@ -50,6 +53,7 @@ def test_triple_decoder_accepts_valid_decoded_input() -> None:
         {
             "triple_id": "t1",
             "claim_id": "c1",
+            "claim_text": "The product integrates with Salesforce.",
             "evidence_quote": "The product integrates with Salesforce.",
             "source_id": "s1",
             "expected_supports": True,
@@ -60,6 +64,7 @@ def test_triple_decoder_accepts_valid_decoded_input() -> None:
     assert errors == ()
     assert triple is not None
     assert triple.triple_id == "t1"
+    assert triple.claim_text == "The product integrates with Salesforce."
     assert triple.expected_supports is True
 
 
@@ -68,6 +73,7 @@ def test_triple_decoder_reports_missing_and_wrong_typed_fields() -> None:
         {
             "triple_id": None,
             "claim_id": 10,
+            "claim_text": " ",
             "evidence_quote": "",
             "source_id": "s1",
             "expected_supports": "yes",
@@ -79,6 +85,7 @@ def test_triple_decoder_reports_missing_and_wrong_typed_fields() -> None:
     assert errors == (
         "triple_id missing",
         "claim_id missing",
+        "claim_text missing",
         "evidence_quote missing",
         "expected_supports missing",
         "difficulty must be easy or hard",
@@ -106,6 +113,7 @@ def test_fixture_validator_prefixes_row_decoder_errors() -> None:
             {
                 "triple_id": "t1",
                 "claim_id": "",
+                "claim_text": "",
                 "evidence_quote": "source quote",
                 "source_id": "s1",
                 "expected_supports": None,
@@ -117,6 +125,7 @@ def test_fixture_validator_prefixes_row_decoder_errors() -> None:
     assert fixture.triples == ()
     assert fixture.errors == (
         "row 1: claim_id missing",
+        "row 1: claim_text missing",
         "row 1: expected_supports missing",
         "row 1: difficulty must be easy or hard",
     )
@@ -296,6 +305,77 @@ def test_response_decoder_reports_missing_and_wrong_typed_fields() -> None:
         "confidence must be an integer from 1 to 5",
         "reason missing",
     )
+
+
+def test_prompt_contract_renders_required_triple_fields_and_guardrails() -> None:
+    contract = build_claim_evidence_prompt_contract(
+        ClaimEvidenceTriple(
+            triple_id="hard-001",
+            claim_id="claim-escalation-001",
+            claim_text="Customers reduced escalations by 31 percent.",
+            evidence_quote="Escalation volume fell 31% after rollout.",
+            source_id="case-study-acme",
+            expected_supports=True,
+            difficulty=HARD,
+        )
+    )
+
+    assert contract.contract_version == "verify_claim_evidence.v1"
+    assert "Claim: Customers reduced escalations by 31 percent." in contract.prompt
+    assert "Claim id: claim-escalation-001" in contract.prompt
+    assert "Source id: case-study-acme" in contract.prompt
+    assert "Difficulty bucket: hard" in contract.prompt
+    assert "Escalation volume fell 31% after rollout." in contract.prompt
+    assert "supports the claim under test" in contract.prompt
+    assert "Do not decide whether the claim is true in general." in contract.prompt
+    assert "Do not use outside knowledge" in contract.prompt
+
+
+def test_response_json_schema_matches_decoder_contract() -> None:
+    schema = claim_evidence_response_json_schema()
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["supports", "confidence", "reason"]
+    assert schema["properties"]["supports"]["type"] == "boolean"
+    assert schema["properties"]["confidence"]["type"] == "integer"
+    assert schema["properties"]["confidence"]["minimum"] == 1
+    assert schema["properties"]["confidence"]["maximum"] == 5
+    assert schema["properties"]["reason"]["type"] == "string"
+    assert schema["properties"]["reason"]["pattern"] == "\\S"
+
+    response, errors = ClaimEvidenceResponse.from_mapping(
+        {"supports": True, "confidence": 4, "reason": "quote states it"}
+    )
+
+    assert errors == ()
+    assert response == ClaimEvidenceResponse(True, 4, "quote states it")
+
+
+def test_response_json_schema_rejects_whitespace_reason_like_decoder() -> None:
+    schema = claim_evidence_response_json_schema()
+    whitespace_reason = {"supports": True, "confidence": 4, "reason": "   "}
+
+    assert schema["properties"]["reason"]["pattern"] == "\\S"
+    assert not any(
+        character.strip() for character in str(whitespace_reason["reason"])
+    )
+
+    response, errors = ClaimEvidenceResponse.from_mapping(whitespace_reason)
+
+    assert response is None
+    assert errors == ("reason missing",)
+
+
+def test_response_json_schema_returns_fresh_mapping() -> None:
+    schema = claim_evidence_response_json_schema()
+    schema["required"] = []
+
+    assert claim_evidence_response_json_schema()["required"] == [
+        "supports",
+        "confidence",
+        "reason",
+    ]
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:

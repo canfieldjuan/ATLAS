@@ -31,6 +31,7 @@ def _row(
     return {
         "triple_id": triple_id,
         "claim_id": f"claim-{triple_id}",
+        "claim_text": f"Claim statement {triple_id}",
         "evidence_quote": f"evidence {triple_id}",
         "source_id": f"source-{triple_id}",
         "expected_supports": expected,

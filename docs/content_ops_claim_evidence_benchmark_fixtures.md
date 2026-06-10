@@ -14,6 +14,7 @@ Each row is an object with these fields:
 {
   "triple_id": "real-001",
   "claim_id": "claim-churn-001",
+  "claim_text": "Customers reduced manual escalation work by 31% after rollout.",
   "evidence_quote": "Customers reduced manual escalation work by 31% after rollout.",
   "source_id": "case-study-acme-q4",
   "expected_supports": true,
@@ -24,7 +25,9 @@ Each row is an object with these fields:
 Field rules:
 
 - `triple_id`: unique non-empty string for this benchmark row.
-- `claim_id`: non-empty string that identifies the claim under test.
+- `claim_id`: non-empty identifier for traceability, deduplication, or registry
+  linkage.
+- `claim_text`: non-empty claim statement the model judges against the evidence.
 - `evidence_quote`: non-empty quote or excerpt the model will judge.
 - `source_id`: non-empty source identifier for traceability.
 - `expected_supports`: operator label; `true` means the evidence supports the
@@ -53,6 +56,7 @@ JSON fixture text is one array of row objects:
   {
     "triple_id": "real-001",
     "claim_id": "claim-churn-001",
+    "claim_text": "Customers reduced manual escalation work by 31% after rollout.",
     "evidence_quote": "Customers reduced manual escalation work by 31% after rollout.",
     "source_id": "case-study-acme-q4",
     "expected_supports": true,
@@ -64,8 +68,8 @@ JSON fixture text is one array of row objects:
 JSONL fixture text is one row object per non-empty line:
 
 ```jsonl
-{"triple_id":"real-001","claim_id":"claim-churn-001","evidence_quote":"Customers reduced manual escalation work by 31% after rollout.","source_id":"case-study-acme-q4","expected_supports":true,"difficulty":"easy"}
-{"triple_id":"hard-001","claim_id":"claim-integration-002","evidence_quote":"The platform exports CSV files for CRM import.","source_id":"docs-export","expected_supports":false,"difficulty":"hard"}
+{"triple_id":"real-001","claim_id":"claim-churn-001","claim_text":"Customers reduced manual escalation work by 31% after rollout.","evidence_quote":"Customers reduced manual escalation work by 31% after rollout.","source_id":"case-study-acme-q4","expected_supports":true,"difficulty":"easy"}
+{"triple_id":"hard-001","claim_id":"claim-integration-002","claim_text":"The platform syncs Salesforce opportunities natively.","evidence_quote":"The platform exports CSV files for CRM import.","source_id":"docs-export","expected_supports":false,"difficulty":"hard"}
 ```
 
 JSONL lines must be objects. Arrays belong in JSON fixture text, not JSONL, so
@@ -86,6 +90,40 @@ The command prints a JSON envelope with `ok`, `errors`, `triple_count`,
 zero only when the fixture is valid. It does not call models, write benchmark
 results, or expose verifier/MCP behavior.
 
+## Prompt And Response Contract
+
+The structured-witness contract is versioned as `verify_claim_evidence.v1`.
+For each benchmark row, the future provider runner will render a prompt with:
+
+- the claim text;
+- the claim id for traceability;
+- the evidence quote;
+- the source id;
+- the difficulty bucket.
+
+The prompt asks the witness to decide whether the evidence quote supports the
+claim under test. It explicitly tells the witness not to decide whether the
+claim is generally true and not to use outside knowledge.
+
+Responses must match this strict JSON shape:
+
+```json
+{
+  "supports": true,
+  "confidence": 4,
+  "reason": "The quote directly states the measured outcome."
+}
+```
+
+Field rules:
+
+- `supports`: boolean support judgment.
+- `confidence`: integer from 1 through 5. Downstream scoring only credits high
+  confidence responses.
+- `reason`: non-empty, non-whitespace rationale grounded in the evidence quote.
+
+Extra response fields are not part of the contract.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
@@ -99,6 +137,6 @@ where keyword overlap is not enough:
 
 ## Out Of Scope
 
-This fixture does not include model responses, prompts, provider settings,
-tokens, customer draft content, or verifier/MCP wiring. The future runner owns
-file-path loading, provider execution, and result artifacts.
+This fixture does not include model responses, provider settings, tokens,
+customer draft content, or verifier/MCP wiring. The future runner owns provider
+execution and result artifacts.
