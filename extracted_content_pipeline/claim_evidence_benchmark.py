@@ -24,6 +24,7 @@ FINAL_HARD_TARGET = 10
 FIXTURE_FORMAT_JSON = "json"
 FIXTURE_FORMAT_JSONL = "jsonl"
 VALID_FIXTURE_FORMATS = frozenset({FIXTURE_FORMAT_JSON, FIXTURE_FORMAT_JSONL})
+VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION = "verify_claim_evidence.v1"
 
 
 def _required_text(data: Mapping[str, object], key: str) -> str | None:
@@ -59,6 +60,7 @@ class ClaimEvidenceTriple:
 
     triple_id: str
     claim_id: str
+    claim_text: str
     evidence_quote: str
     source_id: str
     expected_supports: bool
@@ -74,6 +76,7 @@ class ClaimEvidenceTriple:
         errors: list[str] = []
         triple_id = _required_text(data, "triple_id")
         claim_id = _required_text(data, "claim_id")
+        claim_text = _required_text(data, "claim_text")
         evidence_quote = _required_text(data, "evidence_quote")
         source_id = _required_text(data, "source_id")
         expected_supports = _required_bool(data, "expected_supports")
@@ -82,6 +85,7 @@ class ClaimEvidenceTriple:
         for key, value in (
             ("triple_id", triple_id),
             ("claim_id", claim_id),
+            ("claim_text", claim_text),
             ("evidence_quote", evidence_quote),
             ("source_id", source_id),
         ):
@@ -98,6 +102,7 @@ class ClaimEvidenceTriple:
             cls(
                 triple_id=triple_id or "",
                 claim_id=claim_id or "",
+                claim_text=claim_text or "",
                 evidence_quote=evidence_quote or "",
                 source_id=source_id or "",
                 expected_supports=bool(expected_supports),
@@ -143,6 +148,79 @@ class ClaimEvidenceResponse:
             ),
             (),
         )
+
+
+@dataclass(frozen=True)
+class ClaimEvidencePromptContract:
+    """Provider-neutral prompt and response schema for one witness call."""
+
+    contract_version: str
+    prompt: str
+    response_schema: Mapping[str, object]
+
+
+def claim_evidence_response_json_schema() -> dict[str, object]:
+    """Return the strict JSON Schema for structured witness responses."""
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["supports", "confidence", "reason"],
+        "properties": {
+            "supports": {
+                "type": "boolean",
+                "description": (
+                    "True only when the provided evidence quote supports the "
+                    "claim under test."
+                ),
+            },
+            "confidence": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5,
+                "description": (
+                    "Confidence in the support judgment. Use 4 or 5 only for "
+                    "clear support or clear non-support."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "pattern": "\\S",
+                "description": (
+                    "Short rationale grounded only in the evidence quote."
+                ),
+            },
+        },
+    }
+
+
+def build_claim_evidence_prompt_contract(
+    triple: ClaimEvidenceTriple,
+) -> ClaimEvidencePromptContract:
+    """Build the deterministic prompt/schema contract for one benchmark triple."""
+
+    prompt = "\n".join(
+        (
+            f"Contract: {VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION}",
+            "Task: decide whether the evidence quote supports the claim under test.",
+            "Judge support only from the provided evidence quote.",
+            "Do not decide whether the claim is true in general.",
+            "Do not use outside knowledge or infer facts not present in the quote.",
+            "Return only JSON that matches the response schema.",
+            "",
+            f"Claim: {triple.claim_text}",
+            f"Claim id: {triple.claim_id}",
+            f"Source id: {triple.source_id}",
+            f"Difficulty bucket: {triple.difficulty}",
+            "Evidence quote:",
+            triple.evidence_quote,
+        )
+    )
+    return ClaimEvidencePromptContract(
+        contract_version=VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION,
+        prompt=prompt,
+        response_schema=claim_evidence_response_json_schema(),
+    )
 
 
 @dataclass(frozen=True)
