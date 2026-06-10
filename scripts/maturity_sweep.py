@@ -267,16 +267,22 @@ def index_tests(root):
     return sources, "\n".join(blobs)
 
 
+def matching_test_sources(module_stem, test_sources):
+    """All test sources whose file stem contains the module stem as a
+    _-delimited segment run. Handles prefixed conventions like
+    test_extracted_<module> and test_content_ops_<module>, and unions the
+    multiple test files a module commonly has. The previous exact-stem-only
+    match left HAPPY_PATH_TESTS/NO_RAISES_TESTS dark for prefix-named tests."""
+    seg_re = re.compile(r"(^|_)%s(_|$)" % re.escape(module_stem.lower()))
+    return [src for stem, src in sorted(test_sources.items())
+            if seg_re.search(stem.lower())]
+
+
 def score_tests(module_stem, test_sources, all_test_text):
     """Returns a list of findings about test coverage quality for one module."""
     findings = []
-    candidate_stems = {"test_%s" % module_stem, "%s_test" % module_stem,
-                       "test_%s" % module_stem.lower()}
-    src = None
-    for stem in candidate_stems:
-        if stem in test_sources:
-            src = test_sources[stem]
-            break
+    matched = matching_test_sources(module_stem, test_sources)
+    src = "\n".join(matched) if matched else None
 
     mentioned = re.search(r"\b%s\b" % re.escape(module_stem), all_test_text)
 

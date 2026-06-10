@@ -16,6 +16,7 @@ on:
     paths:
       - ".github/workflows/maturity_sweep_advisory.yml"
       - "scripts/maturity_sweep.py"
+      - "tests/test_maturity_sweep.py"
       - "extracted_content_pipeline/**"
       - "tests/test_extracted_*.py"
       - "tests/test_content_ops_*.py"
@@ -39,7 +40,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      # stdlib-only tool -- no dependency install needed.
+      - name: Install pytest
+        run: python -m pip install --quiet pytest
+
+      # Tool correctness gates (AGENTS.md 3i failure-branch fixtures: they
+      # prove the detectors fire, and pin the dead-detector matcher bug).
+      # --noconftest: the repo-level tests/conftest.py imports pytest_asyncio
+      # and app dependencies; these tests are self-contained stdlib by design.
+      - name: Sweep unit tests (blocking)
+        run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+
+      # The sweep itself is stdlib-only.
       - name: Maturity sweep (advisory, non-blocking)
         continue-on-error: true
         run: |

@@ -28,12 +28,22 @@ Slice phase: workflow/process
    `extracted_content_pipeline` with `--tests-root tests`, top 25, non-blocking
    (`continue-on-error` + no `--min-score`). Triggers on PRs touching the
    lane / tool / its tests.
+3. (Review round) Fix the per-module test matcher so the test-quality
+   detectors fire on this repo's naming: segment-boundary containment over
+   test-file stems (handles test_extracted_ and test_content_ops_ prefixes,
+   unions multiple test files per module) replaces the exact-stem match that
+   left the deflection lane's own modules with zero quality signal.
+4. (Review round) Add `tests/test_maturity_sweep.py` -- AGENTS.md 3i
+   failure-branch fixtures that prove each detector fires (and pin the
+   dead-detector matcher bug: the repo-style-naming test fails on the old
+   matcher), run as a blocking step in the workflow.
 
 ### Files touched
 
 - `.github/workflows/maturity_sweep_advisory.yml`
 - `plans/PR-Maturity-Sweep-Advisory-CI.md`
 - `scripts/maturity_sweep.py`
+- `tests/test_maturity_sweep.py`
 
 ### Review Contract
 - Acceptance: the sweep runs in CI on lane PRs, prints a worst-first agenda,
@@ -76,11 +86,6 @@ is a safety net.
   install in CI.
 
 ## Deferred
-- Per-module `HAPPY_PATH_TESTS` / `NO_RAISES_TESTS` matching is under-reported
-  because Atlas tests are named test_extracted_&lt;module&gt; while the tool
-  matches test_&lt;module&gt;; `NO_TEST_FILE` is already correct via the
-  "mentioned anywhere" fallback. Tightening the stem match (handle the
-  `extracted_` prefix) is a follow-up.
 - Broadening scope beyond `extracted_content_pipeline` (e.g. `atlas_brain`
   content-ops surfaces) -- follow-up.
 - Promoting to a regression-gate (fail only when a changed file's score
@@ -96,16 +101,28 @@ is a safety net.
 - Tested deflection files no longer show a false `NO_TEST_FILE`
   (`faq_deflection_report`, `support_ticket_input_package` -> `NO_TEST_FILE`
   absent).
+- Detector liveness, measured: with the old exact-stem matcher,
+  HAPPY_PATH_TESTS fired on 11 files and NO_RAISES_TESTS on 12 (plain
+  test_module naming only) and on ZERO of the deflection lane's four key
+  modules; with the segment-containment matcher they fire on 37 and 50
+  files respectively, and the deflection modules are now either flagged
+  (support_ticket_input_package -> NO_RAISES_TESTS) or verifiably quiet
+  because their matched suites are failure-rich (ticket_faq_markdown: 131
+  tests, 35 negative-named, 9 raises).
+- 8 unit tests pass (`tests/test_maturity_sweep.py`, --noconftest); the
+  repo-style-naming fixture fails against the old matcher (dead-detector
+  pin, verified by mutating a copy back to exact-stem matching).
 - Running `scripts/check_ascii_python.sh` passes (`scripts/maturity_sweep.py`
   is ASCII).
 - Workflow is non-blocking by construction: no `--min-score`, plus
-  `continue-on-error: true`.
+  `continue-on-error: true`; the unit-test step is blocking.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/maturity_sweep_advisory.yml` | 51 |
-| `plans/PR-Maturity-Sweep-Advisory-CI.md` | 111 |
-| `scripts/maturity_sweep.py` | 467 |
-| **Total** | **629** |
+| `.github/workflows/maturity_sweep_advisory.yml` | 62 |
+| `plans/PR-Maturity-Sweep-Advisory-CI.md` | 128 |
+| `scripts/maturity_sweep.py` | 473 |
+| `tests/test_maturity_sweep.py` | 125 |
+| **Total** | **788** |
