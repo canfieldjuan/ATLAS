@@ -13,6 +13,7 @@ import { SeoHead } from "@/components/seo/SeoHead";
 const SNAPSHOT_STORAGE_PREFIX = "atlas:deflection:snapshot:";
 const CHECKOUT_ENDPOINT = "/api/content-ops/deflection/checkout";
 const CHECKOUT_SOURCE = "content_ops_deflection_report";
+const LIGHT_REPEAT_TICKET_THRESHOLD = 10;
 const FORBIDDEN_SNAPSHOT_KEYS = new Set([
   "answer",
   "answers",
@@ -30,6 +31,7 @@ const FORBIDDEN_SNAPSHOT_KEYS = new Set([
 type DeflectionSnapshot = {
   summary: {
     generated: number;
+    repeat_ticket_count: number;
     drafted_answer_count: number;
     no_proven_answer_count: number;
     support_ticket_resolution_evidence_present: boolean;
@@ -87,6 +89,7 @@ function parseSnapshot(value: unknown): SnapshotState {
   }
 
   const generated = finiteNumber(value.summary.generated);
+  const repeatTicketCount = finiteNumber(value.summary.repeat_ticket_count);
   const draftedAnswerCount = finiteNumber(value.summary.drafted_answer_count);
   const noProvenAnswerCount = finiteNumber(value.summary.no_proven_answer_count);
   const resolutionEvidencePresent = value.summary.support_ticket_resolution_evidence_present;
@@ -95,6 +98,7 @@ function parseSnapshot(value: unknown): SnapshotState {
   );
   if (
     generated === null ||
+    repeatTicketCount === null ||
     draftedAnswerCount === null ||
     noProvenAnswerCount === null ||
     typeof resolutionEvidencePresent !== "boolean" ||
@@ -133,6 +137,7 @@ function parseSnapshot(value: unknown): SnapshotState {
     snapshot: {
       summary: {
         generated,
+        repeat_ticket_count: repeatTicketCount,
         drafted_answer_count: draftedAnswerCount,
         no_proven_answer_count: noProvenAnswerCount,
         support_ticket_resolution_evidence_present: resolutionEvidencePresent,
@@ -175,6 +180,7 @@ export default function FaqDeflectionResult() {
     const { summary } = snapshotState.snapshot;
     return [
       { label: "Questions found", value: summary.generated },
+      { label: "Repeat-ticket hits", value: summary.repeat_ticket_count },
       { label: "Evidence-backed answers", value: summary.drafted_answer_count },
       { label: "Needs support proof", value: summary.no_proven_answer_count },
     ];
@@ -199,6 +205,19 @@ export default function FaqDeflectionResult() {
       copy: present
         ? `${formatCount(count)} resolved ticket rows can support publishable answer drafting.`
         : "This export supports a gap list only; publishable answers need agent replies or resolved ticket notes.",
+    };
+  }, [snapshotState]);
+
+  const repeatVolume = useMemo(() => {
+    if (snapshotState.status !== "available") return null;
+    const count = snapshotState.snapshot.summary.repeat_ticket_count;
+    const light = count < LIGHT_REPEAT_TICKET_THRESHOLD;
+    return {
+      light,
+      label: count > 0 ? `${formatCount(count)} repeat-ticket hits` : "No repeated clusters yet",
+      copy: light
+        ? "This export is light on repeat volume. Review the free snapshot before paying for the full report."
+        : "This export has enough repeated ticket volume for a substantial paid report preview.",
     };
   }, [snapshotState]);
 
@@ -280,7 +299,7 @@ export default function FaqDeflectionResult() {
               </div>
             )}
 
-            <div className="mt-8 grid gap-4 sm:grid-cols-3">
+            <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {metricCards.length > 0 ? (
                 metricCards.map((metric) => (
                   <div
@@ -294,7 +313,7 @@ export default function FaqDeflectionResult() {
                   </div>
                 ))
               ) : (
-                <div className="sm:col-span-3 rounded-lg border border-surface-700/60 bg-surface-800/40 p-5">
+                <div className="sm:col-span-2 lg:col-span-4 rounded-lg border border-surface-700/60 bg-surface-800/40 p-5">
                   <p className="text-sm font-semibold text-white">Snapshot not loaded</p>
                   <p className="mt-2 text-sm leading-6 text-surface-200/75">
                     This page has not received the free snapshot from the submit
@@ -304,6 +323,30 @@ export default function FaqDeflectionResult() {
                 </div>
               )}
             </div>
+
+            {repeatVolume && (
+              <div
+                className="mt-4 flex flex-col gap-3 rounded-lg border border-surface-700/60 bg-surface-800/40 p-5 sm:flex-row sm:items-start sm:justify-between"
+                data-atlas-deflection-repeat-volume
+                data-repeat-volume-light={repeatVolume.light ? "true" : "false"}
+              >
+                <div>
+                  <p className="text-sm text-surface-200/70">Repeat-ticket volume</p>
+                  <p
+                    className={
+                      repeatVolume.light
+                        ? "mt-2 text-lg font-semibold text-amber-200"
+                        : "mt-2 text-lg font-semibold text-primary-300"
+                    }
+                  >
+                    {repeatVolume.label}
+                  </p>
+                </div>
+                <p className="max-w-xl text-sm leading-6 text-surface-200/75">
+                  {repeatVolume.copy}
+                </p>
+              </div>
+            )}
 
             {resolutionEvidence && (
               <div

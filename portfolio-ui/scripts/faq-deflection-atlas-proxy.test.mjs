@@ -20,6 +20,7 @@ const ENV = {
 const SNAPSHOT = {
   summary: {
     generated: 3,
+    repeat_ticket_count: 12,
     drafted_answer_count: 2,
     no_proven_answer_count: 1,
     support_ticket_resolution_evidence_present: true,
@@ -204,11 +205,34 @@ await test("snapshot projection only returns known safe fields", async () => {
   ]);
 });
 
+await test("proxy rejects snapshots that omit repeat-ticket counts", async () => {
+  const { repeat_ticket_count: _repeatTicketCount, ...summaryWithoutRepeatCount } =
+    SNAPSHOT.summary;
+  const missingRepeatCount = {
+    ...SNAPSHOT,
+    summary: summaryWithoutRepeatCount,
+  };
+  const result = await loadDeflectionReport({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    env: ENV,
+    fetchImpl: mockFetch([response(missingRepeatCount, 200)]).fetchImpl,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.statusCode, 502);
+  assert.equal(result.error, "atlas_snapshot_contract_violation");
+  assert.deepEqual(result.details, [
+    "snapshot.summary metrics must include finite counts and resolution evidence",
+  ]);
+});
+
 await test("proxy rejects snapshots that omit resolution evidence diagnostics", async () => {
   const missingResolutionEvidence = {
     ...SNAPSHOT,
     summary: {
       generated: 3,
+      repeat_ticket_count: 12,
       drafted_answer_count: 2,
       no_proven_answer_count: 1,
     },

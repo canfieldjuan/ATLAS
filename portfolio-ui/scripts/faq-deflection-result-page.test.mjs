@@ -95,6 +95,7 @@ await test("result page exposes validation markers and checkout metadata", () =>
   }
   for (const source of [pageSource, resultPageSource]) {
     assert.match(source, /data-atlas-deflection-resolution-evidence/);
+    assert.match(source, /data-atlas-deflection-repeat-volume/);
   }
   assert.match(pageSource, /content_ops_deflection_report/);
   assert.match(html, /content_ops_deflection_report/);
@@ -122,6 +123,19 @@ await test("snapshot guard names paid report fields that must not render pre-pay
     assert.match(pageSource, new RegExp(`"${forbidden}"`));
   }
   assert.match(pageSource, /collectForbiddenKeys/);
+});
+
+await test("React fallback rejects snapshots that omit repeat-ticket counts", () => {
+  const compactPageSource = pageSource.replace(/\s+/g, " ");
+  assert.match(
+    compactPageSource,
+    /const repeatTicketCount = finiteNumber\(value\.summary\.repeat_ticket_count\);/,
+  );
+  assert.match(compactPageSource, /repeatTicketCount === null \|\| draftedAnswerCount === null/);
+  assert.doesNotMatch(
+    pageSource,
+    /finiteNumber\(value\.summary\.repeat_ticket_count\)\s*\?\?\s*0/,
+  );
 });
 
 await test("real snapshot page groups bounded customer wording examples", () => {
@@ -154,6 +168,7 @@ await test("real snapshot page groups bounded customer wording examples", () => 
       snapshot: {
         summary: {
           generated: 6,
+          repeat_ticket_count: 12,
           drafted_answer_count: 2,
           no_proven_answer_count: 4,
           support_ticket_resolution_evidence_present: true,
@@ -166,6 +181,11 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   });
   assert.match(html, /Help-desk SEO targeting list/);
   assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-atlas-deflection-repeat-volume/);
+  assert.match(html, /data-repeat-volume-light="false"/);
+  assert.match(html, /Repeat-ticket volume/);
+  assert.match(html, /12 repeat-ticket hits/);
+  assert.match(html, /substantial paid report preview/);
   assert.match(html, /data-resolution-evidence-present="true"/);
   assert.match(html, /Resolution evidence/);
   assert.match(html, /Present/);
@@ -195,6 +215,7 @@ await test("real snapshot page groups bounded customer wording examples", () => 
       snapshot: {
         summary: {
           generated: 0,
+          repeat_ticket_count: 0,
           drafted_answer_count: 0,
           no_proven_answer_count: 0,
           support_ticket_resolution_evidence_present: false,
@@ -219,6 +240,7 @@ await test("hosted result page flags absent resolution evidence as gap list only
       snapshot: {
         summary: {
           generated: 2,
+          repeat_ticket_count: 3,
           drafted_answer_count: 0,
           no_proven_answer_count: 2,
           support_ticket_resolution_evidence_present: false,
@@ -238,6 +260,10 @@ await test("hosted result page flags absent resolution evidence as gap list only
   });
 
   assert.match(html, /data-atlas-deflection-resolution-evidence/);
+  assert.match(html, /data-atlas-deflection-repeat-volume/);
+  assert.match(html, /data-repeat-volume-light="true"/);
+  assert.match(html, /3 repeat-ticket hits/);
+  assert.match(html, /light on repeat volume/);
   assert.match(html, /data-resolution-evidence-present="false"/);
   assert.match(html, /Resolution evidence/);
   assert.match(html, /Absent/);
@@ -290,6 +316,7 @@ await test("hosted result page loads report with configured account when URL omi
             ? {
                 summary: {
                   generated: 1,
+                  repeat_ticket_count: 1,
                   drafted_answer_count: 0,
                   no_proven_answer_count: 1,
                   support_ticket_resolution_evidence_present: false,

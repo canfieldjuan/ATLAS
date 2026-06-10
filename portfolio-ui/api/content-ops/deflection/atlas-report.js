@@ -99,6 +99,7 @@ function projectSnapshot(snapshot) {
   if (errors.length > 0) return { ok: false, errors };
 
   const generated = finiteNumber(snapshot.summary.generated);
+  const repeatTicketCount = finiteNumber(snapshot.summary.repeat_ticket_count);
   const draftedAnswerCount = finiteNumber(snapshot.summary.drafted_answer_count);
   const noProvenAnswerCount = finiteNumber(snapshot.summary.no_proven_answer_count);
   const resolutionEvidencePresent = snapshot.summary.support_ticket_resolution_evidence_present;
@@ -107,6 +108,7 @@ function projectSnapshot(snapshot) {
   );
   if (
     generated === null ||
+    repeatTicketCount === null ||
     draftedAnswerCount === null ||
     noProvenAnswerCount === null ||
     typeof resolutionEvidencePresent !== "boolean" ||
@@ -142,6 +144,7 @@ function projectSnapshot(snapshot) {
     snapshot: {
       summary: {
         generated,
+        repeat_ticket_count: repeatTicketCount,
         drafted_answer_count: draftedAnswerCount,
         no_proven_answer_count: noProvenAnswerCount,
         support_ticket_resolution_evidence_present: resolutionEvidencePresent,
