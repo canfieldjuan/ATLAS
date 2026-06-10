@@ -1,6 +1,7 @@
 import { atlasUrl, clean, configFromEnv } from "./atlas-report.js";
 import { resultPath } from "./checkout.js";
 import { emitDeflectionServerEvent } from "./events.js";
+import { forwardInspect } from "./inspect.js";
 
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -214,6 +215,32 @@ async function cleanupPrivateCsvBlob({
   }
 }
 
+function inspectFormFromBlob(blob) {
+  const form = new FormData();
+  form.set("file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
+  form.set("source_rows", "true");
+  form.set("source", "ticket-csv-upload");
+  form.set("target_mode", "faq_deflection_report");
+  form.set("file_format", "csv");
+  form.set("sample_limit", "3");
+  form.set("include_source_material", "false");
+  return form;
+}
+
+async function inspectPrivateCsvBlob({ config, blob, fetchImpl = fetch }) {
+  const result = await forwardInspect({
+    config,
+    contentType: "",
+    body: inspectFormFromBlob(blob),
+    fetchImpl,
+  });
+  if (!result.ok) return result;
+  if (!result.payload.ok) {
+    return { ok: false, statusCode: 400, error: "deflection_inspect_not_ready" };
+  }
+  return { ok: true, payload: result.payload };
+}
+
 async function submitPrivateBlob({
   config,
   blobToken,
@@ -229,6 +256,17 @@ async function submitPrivateBlob({
     getBlobImpl,
   });
   if (!blob.ok) return blob;
+
+  const inspectResult = await inspectPrivateCsvBlob({ config, blob, fetchImpl });
+  if (!inspectResult.ok) {
+    await cleanupPrivateCsvBlob({
+      pathname: blob.pathname,
+      token: blobToken,
+      deleteBlobImpl,
+      eventLogger,
+    });
+    return inspectResult;
+  }
 
   const form = new FormData();
   form.set("csv_file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
@@ -253,6 +291,7 @@ export {
   SUBMIT_PATH,
   cleanupPrivateCsvBlob,
   forwardSubmit,
+  inspectPrivateCsvBlob,
   projectSubmitPayload,
   readPrivateCsvBlob,
   submitPrivateBlob,
