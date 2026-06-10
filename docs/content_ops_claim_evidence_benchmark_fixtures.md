@@ -71,6 +71,21 @@ JSONL fixture text is one row object per non-empty line:
 JSONL lines must be objects. Arrays belong in JSON fixture text, not JSONL, so
 line numbers remain unambiguous when the loader reports malformed input.
 
+## Local Validation
+
+Validate a draft fixture file before running any model benchmark:
+
+```bash
+python scripts/validate_content_ops_claim_evidence_fixture.py path/to/fixture.json
+python scripts/validate_content_ops_claim_evidence_fixture.py path/to/fixture.jsonl --format jsonl
+python scripts/validate_content_ops_claim_evidence_fixture.py path/to/final.json --require-final-shape
+```
+
+The command prints a JSON envelope with `ok`, `errors`, `triple_count`,
+`easy_supports_count`, `easy_not_supports_count`, and `hard_count`. It exits
+zero only when the fixture is valid. It does not call models, write benchmark
+results, or expose verifier/MCP behavior.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
