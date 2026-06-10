@@ -71,6 +71,7 @@ Slice phase: Production hardening
 
 ### Files touched
 
+- `.github/workflows/atlas_content_ops_input_provider_checks.yml`
 - `docs/extraction/validation/deflection_resolution_evidence_live_proof_2026-06-09.md`
 - `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md`
 - `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json`
@@ -187,6 +188,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_content_ops_input_provider_checks.yml` | 3 |
 | `docs/extraction/validation/deflection_resolution_evidence_live_proof_2026-06-09.md` | 13 |
 | `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/report.md` | 6 |
 | `docs/extraction/validation/fixtures/deflection_resolution_evidence_live_proof_20260609/result.json` | 2 |
@@ -203,7 +205,7 @@ Parked hardening: none.
 | `extracted_content_pipeline/examples/support_ticket_sources.csv` | 4 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 37 |
 | `extracted_content_pipeline/ticket_faq_markdown.py` | 184 |
-| `plans/PR-Deflection-Measured-Repetition.md` | 223 |
+| `plans/PR-Deflection-Measured-Repetition.md` | 225 |
 | `scripts/smoke_content_ops_faq_output_proof.py` | 25 |
 | `scripts/smoke_extracted_content_ops_execution.py` | 41 |
 | `tests/test_atlas_content_ops_execution_services.py` | 88 |
@@ -220,4 +222,4 @@ Parked hardening: none.
 | `tests/test_smoke_content_ops_cfpb_faq_markdown.py` | 11 |
 | `tests/test_smoke_content_ops_faq_scale_run.py` | 37 |
 | `tests/test_support_ticket_provider_landing_blog_execute.py` | 2 |
-| **Total** | **2427** |
+| **Total** | **2432** |
