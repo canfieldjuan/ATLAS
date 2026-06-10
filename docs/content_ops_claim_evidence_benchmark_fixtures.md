@@ -2,8 +2,9 @@
 
 Issue #1435 benchmarks `verify_claim_evidence` before any model-filled
 structured-judgment slot can enter the verifier rubric. The benchmark input is a
-decoded list of labeled claim/evidence triples. The future runner may load this
-from JSON or JSONL, but the package contract starts after parsing.
+list of labeled claim/evidence triples. The package loader accepts raw JSON
+array text or JSONL object streams and then applies the same decoded row
+contract.
 
 ## Row Shape
 
@@ -43,6 +44,33 @@ The final #1435 benchmark set targets 40 rows:
 Seed sets do not need to hit these counts. The validator supports seed mode for
 early 5 to 10 real registry triples and final mode for the completed benchmark.
 
+## Fixture Text Formats
+
+JSON fixture text is one array of row objects:
+
+```json
+[
+  {
+    "triple_id": "real-001",
+    "claim_id": "claim-churn-001",
+    "evidence_quote": "Customers reduced manual escalation work by 31% after rollout.",
+    "source_id": "case-study-acme-q4",
+    "expected_supports": true,
+    "difficulty": "easy"
+  }
+]
+```
+
+JSONL fixture text is one row object per non-empty line:
+
+```jsonl
+{"triple_id":"real-001","claim_id":"claim-churn-001","evidence_quote":"Customers reduced manual escalation work by 31% after rollout.","source_id":"case-study-acme-q4","expected_supports":true,"difficulty":"easy"}
+{"triple_id":"hard-001","claim_id":"claim-integration-002","evidence_quote":"The platform exports CSV files for CRM import.","source_id":"docs-export","expected_supports":false,"difficulty":"hard"}
+```
+
+JSONL lines must be objects. Arrays belong in JSON fixture text, not JSONL, so
+line numbers remain unambiguous when the loader reports malformed input.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
@@ -58,4 +86,4 @@ where keyword overlap is not enough:
 
 This fixture does not include model responses, prompts, provider settings,
 tokens, customer draft content, or verifier/MCP wiring. The future runner owns
-file loading, provider execution, and result artifacts.
+file-path loading, provider execution, and result artifacts.

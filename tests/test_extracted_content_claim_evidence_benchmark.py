@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from extracted_content_pipeline.claim_evidence_benchmark import (
     EASY,
     HARD,
@@ -13,6 +15,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     StabilityScore,
     evaluate_thresholds,
     intra_model_stability,
+    load_claim_evidence_fixture_text,
     pairwise_agreements,
     score_model,
     validate_claim_evidence_fixture,
@@ -170,6 +173,102 @@ def test_fixture_validator_reports_final_shape_shortfalls() -> None:
         "final fixture requires 15 easy support rows; got 1",
         "final fixture requires 15 easy non-support rows; got 0",
         "final fixture requires 10 hard rows; got 1",
+    )
+
+
+def test_fixture_loader_rejects_non_string_text_without_raising() -> None:
+    fixture = load_claim_evidence_fixture_text(None)
+
+    assert fixture.triples == ()
+    assert fixture.errors == ("fixture text must be a string",)
+
+
+def test_fixture_loader_rejects_unsupported_format_without_raising() -> None:
+    for source_format in (None, "csv"):
+        fixture = load_claim_evidence_fixture_text("[]", source_format=source_format)
+
+        assert fixture.triples == ()
+        assert fixture.errors == ("fixture format must be json or jsonl",)
+
+
+def test_fixture_loader_accepts_json_array_text() -> None:
+    fixture = load_claim_evidence_fixture_text(
+        json.dumps([_triple("json-1", True, EASY).__dict__])
+    )
+
+    assert fixture.ok is True
+    assert [triple.triple_id for triple in fixture.triples] == ["json-1"]
+
+
+def test_fixture_loader_rejects_json_malformed_text() -> None:
+    fixture = load_claim_evidence_fixture_text("[")
+
+    assert fixture.triples == ()
+    assert fixture.errors == ("json fixture is malformed: Expecting value",)
+
+
+def test_fixture_loader_rejects_json_non_array_text_before_validation() -> None:
+    fixture = load_claim_evidence_fixture_text(json.dumps({"triple_id": "one"}))
+
+    assert fixture.triples == ()
+    assert fixture.errors == ("json fixture must decode to a list of objects",)
+
+
+def test_fixture_loader_accepts_jsonl_object_lines() -> None:
+    text = "\n".join(
+        [
+            json.dumps(_triple("jsonl-1", True, EASY).__dict__),
+            "",
+            json.dumps(_triple("jsonl-2", False, HARD).__dict__),
+        ]
+    )
+
+    fixture = load_claim_evidence_fixture_text(text, source_format="jsonl")
+
+    assert fixture.ok is True
+    assert [triple.triple_id for triple in fixture.triples] == [
+        "jsonl-1",
+        "jsonl-2",
+    ]
+
+
+def test_fixture_loader_reports_jsonl_malformed_line_numbers() -> None:
+    text = "\n".join(
+        [
+            json.dumps(_triple("jsonl-1", True, EASY).__dict__),
+            "{",
+        ]
+    )
+
+    fixture = load_claim_evidence_fixture_text(text, source_format="jsonl")
+
+    assert fixture.triples == ()
+    assert fixture.errors == (
+        "line 2: jsonl fixture is malformed: "
+        "Expecting property name enclosed in double quotes",
+    )
+
+
+def test_fixture_loader_rejects_jsonl_array_lines() -> None:
+    fixture = load_claim_evidence_fixture_text(
+        json.dumps([_triple("jsonl-array", True, EASY).__dict__]),
+        source_format="jsonl",
+    )
+
+    assert fixture.triples == ()
+    assert fixture.errors == ("line 1: jsonl fixture line must be an object",)
+
+
+def test_fixture_loader_delegates_final_shape_validation() -> None:
+    fixture = load_claim_evidence_fixture_text(
+        json.dumps([_triple("easy-yes", True, EASY).__dict__]),
+        require_final_shape=True,
+    )
+
+    assert fixture.errors == (
+        "final fixture requires 15 easy support rows; got 1",
+        "final fixture requires 15 easy non-support rows; got 0",
+        "final fixture requires 10 hard rows; got 0",
     )
 
 
