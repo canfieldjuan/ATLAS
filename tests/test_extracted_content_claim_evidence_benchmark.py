@@ -407,6 +407,82 @@ def test_response_json_schema_matches_decoder_contract() -> None:
     assert response == ClaimEvidenceResponse(True, 4, "quote states it")
 
 
+def test_response_schema_rejection_claims_are_enforced_by_decoder() -> None:
+    schema = claim_evidence_response_json_schema()
+
+    assert schema["required"] == ["supports", "confidence", "reason"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["supports"]["type"] == "boolean"
+    assert schema["properties"]["confidence"]["type"] == "integer"
+    assert schema["properties"]["confidence"]["minimum"] == 1
+    assert schema["properties"]["confidence"]["maximum"] == 5
+    assert schema["properties"]["reason"]["type"] == "string"
+    assert schema["properties"]["reason"]["pattern"] == "\\S"
+
+    cases = (
+        (
+            "missing supports",
+            {"confidence": 4, "reason": "quote states it"},
+            ("supports missing",),
+        ),
+        (
+            "non-boolean supports",
+            {"supports": "true", "confidence": 4, "reason": "quote states it"},
+            ("supports missing",),
+        ),
+        (
+            "missing confidence",
+            {"supports": True, "reason": "quote states it"},
+            ("confidence must be an integer from 1 to 5",),
+        ),
+        (
+            "boolean confidence",
+            {"supports": True, "confidence": True, "reason": "quote states it"},
+            ("confidence must be an integer from 1 to 5",),
+        ),
+        (
+            "below-min confidence",
+            {"supports": True, "confidence": 0, "reason": "quote states it"},
+            ("confidence must be an integer from 1 to 5",),
+        ),
+        (
+            "above-max confidence",
+            {"supports": True, "confidence": 6, "reason": "quote states it"},
+            ("confidence must be an integer from 1 to 5",),
+        ),
+        (
+            "missing reason",
+            {"supports": True, "confidence": 4},
+            ("reason missing",),
+        ),
+        (
+            "whitespace reason",
+            {"supports": True, "confidence": 4, "reason": "  \t"},
+            ("reason missing",),
+        ),
+        (
+            "non-string reason",
+            {"supports": True, "confidence": 4, "reason": 123},
+            ("reason missing",),
+        ),
+        (
+            "extra field",
+            {
+                "supports": True,
+                "confidence": 4,
+                "reason": "quote states it",
+                "extra": "not in schema",
+            },
+            ("unexpected fields: extra",),
+        ),
+    )
+    for _label, raw_response, expected_errors in cases:
+        response, errors = ClaimEvidenceResponse.from_mapping(raw_response)
+
+        assert response is None
+        assert errors == expected_errors
+
+
 def test_response_json_schema_rejects_whitespace_reason_like_decoder() -> None:
     schema = claim_evidence_response_json_schema()
     whitespace_reason = {"supports": True, "confidence": 4, "reason": "   "}
