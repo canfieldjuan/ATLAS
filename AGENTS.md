@@ -151,28 +151,35 @@ levels:
 | **BLOCKER** | Correctness, security, contract break, or CI red. Must fix before merge. | Fix or push back with rationale. |
 | **MAJOR** | Architectural / scope / pattern concern. Strong recommendation but not auto-block. | Fix in this PR if the fix is small; otherwise discuss before deferring. |
 | **NIT** | Style, naming, comment polish. Skip-worthy. | Apply if 1-line; skip otherwise. The reviewer should mark NITs as skip-worthy explicitly. |
-| **LGTM** | All gates green, no remaining concerns. | Merge. |
+| **LGTM** | All gates green, R14 verified, no remaining concerns. | Merge. |
 
 ### 2a. Reviewer's verification template
 
 The reviewer should produce something like:
 
 ```
+**Reviewed head:** `<sha from checked-out PR head>`
+
 **Verification (independent):**
 1. <claim from PR description> -- verified via <command>
 2. <invariant from Mechanism> -- confirmed at <file:line>
 3. ...
+
+**Codebase verification (R14):**
+- Changed code inspected: <files/lines>.
+- Caller/test/artifact spot-checks: <rg command, test path, generated artifact, or route checked>.
+- Not verified: <claim skipped + reason>. (Use "None" only if every verdict claim was checked.)
 
 **Plan-doc compliance:** Why / Scope / Mechanism / Files touched /
 Intentional / Deferred / Verification -- matches AGENTS.md framework.
 Slice phase is named and matches the PR's scope. Parked hardening is
 named in Deferred or explicitly marked none.
 
-**Rule results (triggered rules only, see docs/REVIEWER_RULES.md):**
+**Rule results (triggered rules plus R14, see docs/REVIEWER_RULES.md):**
 - R1 Requirements match: Pass/Fail/N-A
 - R2 Test evidence: Pass/Fail/N-A
-- R3 Security/auth ... R13 Fix-the-class: Pass/Fail/N-A
-(List only the rules the changed paths trigger; cite file:line on any Fail.)
+- R3 Security/auth ... R14 Codebase verification: Pass/Fail/N-A
+(List the rules the changed paths trigger, plus R14; cite file:line on any Fail.)
 
 **AI reconciliation:** AI findings reviewed: Y/N. All fixed or waived: Y/N.
 Waivers justified in PR body: Y/N.
@@ -609,7 +616,7 @@ example is not done.
 
 The reviewer's job is **not** "review the code" -- it is to **prove whether
 the PR satisfies its Review Contract and violates none of the rules in
-`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R13) and maps to
+`docs/REVIEWER_RULES.md`.** Every finding cites a rule ID (R1-R14) and maps to
 a verdict level (BLOCKER / MAJOR / NIT). The rule matrix and AI reconciliation
 go in the §2a template.
 
@@ -623,14 +630,18 @@ read the Review Contract, predict which files *should* change and which tests
 Don't trust the PR description's claims; reproduce them. The
 reviewer should:
 
-1. Re-run the named verification commands.
-2. Spot-check the plan's invariants at the actual file:line pointed
+1. Record the exact reviewed head SHA from the checked-out PR head.
+2. Re-run the named verification commands.
+3. Spot-check the plan's invariants at the actual file:line pointed
    to in the diff.
-3. Sweep for missed call sites with grep patterns more reliable than
+4. Sweep for missed call sites with grep patterns more reliable than
    the PR's claim (multi-line constructions, kwargs split across
    lines, etc.).
-4. Walk the rules triggered by the changed paths (per the trigger table in
+5. Walk the rules triggered by the changed paths (per the trigger table in
    `docs/REVIEWER_RULES.md`) and record Pass/Fail/N-A for each.
+6. Apply R14: every claim used in the verdict must be backed by checked-out
+   code, a caller/test/artifact spot-check, or a "not verified" note with the
+   reason. **No LGTM from the PR story alone.**
 
 ### 4a.1. AI-finding reconciliation (mandatory before LGTM)
 
@@ -675,6 +686,9 @@ Before LGTM, the reviewer confirms:
 - [ ] Every rule triggered by the changed paths (`docs/REVIEWER_RULES.md`)
       is recorded Pass/Fail/N-A, and every Fail at BLOCKER level cites
       file:line.
+- [ ] R14 is recorded Pass/Fail/N-A. The verdict names the reviewed head SHA,
+      changed code inspected, caller/test/artifact spot-checks, and any claims
+      not verified. No LGTM from PR/body/builder claims alone.
 - [ ] Every AI (Codex/Copilot) finding is fixed or explicitly waived with a
       reason in the PR body (§4a.1). No unresolved bot comments at LGTM.
 - [ ] Plan and PR body name a `Slice phase`, and the diff matches that
@@ -844,7 +858,7 @@ defines:
 
 Read `docs/REVIEWER_RULES.md` before your first review. Your job is
 not "review the code" -- it is to prove the PR satisfies its Review
-Contract and violates none of R1-R13. Cite a rule ID on every finding.
+Contract and violates none of R1-R14. Cite a rule ID on every finding.
 
 Read AUDITOR_PROMPT.md for the cross-cutting audit checks
 (canonical / integration / scope / debt). Apply both lenses.
@@ -857,19 +871,23 @@ For each PR you review:
 2. Reproduce the named verification commands from the PR body.
    Don't trust claims; re-run them. Spot-check the plan's
    invariants at the actual file:line cited in the diff.
-3. Sweep for missed call sites with grep patterns more reliable
+3. Record the reviewed head SHA and apply R14: every claim in the verdict
+   must be backed by checked-out code, a caller/test/artifact spot-check, or a
+   "not verified" note with the reason. No LGTM from PR/body/builder claims
+   alone.
+4. Sweep for missed call sites with grep patterns more reliable
    than the PR's claim (multi-line constructions, kwargs split
    across lines).
-4. Record Pass/Fail/N-A for each rule the changed paths trigger
+5. Record Pass/Fail/N-A for each rule the changed paths trigger and for R14
    (`docs/REVIEWER_RULES.md`); cite file:line on any Fail.
-5. Reconcile AI findings: do not LGTM until every Codex/Copilot
+6. Reconcile AI findings: do not LGTM until every Codex/Copilot
    finding is fixed or explicitly waived with a reason in the PR body.
-6. Confirm CI is green (extracted-checks x2 + Vercel) before
+7. Confirm CI is green (extracted-checks x2 + Vercel) before
    issuing LGTM.
-7. Mark NITs as skip-worthy explicitly when they are. The builder
+8. Mark NITs as skip-worthy explicitly when they are. The builder
    applies 1-line / unambiguous NITs; ignores style/naming/comment
    NITs unless you specifically call out "this should be fixed."
-8. Sign your review with: `_Generated by [Claude Code](
+9. Sign your review with: `_Generated by [Claude Code](
    https://claude.ai/code)_`.
 
 The package under active iteration is `extracted_content_pipeline`.
