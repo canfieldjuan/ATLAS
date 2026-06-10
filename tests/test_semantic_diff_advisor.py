@@ -119,6 +119,28 @@ def test_matcher_changed_fires_on_a_regex_pattern_change() -> None:
     assert changed[0].name == "_HTML_SIGNAL_RE"
 
 
+def test_recognition_set_added_fires_for_a_brand_new_module() -> None:
+    # Codex P2 on this PR: a brand-new file (old source empty) introducing a
+    # recognition set must still raise the both-direction-fixtures question.
+    new = (
+        '_NEW_PROVIDER_KEYS = (\n'
+        '    "agent_reply",\n'
+        '    "admin_reply",\n'
+        '    "staff_reply",\n'
+        ')\n'
+    )
+    findings = MOD.detect_python("", new, "pkg/brand_new_module.py")
+    added = [f for f in findings if f.code == "RECOGNITION_SET_ADDED"]
+    assert len(added) == 1
+    assert added[0].name == "_NEW_PROVIDER_KEYS"
+
+
+def test_recognition_set_added_respects_min_member_threshold() -> None:
+    new = '_SMALL = ("a", "b")\n'
+    findings = MOD.detect_python("", new, "pkg/brand_new_small.py")
+    assert [f for f in findings if f.code == "RECOGNITION_SET_ADDED"] == []
+
+
 def test_quiet_on_unrelated_changes() -> None:
     old = (
         'def helper(value):\n'

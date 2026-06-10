@@ -97,9 +97,9 @@ with the standing adversarial question for its pattern.
 - Parked hardening: none.
 
 ## Verification
-- Unit tests: 8 passed (replays of #1446, #1439, #1466, #1453 fire with the
+- Unit tests: 10 passed (replays of #1446, #1439, #1466, #1453 fire with the
   expected finding names and details; unrelated-change and unchanged-file
-  controls stay quiet; test-path filter pinned).
+  controls stay quiet; test-path filter pinned; new-module set firing + threshold pinned).
 - Real-diff replay against the four actual BLOCKER heads:
   #1446 head fires RECOGNITION_SET_WIDENED naming first_response on the exact
   set; #1439 head fires on the auth folds; #1466 head fires
@@ -114,8 +114,8 @@ with the standing adversarial question for its pattern.
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/semantic_diff_advisor.yml` | 55 |
+| `.github/workflows/semantic_diff_advisor.yml` | 57 |
 | `plans/PR-Semantic-Diff-Advisor-CI.md` | 121 |
-| `scripts/semantic_diff_advisor.py` | 378 |
-| `tests/test_semantic_diff_advisor.py` | 153 |
-| **Total** | **707** |
+| `scripts/semantic_diff_advisor.py` | 381 |
+| `tests/test_semantic_diff_advisor.py` | 175 |
+| **Total** | **734** |

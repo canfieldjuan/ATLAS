@@ -37,8 +37,10 @@ jobs:
 
       # Tool correctness gates (these are the advisor's own unit tests,
       # including replays of the four real BLOCKER classes).
+      # --noconftest: the repo-level tests/conftest.py imports pytest_asyncio
+      # and app dependencies; this test is self-contained stdlib by design.
       - name: Advisor unit tests (blocking)
-        run: python -m pytest tests/test_semantic_diff_advisor.py -q
+        run: python -m pytest tests/test_semantic_diff_advisor.py --noconftest -q
 
       - name: Fetch base ref
         run: git fetch --no-tags origin "${{ github.base_ref || 'main' }}"

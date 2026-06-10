@@ -204,7 +204,10 @@ def detect_python(old_src, new_src, path):
                 findings.append(Finding(
                     path, "RECOGNITION_SET_WIDENED", name, lineno,
                     "added: " + ", ".join(sorted(added)[:12])))
-        elif old_tree is not None and len(members) >= MIN_NEW_SET_MEMBERS:
+        elif len(members) >= MIN_NEW_SET_MEMBERS:
+            # Fires for brand-new modules too (old_src empty): a new file
+            # introducing a recognition set is exactly when the
+            # both-direction-fixtures question applies.
             findings.append(Finding(
                 path, "RECOGNITION_SET_ADDED", name, lineno,
                 "%d members" % len(members)))
