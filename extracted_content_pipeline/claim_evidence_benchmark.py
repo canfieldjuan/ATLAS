@@ -8,6 +8,7 @@ structured witness responses against the reliability thresholds from issue
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from itertools import combinations
 from typing import Mapping, Sequence
@@ -20,6 +21,9 @@ CONFIDENCE_COUNTS_MIN = 4
 FINAL_EASY_SUPPORTS_TARGET = 15
 FINAL_EASY_NOT_SUPPORTS_TARGET = 15
 FINAL_HARD_TARGET = 10
+FIXTURE_FORMAT_JSON = "json"
+FIXTURE_FORMAT_JSONL = "jsonl"
+VALID_FIXTURE_FORMATS = frozenset({FIXTURE_FORMAT_JSON, FIXTURE_FORMAT_JSONL})
 
 
 def _required_text(data: Mapping[str, object], key: str) -> str | None:
@@ -257,6 +261,68 @@ def validate_claim_evidence_fixture(
         errors.extend(_final_shape_errors(fixture))
         fixture = BenchmarkFixture(fixture.triples, tuple(errors))
     return fixture
+
+
+def load_claim_evidence_fixture_text(
+    text: object,
+    *,
+    source_format: object = FIXTURE_FORMAT_JSON,
+    require_final_shape: bool = False,
+) -> BenchmarkFixture:
+    """Load raw fixture text into the decoded benchmark fixture contract."""
+
+    if not isinstance(text, str):
+        return BenchmarkFixture((), ("fixture text must be a string",))
+    if not isinstance(source_format, str):
+        return BenchmarkFixture((), ("fixture format must be json or jsonl",))
+
+    normalized_format = source_format.strip().lower()
+    if normalized_format not in VALID_FIXTURE_FORMATS:
+        return BenchmarkFixture((), ("fixture format must be json or jsonl",))
+
+    if normalized_format == FIXTURE_FORMAT_JSON:
+        rows, errors = _decode_json_fixture_text(text)
+    else:
+        rows, errors = _decode_jsonl_fixture_text(text)
+    if errors:
+        return BenchmarkFixture((), errors)
+    return validate_claim_evidence_fixture(
+        rows,
+        require_final_shape=require_final_shape,
+    )
+
+
+def _decode_json_fixture_text(text: str) -> tuple[list[object], tuple[str, ...]]:
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as error:
+        return [], (f"json fixture is malformed: {error.msg}",)
+    if not isinstance(decoded, list):
+        return [], ("json fixture must decode to a list of objects",)
+    return decoded, ()
+
+
+def _decode_jsonl_fixture_text(text: str) -> tuple[list[object], tuple[str, ...]]:
+    rows: list[object] = []
+    errors: list[str] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            decoded = json.loads(stripped)
+        except json.JSONDecodeError as error:
+            errors.append(
+                f"line {line_number}: jsonl fixture is malformed: {error.msg}"
+            )
+            continue
+        if not isinstance(decoded, Mapping):
+            errors.append(f"line {line_number}: jsonl fixture line must be an object")
+            continue
+        rows.append(decoded)
+    if errors:
+        return [], tuple(errors)
+    return rows, ()
 
 
 def _final_shape_errors(fixture: BenchmarkFixture) -> tuple[str, ...]:
