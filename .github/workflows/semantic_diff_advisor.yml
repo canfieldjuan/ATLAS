@@ -1,0 +1,55 @@
+name: Semantic Diff Advisor (advisory)
+
+# Advisory matching/contract-edge pattern detector -- NOT a gate. When a PR
+# widens a recognition set, changes a matcher, touches a normalizer beside
+# term sets, or adds a defaulting idiom in projection context, this prints
+# the standing adversarial question for that pattern. It raises questions;
+# it never decides the change is wrong. Judgment stays with the builder
+# self-check, the reviewer, and the live AI-reconciliation gate.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/semantic_diff_advisor.yml"
+      - "scripts/semantic_diff_advisor.py"
+      - "tests/test_semantic_diff_advisor.py"
+      - "extracted_content_pipeline/**"
+      - "portfolio-ui/api/**"
+      - "portfolio-ui/src/**"
+      - "atlas_brain/_content_ops_*.py"
+
+jobs:
+  semantic-diff-advisor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for merge-base)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest
+
+      # Tool correctness gates (these are the advisor's own unit tests,
+      # including replays of the four real BLOCKER classes).
+      - name: Advisor unit tests (blocking)
+        run: python -m pytest tests/test_semantic_diff_advisor.py -q
+
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.base_ref || 'main' }}"
+
+      # Tool FINDINGS advise (non-blocking by design: no --strict, and
+      # continue-on-error as a safety net).
+      - name: Semantic diff advisor (advisory, non-blocking)
+        continue-on-error: true
+        run: |
+          echo "Advisory pattern detector: emits the standing adversarial"
+          echo "question when a matching/contract edge changes. Questions,"
+          echo "not verdicts -- a quiet run is NOT a correctness stamp."
+          echo
+          python scripts/semantic_diff_advisor.py --base "origin/${{ github.base_ref || 'main' }}"
