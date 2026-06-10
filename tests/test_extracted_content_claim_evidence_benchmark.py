@@ -15,6 +15,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     intra_model_stability,
     pairwise_agreements,
     score_model,
+    validate_claim_evidence_fixture,
 )
 
 
@@ -86,6 +87,90 @@ def test_triple_decoder_rejects_non_object_without_raising() -> None:
 
     assert triple is None
     assert errors == ("triple must be an object",)
+
+
+def test_fixture_validator_rejects_non_list_without_raising() -> None:
+    for rows in (None, "not-json-rows", {"triple_id": "one"}, range(1)):
+        fixture = validate_claim_evidence_fixture(rows)
+
+        assert fixture.triples == ()
+        assert fixture.errors == ("fixture rows must be a list of objects",)
+
+
+def test_fixture_validator_prefixes_row_decoder_errors() -> None:
+    fixture = validate_claim_evidence_fixture(
+        [
+            {
+                "triple_id": "t1",
+                "claim_id": "",
+                "evidence_quote": "source quote",
+                "source_id": "s1",
+                "expected_supports": None,
+                "difficulty": "medium",
+            },
+        ]
+    )
+
+    assert fixture.triples == ()
+    assert fixture.errors == (
+        "row 1: claim_id missing",
+        "row 1: expected_supports missing",
+        "row 1: difficulty must be easy or hard",
+    )
+
+
+def test_fixture_validator_rejects_duplicate_triple_ids() -> None:
+    fixture = validate_claim_evidence_fixture(
+        [
+            _triple("same", True, EASY).__dict__,
+            _triple("same", False, HARD).__dict__,
+        ]
+    )
+
+    assert [triple.triple_id for triple in fixture.triples] == ["same"]
+    assert fixture.errors == ("row 2: triple_id duplicated from row 1: same",)
+
+
+def test_fixture_validator_allows_seed_sets_without_final_shape() -> None:
+    fixture = validate_claim_evidence_fixture(
+        [
+            _triple("seed-1", True, EASY).__dict__,
+            _triple("seed-2", False, HARD).__dict__,
+        ]
+    )
+
+    assert fixture.ok is True
+    assert fixture.easy_supports_count == 1
+    assert fixture.easy_not_supports_count == 0
+    assert fixture.hard_count == 1
+
+
+def test_fixture_validator_enforces_final_issue_1435_shape() -> None:
+    rows = []
+    rows.extend(_triple(f"easy-yes-{idx}", True, EASY).__dict__ for idx in range(15))
+    rows.extend(_triple(f"easy-no-{idx}", False, EASY).__dict__ for idx in range(15))
+    rows.extend(_triple(f"hard-{idx}", idx % 2 == 0, HARD).__dict__ for idx in range(10))
+
+    fixture = validate_claim_evidence_fixture(rows, require_final_shape=True)
+
+    assert fixture.ok is True
+    assert len(fixture.triples) == 40
+
+
+def test_fixture_validator_reports_final_shape_shortfalls() -> None:
+    fixture = validate_claim_evidence_fixture(
+        [
+            _triple("easy-yes", True, EASY).__dict__,
+            _triple("hard", False, HARD).__dict__,
+        ],
+        require_final_shape=True,
+    )
+
+    assert fixture.errors == (
+        "final fixture requires 15 easy support rows; got 1",
+        "final fixture requires 15 easy non-support rows; got 0",
+        "final fixture requires 10 hard rows; got 1",
+    )
 
 
 def test_response_decoder_accepts_valid_decoded_input() -> None:
