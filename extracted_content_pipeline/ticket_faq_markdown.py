@@ -566,6 +566,7 @@ def build_ticket_faq_markdown(
             items=items,
             ticket_source_count=len(source_keys),
             rendered_ticket_source_count=_rendered_ticket_source_count(items),
+            non_repeat_ticket_count=non_repeat_ticket_count,
         ),
         warnings=tuple(warnings),
     )
@@ -2039,9 +2040,16 @@ def _output_checks(
     items: Sequence[Mapping[str, Any]],
     ticket_source_count: int,
     rendered_ticket_source_count: int,
+    non_repeat_ticket_count: int = 0,
 ) -> dict[str, bool]:
     has_items = bool(items)
-    covers_all_sources = rendered_ticket_source_count == ticket_source_count
+    # Excluded one-off tickets (#1460/#1481) are intentionally absent from
+    # rendered items but counted and stated in the report, so they still
+    # count as covered sources.
+    covers_all_sources = (
+        rendered_ticket_source_count + non_repeat_ticket_count
+        == ticket_source_count
+    )
     return {
         "uses_user_vocabulary": has_items
         and all(item.get("question_source") in _SUPPORTED_QUESTION_SOURCES for item in items),
