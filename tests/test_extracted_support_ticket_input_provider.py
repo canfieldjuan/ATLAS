@@ -220,7 +220,16 @@ async def test_support_ticket_input_provider_wires_into_execute_route() -> None:
     def loader(scope: TenantScope, request):
         assert scope.account_id == "acct-execute"
         assert request == {"outputs": ("faq_markdown",)}
-        return _ticket_rows()
+        # #1460: the login-email question needs a repeat partner to stay a
+        # billable FAQ cluster (one-off questions are excluded).
+        return [
+            *_ticket_rows(),
+            {
+                "ticket_id": "ticket-2",
+                "subject": "How can I change my login email?",
+                "description": "The account email setting is hard to find.",
+            },
+        ]
 
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(prefix="/ops", tags=("ops",)),
