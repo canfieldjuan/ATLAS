@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence as RuntimeSequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import combinations
 from typing import Callable, Mapping, Sequence
 
@@ -390,6 +390,33 @@ class BenchmarkVerdict:
 
 
 @dataclass(frozen=True)
+class ClaimEvidenceResultArtifact:
+    """Machine-readable reliability-gate benchmark result."""
+
+    thresholds: BenchmarkThresholds
+    model_scores: tuple[ModelScore, ...]
+    agreement_matrix: tuple[PairwiseAgreement, ...]
+    stability_scores: tuple[StabilityScore, ...]
+    failure_cases: tuple[Mapping[str, object], ...]
+    verdict: BenchmarkVerdict
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors and self.verdict.passed
+
+    @property
+    def go_no_go(self) -> str:
+        return "go" if self.ok else "no_go"
+
+    def as_mapping(self) -> dict[str, object]:
+        payload = asdict(self)
+        payload["go_no_go"] = self.go_no_go
+        payload["ok"] = self.ok
+        return payload
+
+
+@dataclass(frozen=True)
 class BenchmarkFixture:
     """Decoded operator-labeled benchmark fixture rows."""
 
@@ -683,6 +710,184 @@ def evaluate_thresholds(
     return BenchmarkVerdict(passed=not reasons, failure_reasons=tuple(reasons))
 
 
+def build_claim_evidence_result_artifact(
+    triples: Sequence[ClaimEvidenceTriple],
+    model_runs: Sequence[ClaimEvidenceModelRun],
+    *,
+    stability_runs_by_model_id: (
+        Mapping[str, Sequence[ClaimEvidenceModelRun]] | None
+    ) = None,
+    thresholds: BenchmarkThresholds = DEFAULT_THRESHOLDS,
+) -> ClaimEvidenceResultArtifact:
+    """Assemble completed model runs into a benchmark decision artifact."""
+
+    active_thresholds = (
+        thresholds if isinstance(thresholds, BenchmarkThresholds) else DEFAULT_THRESHOLDS
+    )
+    errors: list[str] = []
+    if not isinstance(thresholds, BenchmarkThresholds):
+        errors.append("thresholds must be BenchmarkThresholds")
+
+    typed_triples: tuple[ClaimEvidenceTriple, ...] = ()
+    if not _usable_sequence(triples):
+        errors.append("triples must be a non-empty sequence")
+    elif all(isinstance(triple, ClaimEvidenceTriple) for triple in triples):
+        typed_triples = tuple(triples)
+    else:
+        errors.append("triples must contain ClaimEvidenceTriple")
+
+    typed_runs: tuple[ClaimEvidenceModelRun, ...] = ()
+    if not _usable_sequence(model_runs):
+        errors.append("model_runs must be a non-empty sequence")
+    elif all(isinstance(run, ClaimEvidenceModelRun) for run in model_runs):
+        typed_runs = tuple(sorted(model_runs, key=lambda run: run.model_id))
+    else:
+        errors.append("model_runs must contain ClaimEvidenceModelRun")
+
+    triple_ids = {triple.triple_id for triple in typed_triples}
+    seen_models: set[str] = set()
+    for run in typed_runs:
+        if not run.model_id.strip():
+            errors.append("model_id missing")
+        elif run.model_id in seen_models:
+            errors.append(f"model_id duplicated: {run.model_id}")
+        else:
+            seen_models.add(run.model_id)
+        if run.errors:
+            errors.append(f"{run.model_id}: run errors: {'; '.join(run.errors)}")
+        _validate_artifact_rows(run, triple_ids, errors)
+
+    stability_runs = (
+        {} if stability_runs_by_model_id is None else stability_runs_by_model_id
+    )
+    stability_response_maps: dict[
+        str, tuple[Mapping[str, ClaimEvidenceResponse], ...]
+    ] = {}
+    if not isinstance(stability_runs, Mapping):
+        errors.append("stability_runs_by_model_id must be a mapping")
+    else:
+        stability_response_maps = _validated_stability_response_maps(
+            stability_runs,
+            seen_models,
+            triple_ids,
+            errors,
+        )
+
+    if errors:
+        return _failed_result_artifact(active_thresholds, errors)
+
+    model_responses = {
+        run.model_id: run.responses_by_triple_id for run in typed_runs
+    }
+    model_scores = tuple(
+        score_model(run.model_id, typed_triples, model_responses[run.model_id])
+        for run in typed_runs
+    )
+    agreements = pairwise_agreements(typed_triples, model_responses)
+    stability_scores = tuple(
+        intra_model_stability(
+            model_id,
+            typed_triples,
+            stability_response_maps.get(model_id, ()),
+        )
+        for model_id in sorted(model_responses)
+    )
+    verdict = evaluate_thresholds(
+        model_scores,
+        agreements,
+        stability_scores,
+        active_thresholds,
+    )
+    return ClaimEvidenceResultArtifact(
+        thresholds=active_thresholds,
+        model_scores=model_scores,
+        agreement_matrix=agreements,
+        stability_scores=stability_scores,
+        failure_cases=_claim_evidence_failure_cases(typed_triples, typed_runs),
+        verdict=verdict,
+        errors=(),
+    )
+
+
+def _usable_sequence(value: object) -> bool:
+    return (
+        isinstance(value, RuntimeSequence)
+        and not isinstance(value, (str, bytes))
+        and bool(value)
+    )
+
+
+def _validate_artifact_rows(
+    run: ClaimEvidenceModelRun,
+    triple_ids: set[str],
+    errors: list[str],
+) -> None:
+    seen_rows: set[str] = set()
+    for index, row in enumerate(run.rows, start=1):
+        if not isinstance(row, ClaimEvidenceRunRow):
+            errors.append(f"{run.model_id} row {index}: must be ClaimEvidenceRunRow")
+            continue
+        if row.triple_id in seen_rows:
+            errors.append(f"{run.model_id}: duplicate row triple_id: {row.triple_id}")
+            continue
+        seen_rows.add(row.triple_id)
+        if row.triple_id not in triple_ids:
+            errors.append(f"{run.model_id}: unknown row triple_id: {row.triple_id}")
+
+
+def _validated_stability_response_maps(
+    stability_runs: Mapping[object, object],
+    model_ids: set[str],
+    triple_ids: set[str],
+    errors: list[str],
+) -> dict[str, tuple[Mapping[str, ClaimEvidenceResponse], ...]]:
+    normalized: dict[str, object] = {}
+    for raw_model_id, raw_runs in stability_runs.items():
+        if not isinstance(raw_model_id, str) or not raw_model_id.strip():
+            errors.append("stability model_id missing")
+            continue
+        model_id = raw_model_id.strip()
+        if model_id not in model_ids:
+            errors.append(f"stability model_id not in model runs: {model_id}")
+            continue
+        if model_id in normalized:
+            errors.append(f"stability model_id duplicated: {model_id}")
+            continue
+        normalized[model_id] = raw_runs
+
+    response_maps: dict[str, tuple[Mapping[str, ClaimEvidenceResponse], ...]] = {}
+    for model_id in sorted(model_ids):
+        raw_runs = normalized.get(model_id, ())
+        if not isinstance(raw_runs, RuntimeSequence) or isinstance(
+            raw_runs, (str, bytes)
+        ):
+            errors.append(f"stability runs for {model_id} must be a sequence")
+            continue
+        run_maps: list[Mapping[str, ClaimEvidenceResponse]] = []
+        for index, run in enumerate(raw_runs, start=1):
+            if not isinstance(run, ClaimEvidenceModelRun):
+                errors.append(
+                    f"stability run {index} for {model_id}: "
+                    "must be ClaimEvidenceModelRun"
+                )
+                continue
+            if run.model_id != model_id:
+                errors.append(
+                    f"stability run {index} for {model_id}: "
+                    f"model_id mismatch: {run.model_id}"
+                )
+                continue
+            if run.errors:
+                errors.append(
+                    f"stability run {index} for {model_id}: "
+                    f"run errors: {'; '.join(run.errors)}"
+                )
+            _validate_artifact_rows(run, triple_ids, errors)
+            run_maps.append(run.responses_by_triple_id)
+        response_maps[model_id] = tuple(run_maps)
+    return response_maps
+
+
 def _require_agreement_coverage(
     reasons: list[str],
     model_scores: Sequence[ModelScore],
@@ -762,3 +967,86 @@ def _require_metric(
         return
     if value < minimum:
         reasons.append(f"{owner}: {metric} {value:.3f} below {minimum:.3f}")
+
+
+def _claim_evidence_failure_cases(
+    triples: Sequence[ClaimEvidenceTriple],
+    model_runs: Sequence[ClaimEvidenceModelRun],
+) -> tuple[Mapping[str, object], ...]:
+    failures: list[Mapping[str, object]] = []
+    for run in model_runs:
+        rows_by_id = {row.triple_id: row for row in run.rows}
+        for triple in triples:
+            row = rows_by_id.get(triple.triple_id)
+            if row is None:
+                failures.append(
+                    _failure_case(run.model_id, triple, "missing_response", None, ())
+                )
+                continue
+            if row.response is None or row.errors:
+                failures.append(
+                    _failure_case(
+                        run.model_id,
+                        triple,
+                        "malformed_response",
+                        row.response,
+                        row.errors,
+                    )
+                )
+                continue
+            if row.response.supports != triple.expected_supports:
+                failures.append(
+                    _failure_case(
+                        run.model_id,
+                        triple,
+                        "incorrect_support",
+                        row.response,
+                        (),
+                    )
+                )
+                continue
+            if row.response.confidence < CONFIDENCE_COUNTS_MIN:
+                failures.append(
+                    _failure_case(
+                        run.model_id,
+                        triple,
+                        "low_confidence",
+                        row.response,
+                        (),
+                    )
+                )
+    return tuple(failures)
+
+
+def _failure_case(
+    model_id: str,
+    triple: ClaimEvidenceTriple,
+    failure: str,
+    response: ClaimEvidenceResponse | None,
+    row_errors: tuple[str, ...],
+) -> Mapping[str, object]:
+    return {
+        "model_id": model_id,
+        "triple_id": triple.triple_id,
+        "failure": failure,
+        "expected_supports": triple.expected_supports,
+        "actual_supports": response.supports if response is not None else None,
+        "confidence": response.confidence if response is not None else None,
+        "response_reason": response.reason if response is not None else "",
+        "row_errors": row_errors,
+    }
+
+
+def _failed_result_artifact(
+    thresholds: BenchmarkThresholds,
+    errors: Sequence[str],
+) -> ClaimEvidenceResultArtifact:
+    return ClaimEvidenceResultArtifact(
+        thresholds=thresholds,
+        model_scores=(),
+        agreement_matrix=(),
+        stability_scores=(),
+        failure_cases=(),
+        verdict=BenchmarkVerdict(False, tuple(errors)),
+        errors=tuple(errors),
+    )

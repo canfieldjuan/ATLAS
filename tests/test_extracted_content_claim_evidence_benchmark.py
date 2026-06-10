@@ -8,12 +8,15 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     EASY,
     HARD,
     BenchmarkThresholds,
+    ClaimEvidenceModelRun,
     ClaimEvidenceResponse,
+    ClaimEvidenceRunRow,
     ClaimEvidenceTriple,
     ModelScore,
     PairwiseAgreement,
     StabilityScore,
     build_claim_evidence_prompt_contract,
+    build_claim_evidence_result_artifact,
     claim_evidence_response_json_schema,
     evaluate_thresholds,
     intra_model_stability,
@@ -47,6 +50,39 @@ def _response(supports: bool, confidence: int = 5) -> ClaimEvidenceResponse:
 
 def _passing_score(model_id: str) -> ModelScore:
     return ModelScore(model_id, 1.0, 0.8, 0.95, 30, 10, 40, (), ())
+
+
+def _run_row(
+    model_id: str,
+    triple_id: str,
+    response: ClaimEvidenceResponse | None,
+    errors: tuple[str, ...] = (),
+) -> ClaimEvidenceRunRow:
+    return ClaimEvidenceRunRow(
+        model_id=model_id,
+        triple_id=triple_id,
+        contract_version="verify_claim_evidence.v1",
+        response=response,
+        errors=errors,
+    )
+
+
+def _model_run(
+    model_id: str,
+    responses: dict[str, ClaimEvidenceResponse],
+    *,
+    rows: tuple[ClaimEvidenceRunRow, ...] = (),
+    errors: tuple[str, ...] = (),
+) -> ClaimEvidenceModelRun:
+    return ClaimEvidenceModelRun(
+        model_id=model_id,
+        rows=tuple(
+            _run_row(model_id, triple_id, response)
+            for triple_id, response in responses.items()
+        )
+        + rows,
+        errors=errors,
+    )
 
 
 def test_triple_decoder_accepts_valid_decoded_input() -> None:
@@ -540,6 +576,190 @@ def test_runner_fails_closed_on_invalid_harness_inputs() -> None:
     assert run.errors == ("row 1: triple must be ClaimEvidenceTriple",)
     assert [row.triple_id for row in run.rows] == ["valid"]
     assert run.responses_by_triple_id == {"valid": _response(True, 5)}
+
+
+def test_result_artifact_builds_go_payload_from_completed_runs() -> None:
+    triples = (
+        _triple("easy", True, EASY),
+        _triple("hard", False, HARD),
+    )
+    claude_run = _model_run(
+        "claude",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    gpt_run = _model_run(
+        "gpt",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+
+    artifact = build_claim_evidence_result_artifact(
+        triples,
+        (gpt_run, claude_run),
+        stability_runs_by_model_id={
+            "gpt": (gpt_run, gpt_run),
+            "claude": (claude_run, claude_run),
+        },
+        thresholds=BenchmarkThresholds(
+            easy_accuracy_min=1.0,
+            hard_accuracy_min=1.0,
+            inter_model_agreement_min=1.0,
+            intra_model_stability_min=1.0,
+            high_confidence_accuracy_min=0.90,
+        ),
+    )
+
+    assert artifact.ok is True
+    assert artifact.go_no_go == "go"
+    assert [score.model_id for score in artifact.model_scores] == ["claude", "gpt"]
+    assert artifact.agreement_matrix == (PairwiseAgreement("claude", "gpt", 1.0, 2),)
+    assert artifact.failure_cases == ()
+
+    payload = artifact.as_mapping()
+    assert payload["go_no_go"] == "go"
+    assert payload["verdict"] == {"passed": True, "failure_reasons": ()}
+    assert payload["model_scores"][0]["easy_accuracy"] == 1.0
+    assert payload["agreement_matrix"][0]["agreement"] == 1.0
+    assert payload["stability_scores"][0]["stability"] == 1.0
+
+
+def test_result_artifact_records_failure_cases_without_raising() -> None:
+    triples = (
+        _triple("wrong", True, EASY),
+        _triple("missing", False, HARD),
+        _triple("malformed", True, EASY),
+        _triple("low", True, EASY),
+    )
+    run = _model_run(
+        "gpt",
+        {
+            "wrong": _response(False, 5),
+            "low": _response(True, 2),
+        },
+        rows=(
+            _run_row("gpt", "malformed", None, ("reason missing",)),
+        ),
+    )
+
+    artifact = build_claim_evidence_result_artifact(triples, (run,))
+
+    assert artifact.go_no_go == "no_go"
+    assert artifact.errors == ()
+    assert [case["failure"] for case in artifact.failure_cases] == [
+        "incorrect_support",
+        "missing_response",
+        "malformed_response",
+        "low_confidence",
+    ]
+    assert artifact.failure_cases[0]["actual_supports"] is False
+    assert artifact.failure_cases[1]["actual_supports"] is None
+    assert artifact.failure_cases[2]["row_errors"] == ("reason missing",)
+    assert artifact.failure_cases[3]["confidence"] == 2
+    assert artifact.as_mapping()["failure_cases"][2]["row_errors"] == (
+        "reason missing",
+    )
+
+
+def test_result_artifact_fails_closed_on_malformed_primary_inputs() -> None:
+    known = _triple("known", True, EASY)
+    good_row = _run_row("gpt", "known", _response(True))
+    run_with_bad_rows = ClaimEvidenceModelRun(
+        "gpt",
+        (
+            _run_row("gpt", "unknown", _response(True)),
+            good_row,
+            good_row,
+        ),
+        ("setup failed",),
+    )
+    duplicate_model = ClaimEvidenceModelRun("gpt", (), ())
+    missing_model_id = ClaimEvidenceModelRun(" ", (), ())
+    bad_row_type = ClaimEvidenceModelRun("rows", ("bad-row",), ())
+
+    empty = build_claim_evidence_result_artifact(None, None)
+
+    assert empty.errors == (
+        "triples must be a non-empty sequence",
+        "model_runs must be a non-empty sequence",
+    )
+
+    bad_types = build_claim_evidence_result_artifact(
+        (known, {"not": "a triple"}),
+        ({"not": "a run"},),
+    )
+
+    assert bad_types.errors == (
+        "triples must contain ClaimEvidenceTriple",
+        "model_runs must contain ClaimEvidenceModelRun",
+    )
+
+    artifact = build_claim_evidence_result_artifact(
+        (known,),
+        (
+            run_with_bad_rows,
+            duplicate_model,
+            missing_model_id,
+            bad_row_type,
+        ),
+        thresholds="not-thresholds",
+    )
+
+    assert artifact.model_scores == ()
+    assert artifact.failure_cases == ()
+    for expected in (
+        "gpt: run errors: setup failed",
+        "gpt: unknown row triple_id: unknown",
+        "gpt: duplicate row triple_id: known",
+        "model_id duplicated: gpt",
+        "model_id missing",
+        "rows row 1: must be ClaimEvidenceRunRow",
+        "thresholds must be BenchmarkThresholds",
+    ):
+        assert expected in artifact.errors
+
+    bad_stability = build_claim_evidence_result_artifact(
+        (known,),
+        (_model_run("gpt", {"known": _response(True)}),),
+        stability_runs_by_model_id=[],
+    )
+
+    assert bad_stability.errors == ("stability_runs_by_model_id must be a mapping",)
+
+
+def test_result_artifact_rejects_malformed_stability_reruns() -> None:
+    known = _triple("known", True, EASY)
+    gpt_run = _model_run("gpt", {"known": _response(True)})
+    bad_rows = ClaimEvidenceModelRun(
+        "gpt",
+        (_run_row("gpt", "unknown", _response(True)),),
+        ("rerun setup failed",),
+    )
+
+    artifact = build_claim_evidence_result_artifact(
+        (known,),
+        (gpt_run,),
+        stability_runs_by_model_id={
+            "": (),
+            "other": (),
+            "gpt": (
+                "bad rerun",
+                ClaimEvidenceModelRun("other", (), ()),
+                bad_rows,
+            ),
+        },
+    )
+
+    assert artifact.ok is False
+    assert artifact.go_no_go == "no_go"
+    assert artifact.model_scores == ()
+    for expected in (
+        "stability model_id missing",
+        "stability model_id not in model runs: other",
+        "stability run 1 for gpt: must be ClaimEvidenceModelRun",
+        "stability run 2 for gpt: model_id mismatch: other",
+        "stability run 3 for gpt: run errors: rerun setup failed",
+        "gpt: unknown row triple_id: unknown",
+    ):
+        assert expected in artifact.errors
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:
