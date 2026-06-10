@@ -28,10 +28,32 @@ jobs:
         run: |
           git remote set-head origin --auto || git remote set-head origin main
 
+      - name: Write current PR body
+        if: github.event_name == 'pull_request'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          body = event.get("pull_request", {}).get("body") or ""
+          Path(os.environ["RUNNER_TEMP"], "current-pr-body.md").write_text(
+              body,
+              encoding="utf-8",
+          )
+          PY
+
       - name: Run local PR review bundle
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/local_pr_review.sh
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            bash scripts/local_pr_review.sh --current-pr-body-file "$RUNNER_TEMP/current-pr-body.md"
+          else
+            bash scripts/local_pr_review.sh
+          fi
 
       # Unit-cover the PR-review tooling itself (including the plans-archive
       # advisory). This workflow runs the bundle above, so its fixtures belong
@@ -39,4 +61,4 @@ jobs:
       - name: PR-review tooling unit tests
         run: |
           python -m pip install --quiet pytest pytest-asyncio
-          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py -q
+          python -m pytest tests/test_local_pr_review.py tests/test_audit_ai_reconciliation.py tests/test_audit_review_rules_triggered.py tests/test_summarize_review_misses.py tests/test_check_ai_reconciliation_live.py tests/test_pre_push_audit_workflow.py -q

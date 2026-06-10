@@ -1,0 +1,62 @@
+name: Maturity Sweep (advisory)
+
+# Advisory brittleness triage -- NOT a gate. Ranks files in the content-ops
+# lane by structural-fragility signals (untested modules, happy-path-only
+# tests, swallowed exceptions, unguarded input) and prints a worst-first
+# agenda for an adversarial pass. It never fails the build: it surfaces
+# suspects, judgment stays with the reviewer.
+#
+# It catches STRUCTURAL brittleness only. Semantic / contract / logic bugs
+# (over-broad matchers, fail-open fields, asymmetric token handling) are NOT
+# in scope here -- those are caught by adversarial review + the live
+# AI-reconciliation gate. A green sweep is NOT a production-hardening stamp.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/maturity_sweep_advisory.yml"
+      - "scripts/maturity_sweep.py"
+      - "tests/test_maturity_sweep.py"
+      - "extracted_content_pipeline/**"
+      - "tests/test_extracted_*.py"
+      - "tests/test_content_ops_*.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/maturity_sweep_advisory.yml"
+      - "scripts/maturity_sweep.py"
+      - "extracted_content_pipeline/**"
+
+jobs:
+  maturity-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python -m pip install --quiet pytest
+
+      # Tool correctness gates (AGENTS.md 3i failure-branch fixtures: they
+      # prove the detectors fire, and pin the dead-detector matcher bug).
+      # --noconftest: the repo-level tests/conftest.py imports pytest_asyncio
+      # and app dependencies; these tests are self-contained stdlib by design.
+      - name: Sweep unit tests (blocking)
+        run: python -m pytest tests/test_maturity_sweep.py --noconftest -q
+
+      # The sweep itself is stdlib-only.
+      - name: Maturity sweep (advisory, non-blocking)
+        continue-on-error: true
+        run: |
+          echo "Advisory brittleness triage for the content-ops lane."
+          echo "NOT a gate -- it surfaces suspect files for an adversarial pass."
+          echo "Structural signals only; semantic/contract bugs are caught by review + the reconciliation gate."
+          echo "A green sweep is not a production-hardening stamp."
+          echo
+          python scripts/maturity_sweep.py extracted_content_pipeline --tests-root tests --top 25
