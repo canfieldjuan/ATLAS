@@ -1,5 +1,5 @@
 {
-  "generated": 1,
+  "generated": 2,
   "items": [
     {
       "action_items": [
@@ -7,42 +7,41 @@
         "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
         "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
       ],
-      "answer": "No verified resolution evidence was found in 2 ticket sources; keep this FAQ in review before answering: Which remaining support questions need manual review?",
+      "answer": "No verified resolution evidence was found in 2 ticket sources; keep this FAQ in review before answering: How do I export attribution report?",
       "answer_evidence_status": "draft_needs_review",
       "displayed_evidence_count": 2,
       "evidence_count": 2,
       "evidence_quotes": [
         "`search-export-1`: \"How do I export attribution report?\"",
-        "`ticket-email-1` - Email update: \"How do I change my email?\""
+        "`search-export-2`: \"How can I export the attribution report?\""
       ],
       "failure_risk_score": 1,
       "failure_risk_signals": [
         "zero_result_search"
       ],
-      "frequency": 21,
-      "opportunity_score": 42,
-      "question": "Which remaining support questions need manual review?",
-      "question_source": "source_policy",
+      "frequency": 40,
+      "opportunity_score": 80,
+      "question": "How do I export attribution report?",
+      "question_source": "customer_wording",
       "resolution_evidence_scope": "not_applicable",
       "resolution_source_count": 0,
       "source_ids": [
         "search-export-1",
-        "ticket-email-1"
+        "search-export-2"
       ],
       "source_labels": [
         "`search-export-1`",
-        "`ticket-email-1` - Email update"
+        "`search-export-2`"
       ],
       "source_type_counts": {
-        "search_log": 1,
-        "support_ticket": 1
+        "search_log": 2
       },
       "steps": [
         "Review the cited ticket evidence and confirm the policy-approved answer before publishing.",
         "Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.",
         "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
       ],
-      "summary": "Customers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.",
+      "summary": "Customers are asking about reporting friction across 2 ticket sources. The clearest customer wording is \"How do I export attribution report?\", so this FAQ should answer that request directly and tell users exactly what to try next.",
       "term_mappings": [
         {
           "customer_term": "export",
@@ -52,23 +51,67 @@
             "zero_result_search"
           ],
           "first_source_id": "search-export-1",
-          "opportunity_score": 42,
+          "opportunity_score": 80,
           "source_id_count": 2,
           "suggestion": "Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text.",
-          "zero_result_source_count": 1
+          "zero_result_source_count": 2
         }
       ],
       "ticket_count": 2,
       "topic": "reporting friction",
-      "weighted_frequency": 21,
+      "weighted_frequency": 40,
       "weighted_source_volume_by_type": {
-        "search_log": 20,
-        "support_ticket": 1
+        "search_log": 40
       },
       "when_to_contact_support": "Contact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions."
+    },
+    {
+      "action_items": [
+        "Open account settings, choose Profile, update the email address, then confirm the verification email.",
+        "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+      ],
+      "answer": "To resolve this, open account settings, choose Profile, update the email address, then confirm the verification email.",
+      "answer_evidence_status": "resolution_evidence",
+      "displayed_evidence_count": 1,
+      "evidence_count": 1,
+      "evidence_quotes": [
+        "`ticket-email-1` - Email update: \"How do I change my email?\""
+      ],
+      "failure_risk_score": 0,
+      "failure_risk_signals": [],
+      "frequency": 1,
+      "opportunity_score": 1,
+      "question": "How do I change my email?",
+      "question_source": "customer_wording",
+      "resolution_evidence_scope": "scoped",
+      "resolution_source_count": 1,
+      "source_ids": [
+        "ticket-email-1"
+      ],
+      "source_labels": [
+        "`ticket-email-1` - Email update"
+      ],
+      "source_type_counts": {
+        "support_ticket": 1
+      },
+      "steps": [
+        "Open account settings, choose Profile, update the email address, then confirm the verification email.",
+        "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
+      ],
+      "summary": "A customer asked about email and profile updates: \"How do I change my email?\". This FAQ should answer the request directly and tell the user exactly what to try next.",
+      "term_mappings": [],
+      "ticket_count": 1,
+      "topic": "email and profile updates",
+      "weighted_frequency": 1,
+      "weighted_source_volume_by_type": {
+        "support_ticket": 1
+      },
+      "when_to_contact_support": "Contact support at https://example.com/support if you cannot access the account, the field is locked, or the confirmation message never arrives."
     }
   ],
-  "markdown": "# Support Ticket FAQ Report\n\n_Source rows analyzed: 2. Ticket sources used: 2._\n\n## 1. Which remaining support questions need manual review?\n\nCustomers are asking about reporting friction across 2 ticket sources. Representative evidence includes \"How do I export attribution report?\", so this FAQ should answer the issue directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"export\"; documentation says \"Download report\". Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); 1 zero-result search source(s); mapping score 42.)\n\n**What to do next:**\n\n1. Review the cited ticket evidence and confirm the policy-approved answer before publishing.\n2. Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.\n\n**Sources:**\n\n- `search-export-1`: \"How do I export attribution report?\"\n- `ticket-email-1` - Email update: \"How do I change my email?\"\n",
+  "markdown": "# Support Ticket FAQ Report\n\n_Source rows analyzed: 3. Ticket sources used: 3._\n\n## 1. How do I export attribution report?\n\nCustomers are asking about reporting friction across 2 ticket sources. The clearest customer wording is \"How do I export attribution report?\", so this FAQ should answer that request directly and tell users exactly what to try next.\n\n**Vocabulary gaps:**\n\n- Customers say \"export\"; documentation says \"Download report\". Add \"export\" as alternate phrasing for \"Download report\" in FAQ headings and answer text. (Seen in 2 source(s); 2 zero-result search source(s); mapping score 80.)\n\n**What to do next:**\n\n1. Review the cited ticket evidence and confirm the policy-approved answer before publishing.\n2. Draft the customer-facing steps from a verified help article, runbook, macro, or resolved ticket.\n3. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if the export is missing, locked by plan or role, or still unavailable after an admin checks permissions.\n\n**Sources:**\n\n- `search-export-1`: \"How do I export attribution report?\"\n- `search-export-2`: \"How can I export the attribution report?\"\n\n## 2. How do I change my email?\n\nA customer asked about email and profile updates: \"How do I change my email?\". This FAQ should answer the request directly and tell the user exactly what to try next.\n\n**What to do next:**\n\n1. Open account settings, choose Profile, update the email address, then confirm the verification email.\n2. If it still does not work, contact support at https://example.com/support and include the cited ticket details.\n\n**When to contact support:**\n\nContact support at https://example.com/support if you cannot access the account, the field is locked, or the confirmation message never arrives.\n\n**Sources:**\n\n- `ticket-email-1` - Email update: \"How do I change my email?\"\n",
+  "non_repeat_question_count": 0,
+  "non_repeat_ticket_count": 0,
   "output_checks": {
     "condensed": true,
     "has_action_items": true,
@@ -76,7 +119,7 @@
     "uses_user_vocabulary": true
   },
   "saved_ids": [],
-  "source_count": 2,
-  "ticket_source_count": 2,
+  "source_count": 3,
+  "ticket_source_count": 3,
   "warnings": []
 }

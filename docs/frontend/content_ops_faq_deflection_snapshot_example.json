@@ -4,6 +4,7 @@
     "drafted_answer_count": 1,
     "generated": 2,
     "no_proven_answer_count": 1,
+    "non_repeat_ticket_count": 0,
     "repeat_ticket_count": 4,
     "source_date_end": "2026-05-15",
     "source_date_start": "2026-05-01",
@@ -36,8 +37,8 @@
       "weighted_frequency": 2
     },
     {
-      "customer_wording": "Can I turn on SSO for all users?",
-      "question": "Can I turn on SSO for all users?",
+      "customer_wording": "How do I enable SSO for my team?",
+      "question": "How do I enable SSO for my team?",
       "rank": 2,
       "ticket_count": 2,
       "weighted_frequency": 2
