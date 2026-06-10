@@ -264,6 +264,317 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     assert "support@example.com" in result.markdown
 
 
+def test_build_ticket_faq_markdown_rejects_closure_boilerplate_as_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "evidence": [{
+                "text": "How do I export billing reports?",
+                "source_id": "ticket-closure-1",
+                "source_type": "support_ticket",
+                "resolution_text": "Customer did not respond, closing this out.",
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert "closing this out" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_rejects_internal_notes_as_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Refund issue",
+            "evidence": [{
+                "text": "How do I get a refund for a duplicate charge?",
+                "source_id": "ticket-internal-1",
+                "source_type": "support_ticket",
+                "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert "policy 4.2" not in result.markdown
+    assert "Escalated to T2" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_legitimate_policy_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Refund issue",
+            "evidence": [{
+                "text": "How do I request a refund under the billing policy?",
+                "source_id": "ticket-policy-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Billing, choose Refunds, then review the refund policy "
+                    "before submitting the request."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Open Billing, choose Refunds, then review the refund policy before "
+        "submitting the request."
+    )
+
+
+def test_build_ticket_faq_markdown_uses_row_context_for_resolution_topic_match() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Receipt export",
+            "pain_category": "billing export",
+            "tags": "billing,invoices,resolved",
+            "evidence": [{
+                "text": "Can finance export subscription receipts without admin access?",
+                "source_id": "ticket-context-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Billing then Invoices, filter by the quarter, and "
+                    "download the PDF from the invoice row."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Open Billing then Invoices, filter by the quarter, and download the "
+        "PDF from the invoice row."
+    )
+
+
+@pytest.mark.parametrize(
+    ("question_text", "resolution_text", "expected_step"),
+    (
+        (
+            "I cannot log in to my account.",
+            "Reset the password and send a temporary code.",
+            "Reset the password and send a temporary code.",
+        ),
+        (
+            "How do I sign in after lockout?",
+            "Reset the password and send a backup code.",
+            "Reset the password and send a backup code.",
+        ),
+        (
+            "Why does authentication fail on mobile?",
+            "Clear saved credentials and reset the password.",
+            "Clear saved credentials and reset the password.",
+        ),
+        (
+            "How do I get receipts for finance?",
+            "Open Billing, choose Invoices, and download the PDF.",
+            "Open Billing, choose Invoices, and download the PDF.",
+        ),
+        (
+            "Can I connect Salesforce?",
+            "Open Integrations and refresh the sync.",
+            "Open Integrations and refresh the sync.",
+        ),
+        (
+            "How do I stop renewal?",
+            "Open Billing and cancel the subscription.",
+            "Open Billing and cancel the subscription.",
+        ),
+    ),
+)
+def test_build_ticket_faq_markdown_keeps_synonymous_resolution_topics(
+    question_text: str,
+    resolution_text: str,
+    expected_step: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Synonymous support wording",
+            "evidence": [{
+                "text": question_text,
+                "source_id": "ticket-synonym-1",
+                "source_type": "support_ticket",
+                "resolution_text": resolution_text,
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == expected_step
+
+
+@pytest.mark.parametrize(
+    ("question_text", "resolution_text"),
+    (
+        (
+            "I cannot log in to my account.",
+            "Open Billing and download the invoice PDF.",
+        ),
+        (
+            "How do I get receipts for finance?",
+            "Reset the password and send a temporary code.",
+        ),
+    ),
+)
+def test_build_ticket_faq_markdown_rejects_off_topic_synonym_near_misses(
+    question_text: str,
+    resolution_text: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Off-topic support wording",
+            "evidence": [{
+                "text": question_text,
+                "source_id": "ticket-off-topic-synonym-1",
+                "source_type": "support_ticket",
+                "resolution_text": resolution_text,
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert resolution_text not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_past_tense_action_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "MFA settings",
+            "evidence": [{
+                "text": "How do I update MFA settings?",
+                "source_id": "ticket-past-tense-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "I enabled MFA and configured the authenticator, then "
+                    "updated the settings."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "I enabled MFA and configured the authenticator, then updated the settings."
+    )
+
+
+@pytest.mark.parametrize(
+    "resolution_text",
+    (
+        "Reviewed the billing account and replied to the customer.",
+        "Checked the account and sent the customer an update.",
+        "Reviewed the billing account and sent an update to the customer.",
+        "Checked the account and provided an update to the requester.",
+        "Started reviewing the billing account and sent an update to the customer.",
+    ),
+)
+def test_build_ticket_faq_markdown_rejects_disposition_only_agent_updates(
+    resolution_text: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Billing account",
+            "evidence": [{
+                "text": "How do I update the billing account?",
+                "source_id": "ticket-disposition-1",
+                "source_type": "support_ticket",
+                "resolution_text": resolution_text,
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert resolution_text not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_concrete_step_after_account_review() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Billing account",
+            "evidence": [{
+                "text": "How do I update the billing account?",
+                "source_id": "ticket-concrete-review-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Checked the billing account, opened Invoices, and updated "
+                    "the payment method."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Checked the billing account, opened Invoices, and updated the payment method."
+    )
+
+
+def test_build_ticket_faq_markdown_keeps_concrete_started_return_step() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Product return",
+            "evidence": [{
+                "text": "How do I return a recent purchase from your store?",
+                "source_id": "ticket-return-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Items should be returned within 30 days in their original "
+                    "condition. Start the return in the online returns portal."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Items should be returned within 30 days in their original condition."
+    )
+    assert item["steps"][1] == "Start the return in the online returns portal."
+
+
 def test_build_ticket_faq_markdown_rejects_generic_response_metadata_as_resolution() -> None:
     result = build_ticket_faq_markdown(
         [{

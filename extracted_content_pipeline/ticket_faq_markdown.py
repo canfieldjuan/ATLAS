@@ -225,6 +225,154 @@ _RESOLUTION_TEXT_KEYS = (
     "staff_reply",
     "answer_text",
 )
+_RESOLUTION_ACTION_TERMS = {
+    "add",
+    "approve",
+    "ask",
+    "change",
+    "check",
+    "choose",
+    "clear",
+    "click",
+    "compare",
+    "configure",
+    "confirm",
+    "connect",
+    "contact",
+    "create",
+    "deploy",
+    "disable",
+    "download",
+    "enable",
+    "export",
+    "grant",
+    "import",
+    "map",
+    "open",
+    "paste",
+    "refresh",
+    "remove",
+    "rerun",
+    "reset",
+    "review",
+    "revoke",
+    "run",
+    "save",
+    "select",
+    "send",
+    "set",
+    "start",
+    "update",
+    "verify",
+}
+_RESOLUTION_TOPIC_STOPWORDS = {
+    "about",
+    "after",
+    "and",
+    "are",
+    "can",
+    "cannot",
+    "could",
+    "customer",
+    "does",
+    "for",
+    "from",
+    "help",
+    "how",
+    "into",
+    "issue",
+    "need",
+    "not",
+    "please",
+    "request",
+    "support",
+    "that",
+    "the",
+    "then",
+    "this",
+    "ticket",
+    "user",
+    "what",
+    "when",
+    "where",
+    "why",
+    "with",
+}
+_RESOLUTION_CLOSURE_BOILERPLATE_RE = re.compile(
+    r"\b(?:customer|user|requester|client)\s+"
+    r"(?:did not|didn't|does not|doesn't)\s+respond\b"
+    r"|\bno response from (?:the )?(?:customer|user|requester|client)\b"
+    r"|\bclosed due to no response\b"
+    r"|\bclosing due to no response\b"
+    r"|\bclosing this out\b"
+    r"|\bthanks[,. ]+(?:closing|closed)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_INTERNAL_NOTE_RE = re.compile(
+    r"\b(?:assigned|escalated|routed)\s+to\s+(?:t[0-9]+|tier\s*[0-9]+|l[0-9]+)\b"
+    r"|\bpolicy\s+\d+(?:\.\d+)+\b"
+    r"|\binternal\s+(?:note|only)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_DISPOSITION_ONLY_ACTION_TERMS = {
+    "ask",
+    "check",
+    "confirm",
+    "contact",
+    "review",
+    "send",
+    "start",
+    "update",
+}
+_RESOLUTION_DISPOSITION_ONLY_RE = re.compile(
+    r"\b(?:replied|responded)\s+to\s+(?:the\s+)?(?:customer|client|user|requester)\b"
+    r"|\b(?:sent|provided)\s+(?:the\s+)?(?:customer|client|user|requester)\s+"
+    r"(?:an?\s+)?(?:update|reply|response)\b"
+    r"|\b(?:sent|provided)\s+(?:an?\s+)?(?:update|reply|response)\s+"
+    r"to\s+(?:the\s+)?(?:customer|client|user|requester)\b"
+    r"|\b(?:customer|client|user|requester)\s+(?:was\s+)?"
+    r"(?:updated|notified|informed)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_TOPIC_EQUIVALENCE_GROUPS = (
+    frozenset({
+        "auth",
+        "authentication",
+        "code",
+        "credential",
+        "login",
+        "log",
+        "password",
+        "reset",
+        "sign",
+    }),
+    frozenset({
+        "bill",
+        "billing",
+        "charge",
+        "invoice",
+        "payment",
+        "receipt",
+        "statement",
+    }),
+    frozenset({
+        "connect",
+        "connection",
+        "integration",
+        "sync",
+    }),
+    frozenset({
+        "cancel",
+        "cancellation",
+        "renewal",
+        "subscription",
+    }),
+)
+_RESOLUTION_TOPIC_EQUIVALENCE: dict[str, frozenset[str]] = {
+    token: group
+    for group in _RESOLUTION_TOPIC_EQUIVALENCE_GROUPS
+    for token in group
+}
 _VOCABULARY_GAP_RULES = (
     ("export", "download", "download report", "report download"),
     ("dashboard", "analytics", "reporting", "reports"),
@@ -469,7 +617,22 @@ def build_ticket_faq_markdown(
             seen.add(key)
             source_keys.add(source_key)
             topic = _topic(opportunity, evidence, intent_rules=intent_rules)
-            resolution_text = _resolution_text(evidence, opportunity)
+            resolution_context = " / ".join(
+                value
+                for value in (
+                    text,
+                    topic,
+                    _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                    _clean(evidence.get("pain_category") or opportunity.get("pain_category")),
+                    _clean(evidence.get("tags") or opportunity.get("tags")),
+                )
+                if value
+            )
+            resolution_text = _resolution_text(
+                evidence,
+                opportunity,
+                question_text=resolution_context,
+            )
             evidence_group_key = _evidence_group_key(resolution_text)
             group_key = (topic, evidence_group_key or f"topic:{_compact_key(topic)}")
             source_date = _source_date(evidence) or _source_date(opportunity)
@@ -1048,13 +1211,90 @@ def _source_weight(*rows: Mapping[str, Any]) -> int:
     return source_row_weight(*rows)
 
 
-def _resolution_text(*rows: Mapping[str, Any]) -> str:
+def _resolution_text(*rows: Mapping[str, Any], question_text: str = "") -> str:
     for row in rows:
         for key in _RESOLUTION_TEXT_KEYS:
             text = support_ticket_plain_text(_field_value(row, key))
-            if text:
+            if text and _resolution_text_is_publishable(text, question_text=question_text):
                 return text
     return ""
+
+
+def _resolution_text_is_publishable(value: Any, *, question_text: str) -> bool:
+    text = _compact(support_ticket_plain_text(value))
+    if not text:
+        return False
+    if _RESOLUTION_CLOSURE_BOILERPLATE_RE.search(text):
+        return False
+    if _RESOLUTION_INTERNAL_NOTE_RE.search(text):
+        return False
+
+    resolution_tokens = _resolution_signal_tokens(text)
+    if len(resolution_tokens) < 3:
+        return False
+    if resolution_tokens.isdisjoint(_RESOLUTION_ACTION_TERMS):
+        return False
+    if _resolution_text_is_disposition_only(text, resolution_tokens):
+        return False
+
+    question_tokens = _resolution_signal_tokens(question_text)
+    if question_tokens and _resolution_overlap_tokens(resolution_tokens).isdisjoint(
+        _resolution_overlap_tokens(question_tokens)
+    ):
+        return False
+    return True
+
+
+def _resolution_signal_tokens(value: Any) -> set[str]:
+    return {
+        _resolution_signal_token(token)
+        for token in re.findall(r"[a-z0-9]+", _compact(value).lower())
+        if len(token) > 2 and token not in _RESOLUTION_TOPIC_STOPWORDS
+    }
+
+
+def _resolution_text_is_disposition_only(text: str, resolution_tokens: set[str]) -> bool:
+    action_tokens = resolution_tokens & _RESOLUTION_ACTION_TERMS
+    return bool(
+        action_tokens
+        and action_tokens <= _RESOLUTION_DISPOSITION_ONLY_ACTION_TERMS
+        and _RESOLUTION_DISPOSITION_ONLY_RE.search(text)
+    )
+
+
+def _resolution_overlap_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in tokens:
+        expanded.update(_RESOLUTION_TOPIC_EQUIVALENCE.get(token, ()))
+    return expanded
+
+
+def _resolution_signal_token(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 5 and token.endswith("ing"):
+        base = token[:-3]
+        if base in _RESOLUTION_ACTION_TERMS:
+            return base
+        if f"{base}e" in _RESOLUTION_ACTION_TERMS:
+            return f"{base}e"
+        if len(base) > 3 and base[-1:] == base[-2:-1] and base[:-1] in _RESOLUTION_ACTION_TERMS:
+            return base[:-1]
+        return base
+    if len(token) > 4 and token.endswith("ed"):
+        base = token[:-2]
+        if base in _RESOLUTION_ACTION_TERMS:
+            return base
+        if f"{base}e" in _RESOLUTION_ACTION_TERMS:
+            return f"{base}e"
+        if base.endswith("i") and f"{base[:-1]}y" in _RESOLUTION_ACTION_TERMS:
+            return f"{base[:-1]}y"
+        if len(base) > 3 and base[-1:] == base[-2:-1] and base[:-1] in _RESOLUTION_ACTION_TERMS:
+            return base[:-1]
+        return base
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def _resolution_texts(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
