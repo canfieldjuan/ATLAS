@@ -139,10 +139,13 @@ _MAX_INGESTION_ROWS = 1000
 _MAX_FILE_INGESTION_ROWS = 10000
 _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 * 1024 * 1024
+_MAX_DEFLECTION_SUBMIT_ROWS = _MAX_DEFLECTION_SUBMIT_BLOB_BYTES
 _MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
 _DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS = 15
 _DEFLECTION_SUBMIT_OUTPUTS = ("faq_deflection_report",)
+_DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY = "_deflection_submit_internal_token"
+_DEFLECTION_SUBMIT_INTERNAL_TOKEN = object()
 _DEFLECTION_SUBMIT_PLATFORMS = frozenset({
     "zendesk",
     "intercom",
@@ -626,7 +629,7 @@ if BaseModel is not None:
         support_platform: str = Field(..., min_length=1, max_length=80)
         company_name: str = Field(..., min_length=1, max_length=200)
         contact_email: str = Field(..., min_length=3, max_length=320)
-        limit: int = Field(_MAX_INGESTION_ROWS, ge=1, le=_MAX_INGESTION_ROWS)
+        limit: int | None = Field(default=None, ge=1, le=_MAX_DEFLECTION_SUBMIT_ROWS)
 
         @field_validator("support_platform")
         @classmethod
@@ -1083,6 +1086,10 @@ def create_content_ops_control_surface_router(
         payload: ContentOpsRequestModel = Body(...),
     ) -> dict[str, Any]:
         payload_mapping = _payload_to_mapping(payload, exclude_unset=input_provider is not None)
+        internal_deflection_submit = (
+            payload_mapping.pop(_DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY, None)
+            is _DEFLECTION_SUBMIT_INTERNAL_TOKEN
+        )
         if not await execute_gate.acquire():
             raise HTTPException(
                 status_code=429,
@@ -1108,10 +1115,11 @@ def create_content_ops_control_surface_router(
                 brand_voice_profile_provider=brand_voice_profile_provider,
                 scope=scope,
             )
-            _enforce_faq_execute_source_material_limit(
-                payload_mapping,
-                max_rows=resolved_config.faq_execute_max_source_material_rows,
-            )
+            if not internal_deflection_submit:
+                _enforce_faq_execute_source_material_limit(
+                    payload_mapping,
+                    max_rows=resolved_config.faq_execute_max_source_material_rows,
+                )
             budget_evaluation = await _evaluate_account_usage_budget(
                 payload_mapping,
                 usage_pool_provider=usage_pool_provider,
@@ -1219,10 +1227,6 @@ def create_content_ops_control_surface_router(
             request,
             max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
         )
-        max_rows = min(
-            int(data.get("limit") or _MAX_INGESTION_ROWS),
-            resolved_config.faq_execute_max_source_material_rows,
-        )
         if not rows:
             raise HTTPException(
                 status_code=400,
@@ -1231,7 +1235,20 @@ def create_content_ops_control_surface_router(
                     "message": "Submitted CSV did not contain support-ticket rows.",
                 },
             )
+        loaded_row_count = len(rows)
+        rows, language_filtered_row_count = _deflection_submit_english_rows(rows)
+        if not rows:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason": "deflection_submit_no_english_rows",
+                    "message": "Submitted CSV did not contain English support-ticket rows.",
+                    "source_row_count": loaded_row_count,
+                    "language_filtered_row_count": language_filtered_row_count,
+                },
+            )
         raw_row_count = len(rows)
+        max_rows = _deflection_submit_max_rows(data.get("limit"), raw_row_count)
         submitted_rows = _deflection_submit_rows_with_defaults(data, rows)[:max_rows]
         title = _deflection_submit_title(data)
         package = build_support_ticket_input_package(
@@ -1261,8 +1278,9 @@ def create_content_ops_control_surface_router(
             "support_platform": data["support_platform"],
         })
         result = await execute_generation({
+            _DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY: _DEFLECTION_SUBMIT_INTERNAL_TOKEN,
             "outputs": list(_DEFLECTION_SUBMIT_OUTPUTS),
-            "limit": max_rows,
+            "limit": 1,
             "require_quality_gates": False,
             "inputs": execute_inputs,
         })
@@ -1270,8 +1288,10 @@ def create_content_ops_control_surface_router(
             result,
             byte_count=byte_count,
             max_rows=max_rows,
+            loaded_row_count=loaded_row_count,
             source_row_count=raw_row_count,
             submitted_row_count=len(submitted_rows),
+            language_filtered_row_count=language_filtered_row_count,
             package=package.as_dict(),
             support_platform=data["support_platform"],
             byte_count_key=byte_count_key,
@@ -1378,6 +1398,14 @@ def _deflection_submit_form_to_mapping(form: Any) -> dict[str, Any]:
     if _clean(limit):
         data["limit"] = limit
     return _deflection_submit_fields_to_mapping(data)
+
+
+def _deflection_submit_max_rows(limit: Any, raw_row_count: int) -> int:
+    if raw_row_count <= 0:
+        return 0
+    if limit is None:
+        return raw_row_count
+    return min(int(limit), raw_row_count)
 
 
 async def _inspect_uploaded_ingestion_file(
@@ -1772,6 +1800,35 @@ def _deflection_submit_rows_with_defaults(
     ]
 
 
+def _deflection_submit_english_rows(rows: Sequence[Any]) -> tuple[list[Any], int]:
+    if not any(_deflection_submit_language(row) for row in rows):
+        return list(rows), 0
+    out: list[Any] = []
+    filtered = 0
+    for row in rows:
+        language = _deflection_submit_language(row)
+        if language and not _is_english_language(language):
+            filtered += 1
+            continue
+        out.append(row)
+    return out, filtered
+
+
+def _deflection_submit_language(row: Any) -> str:
+    if not isinstance(row, Mapping):
+        return ""
+    for key in ("language", "lang", "locale"):
+        value = _clean(row.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _is_english_language(value: str) -> bool:
+    normalized = value.strip().lower().replace("_", "-")
+    return normalized in {"en", "eng", "english"} or normalized.startswith("en-")
+
+
 def _deflection_submit_title(data: Mapping[str, Any]) -> str:
     return f"{data['company_name']} Support Deflection Report"
 
@@ -1852,8 +1909,10 @@ def _with_deflection_submit_diagnostics(
     *,
     byte_count: int,
     max_rows: int,
+    loaded_row_count: int,
     source_row_count: int,
     submitted_row_count: int,
+    language_filtered_row_count: int,
     package: Mapping[str, Any],
     support_platform: str,
     byte_count_key: str = "blob_bytes",
@@ -1887,11 +1946,23 @@ def _with_deflection_submit_diagnostics(
         byte_count_key: byte_count,
         "support_platform": support_platform,
     })
+    if language_filtered_row_count:
+        metadata["loaded_source_row_count"] = loaded_row_count
+        metadata["language_filtered_row_count"] = language_filtered_row_count
     warnings = [
         dict(warning)
         for warning in diagnostics.get("warnings") or ()
         if isinstance(warning, Mapping)
     ]
+    if language_filtered_row_count:
+        warnings.append({
+            "code": "deflection_submit_non_english_rows_filtered",
+            "message": (
+                f"Skipped {language_filtered_row_count} non-English support-ticket rows."
+            ),
+            "row_count": loaded_row_count,
+            "filtered_row_count": language_filtered_row_count,
+        })
     if truncated_row_count:
         warnings.append({
             "code": "deflection_submit_rows_truncated",
@@ -3147,6 +3218,12 @@ def _clean_sequence(value: Any) -> tuple[str, ...]:
 
 
 def _payload_to_mapping(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
+    if (
+        isinstance(payload, Mapping)
+        and payload.get(_DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY)
+        is _DEFLECTION_SUBMIT_INTERNAL_TOKEN
+    ):
+        return _internal_deflection_submit_payload_to_mapping(payload)
     if BaseModel is not None and isinstance(payload, ContentOpsRequestModel):
         return payload.model_dump(exclude_unset=exclude_unset)
     try:
@@ -3155,6 +3232,27 @@ def _payload_to_mapping(payload: Any, *, exclude_unset: bool = False) -> dict[st
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=_validation_detail(exc)) from exc
+
+
+def _internal_deflection_submit_payload_to_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        request = request_from_mapping({
+            "target_mode": payload.get("target_mode") or "vendor_retention",
+            "outputs": payload.get("outputs") or _DEFLECTION_SUBMIT_OUTPUTS,
+            "limit": payload.get("limit") or 1,
+            "inputs": payload.get("inputs") if isinstance(payload.get("inputs"), Mapping) else {},
+            "require_quality_gates": bool(payload.get("require_quality_gates", True)),
+        })
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        _DEFLECTION_SUBMIT_INTERNAL_TOKEN_KEY: _DEFLECTION_SUBMIT_INTERNAL_TOKEN,
+        "target_mode": request.target_mode,
+        "outputs": list(request.outputs),
+        "limit": request.limit,
+        "inputs": dict(request.inputs),
+        "require_quality_gates": request.require_quality_gates,
+    }
 
 
 def _ingestion_payload_to_mapping(payload: Any) -> dict[str, Any]:

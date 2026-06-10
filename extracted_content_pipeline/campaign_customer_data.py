@@ -20,6 +20,44 @@ from .campaign_ports import TenantScope
 CustomerDataFormat = Literal["auto", "json", "csv"]
 _CSV_DETECT_DELIMITERS = ",;\t|"
 _CSV_SNIFFER_SAMPLE_CHARS = 65_536
+_CSV_HEADER_HINTS = frozenset({
+    "account",
+    "account_name",
+    "answer",
+    "body",
+    "case_id",
+    "category",
+    "company",
+    "company_name",
+    "contact_email",
+    "conversation_id",
+    "conversation_title",
+    "created_at",
+    "customer_message",
+    "description",
+    "email",
+    "id",
+    "initial_message",
+    "language",
+    "message",
+    "opportunity_id",
+    "pain_category",
+    "queue",
+    "requester_comment",
+    "resolution",
+    "resolution_text",
+    "source_id",
+    "subject",
+    "summary",
+    "ticket_number",
+    "ticket_id",
+    "ticket_subject",
+    "title",
+    "topic",
+    "user_email",
+    "vendor",
+    "vendor_name",
+})
 
 
 @dataclass(frozen=True)
@@ -229,27 +267,30 @@ def _load_csv_dict_rows(
     text = _read_csv_text(path)
     if not text.strip():
         raise ValueError("CSV customer data must include a header row.")
-    reader = csv.DictReader(
-        StringIO(text),
-        dialect=_detect_csv_dialect(text),
-    )
-    fieldnames = tuple(
-        str(field).strip()
-        for field in (reader.fieldnames or ())
+    reader = csv.reader(StringIO(text), dialect=_detect_csv_dialect(text))
+    raw_rows = list(reader)
+    header_index = _csv_header_index(raw_rows)
+    if header_index is None:
+        raise ValueError("CSV customer data must include a header row.")
+    header_width = len(raw_rows[header_index])
+    header_fields = tuple(
+        (index, str(field or "").strip())
+        for index, field in enumerate(raw_rows[header_index])
         if field is not None and str(field).strip()
     )
-    if not fieldnames:
+    if not header_fields:
         raise ValueError("CSV customer data must include a header row.")
-    for row_index, row in enumerate(reader, start=2):
-        if row.get(None):
+    for row_index, values in enumerate(raw_rows[header_index + 1:], start=header_index + 2):
+        if not any(str(value or "").strip() for value in values):
+            continue
+        if len(values) > header_width:
             raise ValueError(
                 f"CSV row {row_index} has more cells than the header; "
                 "check the delimiter and header row."
             )
         cleaned: dict[str, Any] = {}
-        for key, value in row.items():
-            if key is None:
-                continue
+        for value_index, key in header_fields:
+            value = values[value_index] if value_index < len(values) else ""
             cleaned_key = str(key).strip()
             if not cleaned_key:
                 continue
@@ -258,6 +299,27 @@ def _load_csv_dict_rows(
                 cleaned[cleaned_key] = cleaned_value
         rows.append(cleaned)
     return rows
+
+
+def _csv_header_index(rows: Sequence[Sequence[Any]]) -> int | None:
+    fallback: int | None = None
+    for index, row in enumerate(rows):
+        cells = [str(cell or "").strip() for cell in row]
+        nonempty = [cell for cell in cells if cell]
+        if not nonempty:
+            continue
+        normalized = {_normalize_csv_header_cell(cell) for cell in nonempty}
+        if normalized.intersection(_CSV_HEADER_HINTS):
+            return index
+        if len(nonempty) < 2:
+            continue
+        if fallback is None:
+            fallback = index
+    return fallback
+
+
+def _normalize_csv_header_cell(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
 
 
 def _read_csv_text(path: Path) -> str:
@@ -271,9 +333,26 @@ def _read_csv_text(path: Path) -> str:
 def _detect_csv_dialect(text: str) -> csv.Dialect:
     sample = text[:_CSV_SNIFFER_SAMPLE_CHARS]
     try:
-        return csv.Sniffer().sniff(sample, delimiters=_CSV_DETECT_DELIMITERS)
+        return _harden_csv_dialect(csv.Sniffer().sniff(
+            sample,
+            delimiters=_CSV_DETECT_DELIMITERS,
+        ))
     except csv.Error:
         return csv.excel
+
+
+def _harden_csv_dialect(dialect: csv.Dialect) -> type[csv.Dialect]:
+    class HardenedDialect(csv.Dialect):
+        delimiter = dialect.delimiter
+        quotechar = dialect.quotechar or '"'
+        escapechar = dialect.escapechar
+        doublequote = True
+        skipinitialspace = dialect.skipinitialspace
+        lineterminator = dialect.lineterminator
+        quoting = dialect.quoting
+        strict = False
+
+    return HardenedDialect
 
 
 def _coerce_csv_value(value: Any) -> Any:

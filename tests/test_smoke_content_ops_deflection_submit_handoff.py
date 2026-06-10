@@ -222,7 +222,7 @@ def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
         "--contact-email",
         "",
         "--limit",
-        "1001",
+        str(smoke.SUBMIT_ROW_LIMIT_MAX + 1),
         "--timeout",
         "0",
         "--submit-path",
@@ -239,7 +239,7 @@ def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
         "--support-platform must be one of: help_scout, intercom, other, zendesk",
         "ATLAS_DEFLECTION_COMPANY_NAME or --company-name is required",
         "ATLAS_DEFLECTION_CONTACT_EMAIL or --contact-email is required",
-        "--limit must be between 1 and 1000",
+        f"--limit must be between 1 and {smoke.SUBMIT_ROW_LIMIT_MAX}",
         "--timeout must be a positive finite number",
         "--submit-path must start with /",
         "--snapshot-path-template must include {request_id}",
@@ -458,6 +458,7 @@ def test_run_success_posts_submit_and_probes_snapshot_and_locked_artifact(monkey
     assert calls[0]["url"] == "https://atlas.example.com/api/v1/content-ops/deflection-reports/submit"
     assert calls[0]["body"]["blob_url"] == "https://blob.example.com/tickets.csv?sig=signed-secret"
     assert calls[0]["body"]["support_platform"] == "zendesk"
+    assert "limit" not in calls[0]["body"]
     assert calls[1]["url"].endswith("/content-ops-123/snapshot")
     assert calls[2]["url"].endswith("/content-ops-123/artifact")
     serialized = json.dumps(summary)
@@ -506,11 +507,48 @@ def test_run_success_posts_multipart_csv_and_probes_locked_artifact(monkeypatch,
     assert 'name="csv_file"; filename="tickets.csv"' in calls[0]["body_text"]
     assert "How do I export reports?" in calls[0]["body_text"]
     assert 'name="support_platform"' in calls[0]["body_text"]
+    assert 'name="limit"' not in calls[0]["body_text"]
     assert "blob_url" not in calls[0]["body_text"]
     assert summary["submit"]["diagnostics"]["metadata"]["uploaded_bytes"] == csv_file.stat().st_size
     serialized = json.dumps(summary)
     assert "token-secret" not in serialized
     assert "How do I export reports?" not in serialized
+
+
+def test_run_sends_explicit_large_submit_limit_when_requested(monkeypatch, tmp_path):
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        smoke,
+        "_open_http_request",
+        _fake_open(
+            [
+                (
+                    200,
+                    _submit_payload(
+                        metadata={
+                            "source": "portfolio_deflection_submit",
+                            "source_row_count": 25000,
+                            "submitted_row_count": 25000,
+                            "truncated_row_count": 0,
+                            "max_source_material_rows": 25000,
+                            "blob_bytes": 200,
+                            "support_platform": "zendesk",
+                        }
+                    ),
+                ),
+                (200, SNAPSHOT),
+                (403, {"detail": "payment_required"}),
+            ],
+            calls,
+        ),
+    )
+    args = smoke._build_parser().parse_args([*_base_args(tmp_path), "--limit", "25000"])
+
+    summary = smoke.run(args)
+
+    assert summary["ok"] is True
+    assert calls[0]["body"]["limit"] == 25000
+    assert summary["submit"]["diagnostics"]["metadata"]["max_source_material_rows"] == 25000
 
 
 def test_run_fails_with_stale_multipart_submit_route_diagnostic(monkeypatch, tmp_path):

@@ -136,7 +136,7 @@ def test_load_campaign_opportunities_from_semicolon_csv_detects_delimiter(
     assert loaded.opportunities[0]["vendor_name"] == "HubSpot"
 
 
-def test_load_campaign_opportunities_from_csv_fails_on_leading_metadata_row(
+def test_load_campaign_opportunities_from_csv_skips_leading_metadata_row(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "opportunities.csv"
@@ -149,8 +149,11 @@ def test_load_campaign_opportunities_from_csv_fails_on_leading_metadata_row(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="more cells than the header"):
-        load_campaign_opportunities_from_file(path)
+    loaded = load_campaign_opportunities_from_file(path)
+
+    assert loaded.warnings == ()
+    assert loaded.opportunities[0]["target_id"] == "opp-1"
+    assert loaded.opportunities[0]["company_name"] == "Acme"
 
 
 def test_normalize_campaign_opportunity_rows_skips_non_object_rows() -> None:

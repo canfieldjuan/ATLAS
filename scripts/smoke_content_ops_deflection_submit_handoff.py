@@ -31,6 +31,7 @@ DEFAULT_CSV_FILE = (
 LOCAL_BASE_URL_HOSTS = frozenset({"localhost", "0.0.0.0", "::1"})
 SUPPORT_PLATFORMS = frozenset({"zendesk", "intercom", "help_scout", "other"})
 CSV_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+SUBMIT_ROW_LIMIT_MAX = CSV_UPLOAD_MAX_BYTES
 SUBMIT_PATH = "/api/v1/content-ops/deflection-reports/submit"
 SNAPSHOT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/snapshot"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
@@ -95,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--support-platform", default=_env("ATLAS_DEFLECTION_SUPPORT_PLATFORM") or "zendesk")
     parser.add_argument("--company-name", default=_env("ATLAS_DEFLECTION_COMPANY_NAME"))
     parser.add_argument("--contact-email", default=_env("ATLAS_DEFLECTION_CONTACT_EMAIL"))
-    parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--limit", type=int)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--submit-path", default=SUBMIT_PATH)
     parser.add_argument("--snapshot-path-template", default=SNAPSHOT_PATH_TEMPLATE)
@@ -143,8 +144,10 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         errors.append("ATLAS_DEFLECTION_COMPANY_NAME or --company-name is required")
     if not _clean(args.contact_email):
         errors.append("ATLAS_DEFLECTION_CONTACT_EMAIL or --contact-email is required")
-    if int(args.limit) <= 0 or int(args.limit) > 1000:
-        errors.append("--limit must be between 1 and 1000")
+    if args.limit is not None and (
+        int(args.limit) <= 0 or int(args.limit) > SUBMIT_ROW_LIMIT_MAX
+    ):
+        errors.append(f"--limit must be between 1 and {SUBMIT_ROW_LIMIT_MAX}")
     if not math.isfinite(float(args.timeout)) or float(args.timeout) <= 0:
         errors.append("--timeout must be a positive finite number")
     for attr, label in (
@@ -244,22 +247,26 @@ def _redacted_blob_host(blob_url: str) -> str:
 
 
 def _submit_body(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    body: dict[str, Any] = {
         "blob_url": _clean(args.blob_url),
         "support_platform": _clean(args.support_platform),
         "company_name": _clean(args.company_name),
         "contact_email": _clean(args.contact_email),
-        "limit": int(args.limit),
     }
+    if args.limit is not None:
+        body["limit"] = int(args.limit)
+    return body
 
 
 def _submit_fields(args: argparse.Namespace) -> dict[str, str]:
-    return {
+    fields = {
         "support_platform": _clean(args.support_platform),
         "company_name": _clean(args.company_name),
         "contact_email": _clean(args.contact_email),
-        "limit": str(int(args.limit)),
     }
+    if args.limit is not None:
+        fields["limit"] = str(int(args.limit))
+    return fields
 
 
 def _open_http_request(request: urllib.request.Request, *, timeout: float) -> Any:

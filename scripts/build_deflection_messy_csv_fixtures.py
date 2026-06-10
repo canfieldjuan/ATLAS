@@ -201,8 +201,8 @@ def _write_leading_metadata_case(output_dir: Path, rows: Sequence[Mapping[str, s
     return {
         "name": path.name,
         "path": path.name,
-        "expected": "fail_loud",
-        "notes": "Title row before header should not silently parse as support data.",
+        "expected": "parsed",
+        "notes": "Provider title row before a plausible header should be skipped.",
     }
 
 
