@@ -34,6 +34,11 @@ Slice phase: Robust testing
 2. Tests proving seed determinism, ground-truth consistency, injector
    behavior, and a clean round-trip through
    `build_support_ticket_input_package` with zero warnings.
+3. Explicit CI enrollment (review finding, Codex P2 + reviewer R12): the test
+   filename matches no existing enrollment glob, so it is listed explicitly in
+   the extracted-pipeline workflow path filters and the
+   `run_extracted_pipeline_checks.sh` pytest list, mirroring the
+   `test_build_deflection_messy_csv_fixtures.py` precedent.
 
 ### Review Contract
 - Acceptance criteria: same seed -> byte-identical CSV and sidecar; different
@@ -50,6 +55,8 @@ Slice phase: Robust testing
 ### Files touched
 - `scripts/build_synthetic_support_tickets.py`
 - `tests/test_build_synthetic_support_tickets.py`
+- `.github/workflows/extracted_pipeline_checks.yml`
+- `scripts/run_extracted_pipeline_checks.sh`
 - `plans/PR-Deflection-Synthetic-Ticket-Generator.md`
 
 ## Mechanism
