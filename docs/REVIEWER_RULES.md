@@ -2,7 +2,7 @@
 
 > The reviewer's job is **not** to "review the code." It is to **prove whether
 > the PR satisfies its Review Contract and violates none of the rules below.**
-> Every review finding cites a rule ID (R1-R13). This pack is the checklist the
+> Every review finding cites a rule ID (R1-R14). This pack is the checklist the
 > reviewer runs; the recurring-lapse list in `docs/SESSION_BOOTSTRAP.md` is the
 > same checklist front-loaded into the builder so the repeats stop.
 
@@ -13,11 +13,15 @@ This pack sits **under** the existing verdict ladder, it does not replace it:
 | **BLOCKER** | A rule below is failed in a way that breaks correctness, security, a contract, or CI. Must fix before merge. |
 | **MAJOR** | A rule is at risk: architectural / scope / pattern concern. Fix if small; else discuss. |
 | **NIT** | Style / naming / polish. Apply only if 1-line; reviewer marks skip-worthy. |
-| **LGTM** | All triggered rules pass and all AI findings are fixed-or-waived. |
+| **LGTM** | All triggered rules pass, R14 is satisfied, and all AI findings are fixed-or-waived. |
 
 A finding is written as `Rxx (LEVEL) file:line - issue - required fix`.
 **Blockers must cite `file:line`.** A bare "LGTM" with no rule matrix and no
 independent verification is worse than no comment.
+
+R14 is universal: it applies to every review verdict, even when no changed path
+specifically triggers it. A reviewer who has not inspected the checked-out PR
+head and relevant codebase evidence cannot issue LGTM.
 
 ---
 
@@ -146,6 +150,19 @@ practical, use multiple unseen fixtures plus a short explanation of the
 generalized mechanism. Generated or unseen cases must be diverse enough to
 exercise the class, not trivial near-duplicates that satisfy the easy path.
 
+### R14 - Verify against the codebase, not the PR story
+Review verdicts must be based on the checked-out PR head and the current
+codebase, not the PR description, issue summary, builder claims, or prior
+conversation. Claims used in a verdict are verified by reading the relevant
+code, checking at least one relevant caller/test/artifact path, running or
+inspecting the relevant command output, or explicitly marking the claim "not
+verified" with a reason. **No LGTM from claims alone.**
+**Block if:** the verdict accepts a PR claim without checking the codebase; the
+review does not name the reviewed head SHA; the reviewer did not inspect the
+changed code; a shared-function or contract change lacks a caller/test/artifact
+spot-check; or skipped verification is omitted instead of listed as "not
+verified."
+
 ---
 
 ## Path-based rule triggers
@@ -166,6 +183,7 @@ these for the paths it touches:
 | `scripts/audit_*.py`, `scripts/check_*.py`, evaluators / gate predicates | R2 (failure-branch fixtures per `AGENTS.md` 3h/3i), R10 |
 | `extracted_*/` synced files | R1, R10 (manifest sync discipline) |
 | Review comments that name a defect class ("all X", "class of Y", "same failure mode") | R13 (held-out/propertied proof that the class, not only the example, is fixed) |
+| All reviewer verdicts | R14 (checked-out PR-head and codebase-backed verification) |
 
 Phase 1 of this convention is documentation + reviewer discipline. A later
 slice adds a mechanical audit that derives the required rule IDs from the diff
