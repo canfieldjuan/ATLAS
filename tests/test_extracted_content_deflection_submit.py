@@ -652,6 +652,46 @@ async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_reports_cluster_preview_skip_for_large_untagged_csv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline import support_ticket_clustering as clustering
+
+    monkeypatch.setattr(clustering, "MAX_TOKEN_SET_CLUSTER_ROWS", 3)
+    csv_data = _csv_bytes([
+        "ticket_id,subject,message",
+        "zd-1,Password reset help,How do I reset my password?",
+        "zd-2,Change email address,Where do I update my email?",
+        "zd-3,Invoice download missing,Where can I download my invoice?",
+        "zd-4,Export report broken,The report export button does nothing",
+    ])
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    request = _FormRequest({
+        "csv_file": _Upload(csv_data),
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+    })
+
+    payload = await submit.endpoint(request)
+
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["cluster_preview_skipped"] is True
+    assert metadata["cluster_preview_token_set_row_count"] == 4
+    assert metadata["included_row_count"] == 4
+    assert metadata["cluster_quality"]["uncategorized_row_count"] == 4
+    skip_warnings = [
+        warning
+        for warning in payload["input_provider"]["warnings"]
+        if warning["code"] == "cluster_preview_skipped_large_upload"
+    ]
+    assert len(skip_warnings) == 1
+    assert skip_warnings[0]["row_count"] == 4
+    assert skip_warnings[0]["max_token_set_rows"] == 3
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_accepts_provider_export_fixture_with_resolution_diagnostics() -> None:
     csv_data = (
         PROVIDER_FIXTURE_DIR / "zendesk_full_thread_export.csv"

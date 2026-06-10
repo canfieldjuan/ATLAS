@@ -16,7 +16,7 @@ from typing import Any
 from .campaign_source_adapters import source_material_to_source_rows
 from .content_ops_input_provider import ContentOpsInputPackage
 from .support_ticket_clustering import (
-    assign_support_ticket_clusters,
+    assign_support_ticket_clusters_with_diagnostics,
     support_ticket_cluster_quality,
     support_ticket_cluster_summary,
     support_ticket_plain_text,
@@ -227,7 +227,24 @@ def build_support_ticket_input_package(
         })
     skipped_row_count = len(raw_rows[:max_rows]) - len(normalized_rows)
     truncated_row_count = max(0, len(raw_rows) - max_rows)
-    normalized_rows = list(assign_support_ticket_clusters(normalized_rows))
+    clustered_rows, cluster_diagnostics = (
+        assign_support_ticket_clusters_with_diagnostics(normalized_rows)
+    )
+    normalized_rows = list(clustered_rows)
+    if cluster_diagnostics["cluster_preview_skipped"]:
+        warnings.append({
+            "code": "cluster_preview_skipped_large_upload",
+            "message": (
+                "Skipped the ticket-cluster preview for "
+                f"{cluster_diagnostics['token_set_row_count']} uncategorized "
+                "rows; clustering above "
+                f"{cluster_diagnostics['max_token_set_rows']} rows without a "
+                "category column is not supported. Rows are still included "
+                "in the report."
+            ),
+            "row_count": cluster_diagnostics["token_set_row_count"],
+            "max_token_set_rows": cluster_diagnostics["max_token_set_rows"],
+        })
     has_valid_date_window = _all_rows_have_dates(normalized_rows)
     source_period = (
         f"Last {window_days} days of support tickets"
@@ -296,27 +313,33 @@ def build_support_ticket_input_package(
     if has_valid_date_window:
         inputs["faq_window_days"] = window_days
 
+    metadata: dict[str, Any] = {
+        "source": "support_ticket_input_package",
+        "source_row_count": len(raw_rows),
+        "included_row_count": len(normalized_rows),
+        "skipped_row_count": skipped_row_count,
+        "truncated_row_count": truncated_row_count,
+        "source_period": source_period,
+        "has_dated_window": has_valid_date_window,
+        "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
+        "support_ticket_resolution_evidence_count": resolution_evidence_count,
+        "has_measured_outcomes": measured_outcome_count > 0,
+        "measured_outcome_count": measured_outcome_count,
+        "top_ticket_clusters": top_ticket_clusters,
+        "cluster_quality": support_ticket_cluster_quality(normalized_rows),
+    }
+    if cluster_diagnostics["cluster_preview_skipped"]:
+        metadata["cluster_preview_skipped"] = True
+        metadata["cluster_preview_token_set_row_count"] = (
+            cluster_diagnostics["token_set_row_count"]
+        )
     return ContentOpsInputPackage(
         provider=_clean(provider) or "support_ticket_upload",
         outputs=_normalize_outputs(outputs),
         target_mode="vendor_retention",
         ingestion_profile="existing_evidence",
         inputs=inputs,
-        metadata={
-            "source": "support_ticket_input_package",
-            "source_row_count": len(raw_rows),
-            "included_row_count": len(normalized_rows),
-            "skipped_row_count": skipped_row_count,
-            "truncated_row_count": truncated_row_count,
-            "source_period": source_period,
-            "has_dated_window": has_valid_date_window,
-            "support_ticket_resolution_evidence_present": resolution_evidence_count > 0,
-            "support_ticket_resolution_evidence_count": resolution_evidence_count,
-            "has_measured_outcomes": measured_outcome_count > 0,
-            "measured_outcome_count": measured_outcome_count,
-            "top_ticket_clusters": top_ticket_clusters,
-            "cluster_quality": support_ticket_cluster_quality(normalized_rows),
-        },
+        metadata=metadata,
         warnings=tuple(warnings),
     )
 

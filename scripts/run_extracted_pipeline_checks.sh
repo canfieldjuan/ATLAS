@@ -102,6 +102,7 @@ pytest \
   tests/test_extracted_content_ops_input_provider.py \
   tests/test_support_ticket_context_contract.py \
   tests/test_extracted_support_ticket_input_package.py \
+  tests/test_extracted_support_ticket_clustering_scale.py \
   tests/test_extracted_support_ticket_input_provider.py \
   tests/test_smoke_content_ops_support_ticket_package.py \
   tests/test_extracted_content_control_surface_api.py \
