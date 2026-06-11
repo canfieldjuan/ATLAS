@@ -448,8 +448,9 @@ def _verdict_id(*, account_id: str, request_payload: dict[str, Any]) -> str:
 
 def _verdict_title(payload: dict[str, Any]) -> str:
     decision = _clean(payload.get("decision")) or "unknown"
-    asset_id = _clean(payload.get("asset_id")) or "draft"
-    return f"Content Ops verification for {asset_id}: {decision}"
+    content_pr = payload.get("content_pr")
+    asset_id = _clean(content_pr.get("asset_id")) if isinstance(content_pr, dict) else ""
+    return f"Content Ops verification for {asset_id or 'draft'}: {decision}"
 
 
 def _verdict_text(payload: dict[str, Any]) -> str:
@@ -458,7 +459,54 @@ def _verdict_text(payload: dict[str, Any]) -> str:
     reason_lines = [str(reason) for reason in reasons] if isinstance(reasons, list) else []
     if not reason_lines:
         reason_lines = ["No blocking reasons returned."]
-    return "Decision: " + decision + "\nReasons:\n- " + "\n- ".join(reason_lines)
+    sections = [
+        "Decision: " + decision + "\nReasons:\n- " + "\n- ".join(reason_lines),
+    ]
+    objections = _comment_lines(payload)
+    if objections:
+        sections.append("Objections:\n- " + "\n- ".join(objections))
+    anchors = _anchor_lines(payload)
+    if anchors:
+        sections.append("Calibration anchors:\n- " + "\n- ".join(anchors))
+    return "\n".join(sections)
+
+
+def _comment_lines(payload: dict[str, Any]) -> list[str]:
+    content_pr = payload.get("content_pr")
+    comments = content_pr.get("comments") if isinstance(content_pr, dict) else None
+    if not isinstance(comments, list):
+        return []
+    lines: list[str] = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        message = _clean(comment.get("message"))
+        if not message:
+            continue
+        category = _clean(comment.get("category")) or "comment"
+        marker = " [BLOCKING]" if comment.get("blocking") is True else ""
+        evidence = _clean(comment.get("evidence"))
+        suffix = f" (evidence: {evidence})" if evidence else ""
+        lines.append(f"[{category}]{marker} {message}{suffix}")
+    return lines
+
+
+def _anchor_lines(payload: dict[str, Any]) -> list[str]:
+    anchors = payload.get("calibration_anchors")
+    if not isinstance(anchors, list):
+        return []
+    lines: list[str] = []
+    for anchor in anchors:
+        if not isinstance(anchor, dict):
+            continue
+        excerpt = _clean(anchor.get("excerpt"))
+        if not excerpt:
+            continue
+        label = _clean(anchor.get("label")) or "anchor"
+        reasoning = _clean(anchor.get("reasoning"))
+        tail = f" -- {reasoning}" if reasoning else ""
+        lines.append(f"{label}: {excerpt}{tail}")
+    return lines
 
 
 def _result_url(document_id: str) -> str:
