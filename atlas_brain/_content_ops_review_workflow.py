@@ -19,6 +19,11 @@ from extracted_content_pipeline.adversarial_pass import (
     AdversarialPass,
     comment_from_finding,
 )
+from extracted_content_pipeline.calibration_anchors import anchors_for_finding_categories
+from extracted_content_pipeline.calibration_library import (
+    CalibrationExample,
+    CalibrationLibrary,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import (
     ExtractedClaim,
@@ -75,6 +80,7 @@ class ContentOpsReviewRequest:
     extracted_claims: tuple[ExtractedClaim, ...] = ()
     comments: tuple[ReviewComment, ...] = ()
     adversarial_passes: tuple[AdversarialPass, ...] = ()
+    calibration_examples: tuple[CalibrationExample, ...] = ()
     as_of: date | None = None
 
 
@@ -106,6 +112,7 @@ class ContentOpsReviewResult:
     reasons: tuple[str, ...]
     mapped_claims: tuple[MappedClaim, ...]
     content_pr: ContentPR
+    calibration_anchors: tuple[CalibrationExample, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible shape for future transport wrappers."""
@@ -127,6 +134,9 @@ class ContentOpsReviewResult:
                 "coverage": [_coverage_row_as_dict(row) for row in self.content_pr.coverage],
                 "comments": [_comment_as_dict(comment) for comment in self.content_pr.comments],
             },
+            "calibration_anchors": [
+                _calibration_anchor_as_dict(anchor) for anchor in self.calibration_anchors
+            ],
         }
 
 
@@ -164,6 +174,7 @@ async def run_content_ops_review(
         reasons=verdict_reasons(content_pr),
         mapped_claims=mapped_claims,
         content_pr=content_pr,
+        calibration_anchors=_calibration_anchors_for_request(request),
     )
 
 
@@ -183,7 +194,31 @@ def _blocked_result(
         reasons=(reason,),
         mapped_claims=(),
         content_pr=content_pr,
+        calibration_anchors=_calibration_anchors_for_request(request),
     )
+
+
+def _calibration_anchors_for_request(
+    request: ContentOpsReviewRequest,
+) -> tuple[CalibrationExample, ...]:
+    """Curated anchors illustrating the failure modes the adversarial passes raised.
+
+    Builds a library from the connector-supplied calibration examples and
+    selects the teachable anchors whose label maps to a fired finding category,
+    so the editor sees a worked example of each failure mode the draft tripped.
+    Returns nothing when no anchors were supplied or no fired category maps.
+    """
+
+    if not request.calibration_examples:
+        return ()
+    fired_categories: list[object] = []
+    for pass_ in _items(request.adversarial_passes):
+        if not isinstance(pass_, AdversarialPass):
+            continue
+        for finding in pass_.substantiated():
+            fired_categories.append(finding.category)
+    library = CalibrationLibrary(examples=tuple(request.calibration_examples))
+    return anchors_for_finding_categories(library, fired_categories)
 
 
 def _scope_account_id(scope: TenantScope | None) -> str:
@@ -277,6 +312,16 @@ def _comment_as_dict(comment: ReviewComment) -> dict[str, Any]:
         "message": comment.message,
         "evidence": comment.evidence,
         "blocking": comment.blocking,
+    }
+
+
+def _calibration_anchor_as_dict(anchor: CalibrationExample) -> dict[str, Any]:
+    return {
+        "example_id": anchor.example_id,
+        "label": _value(anchor.label),
+        "excerpt": anchor.excerpt,
+        "reasoning": anchor.reasoning,
+        "source": anchor.source,
     }
 
 

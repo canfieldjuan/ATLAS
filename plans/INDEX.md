@@ -1,6 +1,6 @@
 # Plan archive index
 
-994 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+995 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -157,6 +157,7 @@
 - [PR-Content-Ops-Ad-Copy-Review-Assets](archive/PR-Content-Ops-Ad-Copy-Review-Assets.md) - lane: content-ops/marketer-reviews-as-input | phase: Vertical slice
 - [PR-Content-Ops-Adapter-Contract-Example](archive/PR-Content-Ops-Adapter-Contract-Example.md) - lane: content-ops/review-contract | phase: Product polish
 - [PR-Content-Ops-Admin-Cost-Labels](archive/PR-Content-Ops-Admin-Cost-Labels.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Adversarial-Verify-Wiring](archive/PR-Content-Ops-Adversarial-Verify-Wiring.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Asset-Bulk-Review](archive/PR-Content-Ops-Asset-Bulk-Review.md)
 - [PR-Content-Ops-Asset-Export-CLI](archive/PR-Content-Ops-Asset-Export-CLI.md)
 - [PR-Content-Ops-Asset-Preview](archive/PR-Content-Ops-Asset-Preview.md)

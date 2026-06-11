@@ -19,6 +19,10 @@ from extracted_content_pipeline.adversarial_pass import (
     AdversarialFindingCategory,
     AdversarialPass,
 )
+from extracted_content_pipeline.calibration_library import (
+    CalibrationExample,
+    CalibrationLabel,
+)
 from extracted_content_pipeline.claims_map import ExtractedClaim
 from extracted_content_pipeline.content_pr import (
     CommentCategory,
@@ -204,6 +208,32 @@ VERIFY_DRAFT_PARAMETER_SCHEMA: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "calibration_library": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "example_id": {"type": "string"},
+                "label": {
+                    "type": "string",
+                    "enum": [
+                        "approved",
+                        "rejected",
+                        "borderline",
+                        "known_defect",
+                        "good_voice",
+                        "voice_drift",
+                        "overclaim",
+                        "weak_persuasion",
+                        "strong_persuasion",
+                    ],
+                },
+                "excerpt": {"type": "string"},
+                "reasoning": {"type": "string"},
+                "source": {"type": "string"},
+            },
+        },
+    },
     "as_of": {
         "type": "string",
         "format": "date",
@@ -221,6 +251,10 @@ _VERIFY_DRAFT_PARAMETER_DESCRIPTIONS = {
     "adversarial_passes": (
         "Independent adversarial-review passes whose substantiated findings are "
         "folded into the verdict as never-blocking editor evidence."
+    ),
+    "calibration_library": (
+        "Curated review examples; the verdict surfaces the teachable anchors "
+        "matching the failure modes the adversarial passes raised."
     ),
     "as_of": "ISO review date used for registry expiration checks.",
 }
@@ -241,6 +275,7 @@ QualityReportsArg = Annotated[Any, _schema_field("quality_reports")]
 BrandVoicePayloadArg = Annotated[Any, _schema_field("brand_voice_payload")]
 CommentsArg = Annotated[Any, _schema_field("comments")]
 AdversarialPassesArg = Annotated[Any, _schema_field("adversarial_passes")]
+CalibrationLibraryArg = Annotated[Any, _schema_field("calibration_library")]
 AsOfArg = Annotated[Any, _schema_field("as_of")]
 
 
@@ -327,6 +362,7 @@ async def verify_draft(
     brand_voice_payload: BrandVoicePayloadArg = None,
     comments: CommentsArg = None,
     adversarial_passes: AdversarialPassesArg = None,
+    calibration_library: CalibrationLibraryArg = None,
     as_of: AsOfArg = "",
 ) -> dict[str, Any]:
     """Verify structured draft evidence for the bound tenant."""
@@ -341,6 +377,7 @@ async def verify_draft(
             brand_voice_payload=brand_voice_payload,
             comments=comments,
             adversarial_passes=adversarial_passes,
+            calibration_library=calibration_library,
             as_of=as_of,
         ),
         account_resolver=_get_account_resolver(),
@@ -359,6 +396,7 @@ def _review_request_from_tool_args(
     brand_voice_payload: Any,
     comments: Any,
     adversarial_passes: Any = None,
+    calibration_library: Any = None,
     as_of: Any,
 ) -> ContentOpsReviewRequest:
     return ContentOpsReviewRequest(
@@ -370,6 +408,7 @@ def _review_request_from_tool_args(
         extracted_claims=_claims(extracted_claims),
         comments=_comments(comments),
         adversarial_passes=_adversarial_passes(adversarial_passes),
+        calibration_examples=_calibration_examples(calibration_library),
         as_of=_date(as_of),
     )
 
@@ -728,6 +767,37 @@ def _adversarial_passes(value: Any) -> tuple[AdversarialPass, ...]:
             )
         )
     return tuple(passes)
+
+
+_CALIBRATION_LABEL_VALUES = frozenset(label.value for label in CalibrationLabel)
+
+
+def _calibration_label(value: Any) -> Any:
+    """Coerce a known label string to the enum; keep an unknown one as text.
+
+    The library queries compare labels by value, so an unrecognized label is
+    preserved rather than rejected -- it simply matches no finding category.
+    """
+
+    cleaned = _clean(value)
+    if cleaned in _CALIBRATION_LABEL_VALUES:
+        return CalibrationLabel(cleaned)
+    return cleaned
+
+
+def _calibration_examples(value: Any) -> tuple[CalibrationExample, ...]:
+    examples: list[CalibrationExample] = []
+    for index, item in enumerate(_dict_rows(value)):
+        examples.append(
+            CalibrationExample(
+                example_id=_clean(item.get("example_id")) or f"anchor-{index}",
+                excerpt=_clean(item.get("excerpt")),
+                label=_calibration_label(item.get("label")),
+                reasoning=_clean(item.get("reasoning")),
+                source=_clean(item.get("source")) or "curated",
+            )
+        )
+    return tuple(examples)
 
 
 def _dict_rows(value: Any) -> tuple[Mapping[str, Any], ...]:

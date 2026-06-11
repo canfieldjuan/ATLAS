@@ -250,6 +250,9 @@
       "target": "extracted_content_pipeline/adversarial_pass.py"
     },
     {
+      "target": "extracted_content_pipeline/calibration_anchors.py"
+    },
+    {
       "target": "extracted_content_pipeline/claim_evidence_benchmark.py"
     },
     {

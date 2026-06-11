@@ -26,7 +26,7 @@ _ACCEPTED_FIELDS = (
     "as_of",
 )
 # Optional submission fields -- accepted and documented, but not required.
-_OPTIONAL_FIELDS = ("adversarial_passes",)
+_OPTIONAL_FIELDS = ("adversarial_passes", "calibration_library")
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,7 @@ async def search(query: str = "", limit: int = 10) -> dict[str, Any]:
             brand_voice_payload=request_payload.get("brand_voice_payload"),
             comments=request_payload.get("comments"),
             adversarial_passes=request_payload.get("adversarial_passes"),
+            calibration_library=request_payload.get("calibration_library"),
             as_of=request_payload.get("as_of"),
         ),
         account_resolver=verify_server.StaticContentOpsMarketerAccountResolver(account_id),
@@ -181,8 +182,8 @@ def _contract_document() -> dict[str, Any]:
         "JSON-encoded string whose decoded value is an object is treated as one "
         "Content Ops review submission with these fields: asset_id, rule_packet, "
         "coverage, extracted_claims, quality_reports, brand_voice_payload, "
-        "comments, and as_of, plus the optional adversarial_passes. Pass "
-        "submissions as query=json.dumps(example); "
+        "comments, and as_of, plus the optional adversarial_passes and "
+        "calibration_library. Pass submissions as query=json.dumps(example); "
         "query is a string in the tool schema, not an object. The adapter "
         "returns a tenant-bound verdict ID. Call fetch with that ID to read the "
         "full Content Ops review verdict."
@@ -272,6 +273,15 @@ def _contract_example() -> dict[str, Any]:
                         "location": "draft:section-2",
                     }
                 ],
+            }
+        ],
+        "calibration_library": [
+            {
+                "example_id": "overclaim-001",
+                "label": "overclaim",
+                "excerpt": "guaranteed 99.99% uptime",
+                "reasoning": "No SLA backs this number; reads as an overclaim.",
+                "source": "curated",
             }
         ],
         "as_of": "2026-06-09",
@@ -374,6 +384,31 @@ def _contract_schema() -> dict[str, Any]:
                                 },
                             },
                         },
+                    },
+                },
+            },
+            "calibration_library": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "example_id": {"type": "string"},
+                        "label": {
+                            "enum": [
+                                "approved",
+                                "rejected",
+                                "borderline",
+                                "known_defect",
+                                "good_voice",
+                                "voice_drift",
+                                "overclaim",
+                                "weak_persuasion",
+                                "strong_persuasion",
+                            ]
+                        },
+                        "excerpt": {"type": "string"},
+                        "reasoning": {"type": "string"},
+                        "source": {"type": "string"},
                     },
                 },
             },

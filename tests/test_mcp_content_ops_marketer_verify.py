@@ -234,6 +234,7 @@ def test_verify_draft_schema_hints_cover_nested_payload_shape() -> None:
         "brand_voice_payload",
         "comments",
         "adversarial_passes",
+        "calibration_library",
         "as_of",
     }
     assert schema["adversarial_passes"]["items"]["properties"]["findings"]["items"][
@@ -1176,3 +1177,86 @@ def test_chatgpt_adapter_contract_lists_adversarial_passes_as_optional() -> None
     schema = contract["metadata"]["schema"]
     assert "adversarial_passes" in schema["properties"]
     assert "adversarial_passes" not in schema["required"]
+
+
+# -- calibration-anchor wiring (slice 7) -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_surfaces_calibration_anchors_for_fired_categories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    args = dict(_valid_payload())
+    args["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [
+            {"category": "overclaim", "message": "40% unbacked", "evidence": "cuts tickets 40%"},
+        ]},
+    ]
+    args["calibration_library"] = [
+        {"example_id": "oc1", "label": "overclaim", "excerpt": "99.99% uptime guaranteed", "reasoning": "no SLA"},
+        {"example_id": "gv1", "label": "good_voice", "excerpt": "honest copy", "reasoning": "on brand"},
+    ]
+
+    payload = await verify.verify_draft(**args)
+
+    anchors = payload["calibration_anchors"]
+    assert [a["example_id"] for a in anchors] == ["oc1"]
+    assert anchors[0]["label"] == "overclaim"
+
+
+def test_calibration_examples_parser_tolerates_decoded_input() -> None:
+    assert verify._calibration_examples(None) == ()
+    assert verify._calibration_examples("nope") == ()
+    parsed = verify._calibration_examples(
+        [
+            {"example_id": "a", "label": "overclaim", "excerpt": "x", "reasoning": "y"},
+            {"label": "unknown_label"},  # unknown label preserved, id defaulted
+        ]
+    )
+    assert parsed[0].label == AdversarialFindingCategory.OVERCLAIM.value  # "overclaim" value match
+    assert parsed[1].example_id == "anchor-1"
+    assert parsed[1].label == "unknown_label"
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_threads_calibration_library_into_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    submission = dict(_valid_payload())
+    submission["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [
+            {"category": "overclaim", "message": "40% unbacked", "evidence": "cuts tickets 40%"},
+        ]},
+    ]
+    submission["calibration_library"] = [
+        {"example_id": "oc1", "label": "overclaim", "excerpt": "99.99% uptime", "reasoning": "no SLA"},
+    ]
+    search_result = await adapter.search(query=json.dumps(submission))
+    verdict_id = search_result["results"][0]["id"]
+
+    payload = adapter._verdict_cache[verdict_id].payload
+    assert [a["example_id"] for a in payload["calibration_anchors"]] == ["oc1"]
+
+
+def test_chatgpt_adapter_contract_lists_calibration_library_as_optional() -> None:
+    contract = adapter._contract_document()
+    assert "calibration_library" in contract["metadata"]["accepted_fields"]
+    schema = contract["metadata"]["schema"]
+    assert "calibration_library" in schema["properties"]
+    assert "calibration_library" not in schema["required"]
