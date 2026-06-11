@@ -15,6 +15,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Mapping, Protocol, Sequence
 
+from extracted_content_pipeline.adversarial_pass import (
+    AdversarialPass,
+    comment_from_finding,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import (
     ExtractedClaim,
@@ -70,6 +74,7 @@ class ContentOpsReviewRequest:
     brand_voice_payload: Mapping[str, Any] | None = None
     extracted_claims: tuple[ExtractedClaim, ...] = ()
     comments: tuple[ReviewComment, ...] = ()
+    adversarial_passes: tuple[AdversarialPass, ...] = ()
     as_of: date | None = None
 
 
@@ -151,7 +156,7 @@ async def run_content_ops_review(
         rule_packet=request.rule_packet,
         coverage=coverage,
         claims=mapped_claims,
-        comments=request.comments,
+        comments=_comments_for_request(request),
     )
     decision = review_verdict(content_pr)
     return ContentOpsReviewResult(
@@ -171,7 +176,7 @@ def _blocked_result(
         rule_packet=request.rule_packet,
         coverage=_coverage_rows_for_request(request),
         claims=(),
-        comments=request.comments,
+        comments=_comments_for_request(request),
     )
     return ContentOpsReviewResult(
         decision=ReviewDecision.BLOCKED,
@@ -193,6 +198,37 @@ def _tenant_scope_from_account_binding(account_id: Any) -> TenantScope | None:
     if not account:
         return None
     return TenantScope(account_id=account)
+
+
+def _comments_for_request(request: ContentOpsReviewRequest) -> tuple[ReviewComment, ...]:
+    """Explicit reviewer comments plus the adversarial-pass findings as comments.
+
+    Explicit comments keep their order; adversarial-derived comments follow.
+    Every adversarial comment is non-blocking (see ``comment_from_finding``), so
+    folding them in never changes the verdict on its own -- they are evidence the
+    editor reads, not a gate (the doc's "still not a judge").
+    """
+
+    return tuple(request.comments) + _adversarial_comments(request.adversarial_passes)
+
+
+def _adversarial_comments(
+    passes: Sequence[AdversarialPass],
+) -> tuple[ReviewComment, ...]:
+    """Convert each pass's substantiated findings into never-blocking comments.
+
+    Only substantiated findings (carrying both an objection and evidence) are
+    folded; an empty/decoration finding would add a bare ``[adversarial:x]``
+    comment with no objection, so it is dropped to keep the result signal-dense.
+    """
+
+    comments: list[ReviewComment] = []
+    for pass_ in _items(passes):
+        if not isinstance(pass_, AdversarialPass):
+            continue
+        for finding in pass_.substantiated():
+            comments.append(comment_from_finding(finding))
+    return tuple(comments)
 
 
 def _coverage_rows_for_request(request: ContentOpsReviewRequest) -> tuple[CoverageRow, ...]:

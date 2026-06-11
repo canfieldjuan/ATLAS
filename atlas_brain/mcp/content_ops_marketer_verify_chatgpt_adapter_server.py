@@ -25,6 +25,8 @@ _ACCEPTED_FIELDS = (
     "comments",
     "as_of",
 )
+# Optional submission fields -- accepted and documented, but not required.
+_OPTIONAL_FIELDS = ("adversarial_passes",)
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,7 @@ async def search(query: str = "", limit: int = 10) -> dict[str, Any]:
             quality_reports=request_payload.get("quality_reports"),
             brand_voice_payload=request_payload.get("brand_voice_payload"),
             comments=request_payload.get("comments"),
+            adversarial_passes=request_payload.get("adversarial_passes"),
             as_of=request_payload.get("as_of"),
         ),
         account_resolver=verify_server.StaticContentOpsMarketerAccountResolver(account_id),
@@ -178,7 +181,8 @@ def _contract_document() -> dict[str, Any]:
         "JSON-encoded string whose decoded value is an object is treated as one "
         "Content Ops review submission with these fields: asset_id, rule_packet, "
         "coverage, extracted_claims, quality_reports, brand_voice_payload, "
-        "comments, and as_of. Pass submissions as query=json.dumps(example); "
+        "comments, and as_of, plus the optional adversarial_passes. Pass "
+        "submissions as query=json.dumps(example); "
         "query is a string in the tool schema, not an object. The adapter "
         "returns a tenant-bound verdict ID. Call fetch with that ID to read the "
         "full Content Ops review verdict."
@@ -192,7 +196,7 @@ def _contract_document() -> dict[str, Any]:
             "ok": True,
             "found": True,
             "type": "adapter_contract",
-            "accepted_fields": list(_ACCEPTED_FIELDS),
+            "accepted_fields": list(_ACCEPTED_FIELDS) + list(_OPTIONAL_FIELDS),
             "dispatch": _contract_dispatch(),
             "schema": _contract_schema(),
             "example": _contract_example(),
@@ -254,6 +258,20 @@ def _contract_example() -> dict[str, Any]:
                 "message": "Optional reviewer note",
                 "evidence": "",
                 "blocking": False,
+            }
+        ],
+        "adversarial_passes": [
+            {
+                "pass_id": "pass-b",
+                "source": "adversarial-prompt@v1 / model-b",
+                "findings": [
+                    {
+                        "category": "overclaim",
+                        "message": "The 40% claim has no cited source",
+                        "evidence": "cuts support tickets by 40%",
+                        "location": "draft:section-2",
+                    }
+                ],
             }
         ],
         "as_of": "2026-06-09",
@@ -324,6 +342,38 @@ def _contract_schema() -> dict[str, Any]:
                         "message": {"type": "string"},
                         "evidence": {"type": "string"},
                         "blocking": {"type": "boolean"},
+                    },
+                },
+            },
+            "adversarial_passes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "pass_id": {"type": "string"},
+                        "source": {"type": "string"},
+                        "findings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "category": {
+                                        "enum": [
+                                            "overclaim",
+                                            "ambiguity",
+                                            "reader_objection",
+                                            "promise_cta_mismatch",
+                                            "generic_stretch",
+                                            "missing_proof",
+                                            "voice_slip",
+                                        ]
+                                    },
+                                    "message": {"type": "string"},
+                                    "evidence": {"type": "string"},
+                                    "location": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                 },
             },

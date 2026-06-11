@@ -14,6 +14,11 @@ from urllib.parse import urlparse
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from extracted_content_pipeline.adversarial_pass import (
+    AdversarialFinding,
+    AdversarialFindingCategory,
+    AdversarialPass,
+)
 from extracted_content_pipeline.claims_map import ExtractedClaim
 from extracted_content_pipeline.content_pr import (
     CommentCategory,
@@ -166,6 +171,39 @@ VERIFY_DRAFT_PARAMETER_SCHEMA: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "adversarial_passes": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "pass_id": {"type": "string"},
+                "source": {"type": "string"},
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "enum": [
+                                    "overclaim",
+                                    "ambiguity",
+                                    "reader_objection",
+                                    "promise_cta_mismatch",
+                                    "generic_stretch",
+                                    "missing_proof",
+                                    "voice_slip",
+                                ],
+                            },
+                            "message": {"type": "string"},
+                            "evidence": {"type": "string"},
+                            "location": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+    },
     "as_of": {
         "type": "string",
         "format": "date",
@@ -180,6 +218,10 @@ _VERIFY_DRAFT_PARAMETER_DESCRIPTIONS = {
     "quality_reports": "Deterministic quality-gate reports for the draft.",
     "brand_voice_payload": "Brand-voice audit result for the draft.",
     "comments": "Reviewer comments or blocking findings to include in the verdict.",
+    "adversarial_passes": (
+        "Independent adversarial-review passes whose substantiated findings are "
+        "folded into the verdict as never-blocking editor evidence."
+    ),
     "as_of": "ISO review date used for registry expiration checks.",
 }
 
@@ -198,6 +240,7 @@ ExtractedClaimsArg = Annotated[Any, _schema_field("extracted_claims")]
 QualityReportsArg = Annotated[Any, _schema_field("quality_reports")]
 BrandVoicePayloadArg = Annotated[Any, _schema_field("brand_voice_payload")]
 CommentsArg = Annotated[Any, _schema_field("comments")]
+AdversarialPassesArg = Annotated[Any, _schema_field("adversarial_passes")]
 AsOfArg = Annotated[Any, _schema_field("as_of")]
 
 
@@ -283,6 +326,7 @@ async def verify_draft(
     quality_reports: QualityReportsArg = None,
     brand_voice_payload: BrandVoicePayloadArg = None,
     comments: CommentsArg = None,
+    adversarial_passes: AdversarialPassesArg = None,
     as_of: AsOfArg = "",
 ) -> dict[str, Any]:
     """Verify structured draft evidence for the bound tenant."""
@@ -296,6 +340,7 @@ async def verify_draft(
             quality_reports=quality_reports,
             brand_voice_payload=brand_voice_payload,
             comments=comments,
+            adversarial_passes=adversarial_passes,
             as_of=as_of,
         ),
         account_resolver=_get_account_resolver(),
@@ -313,6 +358,7 @@ def _review_request_from_tool_args(
     quality_reports: Any,
     brand_voice_payload: Any,
     comments: Any,
+    adversarial_passes: Any = None,
     as_of: Any,
 ) -> ContentOpsReviewRequest:
     return ContentOpsReviewRequest(
@@ -323,6 +369,7 @@ def _review_request_from_tool_args(
         brand_voice_payload=brand_voice_payload if isinstance(brand_voice_payload, Mapping) else None,
         extracted_claims=_claims(extracted_claims),
         comments=_comments(comments),
+        adversarial_passes=_adversarial_passes(adversarial_passes),
         as_of=_date(as_of),
     )
 
@@ -637,6 +684,50 @@ def _comments(value: Any) -> tuple[ReviewComment, ...]:
             )
         )
     return tuple(comments)
+
+
+_ADVERSARIAL_CATEGORY_VALUES = frozenset(c.value for c in AdversarialFindingCategory)
+
+
+def _adversarial_category(value: Any) -> Any:
+    """Coerce a known category string to the enum; keep an unknown one as text.
+
+    ``comment_from_finding`` tolerates a raw-string category (its lane lookup is
+    value-based and falls back to editorial judgment), so an unrecognized
+    category is preserved rather than rejected.
+    """
+
+    cleaned = _clean(value)
+    if cleaned in _ADVERSARIAL_CATEGORY_VALUES:
+        return AdversarialFindingCategory(cleaned)
+    return cleaned
+
+
+def _adversarial_findings(value: Any) -> tuple[AdversarialFinding, ...]:
+    findings: list[AdversarialFinding] = []
+    for item in _dict_rows(value):
+        findings.append(
+            AdversarialFinding(
+                category=_adversarial_category(item.get("category")),
+                message=_clean(item.get("message")),
+                evidence=_clean(item.get("evidence")),
+                location=_clean(item.get("location")),
+            )
+        )
+    return tuple(findings)
+
+
+def _adversarial_passes(value: Any) -> tuple[AdversarialPass, ...]:
+    passes: list[AdversarialPass] = []
+    for index, item in enumerate(_dict_rows(value)):
+        passes.append(
+            AdversarialPass(
+                pass_id=_clean(item.get("pass_id")) or f"pass-{index}",
+                source=_clean(item.get("source")),
+                findings=_adversarial_findings(item.get("findings")),
+            )
+        )
+    return tuple(passes)
 
 
 def _dict_rows(value: Any) -> tuple[Mapping[str, Any], ...]:

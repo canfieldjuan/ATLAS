@@ -11,6 +11,11 @@ from atlas_brain._content_ops_review_workflow import (
     run_content_ops_review,
     run_content_ops_review_for_bound_tenant,
 )
+from extracted_content_pipeline.adversarial_pass import (
+    AdversarialFinding,
+    AdversarialFindingCategory,
+    AdversarialPass,
+)
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import ClaimStatus, ExtractedClaim, RegistryClaim
 from extracted_content_pipeline.content_pr import (
@@ -498,3 +503,121 @@ async def test_blocking_comment_requires_revision() -> None:
 
     assert result.decision == ReviewDecision.REVISION_REQUIRED
     assert any("blocking comment" in reason for reason in result.reasons)
+
+
+# -- adversarial pass folding (slice 6) --------------------------------------
+
+
+_SCOPE = TenantScope(account_id="acct-1", user_id="user-1")
+
+
+def _finding(
+    category: AdversarialFindingCategory,
+    *,
+    message: str = "strongest reason not to ship",
+    evidence: str = "quoted draft span",
+) -> AdversarialFinding:
+    return AdversarialFinding(category=category, message=message, evidence=evidence)
+
+
+def _adversarial_comments(result):
+    return [
+        c for c in result.content_pr.comments if c.message.startswith("[adversarial:")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_adversarial_findings_fold_in_as_nonblocking_comments() -> None:
+    passes = (
+        AdversarialPass(
+            pass_id="p1",
+            findings=(
+                _finding(AdversarialFindingCategory.OVERCLAIM),
+                _finding(AdversarialFindingCategory.AMBIGUITY, message="", evidence=""),
+            ),
+        ),
+    )
+
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    folded = _adversarial_comments(result)
+    # The unsubstantiated finding (no message/evidence) is dropped.
+    assert [c.message for c in folded] == ["[adversarial:overclaim] strongest reason not to ship"]
+    assert all(c.blocking is False for c in folded)
+    assert folded[0].category == CommentCategory.EDITORIAL_JUDGMENT
+
+
+@pytest.mark.asyncio
+async def test_voice_slip_finding_routes_to_brand_rule_lane() -> None:
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.VOICE_SLIP),)),)
+
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    folded = _adversarial_comments(result)
+    assert folded[0].category == CommentCategory.BRAND_RULE
+    assert folded[0].blocking is False
+
+
+@pytest.mark.asyncio
+async def test_adversarial_findings_do_not_change_an_approved_verdict() -> None:
+    # The default request approves; folding never-blocking evidence keeps it APPROVED.
+    passes = (
+        AdversarialPass(
+            pass_id="p1",
+            findings=(
+                _finding(AdversarialFindingCategory.OVERCLAIM),
+                _finding(AdversarialFindingCategory.MISSING_PROOF),
+            ),
+        ),
+    )
+
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.APPROVED
+    assert len(_adversarial_comments(result)) == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_comments_precede_adversarial_comments() -> None:
+    explicit = ReviewComment(
+        category=CommentCategory.EDITORIAL_JUDGMENT,
+        message="human note",
+        evidence="span",
+    )
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.GENERIC_STRETCH),)),)
+
+    result = await run_content_ops_review(
+        _request(comments=(explicit,), adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    messages = [c.message for c in result.content_pr.comments]
+    assert messages == ["human note", "[adversarial:generic_stretch] strongest reason not to ship"]
+
+
+@pytest.mark.asyncio
+async def test_blocked_path_still_folds_adversarial_evidence() -> None:
+    # An unpinned rule packet blocks; the adversarial evidence still surfaces.
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),)),)
+
+    result = await run_content_ops_review(
+        _request(rule_packet=RulePacketVersions(), adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    assert result.decision == ReviewDecision.BLOCKED
+    assert len(_adversarial_comments(result)) == 1

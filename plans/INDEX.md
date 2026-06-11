@@ -1,6 +1,6 @@
 # Plan archive index
 
-993 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+994 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -204,6 +204,7 @@
 - [PR-Content-Ops-Cache-Policy-UI](archive/PR-Content-Ops-Cache-Policy-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
 - [PR-Content-Ops-Cache-Savings-Rollup](archive/PR-Content-Ops-Cache-Savings-Rollup.md) - lane: content-ops/cost-surfacing | phase: Production hardening
 - [PR-Content-Ops-Cache-Savings-UI](archive/PR-Content-Ops-Cache-Savings-UI.md) - lane: content-ops/cost-surfacing | phase: Product polish
+- [PR-Content-Ops-Calibration-Library](archive/PR-Content-Ops-Calibration-Library.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Call-Meeting-Source-Rows](archive/PR-Content-Ops-Call-Meeting-Source-Rows.md)
 - [PR-Content-Ops-Campaign-Export-Reasoning-Summary](archive/PR-Content-Ops-Campaign-Export-Reasoning-Summary.md)
 - [PR-Content-Ops-Card-PNG-Export-UI](archive/PR-Content-Ops-Card-PNG-Export-UI.md) - lane: content-ops/marketer-reviews-as-input-card-png-ui | phase: Product polish

@@ -117,6 +117,7 @@ from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
     DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
     validate_oauth_settings,
 )
+from extracted_content_pipeline.adversarial_pass import AdversarialFindingCategory
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.claims_map import RegistryClaim
 from extracted_content_pipeline.review_contract import RiskTier
@@ -232,8 +233,20 @@ def test_verify_draft_schema_hints_cover_nested_payload_shape() -> None:
         "quality_reports",
         "brand_voice_payload",
         "comments",
+        "adversarial_passes",
         "as_of",
     }
+    assert schema["adversarial_passes"]["items"]["properties"]["findings"]["items"][
+        "properties"
+    ]["category"]["enum"] == [
+        "overclaim",
+        "ambiguity",
+        "reader_objection",
+        "promise_cta_mismatch",
+        "generic_stretch",
+        "missing_proof",
+        "voice_slip",
+    ]
     assert schema["coverage"]["items"]["properties"]["status"]["enum"] == [
         "pass",
         "fail",
@@ -1048,3 +1061,118 @@ def test_content_ops_marketer_verify_oauth_transport_security_allows_explicit_de
 
     assert "atlas-brain.tailc7bd29.ts.net" in transport.allowed_hosts
     assert "atlas-brain.tailc7bd29.ts.net:443" in transport.allowed_hosts
+
+
+# -- adversarial pass wiring (slice 6) ---------------------------------------
+
+
+def test_adversarial_passes_parser_tolerates_decoded_input() -> None:
+    # Non-list, unknown category, and missing fields must not raise.
+    assert verify._adversarial_passes(None) == ()
+    assert verify._adversarial_passes("not-a-list") == ()
+
+    parsed = verify._adversarial_passes(
+        [
+            {
+                "pass_id": " p1 ",
+                "source": "model-b",
+                "findings": [
+                    {"category": "overclaim", "message": "m", "evidence": "e", "location": "para 2"},
+                    {"category": "totally_unknown", "message": "m2", "evidence": "e2"},
+                    {"message": "no category"},
+                ],
+            },
+            "junk-row",
+        ]
+    )
+    assert len(parsed) == 1
+    one = parsed[0]
+    assert one.pass_id == "p1"
+    assert one.source == "model-b"
+    assert len(one.findings) == 3
+    # Known category coerces to the enum; unknown stays a plain string (tolerated).
+    assert one.findings[0].category == AdversarialFindingCategory.OVERCLAIM
+    assert one.findings[1].category == "totally_unknown"
+
+
+def test_adversarial_passes_parser_defaults_blank_pass_id() -> None:
+    parsed = verify._adversarial_passes([{"findings": []}])
+    assert parsed[0].pass_id == "pass-0"
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_folds_adversarial_findings_into_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    payload_args = dict(_valid_payload())
+    payload_args["adversarial_passes"] = [
+        {
+            "pass_id": "p1",
+            "findings": [
+                {"category": "overclaim", "message": "40% unbacked", "evidence": "cuts tickets 40%"},
+                {"category": "voice_slip", "message": "off brand", "evidence": "synergize"},
+                {"category": "ambiguity", "message": "", "evidence": ""},
+            ],
+        }
+    ]
+
+    payload = await verify.verify_draft(**payload_args)
+
+    # Verdict is unchanged (findings are never-blocking evidence).
+    assert payload["decision"] == "approved"
+    comments = payload["content_pr"]["comments"]
+    adversarial = [c for c in comments if c["message"].startswith("[adversarial:")]
+    assert [c["message"] for c in adversarial] == [
+        "[adversarial:overclaim] 40% unbacked",
+        "[adversarial:voice_slip] off brand",
+    ]
+    assert all(c["blocking"] is False for c in adversarial)
+    assert adversarial[0]["category"] == "editorial_judgment"
+    assert adversarial[1]["category"] == "brand_rule"
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_threads_adversarial_passes_into_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A JSON submission's adversarial_passes must reach the verdict, not be
+    # silently dropped by the adapter (Codex P2 on #1488).
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    submission = dict(_valid_payload())
+    submission["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [
+            {"category": "overclaim", "message": "40% unbacked", "evidence": "cuts tickets 40%"},
+        ]},
+    ]
+    search_result = await adapter.search(query=json.dumps(submission))
+    verdict_id = search_result["results"][0]["id"]
+
+    # The finding must reach the cached verdict, not be dropped by the adapter.
+    payload = adapter._verdict_cache[verdict_id].payload
+    messages = [c["message"] for c in payload["content_pr"]["comments"]]
+    assert "[adversarial:overclaim] 40% unbacked" in messages
+    assert all(c["blocking"] is False for c in payload["content_pr"]["comments"])
+
+
+def test_chatgpt_adapter_contract_lists_adversarial_passes_as_optional() -> None:
+    contract = adapter._contract_document()
+    assert "adversarial_passes" in contract["metadata"]["accepted_fields"]
+    # Optional: present in properties, absent from required.
+    schema = contract["metadata"]["schema"]
+    assert "adversarial_passes" in schema["properties"]
+    assert "adversarial_passes" not in schema["required"]
