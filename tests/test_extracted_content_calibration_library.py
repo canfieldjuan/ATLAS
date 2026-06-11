@@ -162,13 +162,13 @@ def test_by_failure_category_filters_and_ignores_uncategorized() -> None:
 
 def test_by_failure_category_none_returns_empty() -> None:
     # Detection branch: a None query must not match the uncategorized examples.
-    assert _library().by_failure_category(None) == ()  # type: ignore[arg-type]
+    assert _library().by_failure_category(None) == ()
 
 
 def test_by_verdict_filters_and_none_returns_empty() -> None:
     lib = _library()
     assert tuple(e.example_id for e in lib.by_verdict(ReviewDecision.APPROVED)) == ("p1",)
-    assert lib.by_verdict(None) == ()  # type: ignore[arg-type]
+    assert lib.by_verdict(None) == ()
 
 
 def test_teachable_drops_decoration() -> None:
@@ -213,6 +213,21 @@ def test_empty_library_is_all_gaps() -> None:
     assert lib.missing_labels((CalibrationLabel.APPROVED,)) == (CalibrationLabel.APPROVED,)
 
 
+def test_unteachable_example_does_not_count_as_label_coverage() -> None:
+    # A decoded record carrying a label but no excerpt/reasoning cannot anchor
+    # a reviewer, so it must not hide the blind spot (Codex finding on #1487).
+    lib = CalibrationLibrary(
+        examples=(
+            _ex("ok", CalibrationLabel.GOOD_VOICE),
+            _ex("decoration", CalibrationLabel.OVERCLAIM, excerpt="", reasoning=""),
+        )
+    )
+    assert lib.labels_covered() == frozenset({CalibrationLabel.GOOD_VOICE})
+    assert lib.missing_labels(
+        (CalibrationLabel.GOOD_VOICE, CalibrationLabel.OVERCLAIM)
+    ) == (CalibrationLabel.OVERCLAIM,)
+
+
 # -- overrides feed the set (example_from_exception) --------------------------
 
 
@@ -246,3 +261,19 @@ def test_example_from_exception_honors_explicit_label_and_category() -> None:
     # An override-fed negative example is queryable like any curated one.
     lib = CalibrationLibrary(examples=(example,))
     assert lib.by_failure_category(FailureCategory.CLAIM_CREDIBILITY_GAP) == (example,)
+
+
+def test_example_from_exception_suffix_disambiguates_repeat_overrides() -> None:
+    # The same soft rule waived twice must not collide on one id (reviewer
+    # MAJOR on #1487): a caller-supplied suffix keeps repeats distinct.
+    record = ExceptionRecord(rule="brand_voice.no_superlatives", reason="r", owner="o")
+    first = example_from_exception(record, excerpt="copy a", suffix="asset-101")
+    second = example_from_exception(record, excerpt="copy b", suffix="asset-202")
+    assert first.example_id == "override:brand_voice.no_superlatives:asset-101"
+    assert second.example_id == "override:brand_voice.no_superlatives:asset-202"
+    assert first.example_id != second.example_id
+
+
+def test_example_from_exception_blank_suffix_keeps_bare_id() -> None:
+    record = ExceptionRecord(rule="r1", reason="r", owner="o")
+    assert example_from_exception(record, excerpt="c", suffix="  ").example_id == "override:r1"

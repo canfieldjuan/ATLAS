@@ -151,19 +151,22 @@ class CalibrationLibrary:
         return tuple(e for e in self.examples if e.label == label)
 
     def by_failure_category(
-        self, category: FailureCategory
+        self, category: FailureCategory | None
     ) -> tuple[CalibrationExample, ...]:
         """Examples cross-linked to ``category``.
 
-        ``None``-category examples never match: an example with no recorded
-        failure category is not silently swept into any category's anchor set.
+        A ``None`` query returns empty, and ``None``-category examples never
+        match: an example with no recorded failure category is not silently
+        swept into any category's anchor set.
         """
 
         if category is None:
             return ()
         return tuple(e for e in self.examples if e.failure_category == category)
 
-    def by_verdict(self, verdict: ReviewDecision) -> tuple[CalibrationExample, ...]:
+    def by_verdict(
+        self, verdict: ReviewDecision | None
+    ) -> tuple[CalibrationExample, ...]:
         """Examples whose recorded verdict equals ``verdict`` (None never matches)."""
 
         if verdict is None:
@@ -186,19 +189,26 @@ class CalibrationLibrary:
         return tuple(e for e in self.examples if e.is_teachable())
 
     def labels_covered(self) -> frozenset[CalibrationLabel]:
-        """The distinct labels present (what kinds of judgment are anchored)."""
+        """The distinct labels with at least one *teachable* example.
 
-        return frozenset(e.label for e in self.examples)
+        Only teachable anchors count as coverage: a decoded record that carries
+        a label but no excerpt/reasoning cannot anchor a reviewer, so it must
+        not hide a blind spot (see :meth:`missing_labels`).
+        """
+
+        return frozenset(e.label for e in self.examples if e.is_teachable())
 
     def missing_labels(
         self, required: Iterable[CalibrationLabel]
     ) -> tuple[CalibrationLabel, ...]:
-        """Required labels with no example -- the set's blind spots, in order.
+        """Required labels with no teachable example -- the blind spots, in order.
 
         A calibration set that has no overclaim or voice-drift example cannot
         anchor a reviewer on those failure modes; this reports the gap so
-        curation is driven by coverage, not vibes. Preserves ``required`` order
-        and de-duplicates.
+        curation is driven by coverage, not vibes. Coverage is derived from
+        teachable examples only -- a label represented solely by decoration
+        (no excerpt or no reasoning) is still a gap. Preserves ``required``
+        order and de-duplicates.
         """
 
         covered = self.labels_covered()
@@ -217,6 +227,7 @@ def example_from_exception(
     excerpt: str,
     label: CalibrationLabel = CalibrationLabel.BORDERLINE,
     failure_category: FailureCategory | None = None,
+    suffix: str = "",
 ) -> CalibrationExample:
     """Turn an ``APPROVED_WITH_EXCEPTION`` override into a calibration example.
 
@@ -228,10 +239,19 @@ def example_from_exception(
     stamped ``"override"`` so curated and override-fed anchors stay
     distinguishable. ``verdict`` is fixed to ``APPROVED_WITH_EXCEPTION`` (the
     only decision an :class:`ExceptionRecord` represents).
+
+    The same soft rule is often waived repeatedly (that is what
+    ``should_update_rule`` exists for), and repeats would collide on
+    ``override:{rule}`` -- ``example_id`` is **not** unique across a library
+    unless the caller passes a distinguishing ``suffix`` (an asset id, date,
+    or sequence number), which is appended as ``override:{rule}:{suffix}``.
     """
 
+    example_id = f"override:{record.rule}"
+    if _nonempty(suffix):
+        example_id = f"{example_id}:{suffix}"
     return CalibrationExample(
-        example_id=f"override:{record.rule}",
+        example_id=example_id,
         excerpt=excerpt,
         label=label,
         reasoning=record.reason,

@@ -52,8 +52,13 @@ Acceptance criteria:
 - Label polarity is data-driven and value-based: a decoded string label
   classifies the same as the enum member.
 - Queries return new tuples in input order and never mutate the set.
-- `by_failure_category` / `by_verdict` return empty for a `None` argument and
-  never sweep in uncategorized examples.
+- `by_failure_category` / `by_verdict` accept `None` in their signatures,
+  return empty for it, and never sweep in uncategorized examples.
+- Label coverage and blind-spot reporting (`labels_covered` /
+  `missing_labels`) count only teachable examples: a label represented solely
+  by a record with no excerpt/reasoning is still reported as a gap.
+- Repeat overrides of the same rule disambiguate via a caller-supplied
+  `suffix`; the docstring states `example_id` is not unique without one.
 - An override (`ExceptionRecord`) converts to a `BORDERLINE`,
   `APPROVED_WITH_EXCEPTION`, `source="override"` example carrying the override
   reason, and is then queryable like any curated example.
@@ -90,9 +95,12 @@ text; `None` counts as missing rather than raising.
 
 `CalibrationLibrary` is a frozen tuple-backed container. Its query helpers filter
 by label, failure category, verdict, and polarity, report the distinct labels
-present, and report required-but-absent labels (the set's blind spots) in order
-and de-duplicated. The `None`-argument branches on the category/verdict queries
-return empty so an uncategorized example is never silently grouped.
+anchored by teachable examples, and report required-but-uncovered labels (the
+set's blind spots) in order and de-duplicated -- coverage is derived from
+teachable examples only, so a decoration record (label without excerpt or
+reasoning) never hides a gap. The `None`-argument branches on the
+category/verdict queries return empty so an uncategorized example is never
+silently grouped.
 
 `example_from_exception` is the compounding seam: it maps a slice-1
 `ExceptionRecord` (an approve-with-exception override) into a calibration example
@@ -158,9 +166,9 @@ only the accountable editor can escalate a model objection to blocking.
 
 - Reviewer rules triggered: R1, R2, R10, R14.
 - Passed: python3 -m py_compile of both new modules and tests -- OK.
-- Passed: pytest of the slice-5a test file -- 24 passed; slice-5b test file --
+- Passed: pytest of the slice-5a test file -- 22 passed; slice-5b test file --
   17 passed.
-- Passed: pytest of slice 5 (both halves) plus sibling slices 1, 3, 4 -- 89
+- Passed: pytest of slice 5 (both halves) plus sibling slices 1, 3, 4 -- 92
   passed, no sibling-slice regression.
 - Passed: python3 scripts/audit_extracted_pipeline_ci_enrollment.py -- OK, 167
   matching tests are enrolled (includes both new tests).
@@ -173,10 +181,10 @@ only the accountable editor can escalate a model objection to blocking.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/adversarial_pass.py` | 181 |
-| `extracted_content_pipeline/calibration_library.py` | 241 |
+| `extracted_content_pipeline/calibration_library.py` | 261 |
 | `extracted_content_pipeline/manifest.json` | 6 |
-| `plans/PR-Content-Ops-Calibration-Library.md` | 178 |
+| `plans/PR-Content-Ops-Calibration-Library.md` | 190 |
 | `scripts/run_extracted_pipeline_checks.sh` | 2 |
 | `tests/test_extracted_content_adversarial_pass.py` | 223 |
-| `tests/test_extracted_content_calibration_library.py` | 248 |
-| **Total** | **1079** |
+| `tests/test_extracted_content_calibration_library.py` | 279 |
+| **Total** | **1142** |
