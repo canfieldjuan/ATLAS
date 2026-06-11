@@ -175,7 +175,8 @@ def comment_from_finding(finding: AdversarialFinding) -> ReviewComment:
     category = _FINDING_COMMENT_CATEGORY.get(
         finding.category, CommentCategory.EDITORIAL_JUDGMENT
     )
-    prefix = f"[adversarial:{finding.category}]"
+    label = finding.category if _nonempty(finding.category) else "uncategorized"
+    prefix = f"[adversarial:{label}]"
     # A decoded None/blank message or evidence counts as missing -- the prefix
     # alone is the message, and "None" never leaks into editor-facing text.
     message = f"{prefix} {finding.message}" if _nonempty(finding.message) else prefix

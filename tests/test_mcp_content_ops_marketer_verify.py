@@ -1137,3 +1137,42 @@ async def test_verify_draft_folds_adversarial_findings_into_result(
     assert all(c["blocking"] is False for c in adversarial)
     assert adversarial[0]["category"] == "editorial_judgment"
     assert adversarial[1]["category"] == "brand_rule"
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_adapter_threads_adversarial_passes_into_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A JSON submission's adversarial_passes must reach the verdict, not be
+    # silently dropped by the adapter (Codex P2 on #1488).
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    submission = dict(_valid_payload())
+    submission["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [
+            {"category": "overclaim", "message": "40% unbacked", "evidence": "cuts tickets 40%"},
+        ]},
+    ]
+    search_result = await adapter.search(query=json.dumps(submission))
+    verdict_id = search_result["results"][0]["id"]
+
+    # The finding must reach the cached verdict, not be dropped by the adapter.
+    payload = adapter._verdict_cache[verdict_id].payload
+    messages = [c["message"] for c in payload["content_pr"]["comments"]]
+    assert "[adversarial:overclaim] 40% unbacked" in messages
+    assert all(c["blocking"] is False for c in payload["content_pr"]["comments"])
+
+
+def test_chatgpt_adapter_contract_lists_adversarial_passes_as_optional() -> None:
+    contract = adapter._contract_document()
+    assert "adversarial_passes" in contract["metadata"]["accepted_fields"]
+    # Optional: present in properties, absent from required.
+    schema = contract["metadata"]["schema"]
+    assert "adversarial_passes" in schema["properties"]
+    assert "adversarial_passes" not in schema["required"]

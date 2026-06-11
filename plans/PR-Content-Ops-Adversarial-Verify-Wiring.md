@@ -23,20 +23,27 @@ Slice phase: Vertical slice
    pass's substantiated findings into the Content-PR comments via slice 5b's
    `comment_from_finding` before the verdict is computed.
 2. MCP: accept an `adversarial_passes` tool arg on `verify_draft`, parse decoded
-   rows into `AdversarialPass` / `AdversarialFinding`, and thread it through.
-3. Park the StrEnum-shim harmonization follow-up (from #1487 review) in
+   rows into `AdversarialPass` / `AdversarialFinding`, and thread it through --
+   including through the ChatGPT search/fetch adapter (it is exposed in that
+   contract as an optional field).
+3. Harden `comment_from_finding` so a blank/decoded-None category renders an
+   `[adversarial:uncategorized]` prefix instead of a malformed `[adversarial:]`.
+4. Park the StrEnum-shim harmonization follow-up (from #1487 review) in
    `HARDENING.md`.
-4. Archive the merged #1487 plan doc.
+5. Archive the merged #1487 plan doc.
 
 ### Files touched
 
 - `HARDENING.md`
 - `atlas_brain/_content_ops_review_workflow.py`
+- `atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py`
 - `atlas_brain/mcp/content_ops_marketer_verify_server.py`
+- `extracted_content_pipeline/adversarial_pass.py`
 - `plans/INDEX.md`
 - `plans/PR-Content-Ops-Adversarial-Verify-Wiring.md`
 - `plans/archive/PR-Content-Ops-Calibration-Library.md`
 - `tests/test_atlas_content_ops_review_workflow.py`
+- `tests/test_extracted_content_adversarial_pass.py`
 - `tests/test_mcp_content_ops_marketer_verify.py`
 
 ### Review Contract
@@ -112,11 +119,27 @@ lives; the MCP layer only decodes transport.
   and `calibration_library.py` to the hardened `__str__ = str.__str__` form
   (from #1487 review; inert today) -- logged in `HARDENING.md`.
 
+## AI reconciliation
+
+- [chatgpt-codex-connector] atlas_brain/mcp/content_ops_marketer_verify_server.py:361
+  "Thread adversarial passes through ChatGPT adapter" - FIXED: the adapter now
+  passes `request_payload.get("adversarial_passes")` into the review request and
+  exposes it in the contract (accepted_fields + schema properties + example) as
+  an optional field; a test asserts a JSON submission's findings reach the
+  cached verdict.
+- [reviewer NIT] atlas_brain/mcp/content_ops_marketer_verify_server.py:703
+  "blank/missing category renders a malformed [adversarial:] prefix" - FIXED in
+  `comment_from_finding` (covers all callers, not just the parser): a blank
+  category renders `[adversarial:uncategorized]`. Negative fixture added.
+
+All findings fixed or waived: yes.
+
 ## Verification
 
 - Reviewer rules triggered: R1, R2, R5, R10, R14.
-- Passed: pytest tests/test_mcp_content_ops_marketer_verify.py tests/test_atlas_content_ops_review_workflow.py -- 70 passed (5 new host + 3 new MCP tests; no regression).
-- Passed: pytest tests/test_content_ops_marketer_verify_launcher_contract.py -- 7 passed (signature-change blast radius: the ChatGPT adapter caller is unaffected because the new builder arg defaults).
+- Passed: pytest of the adversarial, verify, host-workflow, and launcher test
+  files -- 98 passed (adapter-threading + contract-optional + blank-category
+  sentinel fixtures added this round; no regression).
 - Passed: python3 scripts/audit_extracted_pipeline_ci_enrollment.py -- OK, 167 enrolled.
 - Passed: python3 scripts/audit_extracted_standalone.py --fail-on-debt -- 0 findings.
 - Passed: bash scripts/check_ascii_python.sh -- ASCII check passed.
@@ -127,10 +150,13 @@ lives; the MCP layer only decodes transport.
 |---|---:|
 | `HARDENING.md` | 11 |
 | `atlas_brain/_content_ops_review_workflow.py` | 40 |
+| `atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py` | 54 |
 | `atlas_brain/mcp/content_ops_marketer_verify_server.py` | 91 |
+| `extracted_content_pipeline/adversarial_pass.py` | 3 |
 | `plans/INDEX.md` | 3 |
-| `plans/PR-Content-Ops-Adversarial-Verify-Wiring.md` | 136 |
+| `plans/PR-Content-Ops-Adversarial-Verify-Wiring.md` | 156 |
 | `plans/archive/PR-Content-Ops-Calibration-Library.md` | 0 |
 | `tests/test_atlas_content_ops_review_workflow.py` | 123 |
-| `tests/test_mcp_content_ops_marketer_verify.py` | 89 |
-| **Total** | **493** |
+| `tests/test_extracted_content_adversarial_pass.py` | 11 |
+| `tests/test_mcp_content_ops_marketer_verify.py` | 128 |
+| **Total** | **620** |

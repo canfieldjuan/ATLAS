@@ -238,3 +238,14 @@ def test_comment_from_decoded_none_does_not_leak_none_text() -> None:
     assert "None" not in comment.message
     assert comment.evidence == ""
     assert comment.blocking is False
+
+
+def test_comment_from_blank_category_uses_uncategorized_sentinel() -> None:
+    # A substantiated finding whose category decoded to blank must not render a
+    # malformed "[adversarial:]" prefix (reviewer NIT on #1488).
+    comment = comment_from_finding(
+        AdversarialFinding(category="", message="real objection", evidence="quoted span")  # type: ignore[arg-type]
+    )
+    assert comment.message == "[adversarial:uncategorized] real objection"
+    assert comment.category == CommentCategory.EDITORIAL_JUDGMENT
+    assert comment.blocking is False
