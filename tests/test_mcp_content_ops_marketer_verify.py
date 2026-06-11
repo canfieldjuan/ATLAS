@@ -1260,3 +1260,84 @@ def test_chatgpt_adapter_contract_lists_calibration_library_as_optional() -> Non
     schema = contract["metadata"]["schema"]
     assert "calibration_library" in schema["properties"]
     assert "calibration_library" not in schema["required"]
+
+
+# -- verdict render shows the evidence (slice 8) -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetched_verdict_text_renders_objections_and_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    submission = dict(_valid_payload())
+    submission["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [
+            {"category": "overclaim", "message": "40% claim has no source", "evidence": "cuts tickets 40%"},
+        ]},
+    ]
+    submission["calibration_library"] = [
+        {"example_id": "oc1", "label": "overclaim", "excerpt": "99.99% uptime", "reasoning": "no SLA backs this"},
+    ]
+    search_result = await adapter.search(query=json.dumps(submission))
+    fetched = await adapter.fetch(search_result["results"][0]["id"])
+
+    text = fetched["text"]
+    assert "Decision: approved" in text
+    assert "Objections:" in text
+    assert "[editorial_judgment] [adversarial:overclaim] 40% claim has no source (evidence: cuts tickets 40%)" in text
+    assert "Calibration anchors:" in text
+    assert "overclaim: 99.99% uptime -- no SLA backs this" in text
+    # Title now reflects the real asset id, not "draft".
+    assert "asset-1" in fetched["title"]
+
+
+@pytest.mark.asyncio
+async def test_fetched_verdict_text_omits_empty_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    search_result = await adapter.search(query=json.dumps(_valid_payload()))
+    fetched = await adapter.fetch(search_result["results"][0]["id"])
+
+    text = fetched["text"]
+    assert "Decision: approved" in text
+    assert "Objections:" not in text
+    assert "Calibration anchors:" not in text
+
+
+def test_verdict_text_helpers_tolerate_malformed_payload() -> None:
+    # Non-list / non-dict shapes must not raise.
+    assert adapter._comment_lines({"content_pr": "nope"}) == []
+    assert adapter._comment_lines({"content_pr": {"comments": ["junk", {}]}}) == []
+    assert adapter._anchor_lines({"calibration_anchors": "nope"}) == []
+    assert adapter._anchor_lines({"calibration_anchors": [{"label": "x"}]}) == []  # no excerpt -> skipped
+    assert adapter._verdict_title({"decision": "blocked"}) == "Content Ops verification for draft: blocked"
+
+
+def test_verdict_text_marks_blocking_comment() -> None:
+    payload = {
+        "decision": "revision_required",
+        "reasons": ["1 blocking comment(s)"],
+        "content_pr": {"asset_id": "d9", "comments": [
+            {"category": "compliance", "message": "missing disclaimer", "evidence": "", "blocking": True},
+        ]},
+        "calibration_anchors": [],
+    }
+    text = adapter._verdict_text(payload)
+    assert "[compliance] [BLOCKING] missing disclaimer" in text
+    assert "Calibration anchors:" not in text
