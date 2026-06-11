@@ -221,3 +221,20 @@ def test_comment_from_unsubstantiated_finding_still_never_blocks() -> None:
     )
     assert comment.message == "[adversarial:ambiguity]"
     assert comment.blocking is False
+
+
+def test_comment_from_decoded_none_does_not_leak_none_text() -> None:
+    # A finding decoded from model JSON may carry null message/evidence; the
+    # literal string "None" must never appear in editor-facing comment text
+    # (reviewer NIT on #1487).
+    comment = comment_from_finding(
+        AdversarialFinding(
+            category=AdversarialFindingCategory.READER_OBJECTION,
+            message=None,  # type: ignore[arg-type]
+            evidence=None,  # type: ignore[arg-type]
+        )
+    )
+    assert comment.message == "[adversarial:reader_objection]"
+    assert "None" not in comment.message
+    assert comment.evidence == ""
+    assert comment.blocking is False

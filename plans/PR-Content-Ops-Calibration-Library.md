@@ -167,8 +167,8 @@ only the accountable editor can escalate a model objection to blocking.
 - Reviewer rules triggered: R1, R2, R10, R14.
 - Passed: python3 -m py_compile of both new modules and tests -- OK.
 - Passed: pytest of the slice-5a test file -- 22 passed; slice-5b test file --
-  17 passed.
-- Passed: pytest of slice 5 (both halves) plus sibling slices 1, 3, 4 -- 92
+  18 passed.
+- Passed: pytest of slice 5 (both halves) plus sibling slices 1, 3, 4 -- 93
   passed, no sibling-slice regression.
 - Passed: python3 scripts/audit_extracted_pipeline_ci_enrollment.py -- OK, 167
   matching tests are enrolled (includes both new tests).
@@ -180,11 +180,11 @@ only the accountable editor can escalate a model objection to blocking.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/adversarial_pass.py` | 181 |
+| `extracted_content_pipeline/adversarial_pass.py` | 187 |
 | `extracted_content_pipeline/calibration_library.py` | 261 |
 | `extracted_content_pipeline/manifest.json` | 6 |
 | `plans/PR-Content-Ops-Calibration-Library.md` | 190 |
 | `scripts/run_extracted_pipeline_checks.sh` | 2 |
-| `tests/test_extracted_content_adversarial_pass.py` | 223 |
+| `tests/test_extracted_content_adversarial_pass.py` | 240 |
 | `tests/test_extracted_content_calibration_library.py` | 279 |
-| **Total** | **1142** |
+| **Total** | **1165** |

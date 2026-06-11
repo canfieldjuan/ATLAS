@@ -28,7 +28,11 @@ except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
     from enum import Enum
 
     class StrEnum(str, Enum):
-        pass
+        # Match CPython's real StrEnum: str(member) is the value, so the
+        # [adversarial:...] prefix formats identically on both interpreter
+        # paths (3.10's plain str+Enum would format as the class-qualified
+        # name under str()).
+        __str__ = str.__str__
 
 from .content_pr import CommentCategory, ReviewComment
 
@@ -172,10 +176,12 @@ def comment_from_finding(finding: AdversarialFinding) -> ReviewComment:
         finding.category, CommentCategory.EDITORIAL_JUDGMENT
     )
     prefix = f"[adversarial:{finding.category}]"
-    message = f"{prefix} {finding.message}".strip()
+    # A decoded None/blank message or evidence counts as missing -- the prefix
+    # alone is the message, and "None" never leaks into editor-facing text.
+    message = f"{prefix} {finding.message}" if _nonempty(finding.message) else prefix
     return ReviewComment(
         category=category,
         message=message,
-        evidence=finding.evidence,
+        evidence=finding.evidence if _nonempty(finding.evidence) else "",
         blocking=False,
     )
