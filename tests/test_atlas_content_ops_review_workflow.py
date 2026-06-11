@@ -621,3 +621,56 @@ async def test_blocked_path_still_folds_adversarial_evidence() -> None:
 
     assert result.decision == ReviewDecision.BLOCKED
     assert len(_adversarial_comments(result)) == 1
+
+
+# -- calibration-anchor attachment (slice 7) ---------------------------------
+
+
+from extracted_content_pipeline.calibration_library import CalibrationExample, CalibrationLabel
+
+
+def _anchor(example_id: str, label: CalibrationLabel, *, excerpt="worked copy", reasoning="why") -> CalibrationExample:
+    return CalibrationExample(example_id=example_id, excerpt=excerpt, label=label, reasoning=reasoning)
+
+
+@pytest.mark.asyncio
+async def test_calibration_anchors_surface_for_fired_finding_categories() -> None:
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),)),)
+    examples = (
+        _anchor("oc1", CalibrationLabel.OVERCLAIM),
+        _anchor("gv1", CalibrationLabel.GOOD_VOICE),  # no fired category maps -> excluded
+    )
+
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes, calibration_examples=examples),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc1",)
+    assert result.as_dict()["calibration_anchors"][0]["label"] == "overclaim"
+
+
+@pytest.mark.asyncio
+async def test_no_anchors_when_none_supplied() -> None:
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),)),)
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+    assert result.calibration_anchors == ()
+    assert result.as_dict()["calibration_anchors"] == []
+
+
+@pytest.mark.asyncio
+async def test_anchors_surface_even_on_blocked_verdict() -> None:
+    passes = (AdversarialPass(pass_id="p1", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),)),)
+    examples = (_anchor("oc1", CalibrationLabel.OVERCLAIM),)
+    result = await run_content_ops_review(
+        _request(rule_packet=RulePacketVersions(), adversarial_passes=passes, calibration_examples=examples),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+    assert result.decision == ReviewDecision.BLOCKED
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc1",)
