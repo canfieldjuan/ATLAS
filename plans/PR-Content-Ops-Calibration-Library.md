@@ -8,10 +8,15 @@ marketer-verify MCP surface deliberately thin and verify-only until the
 reviewer-anchoring pieces exist. `docs/content_ops_operating_model.md` names the
 **review calibration library** as "the missing anti-drift piece": without curated
 worked examples, "brand voice" is a seance, and both human and model reviewers
-have nothing to anchor on. This slice lands the deterministic half of slice 5 --
-the calibration set as a pure typed store -- and defers the adversarial pass to
-5b. It closes the operator's scope nod on #1338 ("land the deterministic core and
-defer the LLM, like slice 3").
+have nothing to anchor on. This slice lands the full deterministic core of
+slice 5 exactly as the tracker row defines it -- the calibration set as a pure
+typed store (5a) plus the adversarial-pass data model and deterministic
+disagreement/merge helpers (5b) -- and defers the LLM steps (anchor scoring,
+finding-producing prompts, disagreement orchestration). It closes the
+operator's scope nod on #1338 ("land the deterministic core and defer the LLM,
+like slice 3"). The diff is over the 400-LOC soft cap because the two halves
+are one tracker row and ~55% of the diff is the detection-coverage test suite
+the AGENTS 3i contract requires; the production modules total ~400 LOC.
 
 ## Scope (this PR)
 
@@ -21,15 +26,22 @@ Slice phase: Vertical slice
 1. Add `extracted_content_pipeline/calibration_library.py`: the `CalibrationLabel`
    vocabulary, a frozen `CalibrationExample`, an immutable `CalibrationLibrary`
    query container, and a converter that turns a slice-1 override into an example.
-2. Register the new module as package-owned in the manifest.
-3. Enroll the new test in the extracted-pipeline CI runner.
+2. Add `extracted_content_pipeline/adversarial_pass.py`: the
+   `AdversarialFindingCategory` vocabulary (the doc's target list), frozen
+   `AdversarialFinding` / `AdversarialPass` records, deterministic
+   corroboration/disagreement/merge helpers between two passes, and a converter
+   that turns a finding into a never-blocking slice-4 review comment.
+3. Register both new modules as package-owned in the manifest.
+4. Enroll both new tests in the extracted-pipeline CI runner.
 
 ### Files touched
 
+- `extracted_content_pipeline/adversarial_pass.py`
 - `extracted_content_pipeline/calibration_library.py`
 - `extracted_content_pipeline/manifest.json`
 - `plans/PR-Content-Ops-Calibration-Library.md`
 - `scripts/run_extracted_pipeline_checks.sh`
+- `tests/test_extracted_content_adversarial_pass.py`
 - `tests/test_extracted_content_calibration_library.py`
 
 ### Review Contract
@@ -47,6 +59,12 @@ Acceptance criteria:
   reason, and is then queryable like any curated example.
 - Records tolerate decoded input (`None`/non-str excerpt/reasoning count as
   missing, never raise).
+- An adversarial finding converts to a review comment that is **never
+  blocking** (the "still not a judge" invariant), with the finding category
+  carried in the message prefix.
+- Corroboration is the category intersection of two passes; disagreement is the
+  symmetric difference; merge de-duplicates only exact duplicates and preserves
+  first-then-second order.
 
 Affected surfaces: extracted_content_pipeline package only; no host wiring, no
 MCP tool, no route, no DB. The marketer-verify MCP surface is unchanged.
@@ -83,6 +101,20 @@ return empty so an uncategorized example is never silently grouped.
 reasoning, and stamping provenance `override` -- so the judgment layer compounds
 exactly as the doc's section-5 flywheel prescribes.
 
+The adversarial-pass module (5b) models the doc's second independent pass.
+`AdversarialFindingCategory` is the doc's target list (overclaim, ambiguity,
+reader objection, promise/CTA mismatch, generic stretch, missing proof, voice
+slip). `AdversarialFinding` is substantiated only when it carries both an
+objection and quoted evidence -- the filter that keeps a chatty pass from
+flooding review. `AdversarialPass` records the prompt/model identity so two
+passes are distinguishable. The deterministic helpers compute the corroborated
+categories (set intersection -- the strongest signal), the disagreement surface
+(symmetric difference -- the *data* for the parked orchestration), and an
+exact-duplicate-only merge. `comment_from_finding` is where "still not a judge"
+is enforced: every finding becomes a `blocking=False` review comment (voice
+slips route to the brand-rule lane, everything else to editorial judgment), so
+only the accountable editor can escalate a model objection to blocking.
+
 ## Intentional
 
 - **No host/MCP wiring.** This is the deterministic store; scoring a fresh draft
@@ -97,28 +129,41 @@ exactly as the doc's section-5 flywheel prescribes.
 - **`example_from_exception` defaults the label rather than inferring it.** An
   override is a judgment call, so `BORDERLINE` is the safe default; the caller
   can pass `OVERCLAIM`/etc. when the override has a known failure shape.
+- **`comment_from_finding` cannot produce a blocking comment.** The doc is
+  explicit that the adversarial pass is not a judge; hard-coding
+  `blocking=False` at the seam makes the invariant unbypassable rather than
+  conventional.
+- **Merge collapses only exact duplicates.** Two differently-worded objections
+  in the same category are both kept; deciding they are "the same" is a
+  judgment call this module refuses to make.
+- **Disagreement is computed, not acted on.** Routing an A-pass/B-fail split to
+  a human and logging the override is the parked orchestration (operating-model
+  section 4); this slice ships only the deterministic data it would consume.
 
 ## Deferred
 
-- **Slice 5b -- adversarial pass:** the data model for a second independent
-  review pass + a deterministic disagreement/merge helper between two passes
-  (operating-model section 4). Named in #1338; unlocked by this slice landing.
 - **LLM scoring against anchors:** selecting the nearest anchors for a fresh
   draft and the model-assisted drift judgment (operating-model stage 3C) -- the
-  step that actually consumes this set. Gated behind the #1435 reliability work.
-- **Host persistence / a curated seed set:** this slice ships the type + queries,
-  not a populated library or a DB table.
+  step that actually consumes the calibration set. Gated behind the #1435
+  reliability work.
+- **Finding-producing prompts:** the adversarial prompts/models that emit
+  `AdversarialFinding` rows are the LLM step, same deferral as above.
+- **Model-disagreement orchestration:** parked per the doc until slices 1-5
+  prove out.
+- **Host persistence / a curated seed set:** this slice ships the types +
+  queries, not a populated library or a DB table.
 - Parked hardening: none.
 
 ## Verification
 
 - Reviewer rules triggered: R1, R2, R10, R14.
-- Passed: python3 -m py_compile of the new module and test -- OK.
-- Passed: pytest of the new slice-5a test file -- 24 passed.
-- Passed: pytest of slice 5a plus sibling slices 1, 3, 4 -- 72 passed, no
-  sibling-slice regression.
-- Passed: python3 scripts/audit_extracted_pipeline_ci_enrollment.py -- OK, 166
-  matching tests are enrolled (includes the new test).
+- Passed: python3 -m py_compile of both new modules and tests -- OK.
+- Passed: pytest of the slice-5a test file -- 24 passed; slice-5b test file --
+  17 passed.
+- Passed: pytest of slice 5 (both halves) plus sibling slices 1, 3, 4 -- 89
+  passed, no sibling-slice regression.
+- Passed: python3 scripts/audit_extracted_pipeline_ci_enrollment.py -- OK, 167
+  matching tests are enrolled (includes both new tests).
 - Passed: python3 scripts/audit_extracted_standalone.py --fail-on-debt -- Atlas
   runtime import findings: 0.
 - Passed: bash scripts/check_ascii_python.sh -- ASCII check passed.
@@ -127,9 +172,11 @@ exactly as the doc's section-5 flywheel prescribes.
 
 | File | LOC |
 |---|---:|
+| `extracted_content_pipeline/adversarial_pass.py` | 181 |
 | `extracted_content_pipeline/calibration_library.py` | 241 |
-| `extracted_content_pipeline/manifest.json` | 3 |
-| `plans/PR-Content-Ops-Calibration-Library.md` | 135 |
-| `scripts/run_extracted_pipeline_checks.sh` | 1 |
+| `extracted_content_pipeline/manifest.json` | 6 |
+| `plans/PR-Content-Ops-Calibration-Library.md` | 178 |
+| `scripts/run_extracted_pipeline_checks.sh` | 2 |
+| `tests/test_extracted_content_adversarial_pass.py` | 223 |
 | `tests/test_extracted_content_calibration_library.py` | 248 |
-| **Total** | **628** |
+| **Total** | **1079** |
