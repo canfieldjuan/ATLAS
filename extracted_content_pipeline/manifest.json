@@ -244,6 +244,9 @@
       "target": "extracted_content_pipeline/content_pr.py"
     },
     {
+      "target": "extracted_content_pipeline/calibration_library.py"
+    },
+    {
       "target": "extracted_content_pipeline/claim_evidence_benchmark.py"
     },
     {

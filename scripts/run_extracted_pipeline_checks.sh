@@ -20,6 +20,7 @@ pytest \
   tests/test_extracted_content_triage_experiment.py \
   tests/test_extracted_content_claims_map.py \
   tests/test_extracted_content_pr.py \
+  tests/test_extracted_content_calibration_library.py \
   tests/test_extracted_content_claim_evidence_benchmark.py \
   tests/test_validate_content_ops_claim_evidence_fixture.py \
   tests/test_extracted_content_coverage_rows.py \
