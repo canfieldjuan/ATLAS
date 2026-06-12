@@ -709,3 +709,110 @@ async def test_no_corroboration_from_a_single_pass() -> None:
         registry_reader=_reader(),
     )
     assert result.corroborated_objection_categories == ()
+
+
+# -- tenant calibration-library reader port (slice A) ------------------------
+
+
+from extracted_content_pipeline.calibration_library import CalibrationExample, CalibrationLabel
+
+
+@dataclass
+class _CalibrationReader:
+    examples: tuple[CalibrationExample, ...]
+    scopes: list = None
+
+    def __post_init__(self):
+        self.scopes = []
+
+    async def list_calibration_examples(self, *, scope):
+        self.scopes.append(scope)
+        return self.examples
+
+
+class _FailingCalibrationReader:
+    async def list_calibration_examples(self, *, scope):
+        raise RuntimeError("calibration store unavailable")
+
+
+def _anchor(example_id: str, label: CalibrationLabel, *, excerpt="copy", reasoning="why") -> CalibrationExample:
+    return CalibrationExample(example_id=example_id, excerpt=excerpt, label=label, reasoning=reasoning)
+
+
+_OVERCLAIM_PASS = (
+    AdversarialPass(pass_id="p1", findings=(
+        AdversarialFinding(category=AdversarialFindingCategory.OVERCLAIM, message="40% unbacked", evidence="cuts 40%"),
+    )),
+)
+
+
+@pytest.mark.asyncio
+async def test_server_side_anchor_surfaces_without_being_in_the_request() -> None:
+    reader = _CalibrationReader((_anchor("oc-server", CalibrationLabel.OVERCLAIM),))
+    result = await run_content_ops_review(
+        _request(adversarial_passes=_OVERCLAIM_PASS),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+        calibration_reader=reader,
+    )
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc-server",)
+    assert reader.scopes == [_SCOPE]
+
+
+@pytest.mark.asyncio
+async def test_union_is_server_first_and_dedupes_by_example_id() -> None:
+    # Same example_id in server + request -> server wins; distinct ids -> both.
+    reader = _CalibrationReader((
+        _anchor("shared", CalibrationLabel.OVERCLAIM, excerpt="server copy"),
+        _anchor("oc-server", CalibrationLabel.OVERCLAIM),
+    ))
+    request_examples = (
+        _anchor("shared", CalibrationLabel.OVERCLAIM, excerpt="request copy"),
+        _anchor("oc-req", CalibrationLabel.OVERCLAIM),
+    )
+    result = await run_content_ops_review(
+        _request(adversarial_passes=_OVERCLAIM_PASS, calibration_examples=request_examples),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+        calibration_reader=reader,
+    )
+    by_id = {a.example_id: a for a in result.calibration_anchors}
+    assert set(by_id) == {"shared", "oc-server", "oc-req"}
+    assert by_id["shared"].excerpt == "server copy"  # server won the collision
+
+
+@pytest.mark.asyncio
+async def test_failing_calibration_reader_degrades_without_blocking() -> None:
+    request_examples = (_anchor("oc-req", CalibrationLabel.OVERCLAIM),)
+    result = await run_content_ops_review(
+        _request(adversarial_passes=_OVERCLAIM_PASS, calibration_examples=request_examples),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+        calibration_reader=_FailingCalibrationReader(),
+    )
+    assert result.decision == ReviewDecision.APPROVED  # verdict unaffected
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc-req",)
+
+
+@pytest.mark.asyncio
+async def test_no_calibration_reader_matches_slice_7_request_only() -> None:
+    request_examples = (_anchor("oc-req", CalibrationLabel.OVERCLAIM),)
+    result = await run_content_ops_review(
+        _request(adversarial_passes=_OVERCLAIM_PASS, calibration_examples=request_examples),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc-req",)
+
+
+@pytest.mark.asyncio
+async def test_bound_tenant_review_threads_calibration_reader() -> None:
+    reader = _CalibrationReader((_anchor("oc-server", CalibrationLabel.OVERCLAIM),))
+    result = await run_content_ops_review_for_bound_tenant(
+        _request(adversarial_passes=_OVERCLAIM_PASS),
+        account_resolver=_AccountResolver("acct-1"),
+        registry_reader=_reader(),
+        calibration_reader=reader,
+    )
+    assert tuple(a.example_id for a in result.calibration_anchors) == ("oc-server",)
+    assert reader.scopes == [TenantScope(account_id="acct-1")]

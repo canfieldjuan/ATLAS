@@ -36,6 +36,7 @@ from .._content_ops_claim_registry import ContentOpsClaimRegistryRepository
 from .._content_ops_review_workflow import (
     ContentOpsReviewRequest,
     ContentOpsAccountResolver,
+    TenantCalibrationLibraryReader,
     TenantClaimRegistryReader,
     run_content_ops_review_for_bound_tenant,
 )
@@ -62,6 +63,7 @@ _PLACEHOLDER_HTTP_AUTH_TOKENS = {
 }
 _MALFORMED_COVERAGE_RULE_PREFIX = "MALFORMED-COVERAGE"
 _registry_reader_override: TenantClaimRegistryReader | None = None
+_calibration_reader_override: TenantCalibrationLibraryReader | None = None
 _account_resolver_override: ContentOpsAccountResolver | None = None
 _oauth_provider = None
 _QUALITY_FINDING_SCHEMA: dict[str, Any] = {
@@ -382,6 +384,7 @@ async def verify_draft(
         ),
         account_resolver=_get_account_resolver(),
         registry_reader=_get_registry_reader(),
+        calibration_reader=_get_calibration_reader(),
     )
     return result.as_dict()
 
@@ -646,6 +649,27 @@ def _get_registry_reader() -> TenantClaimRegistryReader:
     from ..storage.database import get_db_pool
 
     return ContentOpsClaimRegistryRepository(pool=get_db_pool())
+
+
+class _EmptyCalibrationLibraryReader:
+    """No-op calibration reader: no server-side anchors until persistence lands.
+
+    Slice A wires the read seam end to end; the Postgres-backed repository that
+    actually returns tenant anchors is the next slice. Until then this default
+    returns nothing, so verify behaves exactly as the request-supplied path.
+    """
+
+    async def list_calibration_examples(self, *, scope: Any) -> tuple[Any, ...]:
+        return ()
+
+
+_empty_calibration_reader = _EmptyCalibrationLibraryReader()
+
+
+def _get_calibration_reader() -> TenantCalibrationLibraryReader:
+    if _calibration_reader_override is not None:
+        return _calibration_reader_override
+    return _empty_calibration_reader
 
 
 def _rule_packet(value: Any) -> RulePacketVersions:

@@ -1,6 +1,6 @@
 # Plan archive index
 
-997 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+998 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -230,6 +230,7 @@
 - [PR-Content-Ops-Consumed-Reasoning-Remaining-Assets](archive/PR-Content-Ops-Consumed-Reasoning-Remaining-Assets.md)
 - [PR-Content-Ops-Content-PR](archive/PR-Content-Ops-Content-PR.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Contract-Tests](archive/PR-Content-Ops-Contract-Tests.md)
+- [PR-Content-Ops-Corroboration-Surfacing](archive/PR-Content-Ops-Corroboration-Surfacing.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-DB-Reasoning-Hardening](archive/PR-Content-Ops-DB-Reasoning-Hardening.md)
 - [PR-Content-Ops-DB-Reasoning-Smoke](archive/PR-Content-Ops-DB-Reasoning-Smoke.md)
 - [PR-Content-Ops-DB-Reasoning-Sweeper](archive/PR-Content-Ops-DB-Reasoning-Sweeper.md)
