@@ -810,7 +810,7 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
     assert "markdown" not in step["result"]
     assert "faq_result" not in step["result"]
     gated_payload = json.dumps(step["result"], sort_keys=True)
-    assert "Open Analytics" in gated_payload
+    assert "Open Analytics" not in gated_payload
     assert "ticket-export-1" not in gated_payload
     assert "evidence_quotes" not in gated_payload
 
@@ -936,7 +936,6 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
     router = create_content_ops_control_surface_router(
         config=ContentOpsControlSurfaceApiConfig(
             deflection_snapshot_top_n=2,
-            deflection_snapshot_teaser_preview_count=1,
         ),
         execution_services_provider=lambda: ContentOpsExecutionServices(
             faq_deflection_report=FAQDeflectionReportService(),
@@ -1028,20 +1027,8 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
     }
     assert len(snapshot["top_questions"]) == 2
     assert [question["ticket_count"] for question in snapshot["top_questions"]] == [1, 1]
-    assert snapshot["locked_questions"] == [
-        {"rank": 3, "ticket_count": 1},
-        {"rank": 4, "ticket_count": 1},
-    ]
-    assert snapshot["teaser"]["full_answer"]["answer_evidence_status"] == (
-        "resolution_evidence"
-    )
-    assert snapshot["teaser"]["full_answer"]["resolution_evidence_scope"] == "scoped"
-    assert snapshot["teaser"]["full_answer"]["rank"] == 1
-    assert len(snapshot["teaser"]["previews"]) == 1
-    assert snapshot["teaser"]["previews"][0]["rank"] == 2
-    assert snapshot["teaser"]["previews"][0]["body_withheld"] is True
-    assert "answer" not in snapshot["teaser"]["previews"][0]
-    assert "steps" not in snapshot["teaser"]["previews"][0]
+    assert "locked_questions" not in snapshot
+    assert "teaser" not in snapshot
     snapshot_payload = json.dumps(snapshot, sort_keys=True)
     visible_answer_count = sum(
         answer in snapshot_payload
@@ -1052,7 +1039,7 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
             "Create the replacement token",
         )
     )
-    assert visible_answer_count == 1
+    assert visible_answer_count == 0
     assert "resolution_text" not in snapshot_payload
     assert "ticket-token-1" not in snapshot_payload
     assert "source_ids" not in snapshot_payload

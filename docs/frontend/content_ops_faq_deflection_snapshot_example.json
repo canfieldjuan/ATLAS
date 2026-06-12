@@ -1,5 +1,4 @@
 {
-  "locked_questions": [],
   "summary": {
     "drafted_answer_count": 1,
     "generated": 2,
@@ -10,22 +9,6 @@
     "source_window_days": 15,
     "support_ticket_resolution_evidence_count": 1,
     "support_ticket_resolution_evidence_present": true
-  },
-  "teaser": {
-    "full_answer": {
-      "answer": "To resolve this, open Analytics, choose Attribution, then click Download report.",
-      "answer_evidence_status": "resolution_evidence",
-      "question": "How do I export attribution reports?",
-      "rank": 1,
-      "resolution_evidence_scope": "scoped",
-      "source_count": 2,
-      "steps": [
-        "Open Analytics, choose Attribution, then click Download report.",
-        "If it still does not work, contact support at https://example.com/support and include the cited ticket details."
-      ],
-      "weighted_frequency": 2
-    },
-    "previews": []
   },
   "top_questions": [
     {

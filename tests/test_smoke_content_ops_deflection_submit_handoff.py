@@ -35,7 +35,6 @@ SNAPSHOT = {
             "customer_wording": "How do I export reports?",
         }
     ],
-    "locked_questions": [{"rank": 2, "ticket_count": 1}],
 }
 
 

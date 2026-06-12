@@ -2788,10 +2788,9 @@ async def test_execute_generation_route_returns_snapshot_for_unpaid_deflection_r
     assert result["snapshot"]["summary"]["repeat_ticket_count"] == 2
     assert result["snapshot"]["top_questions"][0]["rank"] == 1
     assert result["snapshot"]["top_questions"][0]["ticket_count"] == 1
-    assert result["snapshot"]["locked_questions"] == []
-    assert result["snapshot"]["teaser"]["full_answer"]["answer"] == (
-        "To resolve this, open Analytics and download the report."
-    )
+    assert "locked_questions" not in result["snapshot"]
+    assert "teaser" not in result["snapshot"]
+    assert "To resolve this, open Analytics and download the report." not in encoded
     assert "markdown" not in result
     assert "faq_result" not in result
     assert "ticket-export-1" not in encoded
@@ -4406,14 +4405,6 @@ def test_content_ops_config_rejects_invalid_faq_execute_row_limit():
 def test_content_ops_config_rejects_invalid_ingestion_import_concurrency():
     with pytest.raises(ValueError, match="ingestion_import_max_concurrency must be positive"):
         ContentOpsControlSurfaceApiConfig(ingestion_import_max_concurrency=0)
-
-
-def test_content_ops_config_rejects_negative_deflection_teaser_preview_count():
-    with pytest.raises(
-        ValueError,
-        match="deflection_snapshot_teaser_preview_count must be non-negative",
-    ):
-        ContentOpsControlSurfaceApiConfig(deflection_snapshot_teaser_preview_count=-1)
 
 
 def test_content_ops_config_rejects_invalid_falsification_rules_shape():

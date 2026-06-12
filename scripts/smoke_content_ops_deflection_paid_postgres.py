@@ -274,7 +274,6 @@ def _smoke_payload(request_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
                 "customer_wording": "How do I export attribution reports?",
             }
         ],
-        "locked_questions": [],
     }
     artifact = {
         "markdown": "# Smoke FAQ Deflection Report\n\nOpen Analytics and export.",

@@ -34,19 +34,15 @@ type GatedDeflectionExecuteResult = {
 };
 ```
 
-Render `snapshot` on the free page. The only answer body available before
-payment is `snapshot.teaser.full_answer`, when present. Teaser previews are
-body-withheld (`body_withheld: true`) and exist only to show answer structure.
-Do not derive other answer text, evidence, source IDs, or Markdown from this
-object.
+Render `snapshot` on the free page. The snapshot contains no answer bodies;
+all answer text, evidence, source IDs, and Markdown stay behind paid unlock.
+Do not derive any of them from this object.
 
 For Support Tax or FOMO copy, use only raw measured count fields:
-`snapshot.summary.repeat_ticket_count`, visible
-`snapshot.top_questions[].ticket_count`, and locked
-`snapshot.locked_questions[].ticket_count`. `weighted_frequency` is a ranking
+`snapshot.summary.repeat_ticket_count` and visible
+`snapshot.top_questions[].ticket_count`. `weighted_frequency` is a ranking
 score, not a customer-specific ticket count; do not use it for spend
-calculations or projections. `locked_questions` intentionally exposes only
-rank and ticket count, with question text withheld until paid unlock.
+calculations or projections.
 
 For period-normalized Support Tax copy, use
 `snapshot.summary.source_date_start`, `snapshot.summary.source_date_end`, and
@@ -106,11 +102,6 @@ Responses:
 
 - `200`: `DeflectionSnapshot`
 - `404`: no report exists for this `request_id` in the authenticated account
-
-The snapshot teaser is bounded and fail-closed: at most one full scoped
-resolution-backed answer plus configured body-withheld previews. When no item
-has scoped resolution evidence, `teaser.full_answer` is `null` and previews are
-empty.
 
 The authenticated ATLAS scope supplies `account_id`; do not put `account_id` in
 the path or query string.

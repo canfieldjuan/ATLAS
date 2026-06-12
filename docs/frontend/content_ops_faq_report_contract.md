@@ -91,8 +91,6 @@ type DeflectionSnapshot = {
     source_window_days?: number; // inclusive day count, only when coverage is complete
   };
   top_questions: DeflectionSnapshotQuestion[];
-  locked_questions: DeflectionSnapshotLockedQuestion[];
-  teaser: DeflectionSnapshotTeaser;
 };
 
 type DeflectionSnapshotQuestion = {
@@ -102,53 +100,16 @@ type DeflectionSnapshotQuestion = {
   weighted_frequency: number;
   customer_wording: string;
 };
-
-type DeflectionSnapshotLockedQuestion = {
-  rank: number;
-  ticket_count: number;
-};
-
-type DeflectionSnapshotTeaser = {
-  full_answer: DeflectionSnapshotFullAnswer | null;
-  previews: DeflectionSnapshotAnswerPreview[];
-};
-
-type DeflectionSnapshotFullAnswer = {
-  rank: number;
-  question: string;
-  answer: string;
-  steps: string[];
-  answer_evidence_status: "resolution_evidence";
-  resolution_evidence_scope: "scoped";
-  weighted_frequency: number;
-  source_count: number;
-};
-
-type DeflectionSnapshotAnswerPreview = {
-  rank: number;
-  question: string;
-  answer_evidence_status: "resolution_evidence";
-  resolution_evidence_scope: "scoped";
-  weighted_frequency: number;
-  step_count: number;
-  source_count: number;
-  body_withheld: true;
-};
 ```
 
 This shape intentionally excludes paid deliverable fields:
 
 - no `markdown`
 - no `faq_result`
-- no answer text or `steps` outside `teaser.full_answer`
+- no answer text or `steps`
 - no `evidence_quotes`
 - no `source_ids`
 - no vocabulary term mappings
-- no locked question text; `locked_questions` contains only rank and raw
-  ticket count
-
-The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
-eligible. Preview entries never include answer body text.
 
 `ticket_count` and `summary.repeat_ticket_count` are raw measured counts from
 the report items/source rows. `weighted_frequency` is ranking metadata only and
@@ -272,9 +233,8 @@ type TicketFAQSearchResponse = {
 - Use `items` for ranked cards or sections, and `markdown` for the full report.
 - For `faq_deflection_report`, render top-level `markdown` as the deliverable.
   Use `summary` for proof badges and `faq_result` for drill-down cards.
-- For unpaid deflection results, render only `DeflectionSnapshot.summary`,
-  `DeflectionSnapshot.top_questions`, `DeflectionSnapshot.locked_questions`,
-  and `DeflectionSnapshot.teaser`. Do not infer answer text, evidence, or
+- For unpaid deflection results, render only `DeflectionSnapshot.summary` and
+  `DeflectionSnapshot.top_questions`. Do not infer answer text, evidence, or
   source IDs from the snapshot.
 - Show `source_count`, `ticket_source_count`, and `output_checks` as proof badges.
 - Show `answer_evidence_status` near steps. `draft_needs_review` means the

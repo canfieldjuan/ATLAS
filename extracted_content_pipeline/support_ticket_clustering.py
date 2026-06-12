@@ -397,20 +397,6 @@ def support_ticket_cluster_hint(row: Mapping[str, Any]) -> SupportTicketClusterH
     )
 
 
-def assign_support_ticket_clusters(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    max_token_set_rows: int | None = None,
-) -> tuple[dict[str, Any], ...]:
-    """Return rows annotated with stable deterministic support-ticket clusters."""
-
-    annotated, _diagnostics = assign_support_ticket_clusters_with_diagnostics(
-        rows,
-        max_token_set_rows=max_token_set_rows,
-    )
-    return annotated
-
-
 def assign_support_ticket_clusters_with_diagnostics(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -530,7 +516,8 @@ def support_ticket_cluster_quality(rows: Sequence[Mapping[str, Any]]) -> dict[st
 def _ensure_clustered(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     if any(support_ticket_plain_text(row.get("support_ticket_cluster")) for row in rows):
         return tuple(dict(row) for row in rows)
-    return assign_support_ticket_clusters(rows)
+    annotated, _diagnostics = assign_support_ticket_clusters_with_diagnostics(rows)
+    return annotated
 
 
 def _bucket_for_hint(
@@ -684,7 +671,6 @@ def _compact_key(value: Any) -> str:
 __all__ = [
     "MAX_TOKEN_SET_CLUSTER_ROWS",
     "SupportTicketClusterHint",
-    "assign_support_ticket_clusters",
     "assign_support_ticket_clusters_with_diagnostics",
     "support_ticket_cluster_hint",
     "support_ticket_cluster_quality",

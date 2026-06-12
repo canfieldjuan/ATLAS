@@ -70,7 +70,6 @@ from ..control_surfaces import (
 from ..generation_plan import build_generation_plan, build_generation_plan_from_mapping
 from ..faq_deflection_report import (
     DEFAULT_DEFLECTION_SNAPSHOT_TOP_N,
-    DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT,
     build_deflection_snapshot,
 )
 from ..landing_page_input_contract import landing_page_seo_geo_aeo_input_contracts
@@ -355,9 +354,6 @@ class ContentOpsControlSurfaceApiConfig:
     execute_max_concurrency: int = 8
     faq_execute_max_source_material_rows: int = _MAX_INGESTION_ROWS
     deflection_snapshot_top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N
-    deflection_snapshot_teaser_preview_count: int = (
-        DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT
-    )
     deflection_checkout_amount_cents: int = 150000
     deflection_checkout_allowed_amount_cents: str = ""
     deflection_checkout_currency: str = "usd"
@@ -411,10 +407,6 @@ class ContentOpsControlSurfaceApiConfig:
             )
         if self.deflection_snapshot_top_n <= 0:
             raise ValueError("deflection_snapshot_top_n must be positive")
-        if self.deflection_snapshot_teaser_preview_count < 0:
-            raise ValueError(
-                "deflection_snapshot_teaser_preview_count must be non-negative"
-            )
         if self.deflection_checkout_amount_cents < 0:
             raise ValueError("deflection_checkout_amount_cents cannot be negative")
         if self.ingestion_import_max_concurrency <= 0:
@@ -1192,9 +1184,6 @@ def create_content_ops_control_surface_router(
                 scope=scope,
                 request_id=request_id,
                 top_n=resolved_config.deflection_snapshot_top_n,
-                teaser_preview_count=(
-                    resolved_config.deflection_snapshot_teaser_preview_count
-                ),
                 preview_summary_metadata=_deflection_resolution_preview_summary(
                     payload_mapping
                 ),
@@ -2772,7 +2761,6 @@ async def _gate_deflection_report_artifacts(
     scope: TenantScope | None,
     request_id: str,
     top_n: int,
-    teaser_preview_count: int,
     preview_summary_metadata: Mapping[str, Any] | None = None,
     delivery_email: str | None = None,
 ) -> dict[str, Any]:
@@ -2798,7 +2786,6 @@ async def _gate_deflection_report_artifacts(
             snapshot = build_deflection_snapshot(
                 artifact,
                 top_n=top_n,
-                teaser_preview_count=teaser_preview_count,
             ).as_dict()
             if preview_summary_metadata:
                 snapshot_summary = dict(snapshot.get("summary") or {})

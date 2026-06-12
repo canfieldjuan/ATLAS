@@ -14,7 +14,6 @@ import pytest
 from extracted_content_pipeline import support_ticket_clustering as clustering
 from extracted_content_pipeline.support_ticket_clustering import (
     MAX_TOKEN_SET_CLUSTER_ROWS,
-    assign_support_ticket_clusters,
     assign_support_ticket_clusters_with_diagnostics,
     support_ticket_cluster_quality,
 )
@@ -76,15 +75,6 @@ def test_token_set_rows_above_threshold_skip_preview_but_keep_rows() -> None:
     quality = support_ticket_cluster_quality(annotated)
     assert quality["uncategorized_row_count"] == 4
     assert quality["clustered_row_count"] == 1
-
-
-def test_assign_support_ticket_clusters_keeps_plain_signature() -> None:
-    rows = [_token_set_row(index) for index in range(4)]
-
-    annotated = assign_support_ticket_clusters(rows, max_token_set_rows=3)
-
-    assert len(annotated) == 4
-    assert all("support_ticket_cluster" not in row for row in annotated)
 
 
 def test_package_surfaces_cluster_preview_skip_warning(

@@ -352,13 +352,6 @@ def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
                 "customer_wording": "How do I export attribution reports?",
             }
         ],
-        "locked_questions": [
-            {
-                "rank": 2,
-                "ticket_count": 1,
-            }
-        ],
-        "teaser": {"full_answer": None, "previews": []},
     }
     assert "Open Analytics" not in encoded
     assert "ticket-export-1" not in encoded
@@ -404,7 +397,7 @@ def test_deflection_snapshot_marks_question_only_exports_absent_resolution_evide
     assert snapshot["summary"]["no_proven_answer_count"] == 2
 
 
-def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> None:
+def test_deflection_snapshot_counts_are_raw_and_rows_beyond_top_n_are_omitted() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
         source_count=10,
@@ -448,10 +441,7 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
             "customer_wording": "",
         }
     ]
-    assert snapshot["locked_questions"] == [
-        {"rank": 2, "ticket_count": 2},
-        {"rank": 3, "ticket_count": 0},
-    ]
+    assert "locked_questions" not in snapshot
     assert "Can I enable SSO?" not in encoded
     assert "Weighted score is not a ticket count" not in encoded
     assert "ticket-sso-1" not in encoded
@@ -551,187 +541,32 @@ def test_deflection_snapshot_omits_contradictory_summary_date_window() -> None:
     assert "source_window_days" not in snapshot["summary"]
 
 
-def test_deflection_snapshot_includes_bounded_fail_closed_teaser() -> None:
-    result = TicketFAQMarkdownResult(
-        markdown="# FAQ",
-        source_count=6,
-        ticket_source_count=6,
-        output_checks={"condensed": True},
-        items=(
-            _scoped_answer_item(1, "How do I export reports?", "Locked top answer one"),
-            _scoped_answer_item(2, "How do I update billing?", "Locked top answer two"),
-            _scoped_answer_item(3, "How do I enable SSO?", "Locked top answer three"),
-            _scoped_answer_item(
-                4,
-                "How do we rotate API tokens?",
-                "Create the replacement token, deploy it, then revoke the old token.",
-                step="Create the replacement token before revoking the old one.",
-            ),
-            {
-                **_scoped_answer_item(
-                    5,
-                    "Why is the dashboard stale?",
-                    "Mismatched answer must stay locked.",
-                ),
-                "resolution_evidence_scope": "scope_mismatch",
-            },
-            _scoped_answer_item(6, "How do I add a teammate?", "Tail answer locked"),
-        ),
-    )
-
-    snapshot = build_deflection_snapshot(
-        build_deflection_report_artifact(result),
-        top_n=3,
-        teaser_preview_count=2,
-    ).as_dict()
-    encoded = json.dumps(snapshot, sort_keys=True)
-
-    assert snapshot["summary"]["generated"] == 6
-    assert len(snapshot["top_questions"]) == 3
-    assert snapshot["teaser"]["full_answer"] == {
-        "rank": 1,
-        "question": "How do I export reports?",
-        "answer": "Locked top answer one",
-        "steps": ["Step for How do I export reports?"],
-        "answer_evidence_status": "resolution_evidence",
-        "resolution_evidence_scope": "scoped",
-        "weighted_frequency": 1,
-        "source_count": 1,
-    }
-    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [2, 3]
-    for preview in snapshot["teaser"]["previews"]:
-        assert preview["body_withheld"] is True
-        assert preview["answer_evidence_status"] == "resolution_evidence"
-        assert preview["resolution_evidence_scope"] == "scoped"
-        assert "answer" not in preview
-        assert "steps" not in preview
-
-    assert "Locked top answer one" in encoded
-    assert "Locked top answer two" not in encoded
-    assert "Locked top answer three" not in encoded
-    assert "Mismatched answer must stay locked" not in encoded
-    assert "Tail answer locked" not in encoded
-    assert "ticket-" not in encoded
-    assert "evidence_quotes" not in encoded
-    assert "source_ids" not in encoded
-
-
-def test_deflection_snapshot_teaser_falls_through_to_next_eligible_rank() -> None:
+def test_deflection_snapshot_never_exposes_answer_bodies() -> None:
     result = TicketFAQMarkdownResult(
         markdown="# FAQ",
         source_count=3,
         ticket_source_count=3,
         output_checks={"condensed": True},
         items=(
-            {
-                **_scoped_answer_item(
-                    1,
-                    "How do I export reports?",
-                    "Blocked top answer must not leak.",
-                ),
-                "answer_evidence_status": "draft_needs_review",
-            },
-            _scoped_answer_item(2, "How do I update billing?", "Second answer"),
-            _scoped_answer_item(3, "How do I enable SSO?", "Third answer"),
+            _scoped_answer_item(1, "How do I export reports?", "Top answer body"),
+            _scoped_answer_item(2, "How do I update billing?", "Second answer body"),
+            _scoped_answer_item(3, "How do I enable SSO?", "Third answer body"),
         ),
     )
 
     snapshot = build_deflection_snapshot(
         build_deflection_report_artifact(result),
         top_n=2,
-        teaser_preview_count=1,
     ).as_dict()
     encoded = json.dumps(snapshot, sort_keys=True)
 
-    assert snapshot["teaser"]["full_answer"] == {
-        "rank": 2,
-        "question": "How do I update billing?",
-        "answer": "Second answer",
-        "steps": ["Step for How do I update billing?"],
-        "answer_evidence_status": "resolution_evidence",
-        "resolution_evidence_scope": "scoped",
-        "weighted_frequency": 2,
-        "source_count": 1,
-    }
-    assert [preview["rank"] for preview in snapshot["teaser"]["previews"]] == [3]
-    assert "Blocked top answer must not leak" not in encoded
-    assert "Third answer" not in encoded
-
-
-def test_deflection_snapshot_omits_full_teaser_rank_from_locked_rows() -> None:
-    result = TicketFAQMarkdownResult(
-        markdown="# FAQ",
-        source_count=4,
-        ticket_source_count=4,
-        output_checks={"condensed": True},
-        items=(
-            {
-                **_scoped_answer_item(
-                    1,
-                    "How do I export reports?",
-                    "Blocked top answer must not leak.",
-                ),
-                "answer_evidence_status": "draft_needs_review",
-            },
-            {
-                **_scoped_answer_item(
-                    2,
-                    "How do I update billing?",
-                    "Blocked second answer must not leak.",
-                ),
-                "answer_evidence_status": "draft_needs_review",
-            },
-            _scoped_answer_item(3, "How do I enable SSO?", "Third answer"),
-            _scoped_answer_item(4, "How do I rotate tokens?", "Fourth answer"),
-        ),
-    )
-
-    snapshot = build_deflection_snapshot(
-        build_deflection_report_artifact(result),
-        top_n=1,
-        teaser_preview_count=1,
-    ).as_dict()
-    encoded = json.dumps(snapshot, sort_keys=True)
-
-    assert snapshot["teaser"]["full_answer"]["rank"] == 3
-    assert snapshot["locked_questions"] == [
-        {"rank": 2, "ticket_count": 1},
-        {"rank": 4, "ticket_count": 1},
-    ]
-    assert "Third answer" in encoded
-    assert "Blocked top answer must not leak" not in encoded
-    assert "Blocked second answer must not leak" not in encoded
-    assert "Fourth answer" not in encoded
-
-
-def test_deflection_snapshot_teaser_empty_when_no_scoped_resolution_evidence() -> None:
-    result = TicketFAQMarkdownResult(
-        markdown="# FAQ",
-        source_count=2,
-        ticket_source_count=2,
-        output_checks={"condensed": True},
-        items=(
-            {
-                **_scoped_answer_item(1, "How do I export reports?", "Locked answer"),
-                "resolution_evidence_scope": "scope_mismatch",
-            },
-            {
-                "question": "Scoped status without answer body stays hidden",
-                "weighted_frequency": 1,
-                "answer": "",
-                "answer_evidence_status": "resolution_evidence",
-                "resolution_evidence_scope": "scoped",
-                "source_ids": ("ticket-2",),
-            },
-        ),
-    )
-
-    snapshot = build_deflection_snapshot(build_deflection_report_artifact(result)).as_dict()
-    encoded = json.dumps(snapshot, sort_keys=True)
-
-    assert snapshot["teaser"] == {"full_answer": None, "previews": []}
-    assert "Locked answer" not in encoded
-    assert "ticket-1" not in encoded
+    assert set(snapshot) == {"summary", "top_questions"}
+    assert "Top answer body" not in encoded
+    assert "Second answer body" not in encoded
+    assert "Third answer body" not in encoded
+    assert "ticket-" not in encoded
+    assert "evidence_quotes" not in encoded
+    assert "source_ids" not in encoded
 
 
 def test_deflection_snapshot_rejects_non_positive_top_n() -> None:
@@ -745,22 +580,6 @@ def test_deflection_snapshot_rejects_non_positive_top_n() -> None:
 
     with pytest.raises(ValueError, match="top_n must be positive"):
         build_deflection_snapshot(build_deflection_report_artifact(result), top_n=0)
-
-
-def test_deflection_snapshot_rejects_negative_teaser_preview_count() -> None:
-    result = TicketFAQMarkdownResult(
-        markdown="# FAQ",
-        source_count=0,
-        ticket_source_count=0,
-        output_checks={},
-        items=(),
-    )
-
-    with pytest.raises(ValueError, match="teaser_preview_count must be non-negative"):
-        build_deflection_snapshot(
-            build_deflection_report_artifact(result),
-            teaser_preview_count=-1,
-        )
 
 
 def _scoped_answer_item(

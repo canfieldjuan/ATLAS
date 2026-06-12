@@ -197,8 +197,6 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
     assert set(payload) == {
         "summary",
         "top_questions",
-        "locked_questions",
-        "teaser",
     }
     assert set(payload["summary"]) == {
         "generated",
@@ -219,37 +217,9 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
             "weighted_frequency",
             "customer_wording",
         }
-    for question in payload["locked_questions"]:
-        assert set(question) == {"rank", "ticket_count"}
-    assert set(payload["teaser"]) == {"full_answer", "previews"}
-    if payload["teaser"]["full_answer"] is not None:
-        assert set(payload["teaser"]["full_answer"]) == {
-            "rank",
-            "question",
-            "answer",
-            "steps",
-            "answer_evidence_status",
-            "resolution_evidence_scope",
-            "weighted_frequency",
-            "source_count",
-        }
-        assert (
-            payload["teaser"]["full_answer"]["answer_evidence_status"]
-            == "resolution_evidence"
-        )
-        assert payload["teaser"]["full_answer"]["resolution_evidence_scope"] == "scoped"
-    for preview in payload["teaser"]["previews"]:
-        assert set(preview) == {
-            "rank",
-            "question",
-            "answer_evidence_status",
-            "resolution_evidence_scope",
-            "weighted_frequency",
-            "step_count",
-            "source_count",
-            "body_withheld",
-        }
-        assert preview["body_withheld"] is True
+    assert '"answer"' not in encoded
+    assert "teaser" not in encoded
+    assert "locked_questions" not in encoded
     assert "markdown" not in encoded
     assert "faq_result" not in encoded
     assert "source_ids" not in encoded
@@ -280,8 +250,7 @@ def test_content_ops_faq_deflection_checkout_contract_pins_paid_handoff() -> Non
         "account_id: string;",
         "request_id: string;",
         "GET /content-ops/deflection-reports/{request_id}/snapshot",
-        "snapshot.teaser.full_answer",
-        "body_withheld: true",
+        "The snapshot contains no answer bodies",
         "GET /content-ops/deflection-reports/{request_id}/artifact",
         "csv_file: File;",
         "do not expose raw support-ticket CSVs through a",
