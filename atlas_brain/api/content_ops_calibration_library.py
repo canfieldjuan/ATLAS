@@ -27,11 +27,6 @@ from ..auth.dependencies import AuthUser
 PoolProvider = Callable[[], Any | Awaitable[Any]]
 AuthDependency = Callable[..., AuthUser | Awaitable[AuthUser]]
 
-_LABELS = [
-    "approved", "rejected", "borderline", "known_defect", "good_voice",
-    "voice_drift", "overclaim", "weak_persuasion", "strong_persuasion",
-]
-
 
 class UpsertCalibrationExampleRequest(BaseModel):
     example_id: str = Field(..., min_length=1, max_length=160)
