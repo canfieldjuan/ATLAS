@@ -1341,3 +1341,32 @@ def test_verdict_text_marks_blocking_comment() -> None:
     text = adapter._verdict_text(payload)
     assert "[compliance] [BLOCKING] missing disclaimer" in text
     assert "Calibration anchors:" not in text
+
+
+def test_verdict_text_renders_messageless_blocking_comment_with_placeholder() -> None:
+    # A blocking comment with no message drove the verdict, so it must be shown
+    # (reviewer NIT on #1490, merged before the fix landed): rendered with a
+    # placeholder + BLOCKING marker.
+    payload = {
+        "decision": "revision_required",
+        "reasons": ["1 blocking comment(s)"],
+        "content_pr": {"asset_id": "d1", "comments": [
+            {"category": "compliance", "message": "", "evidence": "", "blocking": True},
+        ]},
+        "calibration_anchors": [],
+    }
+    text = adapter._verdict_text(payload)
+    assert "Objections:" in text
+    assert "[compliance] [BLOCKING] (no message provided)" in text
+
+
+def test_verdict_text_still_drops_messageless_nonblocking_comment() -> None:
+    payload = {
+        "decision": "approved",
+        "reasons": [],
+        "content_pr": {"asset_id": "d1", "comments": [
+            {"category": "nit", "message": "", "evidence": "", "blocking": False},
+        ]},
+        "calibration_anchors": [],
+    }
+    assert adapter._comment_lines(payload) == []

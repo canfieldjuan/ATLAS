@@ -482,7 +482,12 @@ def _comment_lines(payload: dict[str, Any]) -> list[str]:
             continue
         message = _clean(comment.get("message"))
         if not message:
-            continue
+            # A message-less *blocking* comment still drove the verdict, so it
+            # must be marked, not hidden (the verdict-render invariant); only
+            # message-less non-blocking comments are decoration to skip.
+            if comment.get("blocking") is not True:
+                continue
+            message = "(no message provided)"
         category = _clean(comment.get("category")) or "comment"
         marker = " [BLOCKING]" if comment.get("blocking") is True else ""
         evidence = _clean(comment.get("evidence"))
