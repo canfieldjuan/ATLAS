@@ -28,7 +28,10 @@ except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
     from enum import Enum
 
     class StrEnum(str, Enum):
-        pass
+        # Match CPython's real StrEnum: str(member) is the value, so a member
+        # formatted via str()/f-string yields the value, not the class-qualified
+        # name, on the 3.10 fallback path too.
+        __str__ = str.__str__
 
 from .review_contract import ExceptionRecord, FailureCategory, ReviewDecision
 

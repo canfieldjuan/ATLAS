@@ -28,17 +28,6 @@ register under `docs/technical-debt/`.
 - Found during:
 ```
 
-## 2026-06-11
-
-### StrEnum 3.10 fallback shims unhardened in review_contract.py and calibration_library.py
-- File/location: extracted_content_pipeline/review_contract.py, extracted_content_pipeline/calibration_library.py (the `class StrEnum(str, Enum): pass` blocks)
-- Description: adversarial_pass.py sets `__str__ = str.__str__` on its 3.10 fallback shim so members format as their value; the two sibling modules still use the bare `pass` form.
-- Why it matters: inert today (neither module interpolates an enum member into output), but if either later formats a label via str()/f-string, the 3.10 path would emit the class-qualified name (`CalibrationLabel.APPROVED`) instead of `approved`. Harmonizing all three removes the trap class-wide.
-- Effort: S
-- Category: tech-debt
-- Owner/session: content-ops/review-contract
-- Found during: PR #1487 review (slice 5), parked per operator into slice 6
-
 ## Parked Items
 
 ## 2026-06-07
