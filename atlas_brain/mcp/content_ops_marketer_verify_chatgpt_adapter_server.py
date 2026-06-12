@@ -465,10 +465,20 @@ def _verdict_text(payload: dict[str, Any]) -> str:
     objections = _comment_lines(payload)
     if objections:
         sections.append("Objections:\n- " + "\n- ".join(objections))
+    corroborated = _corroborated_lines(payload)
+    if corroborated:
+        sections.append("Corroborated objections (raised by 2+ passes):\n- " + "\n- ".join(corroborated))
     anchors = _anchor_lines(payload)
     if anchors:
         sections.append("Calibration anchors:\n- " + "\n- ".join(anchors))
     return "\n".join(sections)
+
+
+def _corroborated_lines(payload: dict[str, Any]) -> list[str]:
+    categories = payload.get("corroborated_objection_categories")
+    if not isinstance(categories, list):
+        return []
+    return [_clean(category) for category in categories if _clean(category)]
 
 
 def _comment_lines(payload: dict[str, Any]) -> list[str]:

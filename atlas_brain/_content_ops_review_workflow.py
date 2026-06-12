@@ -18,6 +18,7 @@ from typing import Any, Mapping, Protocol, Sequence
 from extracted_content_pipeline.adversarial_pass import (
     AdversarialPass,
     comment_from_finding,
+    corroborated_categories_across,
 )
 from extracted_content_pipeline.calibration_anchors import anchors_for_finding_categories
 from extracted_content_pipeline.calibration_library import (
@@ -113,6 +114,7 @@ class ContentOpsReviewResult:
     mapped_claims: tuple[MappedClaim, ...]
     content_pr: ContentPR
     calibration_anchors: tuple[CalibrationExample, ...] = ()
+    corroborated_objection_categories: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible shape for future transport wrappers."""
@@ -137,6 +139,7 @@ class ContentOpsReviewResult:
             "calibration_anchors": [
                 _calibration_anchor_as_dict(anchor) for anchor in self.calibration_anchors
             ],
+            "corroborated_objection_categories": list(self.corroborated_objection_categories),
         }
 
 
@@ -175,6 +178,7 @@ async def run_content_ops_review(
         mapped_claims=mapped_claims,
         content_pr=content_pr,
         calibration_anchors=_calibration_anchors_for_request(request),
+        corroborated_objection_categories=_corroborated_categories_for_request(request),
     )
 
 
@@ -195,7 +199,26 @@ def _blocked_result(
         mapped_claims=(),
         content_pr=content_pr,
         calibration_anchors=_calibration_anchors_for_request(request),
+        corroborated_objection_categories=_corroborated_categories_for_request(request),
     )
+
+
+def _corroborated_categories_for_request(
+    request: ContentOpsReviewRequest,
+) -> tuple[str, ...]:
+    """Objection categories raised by two or more independent adversarial passes.
+
+    The strongest signal in the verify result: when two passes independently
+    flag the same failure mode, the editor should weight that objection highest.
+    Returned as sorted category values for a stable, JSON-friendly surface.
+    """
+
+    passes = tuple(
+        pass_ for pass_ in _items(request.adversarial_passes)
+        if isinstance(pass_, AdversarialPass)
+    )
+    corroborated = corroborated_categories_across(passes)
+    return tuple(sorted(_value(category) for category in corroborated))
 
 
 def _calibration_anchors_for_request(
