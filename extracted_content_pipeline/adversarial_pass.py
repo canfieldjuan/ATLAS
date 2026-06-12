@@ -137,7 +137,14 @@ def corroborated_categories_across(
     if min_passes < 1:
         raise ValueError("min_passes must be >= 1")
     counts: dict[AdversarialFindingCategory, int] = {}
+    seen_pass_ids: set[str] = set()
     for pass_ in passes:
+        # Distinct passes only: a duplicate pass_id (e.g. a client retry that
+        # resends the same pass) is not independent corroboration, so count it
+        # once.
+        if pass_.pass_id in seen_pass_ids:
+            continue
+        seen_pass_ids.add(pass_.pass_id)
         for category in {finding.category for finding in pass_.substantiated()}:
             counts[category] = counts.get(category, 0) + 1
     return frozenset(category for category, count in counts.items() if count >= min_passes)

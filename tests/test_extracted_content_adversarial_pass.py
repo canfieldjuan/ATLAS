@@ -308,3 +308,14 @@ def test_corroborated_across_rejects_bad_min_passes() -> None:
     import pytest as _pytest
     with _pytest.raises(ValueError):
         corroborated_categories_across((), min_passes=0)
+
+
+def test_corroborated_across_dedupes_by_pass_id() -> None:
+    # The same pass resent (duplicate pass_id) is not independent corroboration
+    # (Codex P2 on #1492).
+    one = AdversarialPass(pass_id="a", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+    dup = AdversarialPass(pass_id="a", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+    assert corroborated_categories_across((one, dup)) == frozenset()
+    # A genuinely distinct pass id does corroborate.
+    other = AdversarialPass(pass_id="b", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+    assert corroborated_categories_across((one, other)) == frozenset({AdversarialFindingCategory.OVERCLAIM})
