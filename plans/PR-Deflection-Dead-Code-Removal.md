@@ -53,6 +53,32 @@ Slice phase: Dead-code removal (audit follow-through)
 6. Drop stale `locked_questions` fixture keys from the paid-postgres smoke
    script and submit-handoff test fixture.
 
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] `assign_support_ticket_clusters` no longer exists anywhere in the
+        package, `__all__`, or tests; `_ensure_clustered` produces identical
+        annotations via the diagnostics entry point.
+  - [ ] `DeflectionSnapshot.as_dict()` serializes exactly `summary` and
+        `top_questions`; no `teaser`, `locked_questions`, or answer-body text
+        appears in any snapshot payload, gated execute result, or checked-in
+        example.
+  - [ ] `ContentOpsControlSurfaceApiConfig` no longer accepts or validates
+        `deflection_snapshot_teaser_preview_count`; no caller threads a
+        teaser count.
+  - [ ] Contract docs and `content_ops_faq_deflection_snapshot_example.json`
+        match the producer shape byte-for-byte under the contract-docs test.
+  - [ ] No production behavior changes outside the deflection snapshot
+        projection; the readonly MCP server suite passes unchanged.
+- Affected surfaces: content-ops API response shape (unpaid snapshot),
+  extracted-package public symbols, frontend contract docs, tests, one smoke
+  script. No DB, auth, or scheduler changes.
+- Risk areas: backcompat (removed public symbols and snapshot keys; mitigated
+  by grep-proven zero consumers in #1501/#1502), stale stored snapshot JSONB
+  rows still carrying old keys (no read path selects them).
+- Reviewer rules triggered: R1, R2, R5, R10 (extracted-package + API-surface
+  path triggers), R14.
+
 ### Files touched
 
 - `extracted_content_pipeline/faq_deflection_report.py`
