@@ -25,7 +25,10 @@ except ImportError:  # pragma: no cover - Python 3.10 CI compatibility
     from enum import Enum
 
     class StrEnum(str, Enum):
-        pass
+        # Match CPython's real StrEnum: str(member) is the value, so a member
+        # formatted via str()/f-string yields "fail", not "Decision.FAIL", on
+        # the 3.10 fallback path too.
+        __str__ = str.__str__
 
 
 class RiskTier(StrEnum):
