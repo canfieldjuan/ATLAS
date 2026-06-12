@@ -152,10 +152,17 @@ class _RegistryReader:
         }
 
 
+class _NoCalibrationReader:
+    async def list_calibration_examples(self, *, scope):
+        return ()
+
+
 @pytest.fixture(autouse=True)
 def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify, "_registry_reader_override", None)
-    monkeypatch.setattr(verify, "_calibration_reader_override", None)
+    # Default to a no-op calibration reader so tests do not hit the DB-backed
+    # default; tests exercising server-side anchors set their own override.
+    monkeypatch.setattr(verify, "_calibration_reader_override", _NoCalibrationReader())
     monkeypatch.setattr(verify, "_account_resolver_override", None)
     monkeypatch.setattr(verify, "_oauth_provider", None)
     monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "")
@@ -1428,9 +1435,3 @@ async def test_verify_draft_uses_server_side_calibration_reader_override(
     payload = await verify.verify_draft(**args)
     assert [a["example_id"] for a in payload["calibration_anchors"]] == ["oc-server"]
 
-
-@pytest.mark.asyncio
-async def test_default_calibration_reader_is_empty() -> None:
-    # Until persistence lands, the default reader yields nothing (slice-7 behavior).
-    reader = verify._get_calibration_reader()
-    assert await reader.list_calibration_examples(scope=None) == ()
