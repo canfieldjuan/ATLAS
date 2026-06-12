@@ -111,13 +111,17 @@ alongside the other content-ops admin routers with
 ## Verification
 
 - Reviewer rules triggered: R1, R2, R5, R14.
-- Passed: pytest tests/test_content_ops_claim_registry_api.py -- 14 passed
-  (list, create-201, create-403/400/409, update-200/404, expire-200/404 +
-  default + invalid-date-400, archive-204/404, 401 on bad tenant scope).
+- Passed: pytest tests/test_content_ops_claim_registry_api.py -- 18 passed
+  (list, create-201/403/400/409, update-200/403/404/409, expire-200/403/404 +
+  default + invalid-date-400, archive-204/403/404, 401 on bad tenant scope).
 - Passed: bash scripts/check_ascii_python.sh -- ASCII check passed.
+- Passed: bash scripts/run_extracted_pipeline_checks.sh -- 3890 passed,
+  10 skipped.
 - The new test is enrolled in
   `.github/workflows/atlas_content_ops_review_workflow_checks.yml` (path filter +
   pytest run step), alongside the calibration API test.
+- Passed: bash scripts/local_pr_review.sh --current-pr-body-file
+  tmp/content_ops_claim_registry_admin_write_pr_body.md.
 
 ## Estimated diff size
 
@@ -126,7 +130,7 @@ alongside the other content-ops admin routers with
 | `.github/workflows/atlas_content_ops_review_workflow_checks.yml` | 9 |
 | `atlas_brain/api/__init__.py` | 8 |
 | `atlas_brain/api/content_ops_claim_registry.py` | 257 |
-| `plans/PR-Content-Ops-Claim-Registry-Admin-Write.md` | 130 |
+| `plans/PR-Content-Ops-Claim-Registry-Admin-Write.md` | 136 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_content_ops_claim_registry_api.py` | 240 |
-| **Total** | **645** |
+| `tests/test_content_ops_claim_registry_api.py` | 285 |
+| **Total** | **696** |

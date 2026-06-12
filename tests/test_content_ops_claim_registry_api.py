@@ -122,10 +122,12 @@ def test_list_returns_tenant_claims() -> None:
 
 
 def test_create_requires_admin_role() -> None:
-    resp = _client(user=_user(role="member")).post(
+    pool = _Pool(fetchrow_result=_row())
+    resp = _client(pool=pool, user=_user(role="member")).post(
         "/content-ops/claim-registry", json=_VALID_BODY
     )
     assert resp.status_code == 403
+    assert pool.fetchrow_calls == []
 
 
 def test_create_inserts_and_returns_view() -> None:
@@ -167,6 +169,15 @@ def test_update_missing_row_is_404() -> None:
     assert resp.status_code == 404
 
 
+def test_update_requires_admin_role_before_repo_call() -> None:
+    pool = _Pool(fetchrow_result=_row())
+    resp = _client(pool=pool, user=_user(role="member")).put(
+        f"/content-ops/claim-registry/{uuid.uuid4()}", json=_VALID_BODY
+    )
+    assert resp.status_code == 403
+    assert pool.fetchrow_calls == []
+
+
 def test_update_returns_view_for_existing_row() -> None:
     pool = _Pool(fetchrow_result=_row())
     resp = _client(pool=pool).put(
@@ -174,6 +185,20 @@ def test_update_returns_view_for_existing_row() -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["registry_id"] == "uptime-claim"
+
+
+def test_update_translates_unique_violation_to_409() -> None:
+    class UniqueViolationError(Exception):  # matches asyncpg's class name
+        pass
+
+    class _ConflictPool(_Pool):
+        async def fetchrow(self, query, *args):
+            raise UniqueViolationError()
+
+    resp = _client(pool=_ConflictPool()).put(
+        f"/content-ops/claim-registry/{uuid.uuid4()}", json=_VALID_BODY
+    )
+    assert resp.status_code == 409
 
 
 def test_expire_returns_view_for_existing_row() -> None:
@@ -188,14 +213,25 @@ def test_expire_returns_view_for_existing_row() -> None:
     assert pool.fetchrow_calls[0][2] == date(2026, 6, 12)
 
 
+def test_expire_requires_admin_role_before_repo_call() -> None:
+    pool = _Pool(fetchrow_result=_row())
+    resp = _client(pool=pool, user=_user(role="member")).post(
+        f"/content-ops/claim-registry/{uuid.uuid4()}/expire",
+        json={"expires_on": "2026-06-12"},
+    )
+    assert resp.status_code == 403
+    assert pool.fetchrow_calls == []
+
+
 def test_expire_without_body_defers_to_repo_default() -> None:
     pool = _Pool(fetchrow_result=_row())
     resp = _client(pool=pool).post(
         f"/content-ops/claim-registry/{uuid.uuid4()}/expire"
     )
     assert resp.status_code == 200
-    # No explicit date -> router forwards None and the repo applies its
-    # own default (today). The forwarded value is a real date, not a string.
+    # The router forwards expires_on=None to the repo when no date is given;
+    # the repo resolves that to today() before the DB call, so the value seen
+    # at the fetchrow (DB) boundary is always a real date, never None or a str.
     assert isinstance(pool.fetchrow_calls[0][2], date)
 
 
@@ -223,6 +259,15 @@ def test_delete_archives_and_returns_204() -> None:
         f"/content-ops/claim-registry/{uuid.uuid4()}"
     )
     assert resp.status_code == 204
+
+
+def test_delete_requires_admin_role_before_repo_call() -> None:
+    pool = _Pool(fetchrow_result={"id": uuid.uuid4()})
+    resp = _client(pool=pool, user=_user(role="member")).delete(
+        f"/content-ops/claim-registry/{uuid.uuid4()}"
+    )
+    assert resp.status_code == 403
+    assert pool.fetchrow_calls == []
 
 
 def test_delete_missing_row_is_404() -> None:
