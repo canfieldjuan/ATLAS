@@ -32,6 +32,7 @@ from extracted_content_pipeline.content_pr import (
     RulePacketVersions,
 )
 
+from .._content_ops_calibration_library import ContentOpsCalibrationLibraryRepository
 from .._content_ops_claim_registry import ContentOpsClaimRegistryRepository
 from .._content_ops_review_workflow import (
     ContentOpsReviewRequest,
@@ -651,25 +652,12 @@ def _get_registry_reader() -> TenantClaimRegistryReader:
     return ContentOpsClaimRegistryRepository(pool=get_db_pool())
 
 
-class _EmptyCalibrationLibraryReader:
-    """No-op calibration reader: no server-side anchors until persistence lands.
-
-    Slice A wires the read seam end to end; the Postgres-backed repository that
-    actually returns tenant anchors is the next slice. Until then this default
-    returns nothing, so verify behaves exactly as the request-supplied path.
-    """
-
-    async def list_calibration_examples(self, *, scope: Any) -> tuple[Any, ...]:
-        return ()
-
-
-_empty_calibration_reader = _EmptyCalibrationLibraryReader()
-
-
 def _get_calibration_reader() -> TenantCalibrationLibraryReader:
     if _calibration_reader_override is not None:
         return _calibration_reader_override
-    return _empty_calibration_reader
+    from ..storage.database import get_db_pool
+
+    return ContentOpsCalibrationLibraryRepository(pool=get_db_pool())
 
 
 def _rule_packet(value: Any) -> RulePacketVersions:
