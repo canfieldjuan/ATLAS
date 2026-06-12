@@ -193,6 +193,9 @@ try:
     from .content_ops_brand_voice_profiles import (
         create_content_ops_brand_voice_profiles_router,
     )
+    from .content_ops_calibration_library import (
+        create_content_ops_calibration_library_router,
+    )
     from ..auth.dependencies import AuthUser
     from ..config import settings
     from ..storage.database import get_db_pool
@@ -311,6 +314,11 @@ try:
         auth_dependency=_capture_content_ops_auth_user,
     )
     router.include_router(brand_voice_profiles_router)
+    calibration_library_router = create_content_ops_calibration_library_router(
+        pool_provider=get_db_pool,
+        auth_dependency=_capture_content_ops_auth_user,
+    )
+    router.include_router(calibration_library_router)
     public_landing_page_router = create_public_landing_page_router(
         pool_provider=get_db_pool,
     )
