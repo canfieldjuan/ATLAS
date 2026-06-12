@@ -249,3 +249,62 @@ def test_comment_from_blank_category_uses_uncategorized_sentinel() -> None:
     assert comment.message == "[adversarial:uncategorized] real objection"
     assert comment.category == CommentCategory.EDITORIAL_JUDGMENT
     assert comment.blocking is False
+
+
+# -- corroboration across N passes (slice 9) ----------------------------------
+
+
+from extracted_content_pipeline.adversarial_pass import corroborated_categories_across
+
+
+def test_corroborated_across_requires_two_distinct_passes() -> None:
+    # OVERCLAIM in both passes -> corroborated; MISSING_PROOF/VOICE_SLIP only one.
+    a = AdversarialPass(pass_id="a", findings=(
+        _finding(AdversarialFindingCategory.OVERCLAIM),
+        _finding(AdversarialFindingCategory.MISSING_PROOF),
+    ))
+    b = AdversarialPass(pass_id="b", findings=(
+        _finding(AdversarialFindingCategory.OVERCLAIM),
+        _finding(AdversarialFindingCategory.VOICE_SLIP),
+    ))
+    assert corroborated_categories_across((a, b)) == frozenset({AdversarialFindingCategory.OVERCLAIM})
+
+
+def test_corroborated_across_counts_a_pass_once_per_category() -> None:
+    # A single pass raising OVERCLAIM twice is not self-corroboration.
+    a = AdversarialPass(pass_id="a", findings=(
+        _finding(AdversarialFindingCategory.OVERCLAIM),
+        _finding(AdversarialFindingCategory.OVERCLAIM, message="reworded"),
+    ))
+    assert corroborated_categories_across((a,)) == frozenset()
+
+
+def test_corroborated_across_ignores_unsubstantiated_findings() -> None:
+    a = AdversarialPass(pass_id="a", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+    b = AdversarialPass(pass_id="b", findings=(
+        _finding(AdversarialFindingCategory.OVERCLAIM, evidence=""),  # noise -> not counted
+    ))
+    assert corroborated_categories_across((a, b)) == frozenset()
+
+
+def test_corroborated_across_min_passes_threshold() -> None:
+    passes = tuple(
+        AdversarialPass(pass_id=str(i), findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+        for i in range(3)
+    )
+    assert corroborated_categories_across(passes, min_passes=3) == frozenset({AdversarialFindingCategory.OVERCLAIM})
+    assert corroborated_categories_across(passes[:2], min_passes=3) == frozenset()
+
+
+def test_corroborated_across_matches_decoded_string_category() -> None:
+    a = AdversarialPass(pass_id="a", findings=(
+        AdversarialFinding(category="overclaim", message="m", evidence="e"),  # type: ignore[arg-type]
+    ))
+    b = AdversarialPass(pass_id="b", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
+    assert corroborated_categories_across((a, b)) == frozenset({AdversarialFindingCategory.OVERCLAIM})
+
+
+def test_corroborated_across_rejects_bad_min_passes() -> None:
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        corroborated_categories_across((), min_passes=0)

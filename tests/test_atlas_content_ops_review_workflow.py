@@ -674,3 +674,38 @@ async def test_anchors_surface_even_on_blocked_verdict() -> None:
     )
     assert result.decision == ReviewDecision.BLOCKED
     assert tuple(a.example_id for a in result.calibration_anchors) == ("oc1",)
+
+
+# -- corroboration surfacing in the result (slice 9) -------------------------
+
+
+@pytest.mark.asyncio
+async def test_result_surfaces_corroborated_objection_categories() -> None:
+    passes = (
+        AdversarialPass(pass_id="a", findings=(
+            _finding(AdversarialFindingCategory.OVERCLAIM),
+            _finding(AdversarialFindingCategory.MISSING_PROOF),
+        )),
+        AdversarialPass(pass_id="b", findings=(
+            _finding(AdversarialFindingCategory.OVERCLAIM),
+            _finding(AdversarialFindingCategory.VOICE_SLIP),
+        )),
+    )
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+    assert result.corroborated_objection_categories == ("overclaim",)
+    assert result.as_dict()["corroborated_objection_categories"] == ["overclaim"]
+
+
+@pytest.mark.asyncio
+async def test_no_corroboration_from_a_single_pass() -> None:
+    passes = (AdversarialPass(pass_id="a", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),)),)
+    result = await run_content_ops_review(
+        _request(adversarial_passes=passes),
+        scope=_SCOPE,
+        registry_reader=_reader(),
+    )
+    assert result.corroborated_objection_categories == ()

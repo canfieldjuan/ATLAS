@@ -1,6 +1,6 @@
 # Plan archive index
 
-996 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+997 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -548,6 +548,7 @@
 - [PR-Content-Ops-Reasoning-Upsert-Validation](archive/PR-Content-Ops-Reasoning-Upsert-Validation.md)
 - [PR-Content-Ops-Reasoning-Upsert](archive/PR-Content-Ops-Reasoning-Upsert.md)
 - [PR-Content-Ops-Reasoning-Usage-Audit](archive/PR-Content-Ops-Reasoning-Usage-Audit.md)
+- [PR-Content-Ops-Render-Messageless-Blocking](archive/PR-Content-Ops-Render-Messageless-Blocking.md) - lane: content-ops/review-contract | phase: Production hardening
 - [PR-Content-Ops-Renewal-Source-Rows](archive/PR-Content-Ops-Renewal-Source-Rows.md)
 - [PR-Content-Ops-Report-Claim-Id-Ledger-Validation](archive/PR-Content-Ops-Report-Claim-Id-Ledger-Validation.md) - lane: content-ops/report-traceability-hardening | phase: Production hardening
 - [PR-Content-Ops-Report-Claim-Ids](archive/PR-Content-Ops-Report-Claim-Ids.md) - lane: content-ops/report-traceability-hardening | phase: Production hardening

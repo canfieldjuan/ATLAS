@@ -1370,3 +1370,30 @@ def test_verdict_text_still_drops_messageless_nonblocking_comment() -> None:
         "calibration_anchors": [],
     }
     assert adapter._comment_lines(payload) == []
+
+
+def test_verdict_text_renders_corroborated_objections_section() -> None:
+    payload = {
+        "decision": "revision_required",
+        "reasons": ["2 blocking comment(s)"],
+        "content_pr": {"asset_id": "d1", "comments": []},
+        "calibration_anchors": [],
+        "corroborated_objection_categories": ["overclaim", "voice_slip"],
+    }
+    text = adapter._verdict_text(payload)
+    assert "Corroborated objections (raised by 2+ passes):" in text
+    assert "- overclaim" in text
+    assert "- voice_slip" in text
+
+
+def test_verdict_text_omits_corroborated_section_when_empty() -> None:
+    payload = {
+        "decision": "approved",
+        "reasons": [],
+        "content_pr": {"asset_id": "d1", "comments": []},
+        "calibration_anchors": [],
+        "corroborated_objection_categories": [],
+    }
+    assert "Corroborated objections" not in adapter._verdict_text(payload)
+    # And tolerates a malformed (non-list) shape.
+    assert adapter._corroborated_lines({"corroborated_objection_categories": "nope"}) == []

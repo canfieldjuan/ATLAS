@@ -20,7 +20,7 @@ stay parked per the doc.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Iterable, Mapping
 
 try:
     from enum import StrEnum
@@ -117,6 +117,30 @@ def corroborated_categories(
     """
 
     return first.categories() & second.categories()
+
+
+def corroborated_categories_across(
+    passes: Iterable[AdversarialPass],
+    *,
+    min_passes: int = 2,
+) -> frozenset[AdversarialFindingCategory]:
+    """Categories raised by at least ``min_passes`` distinct passes (substantiated).
+
+    The N-pass generalization of :func:`corroborated_categories`: independent
+    agreement across passes is the strongest signal an editor can act on. Counts
+    distinct passes per category -- a single pass raising a category twice counts
+    once -- using only substantiated findings, the same filter applied when
+    findings are folded into the verdict. Counting is value-based, so a category
+    decoded as a plain string in one pass corroborates the enum member in another.
+    """
+
+    if min_passes < 1:
+        raise ValueError("min_passes must be >= 1")
+    counts: dict[AdversarialFindingCategory, int] = {}
+    for pass_ in passes:
+        for category in {finding.category for finding in pass_.substantiated()}:
+            counts[category] = counts.get(category, 0) + 1
+    return frozenset(category for category, count in counts.items() if count >= min_passes)
 
 
 def disagreement_categories(
