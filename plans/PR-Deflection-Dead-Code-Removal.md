@@ -141,10 +141,10 @@ deleted delegate did.
 - `pytest tests/test_mcp_content_ops_deflection_readonly.py -q` - 13 passed (MCP boundary unaffected).
 - `pytest tests/test_extracted_content_generation_plan.py tests/test_extracted_content_ops_execution.py tests/test_content_ops_deflection_resolution_live_proof.py tests/test_content_ops_faq_deflection_live_upload_fixture.py tests/test_smoke_content_ops_support_ticket_package.py -q` - 154 passed.
 - `pytest tests/test_extracted_ticket_faq_markdown.py tests/test_extracted_content_deflection_submit.py tests/test_extracted_support_ticket_input_package.py -q` - all passed.
-- `bash scripts/validate_extracted_content_pipeline.sh` - passed.
+- bash `scripts/validate_extracted_content_pipeline.sh` - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - clean.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - 0 findings.
-- `bash scripts/check_ascii_python.sh` - passed.
+- bash `scripts/check_ascii_python.sh` - passed.
 - `ruff check` over all touched Python files - clean.
 - `git grep` residue sweep for `teaser`/`locked_questions`/`assign_support_ticket_clusters`
   across py/ts/js/json/md - only negative-assertion test lines and unrelated
