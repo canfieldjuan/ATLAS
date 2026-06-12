@@ -11,6 +11,7 @@ service instead of reimplementing review logic.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Mapping, Protocol, Sequence
@@ -47,6 +48,9 @@ from extracted_content_pipeline.coverage_rows import (
 from extracted_content_pipeline.review_contract import ReviewDecision
 
 
+logger = logging.getLogger("atlas.content_ops_review_workflow")
+
+
 class TenantClaimRegistryReadError(RuntimeError):
     """Raised when tenant registry data cannot be read safely."""
 
@@ -60,6 +64,24 @@ class TenantClaimRegistryReader(Protocol):
         scope: TenantScope,
     ) -> Mapping[str, RegistryClaim]:
         """Return registry claims keyed by registry id."""
+
+
+class TenantCalibrationLibraryReader(Protocol):
+    """Read curated calibration examples for one tenant scope.
+
+    Symmetric to :class:`TenantClaimRegistryReader`, with one deliberate
+    difference: calibration anchors are *evidence*, not a gate, so a read
+    failure must degrade (fall back to request-supplied anchors), never block
+    the verdict. The review treats any exception from this reader as "no
+    server-side anchors available" rather than a hard error.
+    """
+
+    async def list_calibration_examples(
+        self,
+        *,
+        scope: TenantScope,
+    ) -> tuple[CalibrationExample, ...]:
+        """Return the tenant's curated calibration examples."""
 
 
 class ContentOpsAccountResolver(Protocol):
@@ -90,6 +112,7 @@ async def run_content_ops_review_for_bound_tenant(
     *,
     account_resolver: ContentOpsAccountResolver,
     registry_reader: TenantClaimRegistryReader,
+    calibration_reader: TenantCalibrationLibraryReader | None = None,
 ) -> ContentOpsReviewResult:
     """Resolve connector tenant binding before running the review service."""
 
@@ -102,6 +125,7 @@ async def run_content_ops_review_for_bound_tenant(
         request,
         scope=_tenant_scope_from_account_binding(account_id),
         registry_reader=registry_reader,
+        calibration_reader=calibration_reader,
     )
 
 
@@ -148,6 +172,7 @@ async def run_content_ops_review(
     *,
     scope: TenantScope | None,
     registry_reader: TenantClaimRegistryReader,
+    calibration_reader: TenantCalibrationLibraryReader | None = None,
 ) -> ContentOpsReviewResult:
     """Build a tenant claims map and compute the deterministic review verdict."""
 
@@ -172,12 +197,13 @@ async def run_content_ops_review(
         comments=_comments_for_request(request),
     )
     decision = review_verdict(content_pr)
+    merged_examples = await _merged_calibration_examples(request, scope, calibration_reader)
     return ContentOpsReviewResult(
         decision=decision,
         reasons=verdict_reasons(content_pr),
         mapped_claims=mapped_claims,
         content_pr=content_pr,
-        calibration_anchors=_calibration_anchors_for_request(request),
+        calibration_anchors=_calibration_anchors_for_examples(merged_examples, request),
         corroborated_objection_categories=_corroborated_categories_for_request(request),
     )
 
@@ -221,18 +247,62 @@ def _corroborated_categories_for_request(
     return tuple(sorted(_value(category) for category in corroborated))
 
 
+async def _merged_calibration_examples(
+    request: ContentOpsReviewRequest,
+    scope: TenantScope,
+    calibration_reader: TenantCalibrationLibraryReader | None,
+) -> tuple[CalibrationExample, ...]:
+    """Tenant server-side anchors unioned with request-supplied ones.
+
+    The tenant's curated set is canonical (server-first), so a server anchor wins
+    over a request anchor with the same ``example_id``; the connector can still
+    supplement with new ids. Calibration anchors are evidence, not a gate, so any
+    reader failure degrades to request-supplied anchors -- it never blocks or
+    raises.
+    """
+
+    if calibration_reader is None:
+        return request.calibration_examples
+    try:
+        server_examples = await calibration_reader.list_calibration_examples(scope=scope)
+    except Exception:
+        logger.warning(
+            "calibration library read failed; using request-supplied anchors",
+            exc_info=True,
+        )
+        return request.calibration_examples
+
+    merged: list[CalibrationExample] = []
+    seen_ids: set[str] = set()
+    for example in tuple(server_examples) + tuple(request.calibration_examples):
+        if not isinstance(example, CalibrationExample) or example.example_id in seen_ids:
+            continue
+        seen_ids.add(example.example_id)
+        merged.append(example)
+    return tuple(merged)
+
+
 def _calibration_anchors_for_request(
     request: ContentOpsReviewRequest,
 ) -> tuple[CalibrationExample, ...]:
-    """Curated anchors illustrating the failure modes the adversarial passes raised.
+    """Request-supplied anchors only (blocked-result path; no reader consulted)."""
 
-    Builds a library from the connector-supplied calibration examples and
-    selects the teachable anchors whose label maps to a fired finding category,
-    so the editor sees a worked example of each failure mode the draft tripped.
-    Returns nothing when no anchors were supplied or no fired category maps.
+    return _calibration_anchors_for_examples(request.calibration_examples, request)
+
+
+def _calibration_anchors_for_examples(
+    examples: tuple[CalibrationExample, ...],
+    request: ContentOpsReviewRequest,
+) -> tuple[CalibrationExample, ...]:
+    """Anchors illustrating the failure modes the adversarial passes raised.
+
+    Builds a library from ``examples`` and selects the teachable anchors whose
+    label maps to a fired finding category, so the editor sees a worked example
+    of each failure mode the draft tripped. Returns nothing when no anchors are
+    available or no fired category maps.
     """
 
-    if not request.calibration_examples:
+    if not examples:
         return ()
     fired_categories: list[object] = []
     for pass_ in _items(request.adversarial_passes):
@@ -240,7 +310,7 @@ def _calibration_anchors_for_request(
             continue
         for finding in pass_.substantiated():
             fired_categories.append(finding.category)
-    library = CalibrationLibrary(examples=tuple(request.calibration_examples))
+    library = CalibrationLibrary(examples=tuple(examples))
     return anchors_for_finding_categories(library, fired_categories)
 
 
@@ -356,6 +426,7 @@ __all__ = [
     "ContentOpsAccountResolver",
     "ContentOpsReviewRequest",
     "ContentOpsReviewResult",
+    "TenantCalibrationLibraryReader",
     "TenantClaimRegistryReadError",
     "TenantClaimRegistryReader",
     "run_content_ops_review",

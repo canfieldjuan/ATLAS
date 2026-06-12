@@ -85,6 +85,7 @@ async def search(query: str = "", limit: int = 10) -> dict[str, Any]:
         ),
         account_resolver=verify_server.StaticContentOpsMarketerAccountResolver(account_id),
         registry_reader=verify_server._get_registry_reader(),
+        calibration_reader=verify_server._get_calibration_reader(),
     )
     verdict = result.as_dict()
     verdict_id = _verdict_id(account_id=account_id, request_payload=request_payload)

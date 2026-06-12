@@ -155,6 +155,7 @@ class _RegistryReader:
 @pytest.fixture(autouse=True)
 def _reset_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(verify, "_registry_reader_override", None)
+    monkeypatch.setattr(verify, "_calibration_reader_override", None)
     monkeypatch.setattr(verify, "_account_resolver_override", None)
     monkeypatch.setattr(verify, "_oauth_provider", None)
     monkeypatch.setattr(settings.mcp, "content_ops_marketer_verify_account_id", "")
@@ -1397,3 +1398,39 @@ def test_verdict_text_omits_corroborated_section_when_empty() -> None:
     assert "Corroborated objections" not in adapter._verdict_text(payload)
     # And tolerates a malformed (non-list) shape.
     assert adapter._corroborated_lines({"corroborated_objection_categories": "nope"}) == []
+
+
+@pytest.mark.asyncio
+async def test_verify_draft_uses_server_side_calibration_reader_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from extracted_content_pipeline.calibration_library import CalibrationExample, CalibrationLabel
+
+    reader = _RegistryReader(scopes=[])
+    monkeypatch.setattr(verify, "_registry_reader_override", reader)
+    monkeypatch.setattr(
+        verify,
+        "_account_resolver_override",
+        verify.StaticContentOpsMarketerAccountResolver("acct-1"),
+    )
+
+    class _Cal:
+        async def list_calibration_examples(self, *, scope):
+            return (CalibrationExample(example_id="oc-server", excerpt="server overclaim", label=CalibrationLabel.OVERCLAIM, reasoning="srv"),)
+
+    monkeypatch.setattr(verify, "_calibration_reader_override", _Cal())
+
+    args = dict(_valid_payload())
+    args["adversarial_passes"] = [
+        {"pass_id": "p1", "findings": [{"category": "overclaim", "message": "40% unbacked", "evidence": "cuts 40%"}]},
+    ]
+    # No calibration_library in the request -> the anchor comes from the server reader.
+    payload = await verify.verify_draft(**args)
+    assert [a["example_id"] for a in payload["calibration_anchors"]] == ["oc-server"]
+
+
+@pytest.mark.asyncio
+async def test_default_calibration_reader_is_empty() -> None:
+    # Until persistence lands, the default reader yields nothing (slice-7 behavior).
+    reader = verify._get_calibration_reader()
+    assert await reader.list_calibration_examples(scope=None) == ()
