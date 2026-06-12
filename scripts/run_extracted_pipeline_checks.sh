@@ -125,6 +125,7 @@ pytest \
   tests/test_mcp_content_ops_marketer_verify.py \
   tests/test_content_ops_claim_registry.py \
   tests/test_content_ops_calibration_library.py \
+  tests/test_content_ops_calibration_library_api.py \
   tests/test_atlas_content_ops_generated_assets_api.py \
   tests/test_atlas_content_ops_import_admission.py \
   tests/test_atlas_content_ops_input_provider.py \

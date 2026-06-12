@@ -8,6 +8,7 @@ on:
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "atlas_brain/_content_ops_calibration_library.py"
+      - "atlas_brain/api/content_ops_calibration_library.py"
       - "atlas_brain/storage/migrations/335_content_ops_calibration_library.sql"
       - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
@@ -21,6 +22,7 @@ on:
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
       - "tests/test_content_ops_calibration_library.py"
+      - "tests/test_content_ops_calibration_library_api.py"
       - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "tests/test_check_content_ops_marketer_verify_oauth_e2e.py"
       - "tests/test_check_content_ops_marketer_verify_dual_client_rollout.py"
@@ -36,6 +38,7 @@ on:
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
       - "atlas_brain/_content_ops_calibration_library.py"
+      - "atlas_brain/api/content_ops_calibration_library.py"
       - "atlas_brain/storage/migrations/335_content_ops_calibration_library.sql"
       - "extracted_content_pipeline/campaign_ports.py"
       - "extracted_content_pipeline/claims_map.py"
@@ -49,6 +52,7 @@ on:
       - "scripts/start_content_ops_marketer_verify_oauth_server.py"
       - "tests/test_atlas_content_ops_review_workflow.py"
       - "tests/test_content_ops_calibration_library.py"
+      - "tests/test_content_ops_calibration_library_api.py"
       - "tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py"
       - "tests/test_check_content_ops_marketer_verify_oauth_e2e.py"
       - "tests/test_check_content_ops_marketer_verify_dual_client_rollout.py"
@@ -80,6 +84,7 @@ jobs:
           python -m pytest \
             tests/test_atlas_content_ops_review_workflow.py \
             tests/test_content_ops_calibration_library.py \
+            tests/test_content_ops_calibration_library_api.py \
             tests/test_check_content_ops_marketer_verify_claude_hosted_oauth.py \
             tests/test_check_content_ops_marketer_verify_dual_client_rollout.py \
             tests/test_check_content_ops_marketer_verify_oauth_e2e.py \

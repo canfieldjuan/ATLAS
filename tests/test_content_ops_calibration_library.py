@@ -208,3 +208,111 @@ async def test_review_degrades_when_repository_read_fails() -> None:
     )
     # The verdict is unaffected and the request-supplied anchor still surfaces.
     assert tuple(a.example_id for a in result.calibration_anchors) == ("oc-req",)
+
+
+# -- write CRUD (slice C repo functions) -------------------------------------
+
+
+def _crud_row(**overrides):
+    r = _row()
+    r.update(overrides)
+    return r
+
+
+@pytest.mark.asyncio
+async def test_create_normalizes_and_inserts() -> None:
+    account_id = uuid.uuid4()
+
+    class _W(_Pool):
+        def __init__(self, row):
+            super().__init__()
+            self._row = row
+            self.fetchrow_calls = []
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append({"query": str(query), "args": args})
+            return self._row
+
+    pool = _W(_crud_row(account_id=account_id))
+    record = await calib.create_calibration_example(
+        pool, account_id=account_id,
+        payload={"example_id": " oc1 ", "label": "overclaim", "excerpt": " 99.99% uptime ", "reasoning": "no SLA"},
+    )
+    args = pool.fetchrow_calls[0]["args"]
+    assert "INSERT INTO content_ops_calibration_library" in pool.fetchrow_calls[0]["query"]
+    assert args[0] == account_id
+    assert args[1] == "oc1"
+    assert args[2] == "overclaim"
+    assert record.as_calibration_example().label == CalibrationLabel.OVERCLAIM
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("payload", "message"), [
+    ({"label": "overclaim", "excerpt": "e", "reasoning": "r"}, "example id is required"),
+    ({"example_id": "x", "label": "nope", "excerpt": "e", "reasoning": "r"}, "Invalid calibration label"),
+    ({"example_id": "x", "label": "overclaim", "excerpt": " ", "reasoning": "r"}, "excerpt is required"),
+    ({"example_id": "x", "label": "overclaim", "excerpt": "e", "reasoning": ""}, "reasoning is required"),
+])
+async def test_create_rejects_invalid_payload(payload, message) -> None:
+    class _W(_Pool):
+        async def fetchrow(self, query, *args):
+            raise AssertionError("should not insert")
+    with pytest.raises(ValueError, match=message):
+        await calib.create_calibration_example(_W(), account_id=uuid.uuid4(), payload=payload)
+
+
+@pytest.mark.asyncio
+async def test_update_is_tenant_scoped_and_missing_returns_none() -> None:
+    account_id = uuid.uuid4()
+    row_id = uuid.uuid4()
+
+    class _W(_Pool):
+        def __init__(self, row):
+            super().__init__()
+            self._row = row
+            self.fetchrow_calls = []
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append({"query": str(query), "args": args})
+            return self._row
+
+    ok = _W(_crud_row(id=row_id, account_id=account_id))
+    record = await calib.update_calibration_example(
+        ok, account_id=account_id, example_row_id=row_id,
+        payload={"example_id": "oc1", "label": "overclaim", "excerpt": "e", "reasoning": "r"},
+    )
+    assert record is not None
+    compact = " ".join(ok.fetchrow_calls[0]["query"].split())
+    assert "UPDATE content_ops_calibration_library" in compact
+    assert "WHERE id = $1 AND account_id = $2 AND archived_at IS NULL" in compact
+
+    missing = await calib.update_calibration_example(
+        _W(None), account_id=account_id, example_row_id=row_id,
+        payload={"example_id": "oc1", "label": "overclaim", "excerpt": "e", "reasoning": "r"},
+    )
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_archive_is_tenant_scoped() -> None:
+    account_id = uuid.uuid4()
+    row_id = uuid.uuid4()
+
+    class _W(_Pool):
+        def __init__(self, row):
+            super().__init__()
+            self._row = row
+            self.fetchrow_calls = []
+        async def fetchrow(self, query, *args):
+            self.fetchrow_calls.append({"query": str(query), "args": args})
+            return self._row
+
+    assert await calib.archive_calibration_example(_W({"id": row_id}), account_id=account_id, example_row_id=row_id) is True
+    assert await calib.archive_calibration_example(_W(None), account_id=account_id, example_row_id=row_id) is False
+
+
+@pytest.mark.asyncio
+async def test_list_records_returns_display_records() -> None:
+    account_id = uuid.uuid4()
+    pool = _Pool(fetch_rows=[_crud_row(account_id=account_id, example_id="OC-1")])
+    records = await calib.list_calibration_example_records(pool, account_id=account_id)
+    assert records[0].account_id == account_id
+    assert records[0].example_id == "OC-1"
