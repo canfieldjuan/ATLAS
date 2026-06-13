@@ -5250,6 +5250,13 @@ _HELD_OUT_PUBLISHABLE = (
     ("Sensor offline", "1. Open Settings. 2. Tap Devices. 3. Re-pair the sensor."),
     # "to fix this," instruction preamble
     ("Stuck on payment", "To fix this, clear the saved card and add it again under Billing."),
+    # Guards for the contact-redirect / question reject classes (#1466 round 7):
+    # real steps that merely contain "send"/"message", or a trailing redirect or
+    # question after a genuine step, must still publish on the step.
+    ("Cannot reach owner", "Message the channel owner to request access."),
+    ("Where do I send it?", "Send the report to your team from the Export menu."),
+    ("App errors out", "Reset the cache, then DM us if the error persists."),
+    ("Service is down", "Check the logs. Did it work? If not, restart the service."),
 )
 
 _HELD_OUT_REJECTED = (
@@ -5270,6 +5277,17 @@ _HELD_OUT_REJECTED = (
     ("anything", "That is the expected behavior for the free tier."),
     ("anything", "Unfortunately the issue is a duplicate of an existing bug."),
     ("anything", "Is the account still active on your end?"),
+    # Contact-channel redirection: a hand-off to a human over a private channel
+    # is imperative-shaped but answers nothing. Surfaced running the gate over
+    # real support replies (Twitter brand replies), round 7.
+    ("My account is locked", "Please send me a private message so we can help."),
+    ("I need help", "Have your friend message us."),
+    ("Where is my order?", "Send us a Direct Message with your order number."),
+    ("Login broken", "DM us your account email and we'll investigate."),
+    # Answer-is-a-question: a diagnostic prompt back to the requester is not a
+    # step they can follow (a non-copula interrogative, complementing the
+    # existing "Is the account still active?" copula case above).
+    ("Internet keeps dropping", "Did the lights change on the router when this happened?"),
 )
 
 

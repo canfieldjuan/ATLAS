@@ -109,6 +109,19 @@ converge. The predicate now is:
    per-sentence, and a first-person subject ("We received your request") must
    use a known action verb -- the generic object shape is imperative-position
    only -- so narration is not mistaken for an instruction.
+7. **Two structural per-sentence disqualifiers** added in round 7 after running
+   the gate over real support replies (Twitter brand replies + Ubuntu QA):
+   - **Contact-channel redirection** (`_RESOLUTION_CONTACT_REDIRECT_RE`): a
+     hand-off to a human over a private channel ("send us a DM", "message us",
+     "shoot me a private message") is imperative-shaped but answers nothing --
+     the disposition reject's imperative-phrased sibling. Narrow on purpose
+     (matches "<verb> us/me" and the DM/PM/private-message redirect nouns, not
+     legitimate steps that merely contain "send"/"message"), and checked against
+     the sentence's lead clause only, so a real step with a trailing redirect
+     fallback ("Reset the cache, then DM us") still publishes on the step.
+   - **Answer-is-a-question**: the sentence splitter now retains terminators, so
+     a sentence ending in "?" ("Did the lights change on the router?") -- a
+     diagnostic prompt back to the requester -- is skipped, not parsed as a step.
 
 The action-term-membership and question-topic-overlap checks are **demoted, not
 deleted**, to advisory signals (`_resolution_advisory_signals`): the maps stay
@@ -140,31 +153,53 @@ and paid answer summaries.
   floor is the reject filters (boilerplate / internal-note / disposition-only /
   sub-3-token), not membership.
 - This does not solve the separate #1460 fixed-bucket over-merge issue.
+- The contact-redirect disqualifier is deliberately conservative: it fires on
+  the lead clause, so a redirect leading a sentence rejects even if a real step
+  trails it ("DM us, then reset"). Under-publishing a real answer is the safe
+  direction for a proven-answer gate; the common shape (step first, redirect
+  fallback) is preserved.
 
 ## Deferred
 
 - #1460 remains the broader within-intent clustering/subcluster fix.
 - A future robust-testing slice can add a larger resolution-quality corpus and
   calibrate thresholds against real help-desk exports.
+- A separate over-accept class observed in the real-corpus run -- interjection /
+  adjective sentence leads ("Guac on!", "Love the aesthetic", "Glad to know")
+  parsing as "<verb> <object>" -- is out of scope here. It is Twitter-pleasantry
+  noise that does not appear in real Zendesk `resolution_notes`; chasing it risks
+  over-fitting. Left for the same future calibration slice.
+- The structured-outcome factor (read `status` / `reopens` /
+  `satisfaction_score`; gate `proven` on answer-AND-outcome) and a shape-aware
+  importer (Zendesk full-export vs metrics-only CSV) -- per discussion #1507 --
+  are the larger honesty win and a separate slice. This slice hardens only the
+  answer-text factor.
 
 Parked hardening: none.
 
 ## Verification
 
 - Option-1 inversion (operator decision): held-out probe of
-  `_resolution_text_is_publishable` -- 16/16 realistic answers publish
+  `_resolution_text_is_publishable` -- 20/20 realistic answers publish
   (varied verbs incl. schedule/pin/narrow/forward/assign/rename/archive/submit/
   cancel + symptom/fix synonym pairs login-SSO/crash-cache/charged-refund +
-  past-tense/first-person + numbered steps + "to fix this," preamble), 10/10
-  honesty-floor non-answers rejected, 0 misses either direction. The corpus is
-  pinned into the test file (`_HELD_OUT_PUBLISHABLE` / `_HELD_OUT_REJECTED`).
+  past-tense/first-person + numbered steps + "to fix this," preamble + round-7
+  redirect/question guards: real "send"/"message" steps and step-then-fallback
+  still publish), 19/19 honesty-floor non-answers rejected (incl. round-7
+  contact-redirect + non-copula question), 0 misses either direction. The corpus
+  is pinned into the test file (`_HELD_OUT_PUBLISHABLE` / `_HELD_OUT_REJECTED`).
+- Round-7 real-corpus calibration: ran the gate over 400 real Twitter brand
+  replies (reject-side) and 400 real Ubuntu QA responses (recall-side). The two
+  new disqualifiers drop Twitter publish 15% -> 10% (the DM/clarifying-question
+  false positives) while Ubuntu real-instruction publish holds 9% -> 8%.
 - `drafted_answer_count` does not regress: the resolution-bearing live-proof,
   saas-demo, and macro-writeback fixtures keep their drafted counts;
   measured-repetition merged-state language-filter test stays green.
-- Full extracted gauntlet (`scripts/run_extracted_pipeline_checks.sh`) -- 3939
-  passed, 10 skipped, 0 failed (inversion + measured-repetition reconciliation).
+- Full extracted gauntlet (`scripts/run_extracted_pipeline_checks.sh`) -- 3952
+  passed, 10 skipped, 0 failed (inversion + measured-repetition reconciliation
+  + round-7 redirect/question disqualifiers).
 - Focused pytest for `tests/test_extracted_ticket_faq_markdown.py`.
-  - Passed, 206 tests.
+  - Passed, 219 tests.
 - Downstream pytest targets in `tests/test_content_ops_deflection_resolution_live_proof.py`,
   `tests/test_extracted_ticket_faq_macro_writeback.py`,
   `tests/test_extracted_ticket_faq_output_ingestion.py`, and
@@ -182,14 +217,14 @@ Parked hardening: none.
   and `tests/test_extracted_ticket_faq_markdown.py`
   - Passed.
 - `./scripts/run_extracted_pipeline_checks.sh`
-  - Passed, 3881 passed, 10 skipped; existing torch/pynvml warning.
+  - Passed, 3952 passed, 10 skipped; existing torch/pynvml warning.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/ticket_faq_markdown.py` | 380 |
-| `plans/PR-Deflection-Proven-Answer-Gate.md` | 195 |
+| `extracted_content_pipeline/ticket_faq_markdown.py` | 417 |
+| `plans/PR-Deflection-Proven-Answer-Gate.md` | 237 |
 | `tests/test_build_deflection_messy_csv_fixtures.py` | 11 |
-| `tests/test_extracted_ticket_faq_markdown.py` | 457 |
-| **Total** | **1043** |
+| `tests/test_extracted_ticket_faq_markdown.py` | 475 |
+| **Total** | **1140** |

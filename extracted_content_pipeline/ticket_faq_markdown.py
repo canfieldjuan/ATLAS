@@ -1226,7 +1226,11 @@ def _resolution_text(*rows: Mapping[str, Any], question_text: str = "") -> str:
 # list. This recognizes unknown verbs (schedule, pin, narrow, forward, ...) by
 # the "<verb> the/your/a <noun>" imperative shape, numbered steps, or a UI
 # navigation path -- the enumerated lists could never keep up (four rounds).
-_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"[.!?\n]+")
+# Split on sentence terminators but KEEP them attached (lookbehind), so a
+# trailing "?" survives and an interrogative sentence ("Did the lights change?")
+# can be told apart from a step. The lead word and object shapes are anchored to
+# the start of each sentence, so a retained terminator does not affect them.
+_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 _RESOLUTION_STEP_STRUCTURE_RE = re.compile(r"(?m)^\s*(?:step\s*)?\d+[.):]\s+\S")
 _RESOLUTION_UI_PATH_RE = re.compile(
     r"\b[a-z][\w-]*\s+then\s+[a-z][\w-]*\b", re.IGNORECASE
@@ -1276,6 +1280,25 @@ _RESOLUTION_LEAD_WORD_RE = re.compile(r"([a-z][a-z'-]*)", re.IGNORECASE)
 _RESOLUTION_FIRST_PERSON_LEAD_RE = re.compile(
     r"^(?:i|we)(?:\s+(?:have|had|then|just|already|also))?\s+", re.IGNORECASE
 )
+# Contact-channel redirection: directing the requester to reach a human over a
+# private channel ("send us a DM", "message us", "shoot me a private message")
+# is a hand-off, not a self-serve resolution. This is the imperative-shaped
+# sibling of the disposition reject (a "Please DM us" reply passes the
+# instruction-shape test but answers nothing), surfaced by running the gate over
+# real support replies. Narrow on purpose -- it matches "<verb> us/me" and the
+# "DM/PM/private message" redirect nouns, not legitimate steps that merely
+# contain "send"/"message" ("Send the report to your team", "Message the channel
+# owner"). Applied per sentence, so a genuine step followed by a "...then DM us"
+# fallback still publishes on the real step.
+_RESOLUTION_CONTACT_REDIRECT_RE = re.compile(
+    r"\b(?:send|shoot|drop|message|dm|pm|ping)\s+(?:us|me)\b"
+    r"|\b(?:dm|pm|message|ping|contact)\s+us\b"
+    r"|\bsend\s+(?:us|me)\s+a\s+(?:dm\b|pm\b|message\b|private\s+message|direct\s+message)"
+    r"|\b(?:private|direct)\s+message\s+(?:us|me)\b"
+    r"|\breach\s+out\s+to\s+us\b"
+    r"|\bprivate\s+message\b",
+    re.IGNORECASE,
+)
 
 
 def _resolution_text_is_publishable(value: Any, *, question_text: str) -> bool:
@@ -1321,6 +1344,11 @@ def _resolution_text_looks_instructional(text: str) -> bool:
         stripped = sentence.strip()
         if not stripped:
             continue
+        # A question is not a step. An agent reply that ends in "?" ("Did the
+        # lights change on the router?") is a diagnostic prompt back to the
+        # requester, not a resolution they can act on.
+        if stripped.endswith("?"):
+            continue
         if _RESOLUTION_DISPOSITION_ONLY_RE.search(stripped):
             continue
         prefix = _RESOLUTION_INSTRUCTION_PREFIX_RE.match(stripped)
@@ -1328,6 +1356,13 @@ def _resolution_text_looks_instructional(text: str) -> bool:
         first_person = _RESOLUTION_FIRST_PERSON_LEAD_RE.match(remainder)
         if first_person:
             remainder = remainder[first_person.end():]
+        # A contact redirect only disqualifies the sentence when it is the lead
+        # clause ("Send us a DM ...", "Have your friend message us"). A redirect
+        # trailing a real step ("Reset the cache, then DM us if it persists")
+        # leaves the step intact, so check only up to the first clause break.
+        lead_clause = re.split(r"[,;]", remainder, maxsplit=1)[0]
+        if _RESOLUTION_CONTACT_REDIRECT_RE.search(lead_clause):
+            continue
         lead_match = _RESOLUTION_LEAD_WORD_RE.match(remainder)
         if not lead_match:
             continue
