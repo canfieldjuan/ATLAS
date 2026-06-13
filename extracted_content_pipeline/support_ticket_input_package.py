@@ -166,6 +166,66 @@ _CONTACT_EMAIL_KEYS = (
     "customer_email",
 )
 _PAIN_KEYS = ("pain_category", "category", "intent", "topic")
+_STATUS_KEYS = (
+    "ticket_status",
+    "issue_status",
+    "case_status",
+    "status",
+    "ticket_state",
+    "state",
+)
+_CSAT_KEYS = (
+    "csat",
+    "csat_score",
+    "satisfaction_score",
+    "satisfaction_rating",
+    "customer_satisfaction_rating",
+    "customer_satisfaction_score",
+    "customer_satisfaction",
+    "satisfaction",
+    "rating",
+)
+# Canonical lifecycle buckets. Values are compared after `_key()` normalization
+# (lowercase, alphanumerics only), so "In Progress" -> "inprogress". Unknown
+# vocabulary maps to "other" so nothing is silently relabeled resolved/open.
+_REOPENED_STATUS_VALUES = frozenset({"reopened", "reopen"})
+_RESOLVED_STATUS_VALUES = frozenset({
+    "resolved",
+    "closed",
+    "done",
+    "solved",
+    "complete",
+    "completed",
+    "fixed",
+    "resolvedundermonitoring",
+})
+_CANCELLED_STATUS_VALUES = frozenset({
+    "cancelled",
+    "canceled",
+    "rejected",
+    "withdrawn",
+    "void",
+})
+_OPEN_STATUS_VALUES = frozenset({
+    "open",
+    "new",
+    "todo",
+    "inprogress",
+    "pending",
+    "pendingcustomerapproval",
+    "pendingdeployment",
+    "waiting",
+    "onhold",
+    "hold",
+    "underreview",
+    "inreview",
+    "validation",
+    "monitoring",
+    "testingmonitoring",
+    "deployment",
+    "investigating",
+    "active",
+})
 
 
 def build_support_ticket_input_package(
@@ -260,6 +320,10 @@ def build_support_ticket_input_package(
     resolution_evidence_examples = _resolution_evidence_examples(normalized_rows)
     measured_outcome_count = _measured_outcome_count(normalized_rows)
     measured_outcome_examples = _measured_outcome_examples(normalized_rows)
+    ticket_status_summary = _ticket_status_summary(normalized_rows)
+    ticket_status_present_count = sum(ticket_status_summary.values())
+    csat_present_count = _csat_present_count(normalized_rows)
+    csat_scores = _csat_scores(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
         "repeat support questions",
@@ -327,6 +391,15 @@ def build_support_ticket_input_package(
         "measured_outcome_count": measured_outcome_count,
         "top_ticket_clusters": top_ticket_clusters,
         "cluster_quality": support_ticket_cluster_quality(normalized_rows),
+        "ticket_status_present": ticket_status_present_count > 0,
+        "ticket_status_present_count": ticket_status_present_count,
+        "ticket_status_summary": ticket_status_summary,
+        "csat_present": csat_present_count > 0,
+        "csat_present_count": csat_present_count,
+        "csat_score_count": len(csat_scores),
+        "csat_score_average": (
+            round(sum(csat_scores) / len(csat_scores), 2) if csat_scores else None
+        ),
     }
     if cluster_diagnostics["cluster_preview_skipped"]:
         metadata["cluster_preview_skipped"] = True
@@ -389,6 +462,19 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         value = _first_value(row, keys)
         if value not in (None, "", [], {}):
             normalized[key] = value
+    status_raw = _first_text(row, _STATUS_KEYS)
+    if status_raw:
+        normalized["ticket_status"] = status_raw
+        state = _normalize_status_state(status_raw)
+        if state:
+            normalized["ticket_status_state"] = state
+    csat_value = _first_value(row, _CSAT_KEYS)
+    csat_raw = _evidence_text(csat_value)
+    if csat_raw:
+        normalized["csat"] = csat_raw
+        csat_score = _parse_csat_score(csat_value)
+        if csat_score is not None:
+            normalized["csat_score"] = csat_score
     return normalized
 
 
@@ -549,6 +635,61 @@ def _measured_outcome_examples(
         if len(examples) >= limit:
             return examples
     return examples
+
+
+def _normalize_status_state(value: Any) -> str:
+    key = _key(value)
+    if not key:
+        return ""
+    if key in _REOPENED_STATUS_VALUES:
+        return "reopened"
+    if key in _RESOLVED_STATUS_VALUES:
+        return "resolved"
+    if key in _CANCELLED_STATUS_VALUES:
+        return "cancelled"
+    if key in _OPEN_STATUS_VALUES:
+        return "open"
+    return "other"
+
+
+def _parse_csat_score(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = _clean(value)
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _ticket_status_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        state = _clean(row.get("ticket_status_state"))
+        if state:
+            counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+def _csat_present_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    # Presence reflects any raw CSAT value (textual good/bad included), not just
+    # numeric scores -- a textual-only export must not read as absent.
+    return sum(1 for row in rows if _clean(row.get("csat")))
+
+
+def _csat_scores(rows: Sequence[Mapping[str, Any]]) -> list[float]:
+    scores: list[float] = []
+    for row in rows:
+        score = row.get("csat_score")
+        if isinstance(score, bool):
+            continue
+        if isinstance(score, (int, float)):
+            scores.append(float(score))
+    return scores
 
 
 def _evidence_text(value: Any) -> str:
