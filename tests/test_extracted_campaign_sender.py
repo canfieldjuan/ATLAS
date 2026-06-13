@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from extracted_content_pipeline.campaign_ports import SendRequest
+from extracted_content_pipeline.campaign_ports import (
+    IdempotentReplayConflict,
+    SendRequest,
+)
 from extracted_content_pipeline.campaign_sender import (
     RESEND_API_URL,
     ResendCampaignSender,
@@ -16,8 +19,9 @@ from extracted_content_pipeline.campaign_sender import (
 
 
 class _Response:
-    def __init__(self, payload, *, status_error: Exception | None = None):
+    def __init__(self, payload, *, status_code: int = 200, status_error: Exception | None = None):
         self._payload = payload
+        self.status_code = status_code
         self._status_error = status_error
 
     def raise_for_status(self):
@@ -153,6 +157,36 @@ async def test_resend_sender_includes_attachments_when_requested():
     assert client.calls[0]["json"]["attachments"] == [
         {"filename": "support-deflection-report.pdf", "content": "JVBERi0="},
     ]
+
+
+@pytest.mark.asyncio
+async def test_resend_sender_raises_idempotent_replay_on_409_conflict():
+    client = _HTTPClient(
+        _Response(
+            {
+                "statusCode": 409,
+                "name": "invalid_idempotent_request",
+                "message": "This idempotency key has already been used on a request with a different payload.",
+            },
+            status_code=409,
+        )
+    )
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
+
+    with pytest.raises(IdempotentReplayConflict):
+        await sender.send(_request(idempotency_key="deflection-report:acct-1:req-1"))
+
+
+@pytest.mark.asyncio
+async def test_resend_sender_does_not_swallow_non_idempotency_409():
+    boom = RuntimeError("rate limited")
+    client = _HTTPClient(
+        _Response({"name": "rate_limit_exceeded"}, status_code=409, status_error=boom)
+    )
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
+
+    with pytest.raises(RuntimeError, match="rate limited"):
+        await sender.send(_request(idempotency_key="deflection-report:acct-1:req-1"))
 
 
 def test_resend_sender_requires_api_key():

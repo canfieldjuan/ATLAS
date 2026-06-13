@@ -15,7 +15,11 @@ from atlas_brain.content_ops_deflection_delivery import (
     send_pending_deflection_report_deliveries,
 )
 from atlas_brain.content_ops_deflection_incidents import INCIDENT_LOG_MARKER
-from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
+from extracted_content_pipeline.campaign_ports import (
+    IdempotentReplayConflict,
+    SendRequest,
+    SendResult,
+)
 
 
 def _incident_payloads(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
@@ -342,6 +346,33 @@ async def test_delivery_worker_does_not_double_send_on_reclaim_after_crash(
         == "deflection-report:acct-123:content-ops-abc123"
     )
     assert len(sender.delivered) == 1  # still one unique email -- no duplicate
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_marks_idempotent_replay_delivered_not_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # On re-claim the PDF re-renders to different bytes, so Resend rejects the
+    # retry with 409 invalid_idempotent_request -> IdempotentReplayConflict. The
+    # original email already went out, so the row must be delivered (not failed,
+    # which would fire a false send-failure incident).
+    class _ConflictSender:
+        async def send(self, request: SendRequest) -> SendResult:
+            raise IdempotentReplayConflict(request.idempotency_key or "")
+
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+    pool = _Pool([_row()])
+
+    summary = await send_pending_deflection_report_deliveries(
+        pool, sender=_ConflictSender(), config=_config()
+    )
+
+    assert summary.sent == 1
+    assert summary.failed == 0
+    update_query, update_args = pool.execute_calls[0]
+    assert "delivery_status = 'delivered'" in update_query
+    assert "delivery_status = 'sending'" in update_query
+    assert update_args == ("acct-123", "content-ops-abc123", "resend:idempotent-replay")
 
 
 @pytest.mark.asyncio

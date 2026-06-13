@@ -9,7 +9,11 @@ from typing import Any, Literal, Mapping, Protocol
 from urllib.parse import quote
 
 from .content_ops_deflection_incidents import emit_deflection_paid_funnel_incident_alert
-from extracted_content_pipeline.campaign_ports import SendRequest, SendResult
+from extracted_content_pipeline.campaign_ports import (
+    IdempotentReplayConflict,
+    SendRequest,
+    SendResult,
+)
 from extracted_content_pipeline.storage._jsonb_helpers import decode_jsonb_field
 
 
@@ -117,6 +121,25 @@ async def send_pending_deflection_report_deliveries(
                     config=config,
                 )
             )
+        except IdempotentReplayConflict:
+            # The original send already went out for this idempotency key (the
+            # provider rejected the retried payload). Mark delivered, not failed
+            # -- no second email is sent. Re-rendered PDF attachments differ
+            # byte-for-byte on re-claim, so this is the normal re-claim path.
+            await _emit_delivery_incident(
+                "paid_report_delivery_idempotent_replay",
+                account_id=account_id,
+                request_id=request_id,
+                severity="info",
+            )
+            await _mark_delivered(
+                pool,
+                account_id,
+                request_id,
+                _provider_message_id("resend", "idempotent-replay"),
+            )
+            sent += 1
+            continue
         except Exception as exc:
             error = _bounded_error(exc)
             await _emit_delivery_incident(

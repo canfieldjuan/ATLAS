@@ -65,10 +65,37 @@ not stored.
 - `atlas_brain/content_ops_deflection_delivery.py`: a `_delivery_idempotency_key`
   helper, used by `_send_request`.
 
+### Idempotent-replay conflict (Codex #1511 review)
+
+Resend returns `409 invalid_idempotent_request` when the same key is reused with
+a *different* payload. The paid report carries a generated PDF attachment, and
+the real PDF renderer stamps a per-call creation timestamp / file id, so the
+re-claim re-renders to different bytes -> the retry would be a 409, which the
+delivery loop's generic `except` would mark `failed` (a false send-failure
+incident) even though the original email already went out. To close that:
+
+- `campaign_ports.IdempotentReplayConflict` -- a typed exception meaning "an
+  email was already accepted for this key" (delivered, not failed).
+- `ResendCampaignSender.send` detects the documented `invalid_idempotent_request`
+  409 body and raises `IdempotentReplayConflict` instead of a generic HTTP error
+  (other 409s still raise normally via `raise_for_status`).
+- The delivery loop catches it before the generic failure branch, emits an
+  `info` `paid_report_delivery_idempotent_replay` incident, and marks the row
+  `delivered` (`provider_message_id = resend:idempotent-replay`).
+
+This makes the fix robust to *any* payload drift, not only the PDF timestamp.
+
 ## Intentional
 
 - The key is deterministic and recomputed, not persisted -- no migration, and
   re-claim is guaranteed to reproduce it.
+- A re-claim that re-renders a byte-different PDF is treated as delivered via the
+  `IdempotentReplayConflict` path above, not failed. Chosen over forcing a
+  byte-deterministic PDF render because it is contained to the delivery
+  path/sender and robust to all payload drift; the sentinel
+  `resend:idempotent-replay` id costs nothing here because the deflection
+  delivery's `provider_message_id` is write-only (no webhook/bounce correlation
+  reads it, unlike the campaign flow).
 - Resend-only. The deflection delivery sender is `create_campaign_sender(
   "resend", ...)`, so the native Resend `Idempotency-Key` is the correct,
   simplest mechanism. The `idempotency_key` field is provider-agnostic; if a
@@ -92,13 +119,15 @@ Parked hardening: none.
 ## Verification
 
 - Focused pytest passed over `tests/test_atlas_content_ops_deflection_delivery.py`
-  (incl. the new crash/re-claim no-double-send test),
-  `tests/test_extracted_campaign_sender.py` (the two Resend Idempotency-Key
-  HTTP-header forwarding tests), and
+  (the crash/re-claim no-double-send test + the idempotent-replay-conflict
+  marks-delivered-not-failed test), `tests/test_extracted_campaign_sender.py`
+  (the two Resend Idempotency-Key HTTP-header forwarding tests + the 409
+  `invalid_idempotent_request` -> `IdempotentReplayConflict` test and the
+  non-idempotency-409 still-raises test), and
   `tests/test_send_content_ops_deflection_report_deliveries.py`.
 - ASCII gate `scripts/check_ascii_python.sh` -- passed.
-- Python compile check for the three touched modules -- passed.
-- Full gauntlet `scripts/run_extracted_pipeline_checks.sh` -- 3906 passed,
+- Python compile check for the touched modules -- passed.
+- Full gauntlet `scripts/run_extracted_pipeline_checks.sh` -- 3909 passed,
   10 skipped, 0 failed; existing torch/pynvml warning.
 - Standalone audit `scripts/audit_extracted_standalone.py` (with --fail-on-debt)
   -- 0 import findings.
@@ -107,10 +136,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/campaign_ports.py` | 5 |
-| `extracted_content_pipeline/campaign_sender.py` | 5 |
-| `atlas_brain/content_ops_deflection_delivery.py` | 14 |
-| `tests/test_atlas_content_ops_deflection_delivery.py` | 65 |
-| `tests/test_extracted_campaign_sender.py` | 26 |
-| `plans/PR-Deflection-Delivery-Idempotency.md` | 97 |
-| **Total** | **212** |
+| `extracted_content_pipeline/campaign_ports.py` | 24 |
+| `extracted_content_pipeline/campaign_sender.py` | 36 |
+| `atlas_brain/content_ops_deflection_delivery.py` | 38 |
+| `tests/test_atlas_content_ops_deflection_delivery.py` | 97 |
+| `tests/test_extracted_campaign_sender.py` | 62 |
+| `plans/PR-Deflection-Delivery-Idempotency.md` | 152 |
+| **Total** | **~409** |
