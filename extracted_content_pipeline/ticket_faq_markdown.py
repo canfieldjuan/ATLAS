@@ -225,6 +225,154 @@ _RESOLUTION_TEXT_KEYS = (
     "staff_reply",
     "answer_text",
 )
+_RESOLUTION_ACTION_TERMS = {
+    "add",
+    "approve",
+    "ask",
+    "change",
+    "check",
+    "choose",
+    "clear",
+    "click",
+    "compare",
+    "configure",
+    "confirm",
+    "connect",
+    "contact",
+    "create",
+    "deploy",
+    "disable",
+    "download",
+    "enable",
+    "export",
+    "grant",
+    "import",
+    "map",
+    "open",
+    "paste",
+    "refresh",
+    "remove",
+    "rerun",
+    "reset",
+    "review",
+    "revoke",
+    "run",
+    "save",
+    "select",
+    "send",
+    "set",
+    "start",
+    "update",
+    "verify",
+}
+_RESOLUTION_TOPIC_STOPWORDS = {
+    "about",
+    "after",
+    "and",
+    "are",
+    "can",
+    "cannot",
+    "could",
+    "customer",
+    "does",
+    "for",
+    "from",
+    "help",
+    "how",
+    "into",
+    "issue",
+    "need",
+    "not",
+    "please",
+    "request",
+    "support",
+    "that",
+    "the",
+    "then",
+    "this",
+    "ticket",
+    "user",
+    "what",
+    "when",
+    "where",
+    "why",
+    "with",
+}
+_RESOLUTION_CLOSURE_BOILERPLATE_RE = re.compile(
+    r"\b(?:customer|user|requester|client)\s+"
+    r"(?:did not|didn't|does not|doesn't)\s+respond\b"
+    r"|\bno response from (?:the )?(?:customer|user|requester|client)\b"
+    r"|\bclosed due to no response\b"
+    r"|\bclosing due to no response\b"
+    r"|\bclosing this out\b"
+    r"|\bthanks[,. ]+(?:closing|closed)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_INTERNAL_NOTE_RE = re.compile(
+    r"\b(?:assigned|escalated|routed)\s+to\s+(?:t[0-9]+|tier\s*[0-9]+|l[0-9]+)\b"
+    r"|\bpolicy\s+\d+(?:\.\d+)+\b"
+    r"|\binternal\s+(?:note|only)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_DISPOSITION_ONLY_ACTION_TERMS = {
+    "ask",
+    "check",
+    "confirm",
+    "contact",
+    "review",
+    "send",
+    "start",
+    "update",
+}
+_RESOLUTION_DISPOSITION_ONLY_RE = re.compile(
+    r"\b(?:replied|responded)\s+to\s+(?:the\s+)?(?:customer|client|user|requester)\b"
+    r"|\b(?:sent|provided)\s+(?:the\s+)?(?:customer|client|user|requester)\s+"
+    r"(?:an?\s+)?(?:update|reply|response)\b"
+    r"|\b(?:sent|provided)\s+(?:an?\s+)?(?:update|reply|response)\s+"
+    r"to\s+(?:the\s+)?(?:customer|client|user|requester)\b"
+    r"|\b(?:customer|client|user|requester)\s+(?:was\s+)?"
+    r"(?:updated|notified|informed)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_TOPIC_EQUIVALENCE_GROUPS = (
+    frozenset({
+        "auth",
+        "authentication",
+        "code",
+        "credential",
+        "login",
+        "log",
+        "password",
+        "reset",
+        "sign",
+    }),
+    frozenset({
+        "bill",
+        "billing",
+        "charge",
+        "invoice",
+        "payment",
+        "receipt",
+        "statement",
+    }),
+    frozenset({
+        "connect",
+        "connection",
+        "integration",
+        "sync",
+    }),
+    frozenset({
+        "cancel",
+        "cancellation",
+        "renewal",
+        "subscription",
+    }),
+)
+_RESOLUTION_TOPIC_EQUIVALENCE: dict[str, frozenset[str]] = {
+    token: group
+    for group in _RESOLUTION_TOPIC_EQUIVALENCE_GROUPS
+    for token in group
+}
 _VOCABULARY_GAP_RULES = (
     ("export", "download", "download report", "report download"),
     ("dashboard", "analytics", "reporting", "reports"),
@@ -469,7 +617,22 @@ def build_ticket_faq_markdown(
             seen.add(key)
             source_keys.add(source_key)
             topic = _topic(opportunity, evidence, intent_rules=intent_rules)
-            resolution_text = _resolution_text(evidence, opportunity)
+            resolution_context = " / ".join(
+                value
+                for value in (
+                    text,
+                    topic,
+                    _clean(evidence.get("source_title") or opportunity.get("source_title")),
+                    _clean(evidence.get("pain_category") or opportunity.get("pain_category")),
+                    _clean(evidence.get("tags") or opportunity.get("tags")),
+                )
+                if value
+            )
+            resolution_text = _resolution_text(
+                evidence,
+                opportunity,
+                question_text=resolution_context,
+            )
             evidence_group_key = _evidence_group_key(resolution_text)
             group_key = (topic, evidence_group_key or f"topic:{_compact_key(topic)}")
             source_date = _source_date(evidence) or _source_date(opportunity)
@@ -1048,13 +1211,272 @@ def _source_weight(*rows: Mapping[str, Any]) -> int:
     return source_row_weight(*rows)
 
 
-def _resolution_text(*rows: Mapping[str, Any]) -> str:
+def _resolution_text(*rows: Mapping[str, Any], question_text: str = "") -> str:
     for row in rows:
         for key in _RESOLUTION_TEXT_KEYS:
             text = support_ticket_plain_text(_field_value(row, key))
-            if text:
+            if text and _resolution_text_is_publishable(text, question_text=question_text):
                 return text
     return ""
+
+
+# Imperative-shape detection for the publishable gate (#1466 Option 1). A
+# resolution is publishable when it survives the reject filters AND looks like
+# an instruction, rather than when it contains a token from a fixed action-term
+# list. This recognizes unknown verbs (schedule, pin, narrow, forward, ...) by
+# the "<verb> the/your/a <noun>" imperative shape, numbered steps, or a UI
+# navigation path -- the enumerated lists could never keep up (four rounds).
+# Split on sentence terminators but KEEP them attached (lookbehind), so a
+# trailing "?" survives and an interrogative sentence ("Did the lights change?")
+# can be told apart from a step. The lead word and object shapes are anchored to
+# the start of each sentence, so a retained terminator does not affect them. The
+# `(?<![0-9].)` guard keeps a list-number period ("1. Open ...") from splitting
+# the number off its step, so the per-sentence reject filters still apply to the
+# whole numbered sentence (a numbered question is rejected, not accepted).
+_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])(?<![0-9].)\s+|\n+")
+_RESOLUTION_UI_PATH_RE = re.compile(
+    r"\b[a-z][\w-]*\s+then\s+[a-z][\w-]*\b", re.IGNORECASE
+)
+# A leading clause that precedes the real instruction ("To fix this, reset ...").
+# A list-number prefix ("1.", "2)", "step 3:") is stripped here too, so a
+# numbered step is evaluated by the same lead/object logic as any other sentence
+# -- the numbering is not a standalone "this is a step" signal that could bypass
+# the question/declarative/redirect rejects (round-7 review BLOCKER).
+_RESOLUTION_INSTRUCTION_PREFIX_RE = re.compile(
+    r"^(?:please\s+|kindly\s+|first[,]?\s+|then[,]?\s+|next[,]?\s+|now[,]?\s+"
+    r"|(?:step\s+)?\d+[.):]\s+"
+    r"|to\s+[a-z]+\s+(?:this|it|that|the\s+(?:issue|problem|error))\s*[,:]\s*)+",
+    re.IGNORECASE,
+)
+# Sentence-lead tokens that are not imperative verbs, so a leading "<word> the"
+# match (e.g. "About the export") is not mistaken for an instruction.
+_RESOLUTION_NON_VERB_LEADS = frozenset({
+    "about", "after", "also", "an", "and", "any", "as", "because", "before",
+    "but", "for", "he", "her", "here", "his", "how", "however", "i", "in",
+    "into", "it", "its", "my", "no", "not", "once", "or", "our", "per", "she",
+    "since", "so", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "thanks", "thank", "to", "unfortunately", "we",
+    "what", "when", "where", "which", "while", "who", "why", "with", "you",
+    "your",
+})
+# The object of an imperative is an article/possessive-introduced noun phrase or
+# an imperative preposition. Demonstratives/pronouns (this/that/it/...) are
+# excluded: they are clause subjects, so "<adverb> this is a known issue" must
+# not parse as "<verb> <object>".
+_RESOLUTION_INSTRUCTION_OBJECT_RE = re.compile(
+    r"^(?:the|your|a|an|its|their|to|into|onto|on|off|from)\b",
+    re.IGNORECASE,
+)
+# Linking verbs never lead an imperative; a sentence opening with one is a
+# question or declarative ("Is the account active?"), not a step.
+_RESOLUTION_COPULA_LEADS = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "seem", "seems", "seemed", "look", "looks", "looked",
+    "remain", "remains", "remained", "appear", "appears", "appeared",
+    "become", "becomes", "became",
+})
+# "<article> <noun ...> is/are ..." is a declarative subject + copula, not an
+# instruction object ("the issue is annoying", "the export is a known limit").
+_RESOLUTION_OBJECT_DECLARATIVE_RE = re.compile(
+    r"^(?:the|your|a|an|its|their)\s+[a-z'-]+(?:\s+[a-z'-]+){0,2}\s+"
+    r"(?:is|are|was|were|be|been|seems?|looks?|remains?|appears?|becomes?)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_LEAD_WORD_RE = re.compile(r"([a-z][a-z'-]*)", re.IGNORECASE)
+# A first-person subject preceding the action ("I enabled ...", "We reset ...").
+_RESOLUTION_FIRST_PERSON_LEAD_RE = re.compile(
+    r"^(?:i|we)(?:\s+(?:have|had|then|just|already|also))?\s+", re.IGNORECASE
+)
+# Contact-channel redirection: directing the requester to reach a human over a
+# private channel ("send us a DM", "message us", "shoot me a private message")
+# is a hand-off, not a self-serve resolution. This is the imperative-shaped
+# sibling of the disposition reject (a "Please DM us" reply passes the
+# instruction-shape test but answers nothing), surfaced by running the gate over
+# real support replies. Narrow on purpose -- it matches "<verb> us/me" and the
+# "DM/PM/private message" redirect nouns, not legitimate steps that merely
+# contain "send"/"message" ("Send the report to your team", "Message the channel
+# owner"). Applied per sentence, so a genuine step followed by a "...then DM us"
+# fallback still publishes on the real step.
+_RESOLUTION_CONTACT_REDIRECT_RE = re.compile(
+    r"\b(?:send|shoot|drop|message|dm|pm|ping)\s+(?:us|me)\b"
+    r"|\b(?:dm|pm|message|ping|contact)\s+us\b"
+    r"|\bsend\s+(?:us|me)\s+a\s+(?:dm\b|pm\b|message\b|private\s+message|direct\s+message)"
+    r"|\b(?:private|direct)\s+message\s+(?:us|me)\b"
+    r"|\breach\s+out\s+to\s+us\b"
+    r"|\bprivate\s+message\b",
+    re.IGNORECASE,
+)
+
+
+def _resolution_text_is_publishable(value: Any, *, question_text: str) -> bool:
+    text = _compact(support_ticket_plain_text(value))
+    if not text:
+        return False
+    # Reject filters (honesty floor -- kept verbatim from #1456).
+    if _RESOLUTION_CLOSURE_BOILERPLATE_RE.search(text):
+        return False
+    if _RESOLUTION_INTERNAL_NOTE_RE.search(text):
+        return False
+    resolution_tokens = _resolution_signal_tokens(text)
+    if len(resolution_tokens) < 3:
+        return False
+    if _resolution_text_is_disposition_only(text, resolution_tokens):
+        return False
+    # Positive gate: structural instruction shape, not list membership.
+    if not _resolution_text_looks_instructional(text):
+        return False
+    # Action-term membership and question-topic overlap are demoted (#1466
+    # Option 1) from hard rejects to advisory signals: computed here for a
+    # future confidence surface, but they never block a structurally-valid,
+    # non-boilerplate instruction.
+    _resolution_advisory_signals(resolution_tokens, question_text)
+    return True
+
+
+def _resolution_text_looks_instructional(text: str) -> bool:
+    """True when the resolution reads like a step a user can follow.
+
+    Every positive signal -- a UI navigation path ("Settings then Phone"), a
+    known action verb, or the "<verb> the/your/a <noun>" imperative shape for
+    verbs not in the list -- is evaluated per sentence and only AFTER that
+    sentence clears the question / disposition / contact-redirect /
+    declarative-lead rejects. A numbered/UI-path/declarative diagnostic ("1. Did
+    the lights change?", "The issue is in Billing then Plan ...") therefore can
+    no longer short-circuit those rejects (round-7 review BLOCKER); list numbers
+    are stripped as a prefix, not treated as a standalone "this is a step" flag.
+    """
+
+    for sentence in _RESOLUTION_SENTENCE_SPLIT_RE.split(text):
+        stripped = sentence.strip()
+        if not stripped:
+            continue
+        # A question is not a step. An agent reply that ends in "?" ("Did the
+        # lights change on the router?") is a diagnostic prompt back to the
+        # requester, not a resolution they can act on.
+        if stripped.endswith("?"):
+            continue
+        if _RESOLUTION_DISPOSITION_ONLY_RE.search(stripped):
+            continue
+        prefix = _RESOLUTION_INSTRUCTION_PREFIX_RE.match(stripped)
+        remainder = stripped[prefix.end():] if prefix else stripped
+        first_person = _RESOLUTION_FIRST_PERSON_LEAD_RE.match(remainder)
+        if first_person:
+            remainder = remainder[first_person.end():]
+        # A contact redirect only disqualifies the sentence when it is the lead
+        # clause ("Send us a DM ...", "Have your friend message us"). A redirect
+        # trailing a real step ("Reset the cache, then DM us if it persists")
+        # leaves the step intact, so check only up to the first clause break.
+        lead_clause = re.split(r"[,;]", remainder, maxsplit=1)[0]
+        if _RESOLUTION_CONTACT_REDIRECT_RE.search(lead_clause):
+            continue
+        lead_match = _RESOLUTION_LEAD_WORD_RE.match(remainder)
+        if not lead_match:
+            continue
+        lead = lead_match.group(1).lower()
+        if lead in _RESOLUTION_NON_VERB_LEADS or lead in _RESOLUTION_COPULA_LEADS:
+            continue
+        # A UI navigation path ("Settings then Phone") is a step -- but only now
+        # that the sentence has cleared the question / disposition / redirect /
+        # non-verb-lead rejects above, so a declarative ("The issue is in Billing
+        # then Plan") or question ("Did Settings then Phone show ...?") cannot
+        # qualify through the path shape.
+        if _RESOLUTION_UI_PATH_RE.search(remainder):
+            return True
+        # Stem the lead so past-tense / gerund action verbs ("Enabled the SSO",
+        # "Configured ...", "Updating ...") still register as instructions.
+        if _resolution_signal_token(lead) in _RESOLUTION_ACTION_TERMS:
+            return True
+        # The generic "<verb> the/your <noun>" shape qualifies unknown verbs
+        # ("Schedule the sync", "Pin the view") only in imperative position. A
+        # first-person subject makes it narration ("We received your request",
+        # "We closed your ticket"), so it must use a known action verb instead.
+        if first_person:
+            continue
+        rest = remainder[lead_match.end():].lstrip()
+        # The object must be a genuine instruction object, not a clause subject
+        # that a copula turns into a declarative ("Honestly the issue is ...").
+        if _RESOLUTION_INSTRUCTION_OBJECT_RE.match(rest) and not (
+            _RESOLUTION_OBJECT_DECLARATIVE_RE.match(rest)
+        ):
+            return True
+    return False
+
+
+def _resolution_advisory_signals(
+    resolution_tokens: set[str], question_text: str
+) -> dict[str, bool]:
+    """Demoted confidence signals (#1466 Option 1): computed, never gating.
+
+    The action-term-membership and question-topic-overlap checks were hard
+    rejects through four enumeration rounds and over-rejected real answers.
+    They are retained here as advisory diagnostics so the maps stay live for a
+    future confidence surface; they do not influence publishability.
+    """
+
+    question_tokens = _resolution_signal_tokens(question_text)
+    return {
+        "has_known_action_term": not resolution_tokens.isdisjoint(
+            _RESOLUTION_ACTION_TERMS
+        ),
+        "topic_aligned": (
+            not question_tokens
+            or not _resolution_overlap_tokens(resolution_tokens).isdisjoint(
+                _resolution_overlap_tokens(question_tokens)
+            )
+        ),
+    }
+
+
+def _resolution_signal_tokens(value: Any) -> set[str]:
+    return {
+        _resolution_signal_token(token)
+        for token in re.findall(r"[a-z0-9]+", _compact(value).lower())
+        if len(token) > 2 and token not in _RESOLUTION_TOPIC_STOPWORDS
+    }
+
+
+def _resolution_text_is_disposition_only(text: str, resolution_tokens: set[str]) -> bool:
+    action_tokens = resolution_tokens & _RESOLUTION_ACTION_TERMS
+    return bool(
+        action_tokens
+        and action_tokens <= _RESOLUTION_DISPOSITION_ONLY_ACTION_TERMS
+        and _RESOLUTION_DISPOSITION_ONLY_RE.search(text)
+    )
+
+
+def _resolution_overlap_tokens(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for token in tokens:
+        expanded.update(_RESOLUTION_TOPIC_EQUIVALENCE.get(token, ()))
+    return expanded
+
+
+def _resolution_signal_token(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 5 and token.endswith("ing"):
+        base = token[:-3]
+        if base in _RESOLUTION_ACTION_TERMS:
+            return base
+        if f"{base}e" in _RESOLUTION_ACTION_TERMS:
+            return f"{base}e"
+        if len(base) > 3 and base[-1:] == base[-2:-1] and base[:-1] in _RESOLUTION_ACTION_TERMS:
+            return base[:-1]
+        return base
+    if len(token) > 4 and token.endswith("ed"):
+        base = token[:-2]
+        if base in _RESOLUTION_ACTION_TERMS:
+            return base
+        if f"{base}e" in _RESOLUTION_ACTION_TERMS:
+            return f"{base}e"
+        if base.endswith("i") and f"{base[:-1]}y" in _RESOLUTION_ACTION_TERMS:
+            return f"{base[:-1]}y"
+        if len(base) > 3 and base[-1:] == base[-2:-1] and base[:-1] in _RESOLUTION_ACTION_TERMS:
+            return base[:-1]
+        return base
+    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def _resolution_texts(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:

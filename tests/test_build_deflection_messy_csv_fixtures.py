@@ -32,10 +32,15 @@ def _write_source_rows(tmp_path: Path) -> Path:
             "company_response": "Closed with explanation",
         },
         {
+            # Shares cfpb:1's question gist so the first four rows contain a
+            # genuine 2-ticket repeat. Under measured repetition (#1486) plus
+            # the stricter proven-answer gate (#1466) these disposition-only
+            # resolutions are rejected, so without a real repeat every row
+            # would be a non-repeat singleton and the report would be empty.
             "source_id": "cfpb:2",
-            "source_title": "Credit card - Billing dispute",
-            "text": "My payment was applied to the wrong balance.",
-            "pain_category": "Billing dispute",
+            "source_title": "Checking account - Managing an account",
+            "text": "The bank charged a fee when I closed the account.",
+            "pain_category": "Managing an account",
             "company_response": "Closed with non-monetary relief",
         },
         {

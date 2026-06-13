@@ -21,6 +21,9 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
     _output_checks,
+    _resolution_advisory_signals,
+    _resolution_signal_tokens,
+    _resolution_text_is_publishable,
     build_ticket_faq_markdown,
     normalize_intent_rules,
     weighted_source_volume_by_group,
@@ -262,6 +265,369 @@ def test_build_ticket_faq_markdown_uses_resolution_evidence_for_steps() -> None:
     assert "Verified resolution evidence" not in item["answer"]
     assert "Draft the customer-facing steps" not in result.markdown
     assert "support@example.com" in result.markdown
+
+
+def test_build_ticket_faq_markdown_rejects_closure_boilerplate_as_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Export issue",
+            "evidence": [
+                {
+                    "text": "How do I export billing reports?",
+                    "source_id": "ticket-closure-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Customer did not respond, closing this out.",
+                },
+                {
+                    "text": "How do I export billing reports?",
+                    "source_id": "ticket-closure-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Customer did not respond, closing this out.",
+                },
+            ],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert "closing this out" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_rejects_internal_notes_as_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Refund issue",
+            "evidence": [
+                {
+                    "text": "How do I get a refund for a duplicate charge?",
+                    "source_id": "ticket-internal-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
+                },
+                {
+                    "text": "How do I get a refund for a duplicate charge?",
+                    "source_id": "ticket-internal-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
+                },
+            ],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert "policy 4.2" not in result.markdown
+    assert "Escalated to T2" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_legitimate_policy_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Refund issue",
+            "evidence": [{
+                "text": "How do I request a refund under the billing policy?",
+                "source_id": "ticket-policy-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Billing, choose Refunds, then review the refund policy "
+                    "before submitting the request."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Open Billing, choose Refunds, then review the refund policy before "
+        "submitting the request."
+    )
+
+
+def test_build_ticket_faq_markdown_uses_row_context_for_resolution_topic_match() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Receipt export",
+            "pain_category": "billing export",
+            "tags": "billing,invoices,resolved",
+            "evidence": [{
+                "text": "Can finance export subscription receipts without admin access?",
+                "source_id": "ticket-context-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Open Billing then Invoices, filter by the quarter, and "
+                    "download the PDF from the invoice row."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Open Billing then Invoices, filter by the quarter, and download the "
+        "PDF from the invoice row."
+    )
+
+
+@pytest.mark.parametrize(
+    ("question_text", "resolution_text", "expected_step"),
+    (
+        (
+            "I cannot log in to my account.",
+            "Reset the password and send a temporary code.",
+            "Reset the password and send a temporary code.",
+        ),
+        (
+            "How do I sign in after lockout?",
+            "Reset the password and send a backup code.",
+            "Reset the password and send a backup code.",
+        ),
+        (
+            "Why does authentication fail on mobile?",
+            "Clear saved credentials and reset the password.",
+            "Clear saved credentials and reset the password.",
+        ),
+        (
+            "How do I get receipts for finance?",
+            "Open Billing, choose Invoices, and download the PDF.",
+            "Open Billing, choose Invoices, and download the PDF.",
+        ),
+        (
+            "Can I connect Salesforce?",
+            "Open Integrations and refresh the sync.",
+            "Open Integrations and refresh the sync.",
+        ),
+        (
+            "How do I stop renewal?",
+            "Open Billing and cancel the subscription.",
+            "Open Billing and cancel the subscription.",
+        ),
+    ),
+)
+def test_build_ticket_faq_markdown_keeps_synonymous_resolution_topics(
+    question_text: str,
+    resolution_text: str,
+    expected_step: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Synonymous support wording",
+            "evidence": [{
+                "text": question_text,
+                "source_id": "ticket-synonym-1",
+                "source_type": "support_ticket",
+                "resolution_text": resolution_text,
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == expected_step
+
+
+@pytest.mark.parametrize(
+    ("question_text", "resolution_text"),
+    (
+        (
+            "I cannot log in to my account.",
+            "Open Billing and download the invoice PDF.",
+        ),
+        (
+            "How do I get receipts for finance?",
+            "Reset the password and send a temporary code.",
+        ),
+    ),
+)
+def test_build_ticket_faq_markdown_publishes_off_topic_instruction_overlap_demoted(
+    question_text: str,
+    resolution_text: str,
+) -> None:
+    # #1466 Option 1: question-topic overlap is demoted from a hard reject to an
+    # advisory signal. An off-topic-but-genuine instruction now PUBLISHES (it
+    # passes the reject filters + instruction-shape gate); the advisory
+    # `topic_aligned` signal still reports the mismatch for a future confidence
+    # surface, but it no longer blocks publication.
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Off-topic support wording",
+            "evidence": [
+                {
+                    "text": question_text,
+                    "source_id": "ticket-off-topic-synonym-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+                {
+                    "text": question_text,
+                    "source_id": "ticket-off-topic-synonym-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+            ],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    advisory = _resolution_advisory_signals(
+        _resolution_signal_tokens(resolution_text), question_text
+    )
+    assert advisory["topic_aligned"] is False
+
+
+def test_resolution_advisory_topic_aligned_distinguishes_on_and_off_topic() -> None:
+    # The demoted overlap signal still computes correctly: on-topic resolutions
+    # align, off-topic ones do not (kept for a future confidence surface).
+    on_topic = _resolution_advisory_signals(
+        _resolution_signal_tokens("Reset the password and confirm the new login."),
+        "I cannot log in to my account.",
+    )
+    off_topic = _resolution_advisory_signals(
+        _resolution_signal_tokens("Open Billing and download the invoice PDF."),
+        "I cannot log in to my account.",
+    )
+    assert on_topic["topic_aligned"] is True
+    assert off_topic["topic_aligned"] is False
+
+
+def test_build_ticket_faq_markdown_keeps_past_tense_action_resolution() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "MFA settings",
+            "evidence": [{
+                "text": "How do I update MFA settings?",
+                "source_id": "ticket-past-tense-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "I enabled MFA and configured the authenticator, then "
+                    "updated the settings."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "I enabled MFA and configured the authenticator, then updated the settings."
+    )
+
+
+@pytest.mark.parametrize(
+    "resolution_text",
+    (
+        "Reviewed the billing account and replied to the customer.",
+        "Checked the account and sent the customer an update.",
+        "Reviewed the billing account and sent an update to the customer.",
+        "Checked the account and provided an update to the requester.",
+        "Started reviewing the billing account and sent an update to the customer.",
+    ),
+)
+def test_build_ticket_faq_markdown_rejects_disposition_only_agent_updates(
+    resolution_text: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Billing account",
+            "evidence": [
+                {
+                    "text": "How do I update the billing account?",
+                    "source_id": "ticket-disposition-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+                {
+                    "text": "How do I update the billing account?",
+                    "source_id": "ticket-disposition-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+            ],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["resolution_evidence_scope"] == "not_applicable"
+    assert item["resolution_source_count"] == 0
+    assert item["steps"][0].startswith("Review the cited ticket evidence")
+    assert resolution_text not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_concrete_step_after_account_review() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Billing account",
+            "evidence": [{
+                "text": "How do I update the billing account?",
+                "source_id": "ticket-concrete-review-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Checked the billing account, opened Invoices, and updated "
+                    "the payment method."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Checked the billing account, opened Invoices, and updated the payment method."
+    )
+
+
+def test_build_ticket_faq_markdown_keeps_concrete_started_return_step() -> None:
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "Product return",
+            "evidence": [{
+                "text": "How do I return a recent purchase from your store?",
+                "source_id": "ticket-return-1",
+                "source_type": "support_ticket",
+                "resolution_text": (
+                    "Items should be returned within 30 days in their original "
+                    "condition. Start the return in the online returns portal."
+                ),
+            }],
+        }]
+    )
+
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
+    assert item["resolution_source_count"] == 1
+    assert item["steps"][0] == (
+        "Items should be returned within 30 days in their original condition."
+    )
+    assert item["steps"][1] == "Start the return in the online returns portal."
 
 
 def test_build_ticket_faq_markdown_rejects_generic_response_metadata_as_resolution() -> None:
@@ -4853,3 +5219,121 @@ def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> Non
 
     assert completed.returncode == 1
     assert "--as-of-date requires --window-days" in completed.stderr
+
+
+# --- Held-out publishability corpus for the #1466 Option 1 inversion ---------
+# Pinned per the operator decision: the gate must publish realistic answers
+# across varied verbs and symptom/fix synonym pairs (not just the four cited
+# examples), and keep the honesty-floor reject classes rejected. These are
+# probed directly against _resolution_text_is_publishable so a regression in
+# the gate fails here, not only in an end-to-end assertion.
+
+_HELD_OUT_PUBLISHABLE = (
+    # varied imperative verbs, including verbs absent from the action-term list
+    ("Why is my sync slow?", "Schedule the sync to run during off-peak hours."),
+    ("How do I keep my view?", "Pin the saved view to your dashboard so it loads first."),
+    ("I never got the email", "Check the spam folder for the confirmation email and mark it not spam."),
+    ("My export times out", "Narrow the export window to under 90 days and retry the export."),
+    ("Wrong team got my ticket", "Forward the ticket to the billing queue from the actions menu."),
+    ("Who owns this case?", "Assign the case to yourself, then add an internal label."),
+    ("Change workspace name", "Rename the workspace under Settings then General."),
+    ("Too many old threads", "Archive the old thread and start a fresh conversation."),
+    ("Form will not submit", "Submit the form again after clearing the browser cache."),
+    ("Stop my plan", "Cancel the subscription from Billing then Plan before the renewal date."),
+    # symptom/fix synonym pairs (topic overlap demoted -> still publishable)
+    ("I cannot log in", "Reset the SSO certificate and re-enable single sign-on for the org."),
+    ("App keeps crashing", "Clear the cache and restart the app to stop the crash."),
+    ("I was charged twice", "Open Billing, find the duplicate charge, and request a refund."),
+    # past-tense / first-person action narration
+    ("How do I update MFA settings?", "I enabled MFA and configured the authenticator, then updated the settings."),
+    # numbered steps
+    ("Sensor offline", "1. Open Settings. 2. Tap Devices. 3. Re-pair the sensor."),
+    # "to fix this," instruction preamble
+    ("Stuck on payment", "To fix this, clear the saved card and add it again under Billing."),
+    # Guards for the contact-redirect / question reject classes (#1466 round 7):
+    # real steps that merely contain "send"/"message", or a trailing redirect or
+    # question after a genuine step, must still publish on the step.
+    ("Cannot reach owner", "Message the channel owner to request access."),
+    ("Where do I send it?", "Send the report to your team from the Export menu."),
+    ("App errors out", "Reset the cache, then DM us if the error persists."),
+    ("Service is down", "Check the logs. Did it work? If not, restart the service."),
+    # A real UI-path instruction must still publish after the structural
+    # recognizers were moved behind the per-sentence rejects (round-7 BLOCKER).
+    ("Disable airplane mode", "Go to Settings then Phone and toggle airplane mode off."),
+)
+
+_HELD_OUT_REJECTED = (
+    ("anything", "Customer did not respond, closing this out."),
+    ("anything", "Sent an update to the customer."),
+    ("anything", "Replied to the requester with the latest status details."),
+    ("anything", "Provided the customer an update on the timeline."),
+    ("anything", "Escalated to T2 for further review."),
+    ("anything", "Refunded per policy 4.2."),
+    ("anything", "Thank you for contacting support. We received your request."),
+    ("anything", "We have closed your ticket as resolved."),
+    ("anything", "Done."),
+    ("Why was I charged?", "The bank charged a fee after I closed the account."),
+    # Declarative status / opinion commentary must NOT publish as a step (the
+    # inversion's over-accept flip-side: the imperative object-shape must not
+    # match a clause subject + copula). Round-6 review MAJOR.
+    ("anything", "Honestly this is a known issue and pretty annoying for everyone."),
+    ("anything", "That is the expected behavior for the free tier."),
+    ("anything", "Unfortunately the issue is a duplicate of an existing bug."),
+    ("anything", "Is the account still active on your end?"),
+    # Contact-channel redirection: a hand-off to a human over a private channel
+    # is imperative-shaped but answers nothing. Surfaced running the gate over
+    # real support replies (Twitter brand replies), round 7.
+    ("My account is locked", "Please send me a private message so we can help."),
+    ("I need help", "Have your friend message us."),
+    ("Where is my order?", "Send us a Direct Message with your order number."),
+    ("Login broken", "DM us your account email and we'll investigate."),
+    # Answer-is-a-question: a diagnostic prompt back to the requester is not a
+    # step they can follow (a non-copula interrogative, complementing the
+    # existing "Is the account still active?" copula case above).
+    ("Internet keeps dropping", "Did the lights change on the router when this happened?"),
+    # Structural recognizers must not bypass the per-sentence rejects (round-7
+    # BLOCKER): a UI-path or numbered diagnostic question, and a UI-path
+    # declarative, are non-answers even though they carry a step-like shape.
+    ("Phone carrier", "Did Settings then Phone show the carrier toggle?"),
+    ("Router lights", "1. Did the lights change on the router?"),
+    ("Billing location", "The issue is in Billing then Plan and not your account."),
+)
+
+
+@pytest.mark.parametrize(("question_text", "resolution_text"), _HELD_OUT_PUBLISHABLE)
+def test_resolution_gate_publishes_held_out_real_answers(
+    question_text: str, resolution_text: str
+) -> None:
+    assert _resolution_text_is_publishable(
+        resolution_text, question_text=question_text
+    ) is True
+
+
+@pytest.mark.parametrize(("question_text", "resolution_text"), _HELD_OUT_REJECTED)
+def test_resolution_gate_rejects_held_out_non_answers(
+    question_text: str, resolution_text: str
+) -> None:
+    assert _resolution_text_is_publishable(
+        resolution_text, question_text=question_text
+    ) is False
+
+
+def test_resolution_gate_drafts_held_out_answers_end_to_end() -> None:
+    # drafted_answer_count must not regress: a repeated question whose two
+    # tickets carry a held-out publishable instruction surfaces as a drafted
+    # (resolution_evidence) answer through the full builder.
+    question = "How do I rotate my API key?"
+    answer = "Open Settings then Developers, revoke the old key, and create a new one."
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "API key rotation",
+            "evidence": [
+                {"text": question, "source_id": "held-1", "source_type": "support_ticket", "resolution_text": answer},
+                {"text": question, "source_id": "held-2", "source_type": "support_ticket", "resolution_text": answer},
+            ],
+        }]
+    )
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
