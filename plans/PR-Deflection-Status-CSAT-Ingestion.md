@@ -37,8 +37,9 @@ Slice phase: Production hardening
   gets `ticket_status` (raw) + `ticket_status_state` (canonical bucket); a row carrying a
   satisfaction column gets `csat` (raw) + `csat_score` (numeric when parseable); package
   metadata reports `ticket_status_present(_count)`, `ticket_status_summary` (per-bucket
-  counts), `csat_present`, `csat_score_count`, `csat_score_average`; rows without these
-  columns are byte-for-byte unchanged and produce no new warnings.
+  counts), `csat_present(_count)` (from raw `csat`, so textual good/bad reads as present),
+  `csat_score_count`, `csat_score_average` (numeric-only); rows without these columns are
+  byte-for-byte unchanged and produce no new warnings.
 - Affected surfaces: one ingestion module + its unit test. No report output, no DB, no
   network, no generation-input change.
 - Risk areas: status vocabulary misclassification (mitigated: unknown values map to

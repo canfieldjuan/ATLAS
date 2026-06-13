@@ -1174,6 +1174,7 @@ def test_support_ticket_input_package_recognizes_status_and_csat_columns() -> No
     assert package.metadata["ticket_status_present_count"] == 2
     assert package.metadata["ticket_status_summary"] == {"resolved": 1, "open": 1}
     assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_present_count"] == 2
     assert package.metadata["csat_score_count"] == 2
     assert package.metadata["csat_score_average"] == 3.5
 
@@ -1234,8 +1235,38 @@ def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:
     assert rows[2]["csat_score"] == 2.0
 
     assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_present_count"] == 3
     assert package.metadata["csat_score_count"] == 2
     assert package.metadata["csat_score_average"] == 3.0
+
+
+def test_support_ticket_input_package_marks_textual_csat_present_without_score() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "zd-1",
+            "subject": "How do I reset my password?",
+            "description": "I cannot reset my password from the login screen.",
+            "Customer Satisfaction Rating": "good",
+        },
+        {
+            "ticket_id": "zd-2",
+            "subject": "Billing question",
+            "description": "Why was I charged twice this month?",
+            "satisfaction_rating": "bad",
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+    assert rows[0]["csat"] == "good"
+    assert "csat_score" not in rows[0]
+    assert rows[1]["csat"] == "bad"
+    assert "csat_score" not in rows[1]
+
+    # all-textual CSAT must read as PRESENT even though no numeric score exists
+    assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_present_count"] == 2
+    assert package.metadata["csat_score_count"] == 0
+    assert package.metadata["csat_score_average"] is None
 
 
 def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> None:
@@ -1256,5 +1287,6 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["ticket_status_present_count"] == 0
     assert package.metadata["ticket_status_summary"] == {}
     assert package.metadata["csat_present"] is False
+    assert package.metadata["csat_present_count"] == 0
     assert package.metadata["csat_score_count"] == 0
     assert package.metadata["csat_score_average"] is None

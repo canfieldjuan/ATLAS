@@ -322,6 +322,7 @@ def build_support_ticket_input_package(
     measured_outcome_examples = _measured_outcome_examples(normalized_rows)
     ticket_status_summary = _ticket_status_summary(normalized_rows)
     ticket_status_present_count = sum(ticket_status_summary.values())
+    csat_present_count = _csat_present_count(normalized_rows)
     csat_scores = _csat_scores(normalized_rows)
     resolved_secondary_keywords = tuple(secondary_keywords or (
         "customer support FAQ",
@@ -393,7 +394,8 @@ def build_support_ticket_input_package(
         "ticket_status_present": ticket_status_present_count > 0,
         "ticket_status_present_count": ticket_status_present_count,
         "ticket_status_summary": ticket_status_summary,
-        "csat_present": len(csat_scores) > 0,
+        "csat_present": csat_present_count > 0,
+        "csat_present_count": csat_present_count,
         "csat_score_count": len(csat_scores),
         "csat_score_average": (
             round(sum(csat_scores) / len(csat_scores), 2) if csat_scores else None
@@ -671,6 +673,12 @@ def _ticket_status_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
         if state:
             counts[state] = counts.get(state, 0) + 1
     return counts
+
+
+def _csat_present_count(rows: Sequence[Mapping[str, Any]]) -> int:
+    # Presence reflects any raw CSAT value (textual good/bad included), not just
+    # numeric scores -- a textual-only export must not read as absent.
+    return sum(1 for row in rows if _clean(row.get("csat")))
 
 
 def _csat_scores(rows: Sequence[Mapping[str, Any]]) -> list[float]:
