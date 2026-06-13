@@ -1248,9 +1248,27 @@ _RESOLUTION_NON_VERB_LEADS = frozenset({
     "what", "when", "where", "which", "while", "who", "why", "with", "you",
     "your",
 })
+# The object of an imperative is an article/possessive-introduced noun phrase or
+# an imperative preposition. Demonstratives/pronouns (this/that/it/...) are
+# excluded: they are clause subjects, so "<adverb> this is a known issue" must
+# not parse as "<verb> <object>".
 _RESOLUTION_INSTRUCTION_OBJECT_RE = re.compile(
-    r"^(?:the|your|a|an|this|that|these|those|its|their|it|them|all|each|any|"
-    r"on|off|into|to|from|in|under|via|by|both)\b",
+    r"^(?:the|your|a|an|its|their|to|into|onto|on|off|from)\b",
+    re.IGNORECASE,
+)
+# Linking verbs never lead an imperative; a sentence opening with one is a
+# question or declarative ("Is the account active?"), not a step.
+_RESOLUTION_COPULA_LEADS = frozenset({
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "seem", "seems", "seemed", "look", "looks", "looked",
+    "remain", "remains", "remained", "appear", "appears", "appeared",
+    "become", "becomes", "became",
+})
+# "<article> <noun ...> is/are ..." is a declarative subject + copula, not an
+# instruction object ("the issue is annoying", "the export is a known limit").
+_RESOLUTION_OBJECT_DECLARATIVE_RE = re.compile(
+    r"^(?:the|your|a|an|its|their)\s+[a-z'-]+(?:\s+[a-z'-]+){0,2}\s+"
+    r"(?:is|are|was|were|be|been|seems?|looks?|remains?|appears?|becomes?)\b",
     re.IGNORECASE,
 )
 _RESOLUTION_LEAD_WORD_RE = re.compile(r"([a-z][a-z'-]*)", re.IGNORECASE)
@@ -1314,7 +1332,7 @@ def _resolution_text_looks_instructional(text: str) -> bool:
         if not lead_match:
             continue
         lead = lead_match.group(1).lower()
-        if lead in _RESOLUTION_NON_VERB_LEADS:
+        if lead in _RESOLUTION_NON_VERB_LEADS or lead in _RESOLUTION_COPULA_LEADS:
             continue
         # Stem the lead so past-tense / gerund action verbs ("Enabled the SSO",
         # "Configured ...", "Updating ...") still register as instructions.
@@ -1327,7 +1345,11 @@ def _resolution_text_looks_instructional(text: str) -> bool:
         if first_person:
             continue
         rest = remainder[lead_match.end():].lstrip()
-        if _RESOLUTION_INSTRUCTION_OBJECT_RE.match(rest):
+        # The object must be a genuine instruction object, not a clause subject
+        # that a copula turns into a declarative ("Honestly the issue is ...").
+        if _RESOLUTION_INSTRUCTION_OBJECT_RE.match(rest) and not (
+            _RESOLUTION_OBJECT_DECLARATIVE_RE.match(rest)
+        ):
             return True
     return False
 

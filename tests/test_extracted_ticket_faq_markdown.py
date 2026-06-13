@@ -5263,6 +5263,13 @@ _HELD_OUT_REJECTED = (
     ("anything", "We have closed your ticket as resolved."),
     ("anything", "Done."),
     ("Why was I charged?", "The bank charged a fee after I closed the account."),
+    # Declarative status / opinion commentary must NOT publish as a step (the
+    # inversion's over-accept flip-side: the imperative object-shape must not
+    # match a clause subject + copula). Round-6 review MAJOR.
+    ("anything", "Honestly this is a known issue and pretty annoying for everyone."),
+    ("anything", "That is the expected behavior for the free tier."),
+    ("anything", "Unfortunately the issue is a duplicate of an existing bug."),
+    ("anything", "Is the account still active on your end?"),
 )
 
 

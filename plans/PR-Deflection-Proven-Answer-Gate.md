@@ -188,8 +188,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/ticket_faq_markdown.py` | 358 |
+| `extracted_content_pipeline/ticket_faq_markdown.py` | 380 |
 | `plans/PR-Deflection-Proven-Answer-Gate.md` | 195 |
 | `tests/test_build_deflection_messy_csv_fixtures.py` | 11 |
-| `tests/test_extracted_ticket_faq_markdown.py` | 450 |
-| **Total** | **1014** |
+| `tests/test_extracted_ticket_faq_markdown.py` | 457 |
+| **Total** | **1043** |
