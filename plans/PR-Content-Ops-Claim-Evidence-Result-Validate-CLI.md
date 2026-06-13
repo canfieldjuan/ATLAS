@@ -50,7 +50,7 @@ Acceptance criteria:
 - Malformed, missing, unreadable, or contradictory result JSON returns a
   no-go envelope and non-zero exit without raising.
 - Markdown output is optional, uses the existing renderer, creates parent
-  directories, and refuses to overwrite a directory path.
+  directories, and refuses directory or symlink output paths.
 - The CLI does not call providers, execute prompts, mutate the registry, expose
   MCP behavior, or read fixture/model-response inputs.
 
@@ -71,7 +71,7 @@ successful parsed artifacts, parsed no-go artifacts, and file/write failures.
 
 When a Markdown output path is provided, the script renders the parsed artifact
 with the existing Markdown renderer. It creates missing parent directories and
-fails closed if the target path is a directory or cannot be written.
+fails closed if the target path is a directory, a symlink, or cannot be written.
 
 ## Intentional
 
@@ -96,13 +96,13 @@ Parked hardening: none.
 ## Verification
 
 - py_compile for the result validation script and focused CLI test: passed.
-- focused CLI pytest: 7 passed.
-- claim/evidence focused pytest sweep: 85 passed.
+- focused CLI pytest: 9 passed.
+- claim/evidence focused pytest sweep: 87 passed.
 - extracted content pipeline validation script: passed.
 - reasoning import-boundary audit for extracted_content_pipeline: passed.
 - standalone debt audit: passed.
 - ASCII Python check: passed.
-- full extracted pipeline wrapper: 3999 passed, 10 skipped.
+- full extracted pipeline wrapper: 4001 passed, 10 skipped.
 - git diff whitespace check: passed.
 - body-aware local PR review: passed.
 
@@ -113,6 +113,6 @@ Parked hardening: none.
 | `.github/workflows/extracted_pipeline_checks.yml` | 2 |
 | `plans/PR-Content-Ops-Claim-Evidence-Result-Validate-CLI.md` | 118 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `scripts/validate_content_ops_claim_evidence_result.py` | 129 |
-| `tests/test_content_ops_claim_evidence_result_validate_cli.py` | 245 |
-| **Total** | **495** |
+| `scripts/validate_content_ops_claim_evidence_result.py` | 133 |
+| `tests/test_content_ops_claim_evidence_result_validate_cli.py` | 284 |
+| **Total** | **538** |

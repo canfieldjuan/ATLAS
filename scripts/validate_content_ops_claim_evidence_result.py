@@ -64,9 +64,13 @@ def _read_result_text(path: Path) -> tuple[str | None, str | None]:
             None,
             f"result artifact file could not be read: {path}: {error.strerror or error}",
         )
+    except UnicodeDecodeError as error:
+        return None, f"result artifact file could not be read: {path}: {error}"
 
 
 def _write_markdown(path: Path, content: str) -> str | None:
+    if path.is_symlink():
+        return f"markdown output path is a symlink: {path}"
     if path.exists() and path.is_dir():
         return f"markdown output path is a directory: {path}"
     try:

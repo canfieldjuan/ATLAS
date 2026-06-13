@@ -181,6 +181,24 @@ def test_validate_cli_reports_missing_file_as_io_error(tmp_path: Path) -> None:
     assert payload["artifact_errors"] == []
 
 
+def test_validate_cli_reports_non_utf8_result_as_io_error(tmp_path: Path) -> None:
+    cli = _load_cli_module()
+    result_path = tmp_path / "claim_evidence_result.json"
+    result_path.write_bytes(b"\xff\xfe")
+
+    exit_code, payload = cli.validate_claim_evidence_result_file(result_path)
+
+    assert exit_code == 2
+    assert payload["ok"] is False
+    assert payload["artifact_errors"] == []
+    assert payload["verdict_failures"] == []
+    assert len(payload["errors"]) == 1
+    assert payload["errors"][0].startswith(
+        f"result artifact file could not be read: {result_path}: "
+    )
+    assert "utf-8" in payload["errors"][0]
+
+
 def test_validate_cli_writes_markdown_report(tmp_path: Path) -> None:
     cli = _load_cli_module()
     result_path = tmp_path / "claim_evidence_result.json"
@@ -216,6 +234,27 @@ def test_validate_cli_rejects_markdown_directory_output(tmp_path: Path) -> None:
     assert payload["ok"] is True
     assert payload["markdown_written"] is False
     assert payload["errors"] == [f"markdown output path is a directory: {markdown_path}"]
+
+
+def test_validate_cli_rejects_markdown_symlink_output(tmp_path: Path) -> None:
+    cli = _load_cli_module()
+    result_path = tmp_path / "claim_evidence_result.json"
+    markdown_path = tmp_path / "claim_evidence_result.md"
+    external_path = tmp_path / "external.md"
+    result_path.write_text(_artifact_json(), encoding="utf-8")
+    external_path.write_text("external stays intact", encoding="utf-8")
+    markdown_path.symlink_to(external_path)
+
+    exit_code, payload = cli.validate_claim_evidence_result_file(
+        result_path,
+        markdown_output=markdown_path,
+    )
+
+    assert exit_code == 2
+    assert payload["ok"] is True
+    assert payload["markdown_written"] is False
+    assert payload["errors"] == [f"markdown output path is a symlink: {markdown_path}"]
+    assert external_path.read_text(encoding="utf-8") == "external stays intact"
 
 
 def test_direct_script_invocation_prints_json_envelope(tmp_path: Path) -> None:
