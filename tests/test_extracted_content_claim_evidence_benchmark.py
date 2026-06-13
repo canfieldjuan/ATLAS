@@ -19,10 +19,12 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     StabilityScore,
     build_claim_evidence_prompt_contract,
     build_claim_evidence_result_artifact,
+    claim_evidence_result_artifact_from_mapping,
     claim_evidence_result_artifact_files,
     claim_evidence_response_json_schema,
     evaluate_thresholds,
     intra_model_stability,
+    load_claim_evidence_result_artifact_text,
     load_claim_evidence_fixture_text,
     pairwise_agreements,
     render_claim_evidence_result_markdown,
@@ -88,6 +90,36 @@ def _model_run(
         )
         + rows,
         errors=errors,
+    )
+
+
+def _passing_artifact():
+    triples = (
+        _triple("easy", True, EASY),
+        _triple("hard", False, HARD),
+    )
+    claude_run = _model_run(
+        "claude",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    gpt_run = _model_run(
+        "gpt",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    return build_claim_evidence_result_artifact(
+        triples,
+        (gpt_run, claude_run),
+        stability_runs_by_model_id={
+            "gpt": (gpt_run, gpt_run),
+            "claude": (claude_run, claude_run),
+        },
+        thresholds=BenchmarkThresholds(
+            easy_accuracy_min=1.0,
+            hard_accuracy_min=1.0,
+            inter_model_agreement_min=1.0,
+            intra_model_stability_min=1.0,
+            high_confidence_accuracy_min=0.90,
+        ),
     )
 
 
@@ -933,33 +965,7 @@ def test_result_writeup_fails_closed_on_malformed_renderer_input() -> None:
 
 
 def test_result_artifact_files_bundle_json_and_markdown_outputs() -> None:
-    triples = (
-        _triple("easy", True, EASY),
-        _triple("hard", False, HARD),
-    )
-    claude_run = _model_run(
-        "claude",
-        {"easy": _response(True, 5), "hard": _response(False, 4)},
-    )
-    gpt_run = _model_run(
-        "gpt",
-        {"easy": _response(True, 5), "hard": _response(False, 4)},
-    )
-    artifact = build_claim_evidence_result_artifact(
-        triples,
-        (gpt_run, claude_run),
-        stability_runs_by_model_id={
-            "gpt": (gpt_run, gpt_run),
-            "claude": (claude_run, claude_run),
-        },
-        thresholds=BenchmarkThresholds(
-            easy_accuracy_min=1.0,
-            hard_accuracy_min=1.0,
-            inter_model_agreement_min=1.0,
-            intra_model_stability_min=1.0,
-            high_confidence_accuracy_min=0.90,
-        ),
-    )
+    artifact = _passing_artifact()
 
     files = claim_evidence_result_artifact_files(artifact)
 
@@ -978,6 +984,163 @@ def test_result_artifact_files_bundle_json_and_markdown_outputs() -> None:
     assert payload["model_scores"][0]["model_id"] == "claude"
     assert files[1].content == render_claim_evidence_result_markdown(artifact)
     assert "- Go/no-go: GO" in files[1].content
+
+
+def test_result_artifact_json_loader_round_trips_generated_bundle() -> None:
+    triples = (
+        _triple("missing", False, HARD),
+        _triple("malformed", True, EASY),
+    )
+    run = _model_run(
+        "gpt",
+        {},
+        rows=(_run_row("gpt", "malformed", None, ("reason missing",)),),
+    )
+    artifact = build_claim_evidence_result_artifact(triples, (run,))
+    json_file = claim_evidence_result_artifact_files(artifact)[0]
+
+    parsed = load_claim_evidence_result_artifact_text(json_file.content)
+
+    assert parsed.errors == ()
+    assert parsed.go_no_go == "no_go"
+    assert parsed.failure_cases[1]["failure"] == "malformed_response"
+    assert parsed.failure_cases[1]["response_reason"] == ""
+    assert render_claim_evidence_result_markdown(parsed) == (
+        render_claim_evidence_result_markdown(artifact)
+    )
+
+
+def test_result_artifact_json_loader_rejects_malformed_text_without_raising() -> None:
+    not_text = load_claim_evidence_result_artifact_text(None)
+    malformed = load_claim_evidence_result_artifact_text("{")
+    non_object = load_claim_evidence_result_artifact_text("[]")
+
+    assert not_text.errors == ("result artifact text must be a string",)
+    assert malformed.errors == (
+        "result artifact json is malformed: Expecting property name enclosed in double quotes",
+    )
+    assert non_object.errors == ("result artifact json must decode to an object",)
+
+
+def test_result_artifact_parser_fails_closed_on_bad_sections() -> None:
+    valid = _passing_artifact().as_mapping()
+    cases = (
+        ("thresholds", "bad", "thresholds must be an object"),
+        (
+            "thresholds.easy_accuracy_min",
+            None,
+            "thresholds.easy_accuracy_min must be a number from 0 to 1",
+        ),
+        ("model_scores", "bad", "model_scores must be a list"),
+        ("model_scores.1.model_id", "", "model_scores[1].model_id missing"),
+        (
+            "agreement_matrix.1.total",
+            -1,
+            "agreement_matrix[1].total must be a non-negative integer",
+        ),
+        (
+            "stability_scores.1.stability",
+            2,
+            "stability_scores[1].stability must be a number from 0 to 1 or null",
+        ),
+        (
+            "failure_cases.1.expected_supports",
+            "yes",
+            "failure_cases[1].expected_supports missing",
+        ),
+        (
+            "verdict.failure_reasons",
+            "bad",
+            "verdict.failure_reasons must be a list",
+        ),
+        ("errors", [""], "errors[1] must be a non-empty string"),
+    )
+
+    for path, value, expected_error in cases:
+        payload = json.loads(json.dumps(valid))
+        if path == "thresholds":
+            payload["thresholds"] = value
+        elif path == "thresholds.easy_accuracy_min":
+            payload["thresholds"]["easy_accuracy_min"] = value
+        elif path == "model_scores":
+            payload["model_scores"] = value
+        elif path == "model_scores.1.model_id":
+            payload["model_scores"][0]["model_id"] = value
+        elif path == "agreement_matrix.1.total":
+            payload["agreement_matrix"][0]["total"] = value
+        elif path == "stability_scores.1.stability":
+            payload["stability_scores"][0]["stability"] = value
+        elif path == "failure_cases.1.expected_supports":
+            payload["failure_cases"] = [
+                {
+                    "model_id": "gpt",
+                    "triple_id": "bad",
+                    "failure": "incorrect_support",
+                    "expected_supports": value,
+                    "actual_supports": False,
+                    "confidence": 5,
+                    "response_reason": "wrong",
+                    "row_errors": [],
+                }
+            ]
+        elif path == "verdict.failure_reasons":
+            payload["verdict"]["failure_reasons"] = value
+        elif path == "errors":
+            payload["errors"] = value
+
+        parsed = claim_evidence_result_artifact_from_mapping(payload)
+
+        assert parsed.ok is False
+        assert expected_error in parsed.errors
+
+
+def test_result_artifact_parser_rejects_contradictory_derived_fields() -> None:
+    payload = _passing_artifact().as_mapping()
+    payload["ok"] = False
+    payload["go_no_go"] = "no_go"
+
+    parsed = claim_evidence_result_artifact_from_mapping(payload)
+
+    assert parsed.ok is False
+    assert parsed.errors == (
+        "ok contradicts artifact state: expected True",
+        "go_no_go contradicts artifact state: expected go",
+    )
+
+
+def test_result_artifact_parser_recomputes_saved_verdict() -> None:
+    payload = _passing_artifact().as_mapping()
+    payload["model_scores"] = []
+    payload["agreement_matrix"] = []
+    payload["stability_scores"] = []
+    payload["failure_cases"] = []
+    payload["verdict"] = {"passed": True, "failure_reasons": []}
+    payload["ok"] = True
+    payload["go_no_go"] = "go"
+
+    parsed = claim_evidence_result_artifact_from_mapping(payload)
+
+    assert parsed.ok is False
+    assert "verdict.passed contradicts artifact state: expected False" in (
+        parsed.errors
+    )
+    assert any(
+        error.startswith(
+            "verdict.failure_reasons contradicts artifact state: expected "
+        )
+        and "no model scores" in error
+        for error in parsed.errors
+    )
+
+
+def test_result_artifact_parser_preserves_saved_failure_artifacts() -> None:
+    json_file = claim_evidence_result_artifact_files({"not": "an artifact"})[0]
+
+    parsed = load_claim_evidence_result_artifact_text(json_file.content)
+
+    assert parsed.ok is False
+    assert parsed.errors == ("artifact must be ClaimEvidenceResultArtifact",)
+    assert parsed.verdict.failure_reasons == parsed.errors
 
 
 def test_result_artifact_files_fail_closed_on_malformed_input() -> None:
