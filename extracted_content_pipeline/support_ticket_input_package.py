@@ -146,6 +146,12 @@ _PASSTHROUGH_KEYS = (
     "faq_source_ticket_ids",
     "faq_answer_evidence_status",
 )
+_STRUCTURED_CONTEXT_KEYS = (
+    ("product", ("product", "product_name")),
+    ("sub_product", ("sub_product", "sub_product_name")),
+    ("issue", ("issue", "issue_type")),
+    ("sub_issue", ("sub_issue", "sub_issue_type")),
+)
 _DATE_KEYS = (
     "created_at",
     "created_time",
@@ -472,6 +478,10 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         normalized["measured_outcome"] = _clip_text(measured_outcome, max_chars=500)
     for key in _PASSTHROUGH_KEYS:
         value = row.get(key)
+        if value not in (None, "", [], {}):
+            normalized[key] = value
+    for key, keys in _STRUCTURED_CONTEXT_KEYS:
+        value = _first_value(row, keys)
         if value not in (None, "", [], {}):
             normalized[key] = value
     for key, keys in (

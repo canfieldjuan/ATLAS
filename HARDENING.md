@@ -30,6 +30,26 @@ register under `docs/technical-debt/`.
 
 ## Parked Items
 
+## 2026-06-13
+
+### Customer-wording FAQ headings can publish raw PII
+- File/location: `extracted_content_pipeline/ticket_faq_markdown.py` customer-wording question extraction path.
+- Description: The representative-label path now renders only known-safe documentation/glossary terms, but the pre-existing customer-wording path can still promote raw row text containing PII into published FAQ question headings.
+- Why it matters: Deflection FAQ output is buyer-facing/publishable; names, emails, account numbers, or similar customer identifiers in headings are a privacy exposure.
+- Effort: M
+- Category: security
+- Owner/session: Codex deflection/clustering
+- Found during: PR-Deflection-Representative-Question-Labels review
+
+### Safe-vocabulary representative label collisions render duplicate FAQ headings
+- File/location: `extracted_content_pipeline/ticket_faq_markdown.py` representative source-policy label fallback.
+- Description: Distinct topic-degraded subclusters that resolve to the same safe documentation/glossary label can still render as separate FAQ items with identical headings. This preserves evidence and count truthfully, but leaves duplicate-looking entries.
+- Why it matters: The report can still look bloated even when grouping is correct; a future slice should disambiguate colliding safe labels or emit a diagnostic.
+- Effort: S
+- Category: polish
+- Owner/session: Codex deflection/clustering
+- Found during: PR-Deflection-Representative-Question-Labels review
+
 ## 2026-06-07
 
 ### Landing-page variants pass audits but are not meaningfully distinct
