@@ -429,6 +429,44 @@ async def test_deflection_checkout_completion_records_reconciliation_when_event_
 
 
 @pytest.mark.asyncio
+async def test_deflection_reconciliation_binds_empty_string_for_missing_session_id(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A missing/empty Stripe session id must be recorded as '' (never NULL):
+    # NULL is DISTINCT in the (account_id, request_id, stripe_session_id) UNIQUE,
+    # so a NULL would defeat the ON CONFLICT dedup on a Stripe retry (#1462 gap).
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id, session_id="")
+    pool = _Pool()
+    pool.update_result = "UPDATE 0"
+    aged_event_created = int(time.time()) - 100_000  # past the 300s grace
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+        event_created=aged_event_created,
+    )
+
+    assert returned is None
+    reconciliations = [
+        call
+        for call in pool.execute_calls
+        if "content_ops_deflection_paid_reconciliation" in call[0]
+    ]
+    assert len(reconciliations) == 1
+    _query, args = reconciliations[0]
+    assert args == (
+        account_id,
+        "req-123",
+        "",  # '' not None -- the NULL-dedup gap fix
+        "checkout.session.completed",
+        "paid_report_missing",
+    )
+
+
+@pytest.mark.asyncio
 async def test_deflection_checkout_completion_retries_409_within_race_window() -> None:
     # A recent event is the transient write-ordering race: keep the 409 so Stripe
     # retries and finds the report row once its write commits. No reconciliation

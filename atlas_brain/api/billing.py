@@ -720,7 +720,10 @@ async def _handle_content_ops_deflection_report_checkout_completed(
                 pool,
                 account_id=account_id_text,
                 request_id=request_id,
-                stripe_session_id=session_id or None,
+                # '' (not NULL) so the reconciliation ledger's
+                # (account_id, request_id, stripe_session_id) UNIQUE dedups a
+                # missing-session retry; NULL would be treated as DISTINCT.
+                stripe_session_id=session_id or "",
                 event_type=event_type,
             )
             await emit_deflection_paid_funnel_incident_alert(

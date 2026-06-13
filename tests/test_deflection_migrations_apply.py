@@ -8,13 +8,15 @@ This check is scoped to the deflection chain, which has no such dependency:
 - 328 content_ops_deflection_reports
 - 332 content_ops_deflection_report_deliveries
 - 336 content_ops_deflection_paid_reconciliation  (#1462 money-path table)
+- 337 reconciliation NULL-session dedup (NOT NULL stripe_session_id)
 
 It applies those files in order to a fresh Postgres database and verifies the
-tables exist and the reconciliation table's idempotency constraint holds. Runs
-in CI against the workflow's fresh atlas_migration_tests service database;
-skipped unless ATLAS_MIGRATION_TEST_DATABASE_URL points at a disposable DB. The
-migrations dir is resolved by path (no atlas_brain import), so the CI job needs
-no application dependencies beyond asyncpg.
+tables exist and the reconciliation table's idempotency constraint holds --
+including the NULL-session dedup gap that 337 closes. Runs in CI against the
+workflow's fresh atlas_migration_tests service database; skipped unless
+ATLAS_MIGRATION_TEST_DATABASE_URL points at a disposable DB. The migrations dir
+is resolved by path (no atlas_brain import), so the CI job needs no application
+dependencies beyond asyncpg.
 """
 
 from __future__ import annotations
@@ -32,21 +34,51 @@ DEFLECTION_MIGRATION_CHAIN = (
     "332_content_ops_deflection_report_deliveries.sql",
     "336_content_ops_deflection_paid_reconciliation.sql",
 )
+NULL_SESSION_MIGRATION = "337_content_ops_deflection_reconciliation_null_session.sql"
 
 _TEST_ACCOUNT_ID = "acct-deflection-migration-apply-test"
+
+_RECON_INSERT_SQL = (
+    "INSERT INTO content_ops_deflection_paid_reconciliation "
+    "(account_id, request_id, stripe_session_id, event_type, reason) "
+    "VALUES ($1, $2, $3, $4, $5) "
+    "ON CONFLICT (account_id, request_id, stripe_session_id) DO NOTHING"
+)
+
+
+def _database_url() -> str | None:
+    return os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+
+
+async def _apply(conn, *names: str) -> None:
+    for name in names:
+        await conn.execute((MIGRATIONS_DIR / name).read_text())
+
+
+async def _reset(conn) -> None:
+    # Both tests share the CI service database; test 1 applies 337 (NOT NULL),
+    # which would break test 2's pre-337 NULL insert. Drop the deflection tables
+    # so each test applies from a clean schema regardless of order. No-op on a
+    # genuinely fresh database.
+    await conn.execute(
+        "DROP TABLE IF EXISTS "
+        "content_ops_deflection_paid_reconciliation, "
+        "content_ops_deflection_report_deliveries, "
+        "content_ops_deflection_reports CASCADE"
+    )
 
 
 @pytest.mark.asyncio
 async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
     asyncpg = pytest.importorskip("asyncpg")
-    database_url = os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+    database_url = _database_url()
     if not database_url:
         pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
 
     conn = await asyncpg.connect(database_url)
     try:
-        for name in DEFLECTION_MIGRATION_CHAIN:
-            await conn.execute((MIGRATIONS_DIR / name).read_text())
+        await _reset(conn)
+        await _apply(conn, *DEFLECTION_MIGRATION_CHAIN, NULL_SESSION_MIGRATION)
 
         existing = {
             row["tablename"]
@@ -77,44 +109,126 @@ async def test_deflection_migration_chain_applies_to_a_fresh_database() -> None:
             "created_at",
         } <= recon_columns
 
-        # The (account_id, request_id, stripe_session_id) uniqueness that
-        # record_paid_report_missing relies on (ON CONFLICT DO NOTHING): a second
-        # event for the same checkout must not create a duplicate ledger row.
-        insert_sql = (
-            "INSERT INTO content_ops_deflection_paid_reconciliation "
-            "(account_id, request_id, stripe_session_id, event_type, reason) "
-            "VALUES ($1, $2, $3, $4, $5) "
-            "ON CONFLICT (account_id, request_id, stripe_session_id) DO NOTHING"
+        # 337 forbids NULL so the (account_id, request_id, stripe_session_id)
+        # UNIQUE can dedup a missing-session row (NULL would be DISTINCT).
+        is_nullable = await conn.fetchval(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_name = 'content_ops_deflection_paid_reconciliation' "
+            "AND column_name = 'stripe_session_id'"
         )
+        assert is_nullable == "NO"
+
+        # Non-null dedup (ON CONFLICT DO NOTHING): a second event for the same
+        # checkout must not create a duplicate ledger row.
         await conn.execute(
-            insert_sql,
+            _RECON_INSERT_SQL,
             _TEST_ACCOUNT_ID,
-            "req-test",
+            "req-sess",
             "sess-test",
             "checkout.session.completed",
             "paid_report_missing",
         )
         await conn.execute(
-            insert_sql,
+            _RECON_INSERT_SQL,
             _TEST_ACCOUNT_ID,
-            "req-test",
+            "req-sess",
             "sess-test",
             "checkout.session.async_payment_succeeded",
             "paid_report_missing",
         )
-        rows = await conn.fetchval(
-            "SELECT count(*) FROM content_ops_deflection_paid_reconciliation "
-            "WHERE account_id = $1 AND request_id = 'req-test'",
-            _TEST_ACCOUNT_ID,
-        )
-        assert rows == 1
-    finally:
-        try:
-            await conn.execute(
-                "DELETE FROM content_ops_deflection_paid_reconciliation "
-                "WHERE account_id = $1",
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM content_ops_deflection_paid_reconciliation "
+                "WHERE account_id = $1 AND request_id = 'req-sess'",
                 _TEST_ACCOUNT_ID,
             )
-        except Exception:
-            pass
+            == 1
+        )
+
+        # Going-forward empty-session dedup: '' is a normal conflict-eligible
+        # value, so two missing-session events for the same checkout dedup
+        # (the gap that NULL left open).
+        for event_type in (
+            "checkout.session.completed",
+            "checkout.session.async_payment_succeeded",
+        ):
+            await conn.execute(
+                _RECON_INSERT_SQL,
+                _TEST_ACCOUNT_ID,
+                "req-empty",
+                "",
+                event_type,
+                "paid_report_missing",
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM content_ops_deflection_paid_reconciliation "
+                "WHERE account_id = $1 AND request_id = 'req-empty'",
+                _TEST_ACCOUNT_ID,
+            )
+            == 1
+        )
+    finally:
+        await _cleanup(conn)
         await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_deflection_337_collapses_pre_existing_null_session_duplicates() -> None:
+    asyncpg = pytest.importorskip("asyncpg")
+    database_url = _database_url()
+    if not database_url:
+        pytest.skip("ATLAS_MIGRATION_TEST_DATABASE_URL not set")
+
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _reset(conn)
+        # 336 only: stripe_session_id is nullable and NULL is DISTINCT, so two
+        # NULL-session rows for the same checkout both land (the bug).
+        await _apply(conn, *DEFLECTION_MIGRATION_CHAIN)
+        for event_type in (
+            "checkout.session.completed",
+            "checkout.session.async_payment_succeeded",
+        ):
+            await conn.execute(
+                "INSERT INTO content_ops_deflection_paid_reconciliation "
+                "(account_id, request_id, stripe_session_id, event_type, reason) "
+                "VALUES ($1, $2, NULL, $3, $4)",
+                _TEST_ACCOUNT_ID,
+                "req-null",
+                event_type,
+                "paid_report_missing",
+            )
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM content_ops_deflection_paid_reconciliation "
+                "WHERE account_id = $1 AND request_id = 'req-null'",
+                _TEST_ACCOUNT_ID,
+            )
+            == 2
+        )
+
+        # 337 collapses the NULL-equivalent duplicates to one row and backfills
+        # the survivor's session id to ''.
+        await _apply(conn, NULL_SESSION_MIGRATION)
+        rows = await conn.fetch(
+            "SELECT stripe_session_id FROM content_ops_deflection_paid_reconciliation "
+            "WHERE account_id = $1 AND request_id = 'req-null'",
+            _TEST_ACCOUNT_ID,
+        )
+        assert len(rows) == 1
+        assert rows[0]["stripe_session_id"] == ""
+    finally:
+        await _cleanup(conn)
+        await conn.close()
+
+
+async def _cleanup(conn) -> None:
+    try:
+        await conn.execute(
+            "DELETE FROM content_ops_deflection_paid_reconciliation "
+            "WHERE account_id = $1",
+            _TEST_ACCOUNT_ID,
+        )
+    except Exception:
+        pass
