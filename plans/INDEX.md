@@ -1,6 +1,6 @@
 # Plan archive index
 
-1006 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1007 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -700,6 +700,7 @@
 - [PR-Deflection-To-Content-Upsell](archive/PR-Deflection-To-Content-Upsell.md) - lane: content-ops/deflection-to-content-upsell | phase: Workflow/process
 - [PR-Deflection-Uncap-Paid-Report](archive/PR-Deflection-Uncap-Paid-Report.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Deflection-Zendesk-Full-Thread-Importer](archive/PR-Deflection-Zendesk-Full-Thread-Importer.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
+- [PR-Deflection-Zendesk-Upload-Handoff](archive/PR-Deflection-Zendesk-Upload-Handoff.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Demand-Opportunity-Report](archive/PR-Demand-Opportunity-Report.md)
 - [PR-Describe-Control-Surfaces-Cache](archive/PR-Describe-Control-Surfaces-Cache.md)
 - [PR-Dev-Workflow-Helpers-Docs](archive/PR-Dev-Workflow-Helpers-Docs.md) - lane: dev-workflow/pr-prep-ergonomics | phase: Workflow/process
