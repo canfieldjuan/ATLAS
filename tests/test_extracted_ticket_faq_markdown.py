@@ -269,12 +269,20 @@ def test_build_ticket_faq_markdown_rejects_closure_boilerplate_as_resolution() -
         [{
             "source_type": "support_ticket",
             "source_title": "Export issue",
-            "evidence": [{
-                "text": "How do I export billing reports?",
-                "source_id": "ticket-closure-1",
-                "source_type": "support_ticket",
-                "resolution_text": "Customer did not respond, closing this out.",
-            }],
+            "evidence": [
+                {
+                    "text": "How do I export billing reports?",
+                    "source_id": "ticket-closure-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Customer did not respond, closing this out.",
+                },
+                {
+                    "text": "How do I export billing reports?",
+                    "source_id": "ticket-closure-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Customer did not respond, closing this out.",
+                },
+            ],
         }]
     )
 
@@ -291,12 +299,20 @@ def test_build_ticket_faq_markdown_rejects_internal_notes_as_resolution() -> Non
         [{
             "source_type": "support_ticket",
             "source_title": "Refund issue",
-            "evidence": [{
-                "text": "How do I get a refund for a duplicate charge?",
-                "source_id": "ticket-internal-1",
-                "source_type": "support_ticket",
-                "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
-            }],
+            "evidence": [
+                {
+                    "text": "How do I get a refund for a duplicate charge?",
+                    "source_id": "ticket-internal-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
+                },
+                {
+                    "text": "How do I get a refund for a duplicate charge?",
+                    "source_id": "ticket-internal-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": "Refunded per policy 4.2. Escalated to T2 for review.",
+                },
+            ],
         }]
     )
 
@@ -445,12 +461,20 @@ def test_build_ticket_faq_markdown_rejects_off_topic_synonym_near_misses(
         [{
             "source_type": "support_ticket",
             "source_title": "Off-topic support wording",
-            "evidence": [{
-                "text": question_text,
-                "source_id": "ticket-off-topic-synonym-1",
-                "source_type": "support_ticket",
-                "resolution_text": resolution_text,
-            }],
+            "evidence": [
+                {
+                    "text": question_text,
+                    "source_id": "ticket-off-topic-synonym-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+                {
+                    "text": question_text,
+                    "source_id": "ticket-off-topic-synonym-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+            ],
         }]
     )
 
@@ -505,12 +529,20 @@ def test_build_ticket_faq_markdown_rejects_disposition_only_agent_updates(
         [{
             "source_type": "support_ticket",
             "source_title": "Billing account",
-            "evidence": [{
-                "text": "How do I update the billing account?",
-                "source_id": "ticket-disposition-1",
-                "source_type": "support_ticket",
-                "resolution_text": resolution_text,
-            }],
+            "evidence": [
+                {
+                    "text": "How do I update the billing account?",
+                    "source_id": "ticket-disposition-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+                {
+                    "text": "How do I update the billing account?",
+                    "source_id": "ticket-disposition-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": resolution_text,
+                },
+            ],
         }]
     )
 

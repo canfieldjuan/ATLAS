@@ -69,6 +69,7 @@ Slice phase: Production hardening
 
 - `extracted_content_pipeline/ticket_faq_markdown.py`
 - `plans/PR-Deflection-Proven-Answer-Gate.md`
+- `tests/test_build_deflection_messy_csv_fixtures.py`
 - `tests/test_extracted_ticket_faq_markdown.py`
 
 ## Mechanism
@@ -158,6 +159,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/ticket_faq_markdown.py` | 246 |
-| `plans/PR-Deflection-Proven-Answer-Gate.md` | 163 |
-| `tests/test_extracted_ticket_faq_markdown.py` | 311 |
-| **Total** | **720** |
+| `plans/PR-Deflection-Proven-Answer-Gate.md` | 165 |
+| `tests/test_build_deflection_messy_csv_fixtures.py` | 11 |
+| `tests/test_extracted_ticket_faq_markdown.py` | 343 |
+| **Total** | **765** |
