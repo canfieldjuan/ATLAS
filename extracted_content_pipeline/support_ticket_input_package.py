@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from .campaign_source_adapters import source_material_to_source_rows
@@ -26,6 +26,7 @@ from .support_ticket_context_contract import (
     UPLOADED_SUPPORT_TICKETS_SOURCE_PERIOD,
     support_ticket_topic_filter,
 )
+from .support_ticket_dates import parse_support_ticket_source_date
 
 
 DEFAULT_SUPPORT_TICKET_OUTPUTS: tuple[str, ...] = (
@@ -305,7 +306,16 @@ def build_support_ticket_input_package(
             "row_count": cluster_diagnostics["token_set_row_count"],
             "max_token_set_rows": cluster_diagnostics["max_token_set_rows"],
         })
-    has_valid_date_window = _all_rows_have_dates(normalized_rows)
+    date_diagnostics = _source_date_diagnostics(normalized_rows)
+    has_valid_date_window = (
+        bool(normalized_rows) and date_diagnostics["missing_count"] == 0
+    )
+    if (
+        normalized_rows
+        and not has_valid_date_window
+        and date_diagnostics["source_date_signal_count"] > 0
+    ):
+        warnings.append(_date_window_disabled_warning(date_diagnostics))
     source_period = (
         f"Last {window_days} days of support tickets"
         if has_valid_date_window
@@ -335,8 +345,10 @@ def build_support_ticket_input_package(
         "Can our team review the answers first?",
     ))
 
+    source_material_rows = [_public_ticket_row(row) for row in normalized_rows]
+
     inputs = {
-        "source_material": normalized_rows,
+        "source_material": source_material_rows,
         "faq_source_types": faq_source_types,
         "faq_title": campaign_name,
         "topic": SUPPORT_TICKET_DEFAULT_TOPIC,
@@ -451,6 +463,8 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         value = row.get(key)
         if value not in (None, "", [], {}):
             normalized[key] = value
+    if _has_any_key(row, _DATE_KEYS):
+        normalized["_date_source_present"] = True
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
@@ -711,29 +725,56 @@ def _clip_text(value: str, *, max_chars: int) -> str:
 
 
 def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
-    return bool(rows) and all(
-        _parse_ticket_source_date(row.get("created_at")) is not None
-        for row in rows
-    )
+    return bool(rows) and _source_date_diagnostics(rows)["missing_count"] == 0
+
+
+def _source_date_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    dated_count = 0
+    source_date_signal_count = 0
+    missing_source_ids: list[str] = []
+    for index, row in enumerate(rows, start=1):
+        has_date_signal = bool(row.get("_date_source_present")) or _clean(
+            row.get("created_at")
+        ) != ""
+        if has_date_signal:
+            source_date_signal_count += 1
+        if parse_support_ticket_source_date(row.get("created_at")) is not None:
+            dated_count += 1
+            continue
+        source_id = _clean(row.get("source_id")) or f"row-{index}"
+        missing_source_ids.append(source_id)
+    return {
+        "included_count": len(rows),
+        "dated_count": dated_count,
+        "missing_count": len(rows) - dated_count,
+        "source_date_signal_count": source_date_signal_count,
+        "example_source_ids": missing_source_ids[:5],
+    }
+
+
+def _public_ticket_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in row.items() if not str(key).startswith("_")}
+
+
+def _date_window_disabled_warning(diagnostics: Mapping[str, Any]) -> dict[str, Any]:
+    included_count = int(diagnostics.get("included_count") or 0)
+    missing_count = int(diagnostics.get("missing_count") or 0)
+    return {
+        "code": "support_ticket_date_window_disabled",
+        "message": (
+            "Disabled the dated support-ticket source window because "
+            f"{missing_count} of {included_count} included ticket rows did not "
+            "include a parseable source date."
+        ),
+        "included_row_count": included_count,
+        "dated_row_count": int(diagnostics.get("dated_count") or 0),
+        "missing_or_unparseable_date_count": missing_count,
+        "example_source_ids": list(diagnostics.get("example_source_ids") or ()),
+    }
 
 
 def _parse_ticket_source_date(value: Any) -> date | None:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = _clean(value)
-    if not text:
-        return None
-    normalized = text.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(normalized).date()
-    except ValueError:
-        pass
-    try:
-        return date.fromisoformat(text[:10])
-    except ValueError:
-        return None
+    return parse_support_ticket_source_date(value)
 
 
 def _first_question(value: Any) -> str:
@@ -766,6 +807,11 @@ def _first_value(row: Mapping[str, Any], keys: Sequence[str]) -> Any:
             if _key(raw_key) == normalized_key and value not in (None, "", [], {}):
                 return value
     return None
+
+
+def _has_any_key(row: Mapping[str, Any], keys: Sequence[str]) -> bool:
+    normalized_keys = {_key(key) for key in keys}
+    return any(_key(raw_key) in normalized_keys for raw_key in row)
 
 
 def _key(value: Any) -> str:

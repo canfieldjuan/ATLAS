@@ -19,6 +19,7 @@ from .support_ticket_clustering import (
     support_ticket_plain_text,
     support_ticket_tokens,
 )
+from .support_ticket_dates import parse_support_ticket_source_date
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -2406,22 +2407,7 @@ def _compact_key(value: Any) -> str:
 
 
 def _parse_source_date(value: Any) -> date | None:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = _clean(value)
-    if not text:
-        return None
-    normalized = text.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(normalized).date()
-    except ValueError:
-        pass
-    try:
-        return date.fromisoformat(text[:10])
-    except ValueError:
-        return None
+    return parse_support_ticket_source_date(value)
 
 
 def _parse_as_of_date(value: Any) -> date | None:
