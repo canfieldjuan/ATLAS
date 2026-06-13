@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="12" markerHeight="12" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3.5 L0,7 Z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="760" fill="#ffffff"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1200" height="96" fill="#0b1f3a"/>
+  <text x="40" y="46" fill="#ffffff" font-size="30" font-weight="700">How I Ship</text>
+  <text x="40" y="76" fill="#9fb3d1" font-size="15">An AI dev operating model: parallel builder + independent reviewer sessions, kept safe by mechanical gates -- not human vigilance.</text>
+  <text x="1160" y="42" fill="#5b7aa6" font-size="13" text-anchor="end">Juan Canfield</text>
+  <text x="1160" y="62" fill="#5b7aa6" font-size="13" text-anchor="end">Founding / Staff AI Platform Engineer</text>
+
+  <!-- Section label -->
+  <text x="40" y="142" fill="#0b1f3a" font-size="15" font-weight="700">THE PIPELINE</text>
+  <line x1="160" y1="137" x2="1160" y2="137" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Pipeline stages -->
+  <!-- box geometry: w=155 h=98 y=160; x = 50,235,420,605,790,975 -->
+  <g>
+    <!-- arrows between boxes (drawn first, behind boxes) -->
+    <line x1="205" y1="209" x2="232" y2="209" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="390" y1="209" x2="417" y2="209" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="575" y1="209" x2="602" y2="209" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="760" y1="209" x2="787" y2="209" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="945" y1="209" x2="972" y2="209" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Stage 1: Plan -->
+  <rect x="50" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="72" cy="182" r="11" fill="#2563eb"/><text x="72" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">1</text>
+  <text x="92" y="186" fill="#0b1f3a" font-size="14" font-weight="700">Plan</text>
+  <text x="62" y="214" fill="#475569" font-size="10.5">Contract-first plan doc:</text>
+  <text x="62" y="230" fill="#475569" font-size="10.5">why / scope / mechanism /</text>
+  <text x="62" y="246" fill="#475569" font-size="10.5">verification. No code first.</text>
+
+  <!-- Stage 2: Builder -->
+  <rect x="235" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="257" cy="182" r="11" fill="#2563eb"/><text x="257" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">2</text>
+  <text x="277" y="186" fill="#0b1f3a" font-size="14" font-weight="700">Builder</text>
+  <text x="247" y="214" fill="#475569" font-size="10.5">One session: code + plan,</text>
+  <text x="247" y="230" fill="#475569" font-size="10.5">thin single-purpose slice</text>
+  <text x="247" y="246" fill="#475569" font-size="10.5">(&lt;400 LOC soft cap).</text>
+
+  <!-- Stage 3: Local gate -->
+  <rect x="420" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="442" cy="182" r="11" fill="#2563eb"/><text x="442" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">3</text>
+  <text x="462" y="186" fill="#0b1f3a" font-size="14" font-weight="700">Local gate</text>
+  <text x="432" y="214" fill="#475569" font-size="10.5">Mechanical bundle: plan</text>
+  <text x="432" y="230" fill="#475569" font-size="10.5">shape, diff size, drift,</text>
+  <text x="432" y="246" fill="#475569" font-size="10.5">ASCII, CI-enrollment.</text>
+
+  <!-- Stage 4: Independent review -->
+  <rect x="605" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#0d9488" stroke-width="2.5"/>
+  <circle cx="627" cy="182" r="11" fill="#0d9488"/><text x="627" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">4</text>
+  <text x="647" y="186" fill="#0b1f3a" font-size="14" font-weight="700">Review</text>
+  <text x="617" y="214" fill="#475569" font-size="10.5">Separate session re-derives</text>
+  <text x="617" y="230" fill="#475569" font-size="10.5">claims, cites rule IDs;</text>
+  <text x="617" y="246" fill="#475569" font-size="10.5">bot findings reconciled.</text>
+
+  <!-- Stage 5: CI -->
+  <rect x="790" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="812" cy="182" r="11" fill="#2563eb"/><text x="812" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">5</text>
+  <text x="832" y="186" fill="#0b1f3a" font-size="14" font-weight="700">CI</text>
+  <text x="802" y="214" fill="#475569" font-size="10.5">Same gates re-run +</text>
+  <text x="802" y="230" fill="#475569" font-size="10.5">path-triggered checks.</text>
+  <text x="802" y="246" fill="#475569" font-size="10.5">Truth, not the first reviewer.</text>
+
+  <!-- Stage 6: Merge -->
+  <rect x="975" y="160" width="155" height="98" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <circle cx="997" cy="182" r="11" fill="#2563eb"/><text x="997" y="186" fill="#fff" font-size="12" font-weight="700" text-anchor="middle">6</text>
+  <text x="1017" y="186" fill="#0b1f3a" font-size="14" font-weight="700">Merge</text>
+  <text x="987" y="214" fill="#475569" font-size="10.5">Squash; archive plan;</text>
+  <text x="987" y="230" fill="#475569" font-size="10.5">tear down branch.</text>
+  <text x="987" y="246" fill="#475569" font-size="10.5">Only when all gates green.</text>
+
+  <!-- Flywheel return arrow -->
+  <path d="M1052,258 C1052,322 128,322 128,262" fill="none" stroke="#d97706" stroke-width="2.5" stroke-dasharray="2,0" marker-end="url(#arrowAmber)"/>
+  <rect x="430" y="296" width="340" height="34" rx="17" fill="#fff7ed" stroke="#d97706" stroke-width="1.5"/>
+  <text x="600" y="318" fill="#9a3412" font-size="13" font-weight="600" text-anchor="middle">Flywheel: every escaped defect becomes a durable, tested gate</text>
+
+  <!-- Section label 2 -->
+  <text x="40" y="392" fill="#0b1f3a" font-size="15" font-weight="700">THE GATE CHAIN I BUILT</text>
+  <text x="262" y="392" fill="#64748b" font-size="12">turns "review" from a vibe into a contract a tired reviewer cannot skip</text>
+  <line x1="40" y1="404" x2="1160" y2="404" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Gate-chain cards: w=265 h=120 y=424; x=40,325,610,895 -->
+  <g>
+    <rect x="40" y="424" width="265" height="120" rx="10" fill="#f1f5f9"/>
+    <rect x="40" y="424" width="6" height="120" rx="3" fill="#0d9488"/>
+    <text x="62" y="452" fill="#0b1f3a" font-size="14" font-weight="700">Rules Contract (R1-R12)</text>
+    <text x="62" y="476" fill="#475569" font-size="11">A stable, ID'd rule pack + a per-PR</text>
+    <text x="62" y="492" fill="#475569" font-size="11">Review Contract (acceptance criteria,</text>
+    <text x="62" y="508" fill="#475569" font-size="11">risk areas, triggered rules). Every</text>
+    <text x="62" y="524" fill="#475569" font-size="11">finding cites a rule, not a hunch.</text>
+  </g>
+  <g>
+    <rect x="325" y="424" width="265" height="120" rx="10" fill="#f1f5f9"/>
+    <rect x="325" y="424" width="6" height="120" rx="3" fill="#0d9488"/>
+    <text x="347" y="452" fill="#0b1f3a" font-size="14" font-weight="700">AI-Finding Reconciliation</text>
+    <text x="347" y="476" fill="#475569" font-size="11">Fail-closed gate: no approval until</text>
+    <text x="347" y="492" fill="#475569" font-size="11">every Codex/Copilot finding is fixed</text>
+    <text x="347" y="508" fill="#475569" font-size="11">or explicitly waived with a reason --</text>
+    <text x="347" y="524" fill="#475569" font-size="11">machine catches mechanics, human owns intent.</text>
+  </g>
+  <g>
+    <rect x="610" y="424" width="265" height="120" rx="10" fill="#f1f5f9"/>
+    <rect x="610" y="424" width="6" height="120" rx="3" fill="#0d9488"/>
+    <text x="632" y="452" fill="#0b1f3a" font-size="14" font-weight="700">Path -&gt; Rule Trigger Audit</text>
+    <text x="632" y="476" fill="#475569" font-size="11">Derives required rule IDs from the</text>
+    <text x="632" y="492" fill="#475569" font-size="11">diff and fails when the plan omits</text>
+    <text x="632" y="508" fill="#475569" font-size="11">one. Parsed from one source of truth,</text>
+    <text x="632" y="524" fill="#475569" font-size="11">so the doc can't drift from the gate.</text>
+  </g>
+  <g>
+    <rect x="895" y="424" width="265" height="120" rx="10" fill="#f1f5f9"/>
+    <rect x="895" y="424" width="6" height="120" rx="3" fill="#0d9488"/>
+    <text x="917" y="452" fill="#0b1f3a" font-size="14" font-weight="700">Miss-Metrics Flywheel</text>
+    <text x="917" y="476" fill="#475569" font-size="11">A ledger of escaped defects, bucketed</text>
+    <text x="917" y="492" fill="#475569" font-size="11">by who missed them -- surfacing the</text>
+    <text x="917" y="508" fill="#475569" font-size="11">"AI findings a human reviewer missed"</text>
+    <text x="917" y="524" fill="#475569" font-size="11">signal; every miss must become a gate.</text>
+  </g>
+
+  <!-- Each gate ships with failure-proving fixtures note -->
+  <text x="40" y="566" fill="#64748b" font-size="11.5" font-style="italic">Each gate is a script that ships with failure-proving fixtures -- the detector must prove it catches the failure, not just pass the happy path.</text>
+
+  <!-- Principles footer -->
+  <rect x="40" y="588" width="1120" height="120" rx="10" fill="#0b1f3a"/>
+  <text x="64" y="620" fill="#ffffff" font-size="14" font-weight="700">Principles worth stealing</text>
+  <g fill="#cdd9ea" font-size="12">
+    <text x="64" y="648">1.  Mechanize every repeated mistake -- a defect that cost a review cycle becomes a script + a fixture, never paid for twice.</text>
+    <text x="64" y="670">2.  The plan is the contract -- a fixed shape + a LOC cap makes scope creep a detectable, failing condition.</text>
+    <text x="64" y="692">3.  Separate the builder from the reviewer -- independent re-derivation catches what self-review can't.</text>
+    <text x="620" y="648">4.  Fail closed, surface drift -- silent green is the enemy; detectors ship with proof their failure branch fires.</text>
+    <text x="620" y="670">5.  Catch it where it's cheap -- the same gate runs local -&gt; hook -&gt; reviewer -&gt; CI, so the expensive layers rarely have to.</text>
+    <text x="620" y="692" fill="#7f9bc2">Result: run several AI sessions in parallel and move fast -- the system mechanically refuses to let any of them break the product.</text>
+  </g>
+</svg>
