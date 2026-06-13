@@ -941,6 +941,32 @@ def test_support_ticket_input_package_warns_when_date_column_is_blank() -> None:
     )
 
 
+def test_support_ticket_date_signal_is_carried_out_of_band_not_on_rows() -> None:
+    # #1519 follow-up: the date-column-present signal used to be stamped onto
+    # the shared row dict (_date_source_present) and stripped only at the
+    # source_material egress. It is now computed during normalization and
+    # handed to _source_date_diagnostics out-of-band. Behavior is preserved
+    # (a blank date column still disables the window and warns), and no
+    # internal marker rides on the exported rows.
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+            "created_at": "",
+        }
+    ])
+
+    assert package.inputs["has_dated_window"] is False
+    assert any(
+        warning["code"] == "support_ticket_date_window_disabled"
+        for warning in package.warnings
+    )
+    for row in package.inputs["source_material"]:
+        assert "_date_source_present" not in row
+        assert not any(str(key).startswith("_") for key in row)
+
+
 def test_support_ticket_input_package_omits_window_filter_without_parseable_row_dates() -> None:
     package = build_support_ticket_input_package([
         {
