@@ -28,6 +28,7 @@ FIXTURE_FORMAT_JSONL = "jsonl"
 VALID_FIXTURE_FORMATS = frozenset({FIXTURE_FORMAT_JSON, FIXTURE_FORMAT_JSONL})
 VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION = "verify_claim_evidence.v1"
 CLAIM_EVIDENCE_RESPONSE_FIELDS = frozenset({"supports", "confidence", "reason"})
+_MISSING = object()
 
 
 def _required_text(data: Mapping[str, object], key: str) -> str | None:
@@ -474,6 +475,74 @@ def claim_evidence_result_artifact_files(
     )
 
 
+def load_claim_evidence_result_artifact_text(
+    text: object,
+) -> ClaimEvidenceResultArtifact:
+    """Load saved benchmark artifact JSON into the result artifact contract."""
+
+    if not isinstance(text, str):
+        return _failed_result_artifact(
+            DEFAULT_THRESHOLDS,
+            ("result artifact text must be a string",),
+        )
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as error:
+        return _failed_result_artifact(
+            DEFAULT_THRESHOLDS,
+            (f"result artifact json is malformed: {error.msg}",),
+        )
+    return claim_evidence_result_artifact_from_mapping(decoded)
+
+
+def claim_evidence_result_artifact_from_mapping(
+    data: object,
+) -> ClaimEvidenceResultArtifact:
+    """Validate decoded benchmark result JSON and rehydrate the artifact."""
+
+    if not isinstance(data, Mapping):
+        return _failed_result_artifact(
+            DEFAULT_THRESHOLDS,
+            ("result artifact json must decode to an object",),
+        )
+
+    errors: list[str] = []
+    thresholds = _parse_thresholds(data.get("thresholds"), errors)
+    model_scores = _parse_model_scores(data.get("model_scores"), errors)
+    agreement_matrix = _parse_agreement_matrix(data.get("agreement_matrix"), errors)
+    stability_scores = _parse_stability_scores(data.get("stability_scores"), errors)
+    failure_cases = _parse_failure_cases(data.get("failure_cases"), errors)
+    verdict = _parse_verdict(data.get("verdict"), errors)
+    artifact_errors = _parse_text_sequence(data.get("errors"), "errors", errors)
+    if errors:
+        return _failed_result_artifact(thresholds, errors)
+    _validate_verdict_result_fields(
+        thresholds,
+        model_scores,
+        agreement_matrix,
+        stability_scores,
+        verdict,
+        artifact_errors,
+        errors,
+    )
+    if errors:
+        return _failed_result_artifact(thresholds, errors)
+
+    artifact = ClaimEvidenceResultArtifact(
+        thresholds=thresholds,
+        model_scores=model_scores,
+        agreement_matrix=agreement_matrix,
+        stability_scores=stability_scores,
+        failure_cases=failure_cases,
+        verdict=verdict,
+        errors=artifact_errors,
+    )
+    _validate_derived_result_fields(data, artifact, errors)
+    if errors:
+        return _failed_result_artifact(thresholds, errors)
+    return artifact
+
+
 def write_claim_evidence_result_artifact_files(
     artifact: object,
     output_dir: object,
@@ -657,6 +726,406 @@ def _coerce_result_artifact(artifact: object) -> ClaimEvidenceResultArtifact:
         DEFAULT_THRESHOLDS,
         ("artifact must be ClaimEvidenceResultArtifact",),
     )
+
+
+def _parse_thresholds(
+    value: object,
+    errors: list[str],
+) -> BenchmarkThresholds:
+    if not isinstance(value, Mapping):
+        errors.append("thresholds must be an object")
+        return DEFAULT_THRESHOLDS
+    parsed: dict[str, float] = {}
+    for key in (
+        "easy_accuracy_min",
+        "hard_accuracy_min",
+        "inter_model_agreement_min",
+        "intra_model_stability_min",
+        "high_confidence_accuracy_min",
+    ):
+        parsed[key] = _required_unit_float(value, key, f"thresholds.{key}", errors)
+    if errors:
+        return DEFAULT_THRESHOLDS
+    return BenchmarkThresholds(**parsed)
+
+
+def _parse_model_scores(
+    value: object,
+    errors: list[str],
+) -> tuple[ModelScore, ...]:
+    rows = _required_sequence(value, "model_scores", errors)
+    parsed: list[ModelScore] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            errors.append(f"model_scores[{index}] must be an object")
+            continue
+        parsed.append(
+            ModelScore(
+                model_id=_required_string(
+                    row, "model_id", f"model_scores[{index}].model_id", errors
+                ),
+                easy_accuracy=_optional_unit_float(
+                    row,
+                    "easy_accuracy",
+                    f"model_scores[{index}].easy_accuracy",
+                    errors,
+                ),
+                hard_accuracy=_optional_unit_float(
+                    row,
+                    "hard_accuracy",
+                    f"model_scores[{index}].hard_accuracy",
+                    errors,
+                ),
+                high_confidence_accuracy=_optional_unit_float(
+                    row,
+                    "high_confidence_accuracy",
+                    f"model_scores[{index}].high_confidence_accuracy",
+                    errors,
+                ),
+                easy_total=_required_nonnegative_int(
+                    row, "easy_total", f"model_scores[{index}].easy_total", errors
+                ),
+                hard_total=_required_nonnegative_int(
+                    row, "hard_total", f"model_scores[{index}].hard_total", errors
+                ),
+                high_confidence_total=_required_nonnegative_int(
+                    row,
+                    "high_confidence_total",
+                    f"model_scores[{index}].high_confidence_total",
+                    errors,
+                ),
+                missing_response_ids=_parse_text_sequence(
+                    row.get("missing_response_ids"),
+                    f"model_scores[{index}].missing_response_ids",
+                    errors,
+                ),
+                low_confidence_response_ids=_parse_text_sequence(
+                    row.get("low_confidence_response_ids"),
+                    f"model_scores[{index}].low_confidence_response_ids",
+                    errors,
+                ),
+            )
+        )
+    return tuple(parsed)
+
+
+def _parse_agreement_matrix(
+    value: object,
+    errors: list[str],
+) -> tuple[PairwiseAgreement, ...]:
+    rows = _required_sequence(value, "agreement_matrix", errors)
+    parsed: list[PairwiseAgreement] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            errors.append(f"agreement_matrix[{index}] must be an object")
+            continue
+        parsed.append(
+            PairwiseAgreement(
+                left_model_id=_required_string(
+                    row,
+                    "left_model_id",
+                    f"agreement_matrix[{index}].left_model_id",
+                    errors,
+                ),
+                right_model_id=_required_string(
+                    row,
+                    "right_model_id",
+                    f"agreement_matrix[{index}].right_model_id",
+                    errors,
+                ),
+                agreement=_optional_unit_float(
+                    row, "agreement", f"agreement_matrix[{index}].agreement", errors
+                ),
+                total=_required_nonnegative_int(
+                    row, "total", f"agreement_matrix[{index}].total", errors
+                ),
+            )
+        )
+    return tuple(parsed)
+
+
+def _parse_stability_scores(
+    value: object,
+    errors: list[str],
+) -> tuple[StabilityScore, ...]:
+    rows = _required_sequence(value, "stability_scores", errors)
+    parsed: list[StabilityScore] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            errors.append(f"stability_scores[{index}] must be an object")
+            continue
+        parsed.append(
+            StabilityScore(
+                model_id=_required_string(
+                    row, "model_id", f"stability_scores[{index}].model_id", errors
+                ),
+                stability=_optional_unit_float(
+                    row,
+                    "stability",
+                    f"stability_scores[{index}].stability",
+                    errors,
+                ),
+                total=_required_nonnegative_int(
+                    row, "total", f"stability_scores[{index}].total", errors
+                ),
+            )
+        )
+    return tuple(parsed)
+
+
+def _parse_failure_cases(
+    value: object,
+    errors: list[str],
+) -> tuple[Mapping[str, object], ...]:
+    rows = _required_sequence(value, "failure_cases", errors)
+    parsed: list[Mapping[str, object]] = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            errors.append(f"failure_cases[{index}] must be an object")
+            continue
+        parsed.append(
+            {
+                "model_id": _required_string(
+                    row, "model_id", f"failure_cases[{index}].model_id", errors
+                ),
+                "triple_id": _required_string(
+                    row, "triple_id", f"failure_cases[{index}].triple_id", errors
+                ),
+                "failure": _required_string(
+                    row, "failure", f"failure_cases[{index}].failure", errors
+                ),
+                "expected_supports": _required_artifact_bool(
+                    row,
+                    "expected_supports",
+                    f"failure_cases[{index}].expected_supports",
+                    errors,
+                ),
+                "actual_supports": _optional_bool(
+                    row,
+                    "actual_supports",
+                    f"failure_cases[{index}].actual_supports",
+                    errors,
+                ),
+                "confidence": _optional_confidence(
+                    row, "confidence", f"failure_cases[{index}].confidence", errors
+                ),
+                "response_reason": _required_string_or_empty(
+                    row,
+                    "response_reason",
+                    f"failure_cases[{index}].response_reason",
+                    errors,
+                ),
+                "row_errors": _parse_text_sequence(
+                    row.get("row_errors"), f"failure_cases[{index}].row_errors", errors
+                ),
+            }
+        )
+    return tuple(parsed)
+
+
+def _parse_verdict(value: object, errors: list[str]) -> BenchmarkVerdict:
+    if not isinstance(value, Mapping):
+        errors.append("verdict must be an object")
+        return BenchmarkVerdict(False, ())
+    return BenchmarkVerdict(
+        passed=_required_artifact_bool(value, "passed", "verdict.passed", errors),
+        failure_reasons=_parse_text_sequence(
+            value.get("failure_reasons"),
+            "verdict.failure_reasons",
+            errors,
+        ),
+    )
+
+
+def _validate_verdict_result_fields(
+    thresholds: BenchmarkThresholds,
+    model_scores: Sequence[ModelScore],
+    agreement_matrix: Sequence[PairwiseAgreement],
+    stability_scores: Sequence[StabilityScore],
+    verdict: BenchmarkVerdict,
+    artifact_errors: Sequence[str],
+    errors: list[str],
+) -> None:
+    if artifact_errors:
+        expected_passed = False
+        expected_reasons = tuple(artifact_errors)
+    else:
+        recomputed = evaluate_thresholds(
+            model_scores,
+            agreement_matrix,
+            stability_scores,
+            thresholds,
+        )
+        expected_passed = recomputed.passed
+        expected_reasons = recomputed.failure_reasons
+
+    if verdict.passed != expected_passed:
+        errors.append(
+            "verdict.passed contradicts artifact state: "
+            f"expected {expected_passed}"
+        )
+    if verdict.failure_reasons != expected_reasons:
+        errors.append(
+            "verdict.failure_reasons contradicts artifact state: "
+            f"expected {list(expected_reasons)}"
+        )
+
+
+def _validate_derived_result_fields(
+    data: Mapping[str, object],
+    artifact: ClaimEvidenceResultArtifact,
+    errors: list[str],
+) -> None:
+    raw_ok = data.get("ok", _MISSING)
+    if raw_ok is not _MISSING:
+        if not isinstance(raw_ok, bool):
+            errors.append("ok must be a boolean")
+        elif raw_ok != artifact.ok:
+            errors.append(f"ok contradicts artifact state: expected {artifact.ok}")
+    raw_go_no_go = data.get("go_no_go", _MISSING)
+    if raw_go_no_go is not _MISSING:
+        if raw_go_no_go not in ("go", "no_go"):
+            errors.append("go_no_go must be go or no_go")
+        elif raw_go_no_go != artifact.go_no_go:
+            errors.append(
+                f"go_no_go contradicts artifact state: expected {artifact.go_no_go}"
+            )
+
+
+def _required_sequence(
+    value: object,
+    label: str,
+    errors: list[str],
+) -> tuple[object, ...]:
+    if not isinstance(value, RuntimeSequence) or isinstance(value, (str, bytes)):
+        errors.append(f"{label} must be a list")
+        return ()
+    return tuple(value)
+
+
+def _parse_text_sequence(
+    value: object,
+    label: str,
+    errors: list[str],
+) -> tuple[str, ...]:
+    rows = _required_sequence(value, label, errors)
+    parsed: list[str] = []
+    for index, item in enumerate(rows, start=1):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{label}[{index}] must be a non-empty string")
+            continue
+        parsed.append(item)
+    return tuple(parsed)
+
+
+def _required_string(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> str:
+    value = data.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    errors.append(f"{label} missing")
+    return ""
+
+
+def _required_string_or_empty(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> str:
+    value = data.get(key)
+    if isinstance(value, str):
+        return value
+    errors.append(f"{label} must be a string")
+    return ""
+
+
+def _required_artifact_bool(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> bool:
+    value = data.get(key)
+    if isinstance(value, bool):
+        return value
+    errors.append(f"{label} missing")
+    return False
+
+
+def _optional_bool(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> bool | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    errors.append(f"{label} must be a boolean or null")
+    return None
+
+
+def _required_nonnegative_int(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> int:
+    value = data.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    errors.append(f"{label} must be a non-negative integer")
+    return 0
+
+
+def _optional_confidence(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 5:
+        return value
+    errors.append(f"{label} must be an integer from 1 to 5 or null")
+    return None
+
+
+def _required_unit_float(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> float:
+    value = data.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1:
+        return float(value)
+    errors.append(f"{label} must be a number from 0 to 1")
+    return 0.0
+
+
+def _optional_unit_float(
+    data: Mapping[str, object],
+    key: str,
+    label: str,
+    errors: list[str],
+) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1:
+        return float(value)
+    errors.append(f"{label} must be a number from 0 to 1 or null")
+    return None
 
 
 def _result_file_path_errors(
