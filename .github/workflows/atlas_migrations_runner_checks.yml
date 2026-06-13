@@ -30,7 +30,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install asyncpg pytest pytest-asyncio
+          python -m pip install asyncpg pytest pytest-asyncio pydantic pydantic-settings
 
       # No database service: test_migrations_runner.py uses a fake migration pool
       # and pure-Path prefix checks. A real-DB apply check for the deflection
