@@ -324,7 +324,10 @@ async function submitPrivateBlob({
   } else {
     form.set("csv_file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
   }
-  form.set("support_platform", clean(payload?.support_platform));
+  form.set(
+    "support_platform",
+    importerMode === FULL_THREAD_IMPORTER_MODE ? "zendesk" : clean(payload?.support_platform),
+  );
   form.set("company_name", clean(payload?.company_name));
   form.set("contact_email", clean(payload?.contact_email));
   form.set("limit", clean(payload?.limit) || "1000");

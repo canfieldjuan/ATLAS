@@ -446,6 +446,7 @@ await test("portfolio submit endpoint pins private Blob submit handling", () => 
   assert.match(submitSource, /normalizeImporterMode/);
   assert.match(submitSource, /form\.set\("json_file"/);
   assert.match(submitSource, /form\.set\("importer_mode", FULL_THREAD_IMPORTER_MODE\)/);
+  assert.match(submitSource, /importerMode === FULL_THREAD_IMPORTER_MODE \? "zendesk" : clean\(payload\?\.support_platform\)/);
   assert.match(submitSource, /inspectPrivateCsvBlob/);
   assert.match(submitSource, /deflection_inspect_not_ready/);
   assert.match(inspectSource, /bodyParser:\s*false/);
@@ -723,6 +724,7 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
   assert.equal(calls[1].options.body instanceof FormData, true);
   assert.equal(calls[1].options.body.get("support_platform"), "zendesk");
   assert.equal(calls[1].options.body.get("company_name"), "Acme Co.");
+  assert.equal(calls[1].options.body.get("limit"), "1000");
   assert.equal(await calls[1].options.body.get("csv_file").text(), csv);
   assert.deepEqual(deleteCalls, [
     {
@@ -754,7 +756,7 @@ await test("private blob submit forwards Zendesk full-thread JSON without CSV in
     payload: {
       blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
       importer_mode: FULL_THREAD_IMPORTER_MODE,
-      support_platform: "zendesk",
+      support_platform: "intercom",
       company_name: "Acme Co.",
       contact_email: "lead@acme.example",
       limit: "1000",
@@ -801,6 +803,7 @@ await test("private blob submit forwards Zendesk full-thread JSON without CSV in
   assert.equal(calls[0].options.body instanceof FormData, true);
   assert.equal(calls[0].options.body.get("support_platform"), "zendesk");
   assert.equal(calls[0].options.body.get("company_name"), "Acme Co.");
+  assert.equal(calls[0].options.body.get("limit"), "1000");
   assert.equal(calls[0].options.body.get("importer_mode"), FULL_THREAD_IMPORTER_MODE);
   assert.equal(await calls[0].options.body.get("json_file").text(), threadJson);
   assert.equal(calls[0].options.body.get("csv_file"), null);

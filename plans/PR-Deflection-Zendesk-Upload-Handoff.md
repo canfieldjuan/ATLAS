@@ -92,7 +92,9 @@ The portfolio submit proxy replaces CSV-only helpers with mode-aware private
 Blob helpers. CSV mode continues to read the blob, inspect it through ATLAS, and
 forward multipart `csv_file`. Full-thread mode reads a JSON private blob,
 skips CSV inspect, and forwards multipart `json_file` plus
-`importer_mode="full_thread"` to ATLAS. Cleanup remains best-effort after the
+`importer_mode="full_thread"` to ATLAS. The proxy pins full-thread
+`support_platform` metadata to `zendesk` server-side because those bytes are
+always parsed as Zendesk thread exports. Cleanup remains best-effort after the
 side-effectful submit and must not mask a successful report creation.
 
 The ATLAS submit parser accepts multipart `json_file` only when
@@ -124,7 +126,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_extracted_content_deflection_submit.py -q`
-  - 51 passed.
+  - 53 passed.
 - `cd portfolio-ui && npm run test:deflection-upload-shell`
   - 27 passed.
 - `cd portfolio-ui && npm run test:deflection-atlas-proxy`
@@ -134,16 +136,19 @@ Parked hardening: none.
     emitted the existing large-chunk and sitemap-env warnings.
 - `scripts/run_extracted_pipeline_checks.sh` (via bash)
   - 4022 passed, 10 skipped, 1 existing torch CUDA warning.
+- Review-fix focused checks:
+  - `python -m pytest tests/test_extracted_content_deflection_submit.py::test_deflection_submit_accepts_full_thread_multipart_json_upload tests/test_extracted_content_deflection_submit.py::test_deflection_submit_rejects_oversize_uploaded_json tests/test_extracted_content_deflection_submit.py::test_deflection_submit_rejects_empty_uploaded_json -q`
+    - 3 passed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
 | `extracted_content_pipeline/api/control_surfaces.py` | 52 |
-| `plans/PR-Deflection-Zendesk-Upload-Handoff.md` | 149 |
-| `portfolio-ui/api/content-ops/deflection/submit.js` | 110 |
+| `plans/PR-Deflection-Zendesk-Upload-Handoff.md` | 154 |
+| `portfolio-ui/api/content-ops/deflection/submit.js` | 115 |
 | `portfolio-ui/api/content-ops/deflection/upload.js` | 16 |
-| `portfolio-ui/scripts/faq-deflection-upload-shell.test.mjs` | 182 |
+| `portfolio-ui/scripts/faq-deflection-upload-shell.test.mjs` | 185 |
 | `portfolio-ui/src/pages/FaqDeflectionUpload.tsx` | 162 |
-| `tests/test_extracted_content_deflection_submit.py` | 73 |
-| **Total** | **744** |
+| `tests/test_extracted_content_deflection_submit.py` | 117 |
+| **Total** | **801** |

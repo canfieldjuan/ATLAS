@@ -879,6 +879,8 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
     assert metadata["csat_score_count"] == 0
     assert metadata["csat_score_average"] is None
     assert payload["input_provider"]["warnings"] == []
+    assert "Internal note" not in json.dumps(payload)
+    assert "A member of the support team will get back to you" not in json.dumps(payload)
 
 
 @pytest.mark.asyncio
@@ -933,6 +935,48 @@ async def test_deflection_submit_rejects_json_file_without_full_thread_mode() ->
 
     assert exc.value.status_code == 422
     assert exc.value.detail == "json_file requires importer_mode=full_thread"
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_oversize_uploaded_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_MAX_DEFLECTION_SUBMIT_BLOB_BYTES", 10)
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "json_file": _Upload(b"01234567890", filename="zendesk-thread.json"),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "importer_mode": "full_thread",
+        }))
+
+    assert exc.value.status_code == 413
+    assert exc.value.detail == {
+        "reason": "deflection_submit_full_thread_too_large",
+        "max_file_bytes": 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_empty_uploaded_json() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "json_file": _Upload(b"", filename="zendesk-thread.json"),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "importer_mode": "full_thread",
+        }))
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Uploaded Zendesk full-thread JSON is empty."
 
 
 @pytest.mark.asyncio
