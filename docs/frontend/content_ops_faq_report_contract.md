@@ -23,6 +23,11 @@ type TicketFAQMarkdownResult = {
   items: TicketFAQItem[];
   source_count: number;
   ticket_source_count: number;
+  // Tickets whose question appeared only once. They are excluded from FAQ
+  // items and never billed as repeat work; a `non_repeat_tickets_excluded`
+  // warning carries the same counts.
+  non_repeat_ticket_count: number;
+  non_repeat_question_count: number;
   output_checks: {
     uses_user_vocabulary: boolean;
     condensed: boolean;
@@ -50,6 +55,8 @@ type FAQDeflectionReportSummary = {
   generated: number;
   source_count: number;
   ticket_source_count: number;
+  non_repeat_ticket_count: number;
+  non_repeat_question_count: number;
   drafted_answer_count: number;
   no_proven_answer_count: number;
   output_checks: {
@@ -86,6 +93,7 @@ type DeflectionSnapshot = {
     drafted_answer_count: number;
     no_proven_answer_count: number;
     repeat_ticket_count: number;
+    non_repeat_ticket_count: number;
     source_date_start?: string; // ISO date, only when source-date coverage is complete
     source_date_end?: string; // ISO date, only when source-date coverage is complete
     source_window_days?: number; // inclusive day count, only when coverage is complete
@@ -151,7 +159,11 @@ The teaser is fail-closed: only scoped `resolution_evidence` FAQ items are
 eligible. Preview entries never include answer body text.
 
 `ticket_count` and `summary.repeat_ticket_count` are raw measured counts from
-the report items/source rows. `weighted_frequency` is ranking metadata only and
+the report items/source rows. `repeat_ticket_count` sums only items whose
+question was asked by at least two tickets; tickets behind single-ticket items
+and excluded one-off questions are reported in
+`summary.non_repeat_ticket_count` instead and must never feed repeat-work spend
+copy. `weighted_frequency` is ranking metadata only and
 must not feed spend or cost copy. If raw counts are unavailable, count-dependent
 frontend projections should stay hidden rather than fall back to the ranking
 score.

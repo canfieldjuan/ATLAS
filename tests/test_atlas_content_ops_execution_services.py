@@ -173,12 +173,22 @@ async def test_faq_markdown_runs_through_host_bundle() -> None:
         {
             "outputs": ["faq_markdown"],
             "inputs": {
-                "source_material": [{
-                    "ticket_id": "ticket-1",
-                    "source_type": "ticket",
-                    "message": "How do I fix failed exports?",
-                    "pain_category": "exports",
-                }]
+                "source_material": [
+                    # #1460: a repeat partner keeps the question a billable
+                    # FAQ cluster (one-off questions are excluded).
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "message": "How do I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "message": "How can I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                ]
             },
         },
         services=services,
@@ -206,12 +216,22 @@ async def test_faq_markdown_persists_when_db_services_enabled() -> None:
         {
             "outputs": ["faq_markdown"],
             "inputs": {
-                "source_material": [{
-                    "ticket_id": "ticket-1",
-                    "source_type": "ticket",
-                    "message": "How do I fix failed exports?",
-                    "pain_category": "exports",
-                }]
+                "source_material": [
+                    # #1460: a repeat partner keeps the question a billable
+                    # FAQ cluster (one-off questions are excluded).
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "message": "How do I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "message": "How can I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                ]
             },
         },
         services=services,
@@ -501,12 +521,22 @@ async def test_faq_deflection_report_runs_through_host_bundle() -> None:
             "outputs": ["faq_deflection_report"],
             "inputs": {
                 "deflection_report_title": "Acme Deflection Report",
-                "source_material": [{
-                    "ticket_id": "ticket-1",
-                    "source_type": "ticket",
-                    "message": "How do I fix failed exports?",
-                    "pain_category": "exports",
-                }]
+                "source_material": [
+                    # #1460: a repeat partner keeps the question a billable
+                    # FAQ cluster (one-off questions are excluded).
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "message": "How do I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "message": "How can I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                ]
             },
         },
         services=services,
@@ -548,12 +578,22 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
             "outputs": ["faq_deflection_report"],
             "inputs": {
                 "deflection_report_title": "Hidden FAQ Source Report",
-                "source_material": [{
-                    "ticket_id": "ticket-1",
-                    "source_type": "ticket",
-                    "message": "How do I fix failed exports?",
-                    "pain_category": "exports",
-                }],
+                "source_material": [
+                    # #1460: a repeat partner keeps the question a billable
+                    # FAQ cluster (one-off questions are excluded).
+                    {
+                        "ticket_id": "ticket-1",
+                        "source_type": "ticket",
+                        "message": "How do I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                    {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "message": "How can I fix failed exports?",
+                        "pain_category": "exports",
+                    },
+                ],
             },
         },
         services=services,

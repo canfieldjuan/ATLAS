@@ -156,10 +156,20 @@ def _documented_search_card_fields(text: str) -> set[str]:
 def _producer_detail_item():
     result = build_ticket_faq_markdown(
         [
+            # #1460: the export question repeats across two zero-result
+            # searches so it stays a billable cluster under measured
+            # repetition (one-off questions are excluded and counted).
             {
                 "source_id": "search-export-1",
                 "source_type": "search_log",
                 "text": "How do I export attribution report?",
+                "zero_results": "true",
+                "source_weight": "20",
+            },
+            {
+                "source_id": "search-export-2",
+                "source_type": "search_log",
+                "text": "How can I export the attribution report?",
                 "zero_results": "true",
                 "source_weight": "20",
             },

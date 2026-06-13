@@ -9,6 +9,7 @@ on:
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
+      - "tests/test_support_ticket_provider_landing_blog_execute.py"
   push:
     branches:
       - main
@@ -19,6 +20,7 @@ on:
       - "tests/test_atlas_content_ops_input_provider.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
+      - "tests/test_support_ticket_provider_landing_blog_execute.py"
 
 jobs:
   atlas-content-ops-input-provider-checks:
@@ -45,4 +47,5 @@ jobs:
             tests/test_atlas_content_ops_input_provider.py \
             tests/test_atlas_content_ops_review_input_provider.py \
             tests/test_atlas_content_ops_execution_services.py \
+            tests/test_support_ticket_provider_landing_blog_execute.py \
             -q

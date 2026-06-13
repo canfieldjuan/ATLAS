@@ -29,6 +29,29 @@
       ],
       "pain_category": "manual follow-up",
       "source_url": "https://example.com/tickets/riverbend-2"
+    },
+    {
+      "ticket_id": "support-riverbend-3",
+      "subject": "Attribution export still blocked",
+      "description": "Our operations team cannot export campaign attribution data before the renewal review.",
+      "pain_category": "reporting friction",
+      "source_url": "https://example.com/tickets/riverbend-3"
+    },
+    {
+      "ticket_id": "support-riverbend-4",
+      "subject": "Demo follow-up rebuilt by hand again",
+      "comments": [
+        {
+          "author": "Customer",
+          "body": "Every demo follow-up still gets rebuilt by hand."
+        },
+        {
+          "role": "Agent",
+          "message": "The workflow automation feature is not available on the current plan."
+        }
+      ],
+      "pain_category": "manual follow-up",
+      "source_url": "https://example.com/tickets/riverbend-4"
     }
   ]
 }

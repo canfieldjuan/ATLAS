@@ -43,7 +43,7 @@ test('deflection report view splits proven and no-proven answers from contract e
   assert.equal(report.provenItems.length, 1)
   assert.equal(report.noProvenItems.length, 1)
   assert.equal(report.provenItems[0].question, 'How do I export attribution reports?')
-  assert.equal(report.noProvenItems[0].question, 'Can I turn on SSO for all users?')
+  assert.equal(report.noProvenItems[0].question, 'How do I enable SSO for my team?')
   assert.equal(report.provenItems[0].answerEvidenceStatus, 'resolution_evidence')
   assert.equal(report.noProvenItems[0].answerEvidenceStatus, 'draft_needs_review')
   assert.ok(

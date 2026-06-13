@@ -328,24 +328,45 @@ def test_faq_scale_smoke_preserves_fail_closed_exit_and_artifacts(tmp_path: Path
     result = json.loads((artifact_dir / "faq_result.json").read_text(encoding="utf-8"))
     stderr = (artifact_dir / "stderr.txt").read_text(encoding="utf-8")
     assert result["status"] == "failed_output_checks"
-    assert result["failed_output_checks"] == ["condensed"]
-    assert "FAQ output checks failed: condensed" in stderr
+    # #1460: two one-off questions are no longer billed as repeat FAQ items,
+    # so no items are generated and every output check fails.
+    failed_checks = [
+        "condensed",
+        "has_action_items",
+        "resolution_evidence_scoped",
+        "uses_user_vocabulary",
+    ]
+    assert result["failed_output_checks"] == failed_checks
+    assert (
+        "FAQ output checks failed: condensed, has_action_items, "
+        "resolution_evidence_scoped, uses_user_vocabulary"
+    ) in stderr
     assert not (artifact_dir / "faq.md").exists()
     assert summary["artifacts"]["markdown"] is None
     assert summary["artifact_details"]["markdown"]["exists"] is False
     assert summary["artifact_details"]["result"]["bytes"] > 0
     assert summary["failure"]["type"] == "output_checks"
-    assert summary["failure"]["failed_output_checks"] == ["condensed"]
+    assert summary["failure"]["failed_output_checks"] == failed_checks
     assert "FAQ output checks failed: condensed" in summary["failure"]["stderr_tail"]
     assert summary["faq_run_summary"] == result["diagnostics"]["run_summary"]
     assert summary["faq_run_summary"]["status"] == "failed_output_checks"
-    assert summary["faq_run_summary"]["output_checks"]["failed_checks"] == ["condensed"]
+    assert summary["faq_run_summary"]["output_checks"]["failed_checks"] == failed_checks
+    assert summary["faq_run_summary"]["generated"] == 0
     assert summary["input_profile"]["raw_row_count"] == 3
     assert summary["input_profile"]["usable_source_count"] == 2
     assert summary["input_profile"]["warnings_by_code"]["missing_source_text"] == 1
     assert summary["input_profile"]["missing_source_text_count"] == 1
     assert summary["input_profile"]["skipped_row_count"] == 1
-    assert summary["result"]["diagnostics"]["rendered_ticket_source_count"] == 2
+    assert summary["result"]["diagnostics"]["rendered_ticket_source_count"] == 0
+    assert summary["result"]["diagnostics"]["unrepresented_ticket_sources"] == 2
+    non_repeat_warnings = [
+        warning
+        for warning in summary["result"]["diagnostics"]["warnings"]
+        if warning["code"] == "non_repeat_tickets_excluded"
+    ]
+    assert len(non_repeat_warnings) == 1
+    assert non_repeat_warnings[0]["ticket_count"] == 2
+    assert non_repeat_warnings[0]["question_count"] == 2
 
 
 def test_faq_scale_smoke_can_allow_output_check_failures(tmp_path: Path) -> None:
@@ -450,8 +471,10 @@ def test_faq_scale_smoke_main_prints_profile_on_failure(tmp_path: Path, capsys) 
     assert "Content Ops FAQ scale smoke failed:" in captured.err
     assert "source_rows=2/3" in captured.err
     assert "faq=available" in captured.err
-    assert "generated=2" in captured.err
-    assert "checks_failed=1/4" in captured.err
+    # #1460: both remaining rows are one-off questions, so nothing is
+    # generated and all four output checks fail.
+    assert "generated=0" in captured.err
+    assert "checks_failed=4/4" in captured.err
     assert "skipped_rows=1" in captured.err
     assert "missing_source_text=1" in captured.err
     assert "failure=output_checks" in captured.err

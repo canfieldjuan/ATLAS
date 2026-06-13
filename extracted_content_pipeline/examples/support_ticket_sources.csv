@@ -1,5 +1,5 @@
 Ticket ID,Account Name,Vendor Name,Contact Email,Contact Name,Contact Title,Subject,Description,Pain Category,Source URL
 ticket-acme-1,Acme Logistics,HubSpot,ops@example.com,Jordan Lee,VP Revenue Operations,Change login email,How do I change my login email?,email and profile updates,https://example.com/tickets/acme-1
 ticket-acme-2,Acme Logistics,HubSpot,ops@example.com,Jordan Lee,VP Revenue Operations,Update account email,I need to update the email on my account.,email and profile updates,https://example.com/tickets/acme-2
-ticket-northstar-1,Northstar Foods,LegacyCRM,growth@example.com,Riley Chen,Director of Growth,Export campaign reports,How do we export campaign attribution data before renewal?,reporting friction,https://example.com/tickets/northstar-1
-ticket-northstar-2,Northstar Foods,LegacyCRM,growth@example.com,Riley Chen,Director of Growth,Reporting dashboard export,We cannot export the reporting dashboard for analysts.,reporting friction,https://example.com/tickets/northstar-2
+ticket-northstar-1,Northstar Foods,LegacyCRM,growth@example.com,Riley Chen,Director of Growth,Export campaign reports,How do we export the campaign reporting dashboard before renewal?,reporting friction,https://example.com/tickets/northstar-1
+ticket-northstar-2,Northstar Foods,LegacyCRM,growth@example.com,Riley Chen,Director of Growth,Reporting dashboard export,We cannot export the campaign reporting dashboard before renewal.,reporting friction,https://example.com/tickets/northstar-2

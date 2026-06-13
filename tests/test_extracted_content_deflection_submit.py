@@ -599,8 +599,8 @@ def test_is_english_language_rejects_non_english_forms(value: str) -> None:
 async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv() -> None:
     csv_data = _csv_bytes([
         "ticket_id,subject,message",
-        "zd-1,Password reset help,<p>How do I reset my password?</p>",
-        "zd-2,Password reset not working,I cannot reset password from the login screen",
+        "zd-1,Password reset help,<p>How do I reset my password from the login screen?</p>",
+        "zd-2,Password reset not working,I cannot reset my password from the login screen",
         "hs-1,Change email address,Where do I update my email?",
         "hs-2,Update account email,Need to change email address",
     ])
@@ -638,7 +638,7 @@ async def test_deflection_submit_surfaces_cluster_preview_for_messy_untagged_csv
         (item["ticket_count"], item["customer_wording"])
         for item in snapshot["top_questions"]
     ] == [
-        (2, "Password reset help How do I reset my password?"),
+        (2, "Password reset help How do I reset my password from the login screen?"),
         (2, "Change email address Where do I update my email?"),
     ]
     assert "<p>" not in str(snapshot)

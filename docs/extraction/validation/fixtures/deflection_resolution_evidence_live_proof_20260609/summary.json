@@ -2,6 +2,8 @@
   "drafted_answer_count": 2,
   "generated": 4,
   "no_proven_answer_count": 2,
+  "non_repeat_question_count": 0,
+  "non_repeat_ticket_count": 0,
   "output_checks": {
     "condensed": true,
     "has_action_items": true,

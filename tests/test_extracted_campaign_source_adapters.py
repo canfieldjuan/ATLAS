@@ -1094,12 +1094,18 @@ def test_packaged_support_ticket_bundle_inherits_account_metadata() -> None:
     assert [row["target_id"] for row in loaded.opportunities] == [
         "support-riverbend-1",
         "support-riverbend-2",
+        "support-riverbend-3",
+        "support-riverbend-4",
     ]
     assert [row["company_name"] for row in loaded.opportunities] == [
         "Riverbend Supply",
         "Riverbend Supply",
+        "Riverbend Supply",
+        "Riverbend Supply",
     ]
     assert [row["source_type"] for row in loaded.opportunities] == [
+        "support_ticket",
+        "support_ticket",
         "support_ticket",
         "support_ticket",
     ]

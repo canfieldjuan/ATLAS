@@ -25,10 +25,20 @@ DEFLECTION_CHECKOUT_CONTRACT_PATH = (
 def _producer_report_shape() -> tuple[set[str], set[str]]:
     result = build_ticket_faq_markdown(
         [
+            # #1460: the export question repeats across two zero-result
+            # searches so it stays a billable cluster under measured
+            # repetition (one-off questions are excluded and counted).
             {
                 "source_id": "search-export-1",
                 "source_type": "search_log",
                 "text": "How do I export attribution report?",
+                "zero_results": "true",
+                "source_weight": "20",
+            },
+            {
+                "source_id": "search-export-2",
+                "source_type": "search_log",
+                "text": "How can I export the attribution report?",
                 "zero_results": "true",
                 "source_weight": "20",
             },
@@ -85,11 +95,14 @@ def _producer_deflection_report_payload() -> dict[str, object]:
                 "text": "How do I enable SSO for my team?",
                 "created_at": "2026-05-10",
             },
+            # #1460: reworded so both SSO tickets repeat the same question
+            # gist within the same topic; topic membership alone no longer
+            # merges questions.
             {
                 "source_id": "ticket-sso-2",
                 "source_type": "support_ticket",
-                "source_title": "Team login",
-                "text": "Can I turn on SSO for all users?",
+                "source_title": "SSO setup",
+                "text": "Can we enable SSO for our team?",
                 "created_at": "2026-05-15",
             },
         ],
@@ -205,6 +218,9 @@ def test_content_ops_faq_deflection_snapshot_example_matches_producer_shape() ->
         "drafted_answer_count",
         "no_proven_answer_count",
         "repeat_ticket_count",
+        # #1460: one-off questions are excluded from repeat work and
+        # surfaced through this separate count.
+        "non_repeat_ticket_count",
         "source_date_start",
         "source_date_end",
         "source_window_days",

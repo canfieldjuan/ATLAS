@@ -1071,6 +1071,14 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                         "pain_category": "login",
                     },
                     {
+                        "ticket_id": "ticket-2",
+                        "source_type": "ticket",
+                        "created_at": "2026-05-08",
+                        "subject": "SSO setup",
+                        "message": "How can I enable SSO for my team?",
+                        "pain_category": "login",
+                    },
+                    {
                         "ticket_id": "ticket-old",
                         "source_type": "ticket",
                         "created_at": "2026-01-01",
@@ -1121,17 +1129,19 @@ async def test_execute_applies_hosted_faq_intent_rules() -> None:
                     {"topic": "data freshness", "keywords": ["warehouse sync"]}
                 ],
                 "source_material": [
+                    # #1460: the two tickets must repeat the same question
+                    # (matching gists), not just share the topic keyword.
                     {
                         "ticket_id": "ticket-1",
                         "source_type": "ticket",
                         "subject": "Warehouse sync lag",
-                        "message": "The warehouse sync is delayed again.",
+                        "message": "Why is the warehouse sync delayed again this morning?",
                     },
                     {
                         "ticket_id": "ticket-2",
                         "source_type": "ticket",
                         "subject": "Warehouse sync stale",
-                        "message": "Warehouse sync data is stale this morning.",
+                        "message": "Why is the warehouse sync delayed this morning?",
                     },
                 ],
             },
@@ -1160,17 +1170,20 @@ async def test_execute_applies_hosted_faq_intent_rules_to_deflection_report_with
                     "data freshness=warehouse sync,connector lag"
                 ],
                 "source_material": [
+                    # #1460: both tickets repeat the same connector-lag
+                    # question so the intent rule still yields one repeat
+                    # FAQ cluster (topic keywords alone no longer merge).
                     {
                         "ticket_id": "ticket-1",
                         "source_type": "support_ticket",
                         "subject": "Warehouse sync lag",
-                        "message": "The warehouse sync is delayed again.",
+                        "message": "Why is the warehouse sync delayed by connector lag this morning?",
                     },
                     {
                         "ticket_id": "ticket-2",
                         "source_type": "support_ticket",
                         "subject": "Connector lag",
-                        "message": "CRM connector lag repeats every morning.",
+                        "message": "Why is connector lag keeping the warehouse sync delayed this morning?",
                     },
                 ],
             },
@@ -1223,11 +1236,20 @@ async def test_execute_runs_faq_deflection_report_from_source_material() -> None
                             "Download report."
                         ),
                     },
+                    # #1460: the unresolved renewal-invoice question needs a
+                    # repeat partner to stay a billable FAQ cluster.
                     {
                         "ticket_id": "ticket-2",
                         "source_type": "support_ticket",
                         "subject": "Renewal invoice",
                         "message": "How do I confirm my renewal invoice before payment?",
+                        "pain_category": "billing",
+                    },
+                    {
+                        "ticket_id": "ticket-3",
+                        "source_type": "support_ticket",
+                        "subject": "Renewal invoice",
+                        "message": "How do I confirm the renewal invoice before payment is sent?",
                         "pain_category": "billing",
                     },
                 ],
@@ -1249,7 +1271,7 @@ async def test_execute_runs_faq_deflection_report_from_source_material() -> None
     assert "## Publishable Help-Center Copy From Proven Resolutions" in step["result"]["markdown"]
     assert "Open Analytics, choose Attribution" in step["result"]["markdown"]
     assert "## No Proven Answer Yet" in step["result"]["markdown"]
-    assert step["result"]["summary"]["source_count"] == 2
+    assert step["result"]["summary"]["source_count"] == 3
     assert step["result"]["summary"]["drafted_answer_count"] == 1
     assert step["result"]["summary"]["no_proven_answer_count"] == 1
     assert step["result"]["faq_result"]["markdown"].startswith("# Acme Support FAQ")

@@ -171,7 +171,8 @@ def build_deflection_snapshot(
         "support_ticket_resolution_evidence_count": _resolution_evidence_count(
             summary
         ),
-        "repeat_ticket_count": sum(_ticket_count(item) for item in items),
+        "repeat_ticket_count": _repeat_ticket_count(items),
+        "non_repeat_ticket_count": _non_repeat_ticket_count(summary, items),
     }
     source_date_window = _complete_source_date_window(summary, items)
     if source_date_window:
@@ -263,6 +264,8 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         "generated": len(items),
         "source_count": int(faq_result.source_count),
         "ticket_source_count": int(faq_result.ticket_source_count),
+        "non_repeat_ticket_count": int(faq_result.non_repeat_ticket_count),
+        "non_repeat_question_count": int(faq_result.non_repeat_question_count),
         "drafted_answer_count": len(proven),
         "no_proven_answer_count": len(needs_review),
         "support_ticket_resolution_evidence_present": len(proven) > 0,
@@ -318,6 +321,7 @@ def _support_tax_section(
     items: Sequence[Mapping[str, Any]],
 ) -> list[str]:
     repeat_ticket_count = _repeat_ticket_count(items)
+    non_repeat_ticket_count = _non_repeat_ticket_count(summary, items)
     batch_cost = _support_cost(repeat_ticket_count)
     source_window = _complete_source_date_window(summary, items)
     lines = [
@@ -331,6 +335,15 @@ def _support_tax_section(
             "assisted-contact handling."
         ),
     ]
+    if non_repeat_ticket_count:
+        lines.extend([
+            "",
+            (
+                f"{_count(non_repeat_ticket_count)} tickets asked a question that "
+                "appeared only once in this upload; they are excluded from the "
+                "repeat counts and cost sizing above."
+            ),
+        ])
     if source_window:
         annualized = _support_cost(
             repeat_ticket_count * 365 / _int(source_window.get("source_window_days"))
@@ -676,7 +689,27 @@ def _source_count(item: Mapping[str, Any]) -> int:
 
 
 def _repeat_ticket_count(items: Sequence[Mapping[str, Any]]) -> int:
-    return sum(_ticket_count(item) for item in items)
+    # A question asked once is not a repeat: resolution-scoped items can
+    # still carry a single ticket, and they stay in the report as drafted
+    # answers, but they do not count as repeat work (#1481).
+    return sum(
+        _ticket_count(item)
+        for item in items
+        if _ticket_count(item) >= 2
+    )
+
+
+def _non_repeat_ticket_count(
+    summary: Mapping[str, Any],
+    items: Sequence[Mapping[str, Any]],
+) -> int:
+    excluded = _int(summary.get("non_repeat_ticket_count"))
+    singleton_items = sum(
+        _ticket_count(item)
+        for item in items
+        if _ticket_count(item) == 1
+    )
+    return excluded + singleton_items
 
 
 def _ticket_count(item: Mapping[str, Any]) -> int:

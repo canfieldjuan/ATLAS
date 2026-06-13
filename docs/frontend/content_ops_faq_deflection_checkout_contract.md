@@ -45,7 +45,10 @@ For Support Tax or FOMO copy, use only raw measured count fields:
 `snapshot.top_questions[].ticket_count`, and locked
 `snapshot.locked_questions[].ticket_count`. `weighted_frequency` is a ranking
 score, not a customer-specific ticket count; do not use it for spend
-calculations or projections. `locked_questions` intentionally exposes only
+calculations or projections. `repeat_ticket_count` counts only questions asked
+by at least two tickets; one-off tickets are reported separately in
+`snapshot.summary.non_repeat_ticket_count` and must not feed repeat-work spend
+copy. `locked_questions` intentionally exposes only
 rank and ticket count, with question text withheld until paid unlock.
 
 For period-normalized Support Tax copy, use

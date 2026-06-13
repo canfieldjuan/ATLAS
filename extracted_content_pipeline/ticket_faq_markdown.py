@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+import hashlib
 import re
 from typing import Any
 
@@ -14,7 +15,10 @@ from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_rows_to_campaign_opportunities,
 )
-from .support_ticket_clustering import support_ticket_plain_text
+from .support_ticket_clustering import (
+    support_ticket_plain_text,
+    support_ticket_tokens,
+)
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -241,6 +245,8 @@ class TicketFAQMarkdownResult:
     output_checks: dict[str, bool]
     warnings: tuple[dict[str, Any], ...] = ()
     saved_ids: tuple[str, ...] = ()
+    non_repeat_ticket_count: int = 0
+    non_repeat_question_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +255,8 @@ class TicketFAQMarkdownResult:
             "items": [dict(item) for item in self.items],
             "source_count": self.source_count,
             "ticket_source_count": self.ticket_source_count,
+            "non_repeat_ticket_count": self.non_repeat_ticket_count,
+            "non_repeat_question_count": self.non_repeat_question_count,
             "output_checks": dict(self.output_checks),
             "warnings": [dict(warning) for warning in self.warnings],
             "saved_ids": list(self.saved_ids),
@@ -483,8 +491,54 @@ def build_ticket_faq_markdown(
                 "resolution_text": resolution_text,
             })
 
+    # #1460: topic-degraded groups (scope "topic:*") measure bucket
+    # membership, not question repetition. Split them into question
+    # sub-clusters; only clusters asked by >= 2 DISTINCT source tickets stay
+    # as FAQ groups (one ticket contributing several evidence rows is not a
+    # repeat), and excluded singletons are counted and surfaced instead of
+    # silently rendering as "repeat" work. Resolution-scoped groups are
+    # untouched.
+    subclustered_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
+    excluded_singleton_keys: set[str] = set()
+    non_repeat_question_count = 0
+    token_hashes: dict[str, int] = {}
+    for (topic, scope), rows in groups.items():
+        if not scope.startswith("topic:"):
+            subclustered_groups[(topic, scope)] = rows
+            continue
+        for cluster_index, cluster_rows in enumerate(
+            _question_subclusters(rows, token_hashes=token_hashes)
+        ):
+            cluster_keys = _row_source_keys(cluster_rows)
+            if len(cluster_keys) < 2:
+                excluded_singleton_keys.update(cluster_keys)
+                non_repeat_question_count += 1
+                continue
+            subclustered_groups[(topic, f"{scope}:question:{cluster_index}")] = list(
+                cluster_rows
+            )
+    # A ticket only counts as non-repeat if none of its evidence rows landed
+    # in any kept group; this keeps the condensed-coverage accounting exact
+    # (rendered distinct tickets + non-repeat distinct tickets == sources).
+    kept_keys: set[str] = set()
+    for rows in subclustered_groups.values():
+        kept_keys.update(_row_source_keys(rows))
+    non_repeat_ticket_count = len(excluded_singleton_keys - kept_keys)
+    warnings: list[dict[str, Any]] = []
+    if non_repeat_ticket_count:
+        warnings.append({
+            "code": "non_repeat_tickets_excluded",
+            "message": (
+                f"Excluded {non_repeat_ticket_count} tickets whose question "
+                "appeared only once; they are counted separately and not "
+                "billed as repeat work."
+            ),
+            "ticket_count": non_repeat_ticket_count,
+            "question_count": non_repeat_question_count,
+        })
+
     sorted_groups = sorted(
-        ((topic, rows) for (topic, _scope), rows in groups.items()),
+        ((topic, rows) for (topic, _scope), rows in subclustered_groups.items()),
         key=_group_sort_key,
     )
     if resolved_max_items is not None and len(sorted_groups) > resolved_max_items:
@@ -516,11 +570,15 @@ def build_ticket_faq_markdown(
         items=items,
         source_count=len(opportunities),
         ticket_source_count=len(source_keys),
+        non_repeat_ticket_count=non_repeat_ticket_count,
+        non_repeat_question_count=non_repeat_question_count,
         output_checks=_output_checks(
             items=items,
             ticket_source_count=len(source_keys),
             rendered_ticket_source_count=_rendered_ticket_source_count(items),
+            non_repeat_ticket_count=non_repeat_ticket_count,
         ),
+        warnings=tuple(warnings),
     )
 
 
@@ -547,6 +605,137 @@ def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], .
         "source_type": opportunity.get("source_type") or "",
         "source_title": opportunity.get("source_title") or "",
     },)
+
+
+# --- Question sub-clustering (#1460) -------------------------------------
+#
+# Topic/intent buckets are a coarse pre-partition: when rows carry no
+# resolution evidence the group key degrades to "topic:<topic>" and every
+# ticket in the bucket would render as ONE FAQ whose ticket_count measures
+# bucket membership, not question repetition. These helpers split each
+# degraded bucket into question-similarity sub-clusters with deterministic
+# MinHash-LSH banding plus exact-Jaccard verification, so only questions
+# customers actually asked more than once count as repeats.
+
+_SUBCLUSTER_JACCARD_THRESHOLD = 1 / 3
+_SUBCLUSTER_GIST_TOKEN_LIMIT = 30
+_MINHASH_PRIME = (1 << 61) - 1
+# Fixed (a, b) permutation constants: 16 hashes = 4 bands x 4 rows. Literal
+# constants keep the clustering deterministic across runs and processes.
+_MINHASH_PERMUTATIONS = (
+    (1099511628211, 40503185483),
+    (216613626151, 92821459571),
+    (805306457117, 18352446323),
+    (655360001281, 73692873701),
+    (377778524351, 28419182549),
+    (982451653069, 61231040987),
+    (472882049891, 35742392227),
+    (715827883159, 50321736709),
+    (293339129747, 87178291199),
+    (846835986133, 22801763489),
+    (538216442407, 67867967773),
+    (159218691971, 44560482149),
+    (920419823369, 15485863757),
+    (368345293463, 79302361813),
+    (614741108437, 31556891543),
+    (257885161353, 96846628681),
+)
+_MINHASH_BAND_ROWS = 4
+
+
+def _question_gist_tokens(text: str) -> frozenset[str]:
+    """Tokens of the row's question sentence, or its opening gist."""
+
+    question = _question_text(text)
+    source = question if question else " ".join(text.split()[: _SUBCLUSTER_GIST_TOKEN_LIMIT])
+    tokens = support_ticket_tokens(source)
+    return frozenset(
+        token for token in tokens if not _REDACTION_TOKEN_RE.fullmatch(token)
+    )
+
+
+def _minhash_signature(
+    tokens: frozenset[str],
+    token_hashes: dict[str, int],
+) -> tuple[int, ...]:
+    hashes = []
+    for token in tokens:
+        value = token_hashes.get(token)
+        if value is None:
+            value = int.from_bytes(
+                hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest(),
+                "big",
+            )
+            token_hashes[token] = value
+        hashes.append(value)
+    return tuple(
+        min(((a * value + b) % _MINHASH_PRIME) for value in hashes)
+        for a, b in _MINHASH_PERMUTATIONS
+    )
+
+
+def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _row_source_keys(rows: Sequence[Mapping[str, str]]) -> set[str]:
+    return {
+        key
+        for row in rows
+        if (key := str(row.get("source_key") or "").strip())
+    }
+
+
+def _question_subclusters(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    token_hashes: dict[str, int],
+) -> list[list[Mapping[str, str]]]:
+    """Split one degraded topic bucket into question-similarity clusters.
+
+    Deterministic: fixed MinHash permutations, insertion-ordered band
+    buckets, and candidate verification against each band bucket's first
+    member only (bounded work; LSH recall is approximate by design, #1460).
+    Rows with an empty gist never merge.
+    """
+
+    gists = [_question_gist_tokens(str(row.get("text") or "")) for row in rows]
+    parent = list(range(len(rows)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left, root_right = find(left), find(right)
+        if root_left != root_right:
+            parent[max(root_left, root_right)] = min(root_left, root_right)
+
+    exact: dict[frozenset[str], int] = {}
+    band_buckets: dict[tuple[int, tuple[int, ...]], int] = {}
+    for index, gist in enumerate(gists):
+        if not gist:
+            continue
+        first_exact = exact.setdefault(gist, index)
+        if first_exact != index:
+            union(first_exact, index)
+            continue
+        signature = _minhash_signature(gist, token_hashes)
+        for band_index in range(0, len(signature), _MINHASH_BAND_ROWS):
+            band = (band_index, signature[band_index:band_index + _MINHASH_BAND_ROWS])
+            representative = band_buckets.setdefault(band, index)
+            if representative != index and find(representative) != find(index):
+                if _jaccard(gists[representative], gist) >= _SUBCLUSTER_JACCARD_THRESHOLD:
+                    union(representative, index)
+
+    clusters: dict[int, list[Mapping[str, str]]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        clusters[find(index)].append(row)
+    return [clusters[root] for root in sorted(clusters)]
 
 
 def _topic(
@@ -1869,9 +2058,16 @@ def _output_checks(
     items: Sequence[Mapping[str, Any]],
     ticket_source_count: int,
     rendered_ticket_source_count: int,
+    non_repeat_ticket_count: int = 0,
 ) -> dict[str, bool]:
     has_items = bool(items)
-    covers_all_sources = rendered_ticket_source_count == ticket_source_count
+    # Excluded one-off tickets (#1460/#1481) are intentionally absent from
+    # rendered items but counted and stated in the report, so they still
+    # count as covered sources.
+    covers_all_sources = (
+        rendered_ticket_source_count + non_repeat_ticket_count
+        == ticket_source_count
+    )
     return {
         "uses_user_vocabulary": has_items
         and all(item.get("question_source") in _SUPPORTED_QUESTION_SOURCES for item in items),

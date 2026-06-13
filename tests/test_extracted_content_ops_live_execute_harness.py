@@ -436,7 +436,7 @@ async def test_support_ticket_provider_feeds_real_landing_page_generation() -> N
     assert "Uploaded support tickets" in system_prompt
     assert "Last 90 days of support tickets" not in system_prompt
     assert "How do I change my login email?" in system_prompt
-    assert "How do we export campaign attribution data before renewal?" in system_prompt
+    assert "How do we export the campaign reporting dashboard before renewal?" in system_prompt
     assert "Generate one landing page" in user_prompt
 
 
@@ -708,13 +708,22 @@ async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
             "faq_vocabulary_gap_rules": [["SSO", "single sign-on"]],
             "source_material": {
                 "support_tickets": [
+                    # #1460: a repeat partner keeps the SSO question a
+                    # billable FAQ cluster (one-off questions are excluded).
                     {
                         "ticket_id": "ticket-sso-1",
                         "source_type": "support_ticket",
                         "subject": "SSO setup",
                         "message": "How do I enable SSO for my team?",
                         "pain_category": "authentication",
-                    }
+                    },
+                    {
+                        "ticket_id": "ticket-sso-2",
+                        "source_type": "support_ticket",
+                        "subject": "SSO setup",
+                        "message": "How can I enable SSO for my team?",
+                        "pain_category": "authentication",
+                    },
                 ]
             },
         },
@@ -734,13 +743,13 @@ async def test_live_execute_route_accepts_faq_vocabulary_gap_inputs() -> None:
 
     result = step["result"]
     assert result["generated"] == 1
-    assert result["ticket_source_count"] == 1
+    assert result["ticket_source_count"] == 2
     assert all(result["output_checks"].values())
     assert "Hosted FAQ Vocabulary Gap Smoke" in result["markdown"]
     assert "`ticket-sso-1` - SSO setup" in result["markdown"]
 
     item = result["items"][0]
-    assert item["source_ids"] == ("ticket-sso-1",)
+    assert item["source_ids"] == ("ticket-sso-1", "ticket-sso-2")
     assert item["term_mappings"][0]["customer_term"] == "SSO"
     # Resolves to the faq_documentation_terms entry through the rule alias,
     # proving documentation_terms and vocabulary_gap_rules combine.
@@ -783,11 +792,20 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
                             "Download report."
                         ),
                     },
+                    # #1460: the unresolved billing question needs a repeat
+                    # partner to stay a billable FAQ cluster.
                     {
                         "ticket_id": "ticket-billing-1",
                         "source_type": "support_ticket",
                         "subject": "Renewal invoice",
                         "message": "How do I confirm my renewal invoice before payment?",
+                        "pain_category": "billing",
+                    },
+                    {
+                        "ticket_id": "ticket-billing-2",
+                        "source_type": "support_ticket",
+                        "subject": "Renewal invoice",
+                        "message": "How do I confirm the renewal invoice before payment is sent?",
                         "pain_category": "billing",
                     },
                 ]
@@ -833,7 +851,7 @@ async def test_live_execute_route_returns_faq_deflection_report_artifact() -> No
         request_id=request_id,
     )
     artifact = await artifact_route.endpoint(request_id=request_id)
-    assert artifact["summary"]["source_count"] == 2
+    assert artifact["summary"]["source_count"] == 3
     assert artifact["markdown"].startswith("# Hosted FAQ Deflection Report")
     assert artifact["faq_result"]["markdown"].startswith("# Hosted FAQ Source")
 
@@ -1021,7 +1039,10 @@ async def test_deflection_report_execute_uncaps_paid_artifact_and_keeps_snapshot
         "no_proven_answer_count": 0,
         "support_ticket_resolution_evidence_count": 4,
         "support_ticket_resolution_evidence_present": True,
-        "repeat_ticket_count": 4,
+        # #1460/#1481: each question was asked once, so none of the four
+        # resolution-scoped items count as repeat work.
+        "repeat_ticket_count": 0,
+        "non_repeat_ticket_count": 4,
         "source_date_start": "2026-05-01",
         "source_date_end": "2026-05-20",
         "source_window_days": 20,
