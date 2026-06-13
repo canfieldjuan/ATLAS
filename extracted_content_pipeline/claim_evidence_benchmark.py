@@ -1,9 +1,9 @@
 """Deterministic benchmark scoring for claim/evidence support checks.
 
-This module is intentionally pure. It does not call a model, read the claim
-registry, or expose an MCP tool. It only scores labeled benchmark triples and
-structured witness responses against the reliability thresholds from issue
-#1435.
+This module does not call a model, read the claim registry, or expose an MCP
+tool. It scores labeled benchmark triples and structured witness responses
+against the reliability thresholds from issue #1435. The only file I/O is the
+explicit operator artifact writer for already-built result artifacts.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 from collections.abc import Sequence as RuntimeSequence
 from dataclasses import asdict, dataclass
 from itertools import combinations
+from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 
@@ -425,6 +426,29 @@ class ClaimEvidenceResultFile:
     content: str
 
 
+@dataclass(frozen=True)
+class ClaimEvidenceWrittenResultFile:
+    """Metadata for one benchmark result file written to disk."""
+
+    path: str
+    content_type: str
+    output_path: str
+    bytes_written: int
+
+
+@dataclass(frozen=True)
+class ClaimEvidenceResultWrite:
+    """Result of writing operator-facing benchmark artifact files."""
+
+    output_dir: str
+    files: tuple[ClaimEvidenceWrittenResultFile, ...]
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
 def claim_evidence_result_artifact_files(
     artifact: object,
 ) -> tuple[ClaimEvidenceResultFile, ...]:
@@ -448,6 +472,66 @@ def claim_evidence_result_artifact_files(
             content=render_claim_evidence_result_markdown(typed_artifact),
         ),
     )
+
+
+def write_claim_evidence_result_artifact_files(
+    artifact: object,
+    output_dir: object,
+) -> ClaimEvidenceResultWrite:
+    """Write the JSON + Markdown result bundle into an operator directory."""
+
+    if not isinstance(output_dir, (str, Path)):
+        return _failed_result_write("", ("output_dir must be a path",))
+
+    target_dir = Path(output_dir)
+    if target_dir.exists() and not target_dir.is_dir():
+        return _failed_result_write(
+            str(target_dir),
+            (f"output_dir is not a directory: {target_dir}",),
+        )
+
+    files = claim_evidence_result_artifact_files(artifact)
+    path_errors = _result_file_path_errors(files)
+    if path_errors:
+        return _failed_result_write(str(target_dir), path_errors)
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        return _failed_result_write(
+            str(target_dir),
+            (f"output_dir could not be created: {target_dir}: {error.strerror or error}",),
+        )
+
+    written: list[ClaimEvidenceWrittenResultFile] = []
+    for file in files:
+        output_path = target_dir / file.path
+        if output_path.is_symlink():
+            return ClaimEvidenceResultWrite(
+                output_dir=str(target_dir),
+                files=tuple(written),
+                errors=(f"result file path is a symlink: {output_path}",),
+            )
+        try:
+            output_path.write_text(file.content, encoding="utf-8")
+        except OSError as error:
+            return ClaimEvidenceResultWrite(
+                output_dir=str(target_dir),
+                files=tuple(written),
+                errors=(
+                    f"result file could not be written: "
+                    f"{output_path}: {error.strerror or error}",
+                ),
+            )
+        written.append(
+            ClaimEvidenceWrittenResultFile(
+                path=file.path,
+                content_type=file.content_type,
+                output_path=str(output_path),
+                bytes_written=len(file.content.encode("utf-8")),
+            )
+        )
+    return ClaimEvidenceResultWrite(str(target_dir), tuple(written), ())
 
 
 def render_claim_evidence_result_markdown(artifact: object) -> str:
@@ -572,6 +656,32 @@ def _coerce_result_artifact(artifact: object) -> ClaimEvidenceResultArtifact:
     return _failed_result_artifact(
         DEFAULT_THRESHOLDS,
         ("artifact must be ClaimEvidenceResultArtifact",),
+    )
+
+
+def _result_file_path_errors(
+    files: Sequence[ClaimEvidenceResultFile],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    for file in files:
+        path = Path(file.path)
+        if (
+            path.is_absolute()
+            or path.name != file.path
+            or file.path in ("", ".", "..")
+        ):
+            errors.append(f"result file path must be a relative filename: {file.path}")
+    return tuple(errors)
+
+
+def _failed_result_write(
+    output_dir: str,
+    errors: Sequence[str],
+) -> ClaimEvidenceResultWrite:
+    return ClaimEvidenceResultWrite(
+        output_dir=output_dir,
+        files=(),
+        errors=tuple(errors),
     )
 
 
