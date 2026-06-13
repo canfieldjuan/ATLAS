@@ -31,8 +31,9 @@ Slice phase: Production hardening
    copy, or steps in `ticket_faq_markdown.py`.
 2. Reject closure/disposition boilerplate, disposition-only agent update notes,
    and narrow internal-note patterns.
-3. Require a minimal actionable/on-topic signal for a resolution to count as
-   publishable answer evidence.
+3. Require structural instruction-shape (not action-term/topic-overlap list
+   membership) for a resolution to count as publishable answer evidence
+   (operator decision #1466 Option 1).
 4. Add failure-first fixtures proving boilerplate/internal notes and
    disposition-only agent updates stay `draft_needs_review`, plus positive
    fixtures proving real step-wise resolution evidence still gates, including
@@ -51,12 +52,15 @@ Slice phase: Production hardening
   - [ ] A genuine step-wise, on-topic resolution still gates as
         `resolution_evidence`, including "start the return" style portal
         instructions.
-  - [ ] Common support synonym pairs used by real tickets, such as
-        login/password reset, receipt/invoice, connect/integration sync, and
-        renewal/cancel, do not get dropped by a raw lexical-overlap check.
-  - [ ] Off-topic near-misses still fail closed; synonym expansion must not let
-        billing steps answer login questions or password resets answer receipt
-        questions.
+  - [ ] Realistic answers across varied verbs (incl. verbs absent from any
+        list -- schedule/pin/narrow/forward/assign/rename/...) and symptom/fix
+        synonym pairs (login/SSO, crash/cache, charged-twice/refund) PUBLISH;
+        list membership is no longer required.
+  - [ ] Question-topic overlap is demoted to an advisory `topic_aligned`
+        signal (computed, surfaced for a future confidence layer) and no
+        longer hard-rejects an off-topic-but-genuine instruction. (Operator
+        Option 1: list-widening did not converge; the honesty floor is the
+        reject filters, not topic membership.)
   - [ ] The filter is deterministic and lives in the extracted package; no
         LLM/Ollama/local model path is introduced.
 - Affected surfaces: deflection FAQ markdown/report item construction and its
@@ -77,32 +81,42 @@ Slice phase: Production hardening
 The resolution-text normalizer is the earliest point where raw evidence/opportunity
 fields are normalized into the row-level `resolution_text` used by grouping,
 answer status, answer copy, and resolution source counts. This slice adds a
-deterministic publishability predicate there:
+deterministic publishability predicate there.
+
+**The gate is reject-known-bad + structural instruction-shape, not
+require-membership (operator decision, #1466 Option 1).** Four earlier rounds
+gated on membership in enumerated lists (action terms, disposition set,
+topic-equivalence map); held-out probes showed those lists still rejected the
+majority of realistic publishable answers and per-example list-widening did not
+converge. The predicate now is:
 
 1. compact the candidate text;
-2. reject narrow closure/disposition boilerplate;
-3. reject narrow internal-note patterns such as tier escalations and numbered
-   internal policy references;
-4. reject disposition-only customer-update notes when the only action signal is
-   weak status/review/check/send/update/start wording, including
-   `sent an update to the customer` and `provided an update to the requester`;
-5. require enough actionable/on-topic signal before returning the text, using
-   the ticket text plus existing topic/source-title/pain-category/tag context
-   so legitimate invoice/receipt wording is not lost.
-6. normalize action verbs symmetrically enough that e-ending past-tense agent
-   notes such as "enabled", "configured", and "updated" still match the
-   publishable-action gate.
-7. recognize concrete "start" instructions as customer-facing actions while
-   still rejecting started/reviewed/sent-update disposition notes.
-8. expand only the final topic-overlap token sets through a narrow support
-   synonym map. The action-token and disposition-only checks still use the raw
-   normalized tokens, so synonym support cannot manufacture action evidence or
-   bypass the weak-status guard.
+2. reject narrow closure/disposition boilerplate (`_RESOLUTION_CLOSURE_BOILERPLATE_RE`);
+3. reject narrow internal-note patterns -- tier escalations, numbered internal
+   policy references (`_RESOLUTION_INTERNAL_NOTE_RE`);
+4. require minimum substance (`len(resolution_tokens) >= 3`);
+5. reject disposition-only customer-update notes via the kept two-factor
+   `_resolution_text_is_disposition_only` (weak status verbs + disposition
+   regex), e.g. `sent an update to the customer`;
+6. **positive gate -- the text must look like an instruction**
+   (`_resolution_text_looks_instructional`): numbered/step structure, a UI
+   navigation path ("Settings then Phone"), or a sentence that opens with an
+   imperative verb. The verb may be a known action term (stemmed, so past-tense
+   "enabled"/"configured"/"updated" register) OR an unknown verb in the
+   "<verb> the/your/a <noun>" imperative shape (so "schedule", "pin", "narrow",
+   "forward", "assign", "rename", "archive", "submit", "cancel", ... publish
+   without ever being listed). Disposition sentences are disqualified
+   per-sentence, and a first-person subject ("We received your request") must
+   use a known action verb -- the generic object shape is imperative-position
+   only -- so narration is not mistaken for an instruction.
 
-If a candidate fails, the normalizer returns an empty string. That keeps
-the bogus text out of `evidence_group_key`, collected resolution texts,
-`resolution_source_count`, resolution-evidence scope calculation, generated
-steps, and paid answer summaries.
+The action-term-membership and question-topic-overlap checks are **demoted, not
+deleted**, to advisory signals (`_resolution_advisory_signals`): the maps stay
+live for a future confidence surface but never block a structurally-valid,
+non-boilerplate instruction. If a candidate fails, the normalizer returns an
+empty string, keeping bogus text out of `evidence_group_key`, collected
+resolution texts, `resolution_source_count`, resolution-evidence scope, steps,
+and paid answer summaries.
 
 ## Intentional
 
@@ -117,10 +131,14 @@ steps, and paid answer summaries.
   customer-update/reply wording. It does not reject concrete step-wise account
   fixes such as opening invoices and updating a payment method, or concrete
   return-flow instructions such as starting a return in a portal.
-- The synonym map is intentionally small and support-domain-specific. It covers
-  recurring help-desk wording pairs that still point at the same customer task,
-  and tests include off-topic near-misses to keep the expansion from becoming a
-  broad topical bypass.
+- Topic alignment is deliberately NOT a gate (operator Option 1). The
+  action-term and topic-equivalence maps are kept and computed as advisory
+  signals (`_resolution_advisory_signals.topic_aligned` /
+  `has_known_action_term`) for a future confidence surface, but an off-topic
+  yet genuine instruction publishes. The tradeoff is conscious: four rounds of
+  topic/verb list-widening still over-rejected real answers, so the honesty
+  floor is the reject filters (boilerplate / internal-note / disposition-only /
+  sub-3-token), not membership.
 - This does not solve the separate #1460 fixed-bucket over-merge issue.
 
 ## Deferred
@@ -133,8 +151,20 @@ Parked hardening: none.
 
 ## Verification
 
+- Option-1 inversion (operator decision): held-out probe of
+  `_resolution_text_is_publishable` -- 16/16 realistic answers publish
+  (varied verbs incl. schedule/pin/narrow/forward/assign/rename/archive/submit/
+  cancel + symptom/fix synonym pairs login-SSO/crash-cache/charged-refund +
+  past-tense/first-person + numbered steps + "to fix this," preamble), 10/10
+  honesty-floor non-answers rejected, 0 misses either direction. The corpus is
+  pinned into the test file (`_HELD_OUT_PUBLISHABLE` / `_HELD_OUT_REJECTED`).
+- `drafted_answer_count` does not regress: the resolution-bearing live-proof,
+  saas-demo, and macro-writeback fixtures keep their drafted counts;
+  measured-repetition merged-state language-filter test stays green.
+- Full extracted gauntlet (`scripts/run_extracted_pipeline_checks.sh`) -- 3939
+  passed, 10 skipped, 0 failed (inversion + measured-repetition reconciliation).
 - Focused pytest for `tests/test_extracted_ticket_faq_markdown.py`.
-  - Passed, 177 tests.
+  - Passed, 206 tests.
 - Downstream pytest targets in `tests/test_content_ops_deflection_resolution_live_proof.py`,
   `tests/test_extracted_ticket_faq_macro_writeback.py`,
   `tests/test_extracted_ticket_faq_output_ingestion.py`, and
@@ -158,8 +188,8 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/ticket_faq_markdown.py` | 246 |
-| `plans/PR-Deflection-Proven-Answer-Gate.md` | 165 |
+| `extracted_content_pipeline/ticket_faq_markdown.py` | 358 |
+| `plans/PR-Deflection-Proven-Answer-Gate.md` | 195 |
 | `tests/test_build_deflection_messy_csv_fixtures.py` | 11 |
-| `tests/test_extracted_ticket_faq_markdown.py` | 343 |
-| **Total** | **765** |
+| `tests/test_extracted_ticket_faq_markdown.py` | 450 |
+| **Total** | **1014** |

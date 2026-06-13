@@ -1220,29 +1220,141 @@ def _resolution_text(*rows: Mapping[str, Any], question_text: str = "") -> str:
     return ""
 
 
+# Imperative-shape detection for the publishable gate (#1466 Option 1). A
+# resolution is publishable when it survives the reject filters AND looks like
+# an instruction, rather than when it contains a token from a fixed action-term
+# list. This recognizes unknown verbs (schedule, pin, narrow, forward, ...) by
+# the "<verb> the/your/a <noun>" imperative shape, numbered steps, or a UI
+# navigation path -- the enumerated lists could never keep up (four rounds).
+_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"[.!?\n]+")
+_RESOLUTION_STEP_STRUCTURE_RE = re.compile(r"(?m)^\s*(?:step\s*)?\d+[.):]\s+\S")
+_RESOLUTION_UI_PATH_RE = re.compile(
+    r"\b[a-z][\w-]*\s+then\s+[a-z][\w-]*\b", re.IGNORECASE
+)
+# A leading clause that precedes the real instruction ("To fix this, reset ...").
+_RESOLUTION_INSTRUCTION_PREFIX_RE = re.compile(
+    r"^(?:please\s+|kindly\s+|first[,]?\s+|then[,]?\s+|next[,]?\s+|now[,]?\s+"
+    r"|to\s+[a-z]+\s+(?:this|it|that|the\s+(?:issue|problem|error))\s*[,:]\s*)+",
+    re.IGNORECASE,
+)
+# Sentence-lead tokens that are not imperative verbs, so a leading "<word> the"
+# match (e.g. "About the export") is not mistaken for an instruction.
+_RESOLUTION_NON_VERB_LEADS = frozenset({
+    "about", "after", "also", "an", "and", "any", "as", "because", "before",
+    "but", "for", "he", "her", "here", "his", "how", "however", "i", "in",
+    "into", "it", "its", "my", "no", "not", "once", "or", "our", "per", "she",
+    "since", "so", "that", "the", "their", "them", "then", "there", "these",
+    "they", "this", "those", "thanks", "thank", "to", "unfortunately", "we",
+    "what", "when", "where", "which", "while", "who", "why", "with", "you",
+    "your",
+})
+_RESOLUTION_INSTRUCTION_OBJECT_RE = re.compile(
+    r"^(?:the|your|a|an|this|that|these|those|its|their|it|them|all|each|any|"
+    r"on|off|into|to|from|in|under|via|by|both)\b",
+    re.IGNORECASE,
+)
+_RESOLUTION_LEAD_WORD_RE = re.compile(r"([a-z][a-z'-]*)", re.IGNORECASE)
+# A first-person subject preceding the action ("I enabled ...", "We reset ...").
+_RESOLUTION_FIRST_PERSON_LEAD_RE = re.compile(
+    r"^(?:i|we)(?:\s+(?:have|had|then|just|already|also))?\s+", re.IGNORECASE
+)
+
+
 def _resolution_text_is_publishable(value: Any, *, question_text: str) -> bool:
     text = _compact(support_ticket_plain_text(value))
     if not text:
         return False
+    # Reject filters (honesty floor -- kept verbatim from #1456).
     if _RESOLUTION_CLOSURE_BOILERPLATE_RE.search(text):
         return False
     if _RESOLUTION_INTERNAL_NOTE_RE.search(text):
         return False
-
     resolution_tokens = _resolution_signal_tokens(text)
     if len(resolution_tokens) < 3:
         return False
-    if resolution_tokens.isdisjoint(_RESOLUTION_ACTION_TERMS):
-        return False
     if _resolution_text_is_disposition_only(text, resolution_tokens):
         return False
+    # Positive gate: structural instruction shape, not list membership.
+    if not _resolution_text_looks_instructional(text):
+        return False
+    # Action-term membership and question-topic overlap are demoted (#1466
+    # Option 1) from hard rejects to advisory signals: computed here for a
+    # future confidence surface, but they never block a structurally-valid,
+    # non-boilerplate instruction.
+    _resolution_advisory_signals(resolution_tokens, question_text)
+    return True
+
+
+def _resolution_text_looks_instructional(text: str) -> bool:
+    """True when the resolution reads like a step a user can follow.
+
+    Recognizes numbered/step structure, a UI navigation path ("Settings then
+    Phone"), or any sentence that opens with an imperative verb -- known
+    (`_RESOLUTION_ACTION_TERMS`) or by the "<verb> the/your/a <noun>" shape for
+    verbs not in the list. Disposition status sentences ("Replied to the
+    customer ...") never count, even though they open with a verb.
+    """
+
+    if _RESOLUTION_STEP_STRUCTURE_RE.search(text):
+        return True
+    if _RESOLUTION_UI_PATH_RE.search(text):
+        return True
+    for sentence in _RESOLUTION_SENTENCE_SPLIT_RE.split(text):
+        stripped = sentence.strip()
+        if not stripped:
+            continue
+        if _RESOLUTION_DISPOSITION_ONLY_RE.search(stripped):
+            continue
+        prefix = _RESOLUTION_INSTRUCTION_PREFIX_RE.match(stripped)
+        remainder = stripped[prefix.end():] if prefix else stripped
+        first_person = _RESOLUTION_FIRST_PERSON_LEAD_RE.match(remainder)
+        if first_person:
+            remainder = remainder[first_person.end():]
+        lead_match = _RESOLUTION_LEAD_WORD_RE.match(remainder)
+        if not lead_match:
+            continue
+        lead = lead_match.group(1).lower()
+        if lead in _RESOLUTION_NON_VERB_LEADS:
+            continue
+        # Stem the lead so past-tense / gerund action verbs ("Enabled the SSO",
+        # "Configured ...", "Updating ...") still register as instructions.
+        if _resolution_signal_token(lead) in _RESOLUTION_ACTION_TERMS:
+            return True
+        # The generic "<verb> the/your <noun>" shape qualifies unknown verbs
+        # ("Schedule the sync", "Pin the view") only in imperative position. A
+        # first-person subject makes it narration ("We received your request",
+        # "We closed your ticket"), so it must use a known action verb instead.
+        if first_person:
+            continue
+        rest = remainder[lead_match.end():].lstrip()
+        if _RESOLUTION_INSTRUCTION_OBJECT_RE.match(rest):
+            return True
+    return False
+
+
+def _resolution_advisory_signals(
+    resolution_tokens: set[str], question_text: str
+) -> dict[str, bool]:
+    """Demoted confidence signals (#1466 Option 1): computed, never gating.
+
+    The action-term-membership and question-topic-overlap checks were hard
+    rejects through four enumeration rounds and over-rejected real answers.
+    They are retained here as advisory diagnostics so the maps stay live for a
+    future confidence surface; they do not influence publishability.
+    """
 
     question_tokens = _resolution_signal_tokens(question_text)
-    if question_tokens and _resolution_overlap_tokens(resolution_tokens).isdisjoint(
-        _resolution_overlap_tokens(question_tokens)
-    ):
-        return False
-    return True
+    return {
+        "has_known_action_term": not resolution_tokens.isdisjoint(
+            _RESOLUTION_ACTION_TERMS
+        ),
+        "topic_aligned": (
+            not question_tokens
+            or not _resolution_overlap_tokens(resolution_tokens).isdisjoint(
+                _resolution_overlap_tokens(question_tokens)
+            )
+        ),
+    }
 
 
 def _resolution_signal_tokens(value: Any) -> set[str]:

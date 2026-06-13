@@ -21,6 +21,9 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
     _output_checks,
+    _resolution_advisory_signals,
+    _resolution_signal_tokens,
+    _resolution_text_is_publishable,
     build_ticket_faq_markdown,
     normalize_intent_rules,
     weighted_source_volume_by_group,
@@ -453,10 +456,15 @@ def test_build_ticket_faq_markdown_keeps_synonymous_resolution_topics(
         ),
     ),
 )
-def test_build_ticket_faq_markdown_rejects_off_topic_synonym_near_misses(
+def test_build_ticket_faq_markdown_publishes_off_topic_instruction_overlap_demoted(
     question_text: str,
     resolution_text: str,
 ) -> None:
+    # #1466 Option 1: question-topic overlap is demoted from a hard reject to an
+    # advisory signal. An off-topic-but-genuine instruction now PUBLISHES (it
+    # passes the reject filters + instruction-shape gate); the advisory
+    # `topic_aligned` signal still reports the mismatch for a future confidence
+    # surface, but it no longer blocks publication.
     result = build_ticket_faq_markdown(
         [{
             "source_type": "support_ticket",
@@ -479,11 +487,26 @@ def test_build_ticket_faq_markdown_rejects_off_topic_synonym_near_misses(
     )
 
     item = result.items[0]
-    assert item["answer_evidence_status"] == "draft_needs_review"
-    assert item["resolution_evidence_scope"] == "not_applicable"
-    assert item["resolution_source_count"] == 0
-    assert item["steps"][0].startswith("Review the cited ticket evidence")
-    assert resolution_text not in result.markdown
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    advisory = _resolution_advisory_signals(
+        _resolution_signal_tokens(resolution_text), question_text
+    )
+    assert advisory["topic_aligned"] is False
+
+
+def test_resolution_advisory_topic_aligned_distinguishes_on_and_off_topic() -> None:
+    # The demoted overlap signal still computes correctly: on-topic resolutions
+    # align, off-topic ones do not (kept for a future confidence surface).
+    on_topic = _resolution_advisory_signals(
+        _resolution_signal_tokens("Reset the password and confirm the new login."),
+        "I cannot log in to my account.",
+    )
+    off_topic = _resolution_advisory_signals(
+        _resolution_signal_tokens("Open Billing and download the invoice PDF."),
+        "I cannot log in to my account.",
+    )
+    assert on_topic["topic_aligned"] is True
+    assert off_topic["topic_aligned"] is False
 
 
 def test_build_ticket_faq_markdown_keeps_past_tense_action_resolution() -> None:
@@ -5196,3 +5219,87 @@ def test_ticket_faq_cli_rejects_as_of_date_without_window(tmp_path: Path) -> Non
 
     assert completed.returncode == 1
     assert "--as-of-date requires --window-days" in completed.stderr
+
+
+# --- Held-out publishability corpus for the #1466 Option 1 inversion ---------
+# Pinned per the operator decision: the gate must publish realistic answers
+# across varied verbs and symptom/fix synonym pairs (not just the four cited
+# examples), and keep the honesty-floor reject classes rejected. These are
+# probed directly against _resolution_text_is_publishable so a regression in
+# the gate fails here, not only in an end-to-end assertion.
+
+_HELD_OUT_PUBLISHABLE = (
+    # varied imperative verbs, including verbs absent from the action-term list
+    ("Why is my sync slow?", "Schedule the sync to run during off-peak hours."),
+    ("How do I keep my view?", "Pin the saved view to your dashboard so it loads first."),
+    ("I never got the email", "Check the spam folder for the confirmation email and mark it not spam."),
+    ("My export times out", "Narrow the export window to under 90 days and retry the export."),
+    ("Wrong team got my ticket", "Forward the ticket to the billing queue from the actions menu."),
+    ("Who owns this case?", "Assign the case to yourself, then add an internal label."),
+    ("Change workspace name", "Rename the workspace under Settings then General."),
+    ("Too many old threads", "Archive the old thread and start a fresh conversation."),
+    ("Form will not submit", "Submit the form again after clearing the browser cache."),
+    ("Stop my plan", "Cancel the subscription from Billing then Plan before the renewal date."),
+    # symptom/fix synonym pairs (topic overlap demoted -> still publishable)
+    ("I cannot log in", "Reset the SSO certificate and re-enable single sign-on for the org."),
+    ("App keeps crashing", "Clear the cache and restart the app to stop the crash."),
+    ("I was charged twice", "Open Billing, find the duplicate charge, and request a refund."),
+    # past-tense / first-person action narration
+    ("How do I update MFA settings?", "I enabled MFA and configured the authenticator, then updated the settings."),
+    # numbered steps
+    ("Sensor offline", "1. Open Settings. 2. Tap Devices. 3. Re-pair the sensor."),
+    # "to fix this," instruction preamble
+    ("Stuck on payment", "To fix this, clear the saved card and add it again under Billing."),
+)
+
+_HELD_OUT_REJECTED = (
+    ("anything", "Customer did not respond, closing this out."),
+    ("anything", "Sent an update to the customer."),
+    ("anything", "Replied to the requester with the latest status details."),
+    ("anything", "Provided the customer an update on the timeline."),
+    ("anything", "Escalated to T2 for further review."),
+    ("anything", "Refunded per policy 4.2."),
+    ("anything", "Thank you for contacting support. We received your request."),
+    ("anything", "We have closed your ticket as resolved."),
+    ("anything", "Done."),
+    ("Why was I charged?", "The bank charged a fee after I closed the account."),
+)
+
+
+@pytest.mark.parametrize(("question_text", "resolution_text"), _HELD_OUT_PUBLISHABLE)
+def test_resolution_gate_publishes_held_out_real_answers(
+    question_text: str, resolution_text: str
+) -> None:
+    assert _resolution_text_is_publishable(
+        resolution_text, question_text=question_text
+    ) is True
+
+
+@pytest.mark.parametrize(("question_text", "resolution_text"), _HELD_OUT_REJECTED)
+def test_resolution_gate_rejects_held_out_non_answers(
+    question_text: str, resolution_text: str
+) -> None:
+    assert _resolution_text_is_publishable(
+        resolution_text, question_text=question_text
+    ) is False
+
+
+def test_resolution_gate_drafts_held_out_answers_end_to_end() -> None:
+    # drafted_answer_count must not regress: a repeated question whose two
+    # tickets carry a held-out publishable instruction surfaces as a drafted
+    # (resolution_evidence) answer through the full builder.
+    question = "How do I rotate my API key?"
+    answer = "Open Settings then Developers, revoke the old key, and create a new one."
+    result = build_ticket_faq_markdown(
+        [{
+            "source_type": "support_ticket",
+            "source_title": "API key rotation",
+            "evidence": [
+                {"text": question, "source_id": "held-1", "source_type": "support_ticket", "resolution_text": answer},
+                {"text": question, "source_id": "held-2", "source_type": "support_ticket", "resolution_text": answer},
+            ],
+        }]
+    )
+    item = result.items[0]
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert item["resolution_evidence_scope"] == "scoped"
