@@ -261,6 +261,7 @@ def build_support_ticket_input_package(
             "code": "source_material_empty",
             "message": "No support-ticket source rows were provided.",
         })
+    source_date_signal_count = 0
     for index, row in enumerate(raw_rows[:max_rows], start=1):
         if not isinstance(row, Mapping):
             warnings.append({
@@ -272,6 +273,14 @@ def build_support_ticket_input_package(
         normalized = _normalize_ticket_row(row, row_index=index)
         if normalized:
             normalized_rows.append(normalized)
+            # Carry the date-column-present signal out-of-band rather than
+            # stamping a marker onto the shared row dict (which would ride
+            # through clustering and every normalized_rows consumer). A row
+            # has the signal when the raw upload carried a date column, even
+            # if that cell was blank -- _has_any_key supersets a parseable
+            # created_at, so this reproduces the old marker exactly.
+            if _has_any_key(row, _DATE_KEYS):
+                source_date_signal_count += 1
             continue
         warnings.append({
             "code": "ticket_row_missing_text",
@@ -306,7 +315,9 @@ def build_support_ticket_input_package(
             "row_count": cluster_diagnostics["token_set_row_count"],
             "max_token_set_rows": cluster_diagnostics["max_token_set_rows"],
         })
-    date_diagnostics = _source_date_diagnostics(normalized_rows)
+    date_diagnostics = _source_date_diagnostics(
+        normalized_rows, source_date_signal_count=source_date_signal_count
+    )
     has_valid_date_window = (
         bool(normalized_rows) and date_diagnostics["missing_count"] == 0
     )
@@ -463,8 +474,6 @@ def _normalize_ticket_row(row: Any, *, row_index: int) -> dict[str, Any]:
         value = row.get(key)
         if value not in (None, "", [], {}):
             normalized[key] = value
-    if _has_any_key(row, _DATE_KEYS):
-        normalized["_date_source_present"] = True
     for key, keys in (
         ("created_at", _DATE_KEYS),
         ("source_url", _URL_KEYS),
@@ -728,16 +737,22 @@ def _all_rows_have_dates(rows: Sequence[Mapping[str, Any]]) -> bool:
     return bool(rows) and _source_date_diagnostics(rows)["missing_count"] == 0
 
 
-def _source_date_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def _source_date_diagnostics(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    source_date_signal_count: int | None = None,
+) -> dict[str, Any]:
+    # The date-column-present signal is supplied out-of-band (computed during
+    # row normalization) so it never has to ride on the row dicts. When it is
+    # omitted, fall back to the created_at value alone; that under-counts
+    # blank-date-column rows, which only matters for source_date_signal_count
+    # (the warning trigger), not for the missing_count window gate.
     dated_count = 0
-    source_date_signal_count = 0
+    fallback_signal_count = 0
     missing_source_ids: list[str] = []
     for index, row in enumerate(rows, start=1):
-        has_date_signal = bool(row.get("_date_source_present")) or _clean(
-            row.get("created_at")
-        ) != ""
-        if has_date_signal:
-            source_date_signal_count += 1
+        if source_date_signal_count is None and _clean(row.get("created_at")) != "":
+            fallback_signal_count += 1
         if parse_support_ticket_source_date(row.get("created_at")) is not None:
             dated_count += 1
             continue
@@ -747,7 +762,11 @@ def _source_date_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "included_count": len(rows),
         "dated_count": dated_count,
         "missing_count": len(rows) - dated_count,
-        "source_date_signal_count": source_date_signal_count,
+        "source_date_signal_count": (
+            source_date_signal_count
+            if source_date_signal_count is not None
+            else fallback_signal_count
+        ),
         "example_source_ids": missing_source_ids[:5],
     }
 
