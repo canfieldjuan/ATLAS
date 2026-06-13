@@ -88,6 +88,9 @@ from ..reasoning_policy import (
 from ..reasoning_signals import reasoning_validation_blocked_reason
 from ..ticket_faq_input_contract import ticket_faq_input_contracts
 from ..support_ticket_input_package import build_support_ticket_input_package
+from ..support_ticket_zendesk_thread import (
+    load_zendesk_full_thread_rows_from_json_bytes,
+)
 
 ExecutionServicesProvider = Callable[
     [],
@@ -152,6 +155,7 @@ _DEFLECTION_SUBMIT_PLATFORMS = frozenset({
     "help_scout",
     "other",
 })
+_DEFLECTION_SUBMIT_IMPORTER_MODES = frozenset({"csv", "full_thread"})
 _UPLOAD_FILE_FORMATS = ("auto", "json", "jsonl", "csv")
 _MAX_REASONING_STATUS_LIST_ITEMS = 20
 _MAX_FALSIFICATION_RULES = 20
@@ -630,6 +634,7 @@ if BaseModel is not None:
         company_name: str = Field(..., min_length=1, max_length=200)
         contact_email: str = Field(..., min_length=3, max_length=320)
         limit: int | None = Field(default=None, ge=1, le=_MAX_DEFLECTION_SUBMIT_ROWS)
+        importer_mode: str = Field(default="csv", min_length=1, max_length=40)
 
         @field_validator("support_platform")
         @classmethod
@@ -640,6 +645,14 @@ if BaseModel is not None:
                     "support_platform must be one of: zendesk, intercom, "
                     "help_scout, other"
                 )
+            return text
+
+        @field_validator("importer_mode")
+        @classmethod
+        def _validate_importer_mode(cls, value: Any) -> str:
+            text = (_clean(value) or "csv").lower().replace("-", "_")
+            if text not in _DEFLECTION_SUBMIT_IMPORTER_MODES:
+                raise ValueError("importer_mode must be one of: csv, full_thread")
             return text
 
         @field_validator("company_name", "contact_email")
@@ -1234,11 +1247,21 @@ def create_content_ops_control_surface_router(
             max_bytes=_MAX_DEFLECTION_SUBMIT_BLOB_BYTES,
         )
         if not rows:
+            importer_mode = _clean(data.get("importer_mode")) or "csv"
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "reason": "deflection_submit_empty_csv",
-                    "message": "Submitted CSV did not contain support-ticket rows.",
+                    "reason": (
+                        "deflection_submit_empty_full_thread"
+                        if importer_mode == "full_thread"
+                        else "deflection_submit_empty_csv"
+                    ),
+                    "message": (
+                        "Submitted Zendesk full-thread JSON did not contain "
+                        "support-ticket rows."
+                        if importer_mode == "full_thread"
+                        else "Submitted CSV did not contain support-ticket rows."
+                    ),
                 },
             )
         loaded_row_count = len(rows)
@@ -1266,11 +1289,18 @@ def create_content_ops_control_surface_router(
         )
         included_row_count = int(package.metadata.get("included_row_count") or 0)
         if included_row_count <= 0:
+            source_label = (
+                "Zendesk full-thread JSON"
+                if _clean(data.get("importer_mode")) == "full_thread"
+                else "Blob CSV"
+            )
             raise HTTPException(
                 status_code=400,
                 detail={
                     "reason": "deflection_submit_no_usable_rows",
-                    "message": "Blob CSV did not include usable support-ticket wording.",
+                    "message": (
+                        f"{source_label} did not include usable support-ticket wording."
+                    ),
                     "source_row_count": raw_row_count,
                     "max_source_material_rows": max_rows,
                 },
@@ -1302,6 +1332,7 @@ def create_content_ops_control_surface_router(
             package=package.as_dict(),
             support_platform=data["support_platform"],
             byte_count_key=byte_count_key,
+            importer_mode=_clean(data.get("importer_mode")) or "csv",
         )
 
     return router
@@ -1327,6 +1358,11 @@ async def _load_deflection_submit_rows_from_request(
             if csv_file is None:
                 raise HTTPException(status_code=422, detail="csv_file is required")
             data = _deflection_submit_form_to_mapping(form)
+            if data.get("importer_mode") == "full_thread":
+                raise HTTPException(
+                    status_code=422,
+                    detail="importer_mode=full_thread requires JSON blob_url submit",
+                )
             rows, byte_count, load_warnings = await _load_deflection_submit_upload_rows(
                 csv_file,
                 max_bytes=max_bytes,
@@ -1344,6 +1380,7 @@ async def _load_deflection_submit_rows_from_request(
         rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
             data["blob_url"],
             max_bytes=max_bytes,
+            importer_mode=data.get("importer_mode") or "csv",
         )
         return data, rows, byte_count, "blob_bytes", load_warnings
 
@@ -1351,6 +1388,7 @@ async def _load_deflection_submit_rows_from_request(
     rows, byte_count, load_warnings = await _load_deflection_submit_blob_rows(
         data["blob_url"],
         max_bytes=max_bytes,
+        importer_mode=data.get("importer_mode") or "csv",
     )
     return data, rows, byte_count, "blob_bytes", load_warnings
 
@@ -1404,6 +1442,9 @@ def _deflection_submit_form_to_mapping(form: Any) -> dict[str, Any]:
     limit = form.get("limit") if hasattr(form, "get") else None
     if _clean(limit):
         data["limit"] = limit
+    importer_mode = form.get("importer_mode") if hasattr(form, "get") else None
+    if _clean(importer_mode):
+        data["importer_mode"] = importer_mode
     return _deflection_submit_fields_to_mapping(data)
 
 
@@ -1479,11 +1520,13 @@ async def _load_deflection_submit_blob_rows(
     blob_url: str,
     *,
     max_bytes: int,
+    importer_mode: str = "csv",
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     return await asyncio.to_thread(
         _load_deflection_submit_blob_rows_sync,
         blob_url,
         max_bytes,
+        importer_mode,
     )
 
 
@@ -1521,17 +1564,38 @@ async def _load_deflection_submit_upload_rows(
 def _load_deflection_submit_blob_rows_sync(
     blob_url: str,
     max_bytes: int,
+    importer_mode: str = "csv",
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
     if not data:
+        detail = (
+            "Zendesk full-thread JSON is empty."
+            if importer_mode == "full_thread"
+            else "Blob CSV is empty."
+        )
         raise HTTPException(
             status_code=400,
-            detail="Blob CSV is empty.",
+            detail=detail,
         )
+    if importer_mode == "full_thread":
+        return _parse_deflection_submit_zendesk_thread_bytes(data)
     return _parse_deflection_submit_csv_bytes(
         data,
         parse_error_detail="Blob CSV could not be parsed.",
     )
+
+
+def _parse_deflection_submit_zendesk_thread_bytes(
+    data: bytes,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    try:
+        result = load_zendesk_full_thread_rows_from_json_bytes(data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Zendesk full-thread JSON could not be parsed.",
+        ) from exc
+    return result.rows, len(data), result.warnings
 
 
 def _parse_deflection_submit_csv_bytes(
@@ -1937,6 +2001,7 @@ def _with_deflection_submit_diagnostics(
     support_platform: str,
     byte_count_key: str = "blob_bytes",
     csv_load_warnings: Sequence[Mapping[str, Any]] = (),
+    importer_mode: str = "csv",
 ) -> dict[str, Any]:
     out = dict(response)
     existing = out.get("input_provider")
@@ -1959,6 +2024,27 @@ def _with_deflection_submit_diagnostics(
             )
             if key in package_metadata
         })
+        if package_metadata.get("ticket_status_present"):
+            metadata.update({
+                key: package_metadata[key]
+                for key in (
+                    "ticket_status_present",
+                    "ticket_status_present_count",
+                    "ticket_status_summary",
+                )
+                if key in package_metadata
+            })
+        if package_metadata.get("csat_present"):
+            metadata.update({
+                key: package_metadata[key]
+                for key in (
+                    "csat_present",
+                    "csat_present_count",
+                    "csat_score_count",
+                    "csat_score_average",
+                )
+                if key in package_metadata
+            })
     truncated_row_count = max(0, source_row_count - submitted_row_count)
     metadata.update({
         "source": "portfolio_deflection_submit",
@@ -1969,6 +2055,8 @@ def _with_deflection_submit_diagnostics(
         byte_count_key: byte_count,
         "support_platform": support_platform,
     })
+    if importer_mode != "csv":
+        metadata["importer_mode"] = importer_mode
     if language_filtered_row_count:
         metadata["loaded_source_row_count"] = loaded_row_count
         metadata["language_filtered_row_count"] = language_filtered_row_count

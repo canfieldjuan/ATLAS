@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import http.client
+import json
 from io import StringIO
 from pathlib import Path
 import socket
@@ -31,6 +32,7 @@ PROVIDER_FIXTURE_DIR = (
     / "examples"
     / "support_ticket_provider_exports"
 )
+ZENDESK_THREAD_SAMPLE = ROOT / "tests/fixtures/zendesk_full_thread_seed_sample.json"
 
 
 def _route(router: Any, path: str, method: str) -> Any:
@@ -332,6 +334,56 @@ async def test_deflection_submit_fetches_blob_and_returns_locked_report(
     ) == {"request_id": payload["request_id"], "paid": True}
     artifact_payload = await artifact.endpoint(request_id=payload["request_id"])
     assert "lead@acme.example" not in str(artifact_payload)
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_accepts_zendesk_full_thread_blob(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    artifact_data = ZENDESK_THREAD_SAMPLE.read_bytes()
+    calls = _install_blob(monkeypatch, artifact_data)
+    store = InMemoryDeflectionReportArtifactStore()
+    router = _router(store)
+
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+    payload = await submit.endpoint({
+        "blob_url": "https://portfolio.example/blob/zendesk-thread.json",
+        "support_platform": "zendesk",
+        "company_name": "Acme Co.",
+        "contact_email": "lead@acme.example",
+        "importer_mode": "full_thread",
+    })
+
+    assert calls == [(
+        "https://portfolio.example/blob/zendesk-thread.json",
+        "93.184.216.34",
+        api_module._DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS,
+    )]
+    assert payload["status"] == "completed"
+    metadata = payload["input_provider"]["metadata"]
+    assert metadata["source_row_count"] == 4
+    assert metadata["submitted_row_count"] == 4
+    assert metadata["included_row_count"] == 4
+    assert metadata["blob_bytes"] == len(artifact_data)
+    assert metadata["importer_mode"] == "full_thread"
+    assert metadata["support_platform"] == "zendesk"
+    assert metadata["support_ticket_resolution_evidence_present"] is True
+    assert metadata["support_ticket_resolution_evidence_count"] == 2
+    assert metadata["ticket_status_present"] is True
+    assert metadata["ticket_status_present_count"] == 4
+    assert metadata["ticket_status_summary"] == {"resolved": 1, "open": 3}
+    assert metadata["csat_present"] is True
+    assert metadata["csat_present_count"] == 1
+    assert metadata["csat_score_count"] == 0
+    assert metadata["csat_score_average"] is None
+    assert payload["input_provider"]["warnings"] == []
+    assert "Internal note" not in json.dumps(payload)
+    assert "A member of the support team will get back to you" not in json.dumps(payload)
+    assert payload["steps"][0]["result"]["full_report"] == {
+        "status": "locked",
+        "reason": "payment_required",
+    }
 
 
 @pytest.mark.asyncio
@@ -795,6 +847,26 @@ async def test_deflection_submit_rejects_multipart_without_csv_file() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_rejects_full_thread_multipart_upload() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint(_FormRequest({
+            "csv_file": _Upload(b"ticket_id,subject,message\n1,Question,How?\n"),
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "importer_mode": "full_thread",
+        }))
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == (
+        "importer_mode=full_thread requires JSON blob_url submit"
+    )
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_rejects_oversize_uploaded_csv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -867,6 +939,24 @@ async def test_deflection_submit_rejects_non_https_blob_url() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_rejects_unknown_importer_mode() -> None:
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint({
+            "blob_url": "https://portfolio.example/blob/tickets.csv",
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "importer_mode": "xml",
+        })
+
+    assert exc.value.status_code == 422
+    assert "importer_mode must be one of: csv, full_thread" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_rejects_blob_url_with_invalid_port() -> None:
     router = _router(InMemoryDeflectionReportArtifactStore())
     submit = _route(router, "/ops/deflection-reports/submit", "POST")
@@ -906,6 +996,28 @@ async def test_deflection_submit_rejects_oversize_blob(
         "reason": "deflection_submit_blob_too_large",
         "max_file_bytes": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_rejects_malformed_full_thread_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    _install_blob(monkeypatch, b"{not-json")
+    router = _router(InMemoryDeflectionReportArtifactStore())
+    submit = _route(router, "/ops/deflection-reports/submit", "POST")
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        await submit.endpoint({
+            "blob_url": "https://portfolio.example/blob/zendesk-thread.json",
+            "support_platform": "zendesk",
+            "company_name": "Acme Co.",
+            "contact_email": "lead@acme.example",
+            "importer_mode": "full_thread",
+        })
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Zendesk full-thread JSON could not be parsed."
 
 
 @pytest.mark.asyncio

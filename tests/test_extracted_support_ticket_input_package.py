@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from extracted_content_pipeline.content_ops_input_provider import (
@@ -21,6 +24,14 @@ from extracted_content_pipeline.support_ticket_input_package import (
     DEFAULT_FAQ_REPORT_CTA_LABEL,
     build_support_ticket_input_package,
 )
+from extracted_content_pipeline.support_ticket_zendesk_thread import (
+    load_zendesk_full_thread_rows_from_json_bytes,
+    rows_from_zendesk_full_thread,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+ZENDESK_THREAD_SAMPLE = ROOT / "tests/fixtures/zendesk_full_thread_seed_sample.json"
 
 
 def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
@@ -1377,3 +1388,174 @@ def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> N
     assert package.metadata["csat_present_count"] == 0
     assert package.metadata["csat_score_count"] == 0
     assert package.metadata["csat_score_average"] is None
+
+
+def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes() -> None:
+    result = load_zendesk_full_thread_rows_from_json_bytes(
+        ZENDESK_THREAD_SAMPLE.read_bytes()
+    )
+
+    assert result.warnings == ()
+    by_id = {row["ticket_id"]: row for row in result.rows}
+    assert by_id["2"]["description"] == (
+        "I was billed twice for this month. How do I get the duplicate charge refunded?"
+    )
+    assert by_id["2"]["resolution_text"] == (
+        "We confirmed the duplicate billing event and refunded the extra charge. "
+        "Refunds normally appear on the original payment method in 5-10 business days."
+    )
+    assert by_id["2"]["ticket_status"] == "solved"
+    assert by_id["2"]["satisfaction_rating"] == "good"
+
+    assert "resolution_text" not in by_id["28"]
+    assert "A member of the support team will get back to you" not in str(by_id["28"])
+    assert "resolution_text" not in by_id["34"]
+    assert "Internal note" not in str(result.rows)
+
+    assert by_id["41"]["resolution_text"] == (
+        "We sent the standard resolution steps and marked this as solved. "
+        "Please reply if the issue continues."
+    )
+    assert "This is still broken after trying the steps" in by_id["41"]["description"]
+    assert "A member of the support team will get back to you" not in str(by_id["41"])
+
+
+def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-first",
+                "subject": "Internal migration workaround",
+                "description": (
+                    "Internal note: explain the real workaround only to the owner."
+                ),
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": False,
+                    "plain_body": (
+                        "Internal note: explain the real workaround only to the owner."
+                    ),
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": True,
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-first",
+        "source_id": "zd-private-first",
+        "source_type": "support_ticket",
+        "subject": "Internal migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+    package = build_support_ticket_input_package(result.rows)
+    assert "Internal note" not in json.dumps(package.as_dict())
+    assert package.inputs["faq_questions"] == [
+        "What permission do I need for account exports?"
+    ]
+
+
+def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-boilerplate-answer",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": (
+                        "Thanks for reaching out. Open Billing > Invoices, "
+                        "then choose Export CSV."
+                    ),
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": (
+                        "A member of the support team will get back to you within "
+                        "the next 48 hours."
+                    ),
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["resolution_text"] == (
+        "Thanks for reaching out. Open Billing > Invoices, then choose Export CSV."
+    )
+    assert "A member of the support team" not in str(row)
+
+
+def test_zendesk_full_thread_rows_feed_status_csat_and_resolution_package() -> None:
+    result = load_zendesk_full_thread_rows_from_json_bytes(
+        ZENDESK_THREAD_SAMPLE.read_bytes()
+    )
+    package = build_support_ticket_input_package(result.rows)
+
+    assert package.inputs["source_row_count"] == 4
+    assert package.inputs["included_ticket_row_count"] == 4
+    assert package.inputs["support_ticket_resolution_evidence_present"] is True
+    assert package.inputs["support_ticket_resolution_evidence_count"] == 2
+    assert package.metadata["ticket_status_present"] is True
+    assert package.metadata["ticket_status_present_count"] == 4
+    assert package.metadata["ticket_status_summary"] == {"resolved": 1, "open": 3}
+    assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_present_count"] == 1
+    assert package.metadata["csat_score_count"] == 0
+    assert package.metadata["csat_score_average"] is None
+    assert "Internal note" not in json.dumps(package.as_dict())
+    assert "A member of the support team will get back to you" not in json.dumps(
+        package.as_dict()
+    )
+
+
+def test_zendesk_full_thread_rows_warn_on_malformed_entries() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [
+            {"comments": []},
+            {
+                "ticket": {
+                    "id": "zd-valid",
+                    "subject": "How do I export data?",
+                    "description": "Where do I download the export?",
+                },
+                "comments": "not-a-list",
+            },
+        ],
+    })
+
+    assert result.rows == [{
+        "ticket_id": "zd-valid",
+        "source_id": "zd-valid",
+        "source_type": "support_ticket",
+        "subject": "How do I export data?",
+        "description": "Where do I download the export?",
+    }]
+    assert result.warnings == (
+        {
+            "code": "zendesk_thread_ticket_missing",
+            "row_index": 1,
+            "message": "Skipped Zendesk thread row because ticket was missing.",
+        },
+        {
+            "code": "zendesk_thread_comments_invalid",
+            "row_index": 2,
+            "source_id": "zd-valid",
+            "message": "Ignored Zendesk comments because they were not a list.",
+        },
+    )
