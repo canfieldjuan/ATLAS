@@ -139,11 +139,20 @@ change.
 - The >= 2 threshold and >= 1/3 Jaccard are the repeat definition for this
   slice; both agent-assisted re-baseline rounds were barred from relaxing
   them, and no production defect was found during re-baselining.
-- LSH recall is approximate: borderline-similar pairs (Jaccard ~0.5-0.6)
-  may not band-collide and stay separate questions. That under-counts
-  repeats slightly rather than over-counting - the conservative direction
-  for a billing-adjacent metric. Fixtures that must merge use wording whose
-  gists match exactly or overwhelmingly.
+- LSH recall is approximate, and the *effective* per-pair threshold is
+  stricter than the declared 1/3: the current 4-band x 4-row shape places
+  the candidate-recall S-curve midpoint at J ~= 0.71, so a pair only has
+  ~4% chance of being verified at J=0.33, ~22% at J=0.50, and ~70% at
+  J=0.70. Moderate-similarity rewordings (J~0.5, e.g. "How do I reset my
+  password?" vs "How can I reset my password please, account locked") are
+  mostly never verified against the 1/3 gate; transitive chaining through
+  exact duplicates partially rescues recall on real data (CFPB still landed
+  at the ~36% benchmark). This under-counts repeats rather than over-counts
+  - the conservative, buyer-protecting direction for a billing-adjacent
+  metric - so it ships as-is, with the 8-band x 2-row re-band (which aligns
+  the empirical curve with the declared 1/3 at no extra hashing cost, but
+  shifts ~120 baselines) tracked as a follow-up in #1504. Fixtures that must
+  merge use wording whose gists match exactly or overwhelmingly.
 - The 12-row demo fixture family was rebuilt to contain genuinely repeated
   questions (it previously repeated themes, not questions, and would
   honestly produce an empty snapshot under measured repetition).
@@ -207,7 +216,7 @@ Parked hardening: none.
 | `extracted_content_pipeline/examples/support_ticket_sources.csv` | 4 |
 | `extracted_content_pipeline/faq_deflection_report.py` | 37 |
 | `extracted_content_pipeline/ticket_faq_markdown.py` | 202 |
-| `plans/PR-Deflection-Measured-Repetition.md` | 227 |
+| `plans/PR-Deflection-Measured-Repetition.md` | 236 |
 | `scripts/smoke_content_ops_faq_output_proof.py` | 25 |
 | `scripts/smoke_extracted_content_ops_execution.py` | 41 |
 | `tests/test_atlas_content_ops_execution_services.py` | 88 |
@@ -224,4 +233,4 @@ Parked hardening: none.
 | `tests/test_smoke_content_ops_cfpb_faq_markdown.py` | 11 |
 | `tests/test_smoke_content_ops_faq_scale_run.py` | 37 |
 | `tests/test_support_ticket_provider_landing_blog_execute.py` | 2 |
-| **Total** | **2615** |
+| **Total** | **2624** |
