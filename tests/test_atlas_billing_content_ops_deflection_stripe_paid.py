@@ -454,6 +454,23 @@ async def test_deflection_checkout_completion_retries_409_within_race_window() -
     ] == []
 
 
+def test_reconcile_grace_config_rejects_non_positive_values() -> None:
+    # #1462 R11/R8: a negative/zero grace would make a fresh event (age 0)
+    # satisfy `age > grace`, recording a genuine write-ordering race as a
+    # permanent reconciliation (2xx) and bypassing the retry this slice exists
+    # to preserve. The money-path config must fail closed for non-positive values
+    # so a bad value cannot even load.
+    from pydantic import ValidationError
+
+    from atlas_brain.config import SaaSAuthConfig
+
+    for bad in (-1, 0):
+        with pytest.raises(ValidationError):
+            SaaSAuthConfig(
+                stripe_content_ops_deflection_report_reconcile_grace_seconds=bad
+            )
+
+
 @pytest.mark.asyncio
 async def test_deflection_checkout_completion_emits_incident_for_terms_mismatch(
     caplog: pytest.LogCaptureFixture,

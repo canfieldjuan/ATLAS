@@ -83,6 +83,10 @@ than the extracted store, since the billing webhook is host-only.
   a reconciliation row. This preserves the prior behavior for timestampless
   sessions and never converts a possible race into a permanent record; the
   permanent path requires a real, aged event timestamp.
+- The grace config is validated `ge=1` (fail-closed): a non-positive value would
+  make a fresh event (`age == 0`) satisfy `age > grace` and record a genuine
+  write-ordering race as permanent (2xx), bypassing the retry. With `ge=1` such
+  a value cannot load (review R11/R8 + Codex). A regression asserts -1/0 raise.
 - The reconciliation row is durable and queryable (operator-actionable), per the
   operator decision over an alert/log-only record.
 - The race-branch alert is byte-identical to the prior behavior, so existing
@@ -94,19 +98,23 @@ than the extracted store, since the billing webhook is host-only.
 - A sweeper/operator surface that lists and clears
   `content_ops_deflection_paid_reconciliation` rows (this slice only writes the
   ledger; reading/clearing is a follow-up).
-- The pre-existing migration-prefix-collision test failure
-  (`test_repo_migration_prefix_collisions_are_only_historical_exceptions`,
-  collisions at 281/282/283/298) is unrelated to this slice and is red on
-  `origin/main` independently; not touched here.
+- Two pre-existing CI-red test failures are red on `origin/main` independently
+  of this slice (verified by stashing) and are handled in a separate CI-hygiene
+  follow-up PR, not here: `test_repo_migration_prefix_collisions_are_only_historical_exceptions`
+  (collisions at 281/282/283/298 missing from its allowlist) and
+  `test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks` (its
+  expected snapshot summary predates the merged #1486 measured-repetition /
+  #1466 proven-answer-gate counts). The latter is what makes the
+  `atlas-content-ops-deflection-stripe-paid-checks` lane red on this PR.
 
 Parked hardening: none.
 
 ## Verification
 
 - Focused pytest over `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
-  -- passed, 45 tests (incl. the new aged->reconcile-2xx test and the
-  recent->409-race test; the existing missing-report tests still 409 because
-  they pass no `event_created`).
+  -- passed, 46 tests (incl. the aged->reconcile-2xx test, the recent->409-race
+  test, and the config-rejects-non-positive-grace test; the existing
+  missing-report tests still 409 because they pass no `event_created`).
 - Focused pytest over the three deflection-billing test files
   `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`,
   `tests/test_smoke_content_ops_deflection_stripe_paid_unlock.py`, and

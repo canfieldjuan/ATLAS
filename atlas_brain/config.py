@@ -120,6 +120,7 @@ class SaaSAuthConfig(BaseSettings):
     )
     stripe_content_ops_deflection_report_reconcile_grace_seconds: int = Field(
         default=300,
+        ge=1,
         description=(
             "Grace window in seconds after a paid Stripe deflection-checkout event "
             "before a missing report row is treated as permanent rather than a "
