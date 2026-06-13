@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -381,6 +382,93 @@ async def test_deflection_checkout_completion_emits_incident_when_report_missing
             "stripe_session_id": "cs_test_deflection",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_records_reconciliation_when_event_aged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # #1462: an event aged past the race window with no report row is a permanent
+    # paid-but-missing case -> record a reconciliation row and return 2xx (stop
+    # the Stripe retry storm), instead of 409-retrying into the void.
+    caplog.set_level(logging.ERROR, logger="atlas.api.billing")
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    pool = _Pool()
+    pool.update_result = "UPDATE 0"
+    aged_event_created = int(time.time()) - 100_000  # well past the 300s grace
+
+    returned = await billing._handle_content_ops_deflection_report_checkout_completed(
+        pool,
+        session,
+        session.metadata,
+        event_created=aged_event_created,
+    )
+
+    assert returned is None  # 2xx, no HTTPException
+    reconciliations = [
+        call
+        for call in pool.execute_calls
+        if "content_ops_deflection_paid_reconciliation" in call[0]
+    ]
+    assert len(reconciliations) == 1
+    query, args = reconciliations[0]
+    assert "INSERT INTO content_ops_deflection_paid_reconciliation" in query
+    assert "ON CONFLICT" in query
+    assert args == (
+        account_id,
+        "req-123",
+        "cs_test_deflection",
+        "checkout.session.completed",
+        "paid_report_missing",
+    )
+    payloads = _incident_payloads(caplog)
+    assert len(payloads) == 1
+    assert payloads[0]["incident_type"] == "paid_report_missing_after_payment"
+    assert payloads[0]["disposition"] == "reconciled"
+
+
+@pytest.mark.asyncio
+async def test_deflection_checkout_completion_retries_409_within_race_window() -> None:
+    # A recent event is the transient write-ordering race: keep the 409 so Stripe
+    # retries and finds the report row once its write commits. No reconciliation
+    # row is written for the race case.
+    account_id = str(uuid.uuid4())
+    session = _session(account_id=account_id)
+    pool = _Pool()
+    pool.update_result = "UPDATE 0"
+
+    with pytest.raises(billing.HTTPException) as exc:
+        await billing._handle_content_ops_deflection_report_checkout_completed(
+            pool,
+            session,
+            session.metadata,
+            event_created=int(time.time()),
+        )
+
+    assert exc.value.status_code == 409
+    assert [
+        call
+        for call in pool.execute_calls
+        if "content_ops_deflection_paid_reconciliation" in call[0]
+    ] == []
+
+
+def test_reconcile_grace_config_rejects_non_positive_values() -> None:
+    # #1462 R11/R8: a negative/zero grace would make a fresh event (age 0)
+    # satisfy `age > grace`, recording a genuine write-ordering race as a
+    # permanent reconciliation (2xx) and bypassing the retry this slice exists
+    # to preserve. The money-path config must fail closed for non-positive values
+    # so a bad value cannot even load.
+    from pydantic import ValidationError
+
+    from atlas_brain.config import SaaSAuthConfig
+
+    for bad in (-1, 0):
+        with pytest.raises(ValidationError):
+            SaaSAuthConfig(
+                stripe_content_ops_deflection_report_reconcile_grace_seconds=bad
+            )
 
 
 @pytest.mark.asyncio

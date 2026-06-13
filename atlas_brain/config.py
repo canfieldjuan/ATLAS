@@ -118,6 +118,18 @@ class SaaSAuthConfig(BaseSettings):
         default="usd",
         description="Stripe Checkout currency for the one-time Content Ops FAQ deflection report",
     )
+    stripe_content_ops_deflection_report_reconcile_grace_seconds: int = Field(
+        default=300,
+        ge=1,
+        description=(
+            "Grace window in seconds after a paid Stripe deflection-checkout event "
+            "before a missing report row is treated as permanent rather than a "
+            "transient write-ordering race. Within the window the webhook returns "
+            "409 so Stripe retries; once the event has aged past it, the webhook "
+            "returns 2xx and records a paid-but-missing reconciliation row instead "
+            "of retrying into the void (#1462)"
+        ),
+    )
 
     # LLM Gateway plan tiers (PR-D2). Stripe products are created
     # operationally; the price IDs land here when ready, _init_price_map()
