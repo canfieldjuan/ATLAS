@@ -90,6 +90,10 @@ def test_repo_migration_prefix_collisions_are_only_historical_exceptions():
 
     duplicates = _find_duplicate_migration_prefixes(sorted(MIGRATIONS_DIR.glob("*.sql")))
 
+    # Accepted historical prefix collisions: each pair already shipped on main
+    # with the same numeric prefix (parallel-session migrations that landed
+    # together). The allowlist documents them so this test still catches a NEW
+    # collision; 281/282/283/298 were added after the allowlist was last updated.
     assert duplicates == {
         76: [
             "076_consumer_analytics_views.sql",
@@ -98,5 +102,21 @@ def test_repo_migration_prefix_collisions_are_only_historical_exceptions():
         230: [
             "230_b2b_reasoning_synthesis.sql",
             "230_scrape_target_checkpoints.sql",
+        ],
+        281: [
+            "281_b2b_report_subscription_filter_payload.sql",
+            "281_b2b_watchlist_alert_reopen_count.sql",
+        ],
+        282: [
+            "282_b2b_enrichment_stage_runs.sql",
+            "282_b2b_materialization_run_id.sql",
+        ],
+        283: [
+            "283_b2b_enrichment_stage_runs_work_fingerprint.sql",
+            "283_b2b_report_subscription_delivery_blocked_freshness.sql",
+        ],
+        298: [
+            "298_b2b_review_vendor_mentions_drop_duplicate_rows.sql",
+            "298_b2b_watchlist_preview_alert_policy.sql",
         ],
     }

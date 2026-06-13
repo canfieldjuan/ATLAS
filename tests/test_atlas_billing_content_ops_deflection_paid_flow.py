@@ -193,11 +193,14 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
             "reason": "payment_required",
         },
     }
+    # Summary reflects merged measured-repetition (#1486: repeat vs non-repeat
+    # split) and the proven-answer gate (#1466: stricter resolution evidence).
     assert gated_result["snapshot"]["summary"] == {
-        "generated": 3,
+        "generated": 1,
         "drafted_answer_count": 1,
-        "no_proven_answer_count": 2,
-        "repeat_ticket_count": 4,
+        "no_proven_answer_count": 0,
+        "repeat_ticket_count": 2,
+        "non_repeat_ticket_count": 2,
         "support_ticket_resolution_evidence_count": 1,
         "support_ticket_resolution_evidence_present": True,
     }
@@ -256,7 +259,7 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
 
     unlocked = await artifact_route.endpoint(request_id=request_id)
     assert unlocked["summary"]["drafted_answer_count"] == 1
-    assert unlocked["summary"]["no_proven_answer_count"] == 2
+    assert unlocked["summary"]["no_proven_answer_count"] == 0
     assert "## Support Tax Confirmation" in unlocked["markdown"]
     assert "## Publishable Help-Center Copy From Proven Resolutions" in unlocked["markdown"]
     assert "## No Proven Answer Yet" in unlocked["markdown"]
