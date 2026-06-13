@@ -8,6 +8,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 const SUBMIT_PATH = "/api/v1/content-ops/deflection-reports/submit";
 const MAX_BLOB_CSV_BYTES = 50 * 1024 * 1024;
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
+const CSV_IMPORTER_MODE = "csv";
+const FULL_THREAD_IMPORTER_MODE = "full_thread";
 
 export const config = {
   api: {
@@ -136,17 +138,31 @@ async function forwardSubmit({ config, contentType, body, fetchImpl = fetch }) {
   return { ok: true, statusCode: 200, payload: projected };
 }
 
-function validBlobPathname(value) {
+function normalizeImporterMode(value) {
+  const mode = clean(value);
+  if (!mode || mode === CSV_IMPORTER_MODE) return CSV_IMPORTER_MODE;
+  if (mode === FULL_THREAD_IMPORTER_MODE) return FULL_THREAD_IMPORTER_MODE;
+  return "";
+}
+
+function validBlobPathname(value, importerMode = CSV_IMPORTER_MODE) {
   const pathname = clean(value);
+  const mode = normalizeImporterMode(importerMode);
+  if (!mode) return "";
   if (!pathname.startsWith(BLOB_UPLOAD_PATH_PREFIX)) return "";
-  if (!pathname.toLowerCase().endsWith(".csv")) return "";
+  const lowerPathname = pathname.toLowerCase();
+  if (mode === FULL_THREAD_IMPORTER_MODE && !lowerPathname.endsWith(".json")) return "";
+  if (mode === CSV_IMPORTER_MODE && !lowerPathname.endsWith(".csv")) return "";
   if (pathname.includes("..") || pathname.includes("\\") || pathname.startsWith("/")) return "";
   return pathname;
 }
 
-function fileNameFromPathname(pathname) {
-  const name = pathname.split("/").filter(Boolean).pop() || "tickets.csv";
-  return name.toLowerCase().endsWith(".csv") ? name : "tickets.csv";
+function fileNameFromPathname(pathname, importerMode = CSV_IMPORTER_MODE) {
+  const mode = normalizeImporterMode(importerMode) || CSV_IMPORTER_MODE;
+  const fallback = mode === FULL_THREAD_IMPORTER_MODE ? "zendesk-thread.json" : "tickets.csv";
+  const extension = mode === FULL_THREAD_IMPORTER_MODE ? ".json" : ".csv";
+  const name = pathname.split("/").filter(Boolean).pop() || fallback;
+  return name.toLowerCase().endsWith(extension) ? name : fallback;
 }
 
 async function getPrivateBlob(pathname, options) {
@@ -159,14 +175,22 @@ async function deletePrivateBlob(pathname, options) {
   return del(pathname, options);
 }
 
-async function readPrivateCsvBlob({
+async function readPrivateSubmitBlob({
   pathname,
   token,
+  importerMode = CSV_IMPORTER_MODE,
   getBlobImpl = getPrivateBlob,
   maxBytes = MAX_BLOB_CSV_BYTES,
 }) {
-  const safePathname = validBlobPathname(pathname);
+  const mode = normalizeImporterMode(importerMode);
+  if (!mode) return { ok: false, statusCode: 400, error: "invalid_importer_mode" };
+  const safePathname = validBlobPathname(pathname, mode);
   if (!safePathname) return { ok: false, statusCode: 400, error: "invalid_blob_reference" };
+  const tooLargeError =
+    mode === FULL_THREAD_IMPORTER_MODE
+      ? "deflection_submit_full_thread_too_large"
+      : "deflection_submit_csv_too_large";
+  const fallbackContentType = mode === FULL_THREAD_IMPORTER_MODE ? "application/json" : "text/csv";
   try {
     const result = await getBlobImpl(safePathname, {
       access: "private",
@@ -177,31 +201,42 @@ async function readPrivateCsvBlob({
       return { ok: false, statusCode: 404, error: "private_blob_unavailable" };
     }
     if (Number.isFinite(result.blob?.size) && result.blob.size > maxBytes) {
-      return { ok: false, statusCode: 413, error: "deflection_submit_csv_too_large" };
+      return { ok: false, statusCode: 413, error: tooLargeError };
     }
     const body = await streamToBuffer(result.stream, maxBytes);
     if (!body.ok) {
-      return { ok: false, statusCode: 413, error: "deflection_submit_csv_too_large" };
+      return { ok: false, statusCode: 413, error: tooLargeError };
     }
     return {
       ok: true,
       pathname: safePathname,
       body: body.body,
-      contentType: clean(result.blob?.contentType) || "text/csv",
-      fileName: fileNameFromPathname(safePathname),
+      contentType: clean(result.blob?.contentType) || fallbackContentType,
+      fileName: fileNameFromPathname(safePathname, mode),
     };
   } catch {
     return { ok: false, statusCode: 502, error: "private_blob_unavailable" };
   }
 }
 
-async function cleanupPrivateCsvBlob({
+async function readPrivateCsvBlob(options) {
+  return readPrivateSubmitBlob({ ...options, importerMode: CSV_IMPORTER_MODE });
+}
+
+async function readPrivateJsonBlob(options) {
+  return readPrivateSubmitBlob({ ...options, importerMode: FULL_THREAD_IMPORTER_MODE });
+}
+
+async function cleanupPrivateSubmitBlob({
   pathname,
   token,
+  importerMode = CSV_IMPORTER_MODE,
   deleteBlobImpl = deletePrivateBlob,
   eventLogger = console.warn,
 }) {
-  const safePathname = validBlobPathname(pathname);
+  const mode = normalizeImporterMode(importerMode);
+  if (!mode) return { ok: false, skipped: true, error: "invalid_importer_mode" };
+  const safePathname = validBlobPathname(pathname, mode);
   if (!safePathname) return { ok: false, skipped: true, error: "invalid_blob_reference" };
   try {
     await deleteBlobImpl(safePathname, { token });
@@ -213,6 +248,14 @@ async function cleanupPrivateCsvBlob({
     }, eventLogger);
     return { ok: false, error: "private_blob_cleanup_failed" };
   }
+}
+
+async function cleanupPrivateCsvBlob(options) {
+  return cleanupPrivateSubmitBlob({ ...options, importerMode: CSV_IMPORTER_MODE });
+}
+
+async function cleanupPrivateJsonBlob(options) {
+  return cleanupPrivateSubmitBlob({ ...options, importerMode: FULL_THREAD_IMPORTER_MODE });
 }
 
 function inspectFormFromBlob(blob) {
@@ -250,35 +293,50 @@ async function submitPrivateBlob({
   deleteBlobImpl = deletePrivateBlob,
   eventLogger = console.warn,
 }) {
-  const blob = await readPrivateCsvBlob({
+  const importerMode = normalizeImporterMode(payload?.importer_mode);
+  if (!importerMode) return { ok: false, statusCode: 400, error: "invalid_importer_mode" };
+  const blob = await readPrivateSubmitBlob({
     pathname: payload?.blob_pathname,
     token: blobToken,
+    importerMode,
     getBlobImpl,
   });
   if (!blob.ok) return blob;
 
-  const inspectResult = await inspectPrivateCsvBlob({ config, blob, fetchImpl });
-  if (!inspectResult.ok) {
-    await cleanupPrivateCsvBlob({
-      pathname: blob.pathname,
-      token: blobToken,
-      deleteBlobImpl,
-      eventLogger,
-    });
-    return inspectResult;
+  if (importerMode === CSV_IMPORTER_MODE) {
+    const inspectResult = await inspectPrivateCsvBlob({ config, blob, fetchImpl });
+    if (!inspectResult.ok) {
+      await cleanupPrivateSubmitBlob({
+        pathname: blob.pathname,
+        token: blobToken,
+        importerMode,
+        deleteBlobImpl,
+        eventLogger,
+      });
+      return inspectResult;
+    }
   }
 
   const form = new FormData();
-  form.set("csv_file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
-  form.set("support_platform", clean(payload?.support_platform));
+  if (importerMode === FULL_THREAD_IMPORTER_MODE) {
+    form.set("json_file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
+    form.set("importer_mode", FULL_THREAD_IMPORTER_MODE);
+  } else {
+    form.set("csv_file", new Blob([blob.body], { type: blob.contentType }), blob.fileName);
+  }
+  form.set(
+    "support_platform",
+    importerMode === FULL_THREAD_IMPORTER_MODE ? "zendesk" : clean(payload?.support_platform),
+  );
   form.set("company_name", clean(payload?.company_name));
   form.set("contact_email", clean(payload?.contact_email));
   form.set("limit", clean(payload?.limit) || "1000");
 
   const result = await forwardSubmit({ config, contentType: "", body: form, fetchImpl });
-  await cleanupPrivateCsvBlob({
+  await cleanupPrivateSubmitBlob({
     pathname: blob.pathname,
     token: blobToken,
+    importerMode,
     deleteBlobImpl,
     eventLogger,
   });
@@ -287,13 +345,18 @@ async function submitPrivateBlob({
 
 export {
   BLOB_UPLOAD_PATH_PREFIX,
+  CSV_IMPORTER_MODE,
+  FULL_THREAD_IMPORTER_MODE,
   MAX_BLOB_CSV_BYTES,
   SUBMIT_PATH,
   cleanupPrivateCsvBlob,
+  cleanupPrivateJsonBlob,
   forwardSubmit,
   inspectPrivateCsvBlob,
+  normalizeImporterMode,
   projectSubmitPayload,
   readPrivateCsvBlob,
+  readPrivateJsonBlob,
   submitPrivateBlob,
   validBlobPathname,
 };

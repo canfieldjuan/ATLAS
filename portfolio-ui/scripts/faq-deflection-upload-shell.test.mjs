@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import submitHandler, {
   BLOB_UPLOAD_PATH_PREFIX,
+  FULL_THREAD_IMPORTER_MODE,
   MAX_BLOB_CSV_BYTES,
   SUBMIT_PATH,
   cleanupPrivateCsvBlob,
@@ -16,7 +17,9 @@ import inspectHandler, {
   MAX_INSPECT_MULTIPART_BYTES,
 } from "../api/content-ops/deflection/inspect.js";
 import {
+  BLOB_UPLOAD_CONTENT_TYPES,
   CSV_CONTENT_TYPES,
+  JSON_CONTENT_TYPES,
   MAX_BLOB_CSV_BYTES as MAX_UPLOAD_CSV_BYTES,
   uploadTokenConfig,
 } from "../api/content-ops/deflection/upload.js";
@@ -196,6 +199,9 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   for (const marker of [
     "data-atlas-deflection-upload",
     "data-atlas-deflection-csv-file",
+    "data-atlas-deflection-upload-file",
+    "data-atlas-deflection-upload-mode",
+    "data-atlas-deflection-upload-mode-option",
     "data-atlas-deflection-company",
     "data-atlas-deflection-contact-email",
     "data-atlas-deflection-support-platform",
@@ -210,10 +216,13 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     assert.match(uploadSource, new RegExp(marker));
   }
   assert.match(uploadSource, /MAX_CSV_BYTES = 50 \* 1024 \* 1024/);
+  assert.match(uploadSource, /FULL_THREAD_IMPORTER_MODE = "full_thread"/);
   assert.match(uploadSource, /@vercel\/blob\/client/);
   assert.doesNotMatch(blobUploadRouteSource, /^import .*@vercel\/blob\/client/m);
   assert.match(blobUploadRouteSource, /import\("@vercel\/blob\/client"\)/);
   assert.match(uploadSource, /access: "private"/);
+  assert.match(uploadSource, /accept=\{isFullThreadUpload \? "\.json,application\/json" : "\.csv,text\/csv"\}/);
+  assert.match(uploadSource, /contentType: isFullThreadUpload \? "application\/json" : "text\/csv"/);
   assert.match(uploadSource, /onUploadProgress/);
   assert.match(uploadSource, /boundedProgress\(event\.percentage\)/);
   assert.match(uploadSource, /role="progressbar"/);
@@ -228,13 +237,22 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /resolution text[\s\S]*resolved ticket notes/);
   assert.match(uploadSource, /Question-only exports[\s\S]*clustering[\s\S]*gap\s+list/);
   assert.match(uploadSource, /publishable answers require uploaded resolution\s+evidence/);
+  assert.match(uploadSource, /value: "zendesk_full_thread"/);
+  assert.match(uploadSource, /Zendesk JSON/);
+  assert.match(uploadSource, /public requester comments[\s\S]*public agent replies/);
+  assert.match(uploadSource, /Private notes are dropped during import/);
+  assert.match(uploadSource, /ATLAS validates the thread shape during submit/);
   assert.doesNotMatch(uploadSource, /exact mathematical clustering/);
   assert.match(uploadSource, /Workspace routing is handled server-side/);
   assert.match(uploadSource, /Your browser never[\s\S]*receives ATLAS service tokens/);
-  assert.match(uploadSource, /CSV inspection and private storage both run\s+server-side/);
+  assert.match(uploadSource, /JSON import/);
+  assert.match(uploadSource, /CSV inspection/);
+  assert.match(uploadSource, /private storage both run server-side/);
   assert.match(uploadSource, /ATLAS checks the CSV first[\s\S]*stores it privately after validation/);
+  assert.match(uploadSource, /private Zendesk JSON server-side[\s\S]*imports public thread evidence/);
   assert.match(uploadSource, /const INSPECT_ENDPOINT = "\/api\/content-ops\/deflection\/inspect"/);
   assert.match(uploadSource, /fetch\(INSPECT_ENDPOINT/);
+  assert.match(uploadSource, /if \(!isFullThreadUpload\)/);
   assert.match(uploadSource, /source_rows", "true"/);
   assert.match(uploadSource, /target_mode", "faq_deflection_report"/);
   assert.match(uploadSource, /Checking CSV/);
@@ -248,8 +266,10 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.doesNotMatch(uploadSource, /Bound server-side to the configured report workspace/);
   assert.doesNotMatch(uploadSource, /CSV bytes are first stored in private Vercel Blob/);
   assert.match(uploadSource, /Retry upload/);
-  assert.match(uploadSource, /starts a new private upload/);
+  assert.match(uploadSource, /starts a new\s+private upload/);
   assert.match(uploadSource, /blob_pathname: blob\.pathname/);
+  assert.match(uploadSource, /support_platform: isFullThreadUpload \? "zendesk" : supportPlatform/);
+  assert.match(uploadSource, /importer_mode: FULL_THREAD_IMPORTER_MODE/);
   assert.match(uploadSource, /private_blob_persistence/);
   assert.match(uploadSource, /value: "help_scout"/);
   assert.match(uploadSource, /value: "other", label: "Freshdesk \/ other"/);
@@ -422,6 +442,11 @@ await test("portfolio submit endpoint pins private Blob submit handling", () => 
   assert.match(submitSource, /const \{ del \} = await import\("@vercel\/blob"\)/);
   assert.match(submitSource, /direct_multipart_deprecated/);
   assert.doesNotMatch(submitSource, /readRawBody|MAX_MULTIPART_OVERHEAD_BYTES/);
+  assert.match(submitSource, /FULL_THREAD_IMPORTER_MODE = "full_thread"/);
+  assert.match(submitSource, /normalizeImporterMode/);
+  assert.match(submitSource, /form\.set\("json_file"/);
+  assert.match(submitSource, /form\.set\("importer_mode", FULL_THREAD_IMPORTER_MODE\)/);
+  assert.match(submitSource, /importerMode === FULL_THREAD_IMPORTER_MODE \? "zendesk" : clean\(payload\?\.support_platform\)/);
   assert.match(submitSource, /inspectPrivateCsvBlob/);
   assert.match(submitSource, /deflection_inspect_not_ready/);
   assert.match(inspectSource, /bodyParser:\s*false/);
@@ -582,11 +607,28 @@ await test("private blob upload token config fails closed on path and account bi
   assert.equal(ok.ok, true);
   assert.equal(ok.token, ENV.BLOB_READ_WRITE_TOKEN);
   assert.equal(ok.options.maximumSizeInBytes, MAX_UPLOAD_CSV_BYTES);
-  assert.deepEqual(ok.options.allowedContentTypes, CSV_CONTENT_TYPES);
+  assert.deepEqual(ok.options.allowedContentTypes, BLOB_UPLOAD_CONTENT_TYPES);
+  assert.deepEqual(BLOB_UPLOAD_CONTENT_TYPES, [...CSV_CONTENT_TYPES, ...JSON_CONTENT_TYPES]);
   assert.equal(ok.options.addRandomSuffix, true);
+
+  const jsonOk = uploadTokenConfig(
+    `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+    "",
+    ENV,
+  );
+  assert.equal(jsonOk.ok, true);
+  assert.deepEqual(jsonOk.options.allowedContentTypes, BLOB_UPLOAD_CONTENT_TYPES);
 
   assert.deepEqual(
     uploadTokenConfig("other/tickets.csv", JSON.stringify({ account_id: ACCOUNT_ID }), ENV),
+    { ok: false, errors: ["invalid_blob_pathname"] },
+  );
+  assert.deepEqual(
+    uploadTokenConfig(`${BLOB_UPLOAD_PATH_PREFIX}tickets.txt`, "", ENV),
+    { ok: false, errors: ["invalid_blob_pathname"] },
+  );
+  assert.deepEqual(
+    uploadTokenConfig(`${BLOB_UPLOAD_PATH_PREFIX}../tickets.csv`, "", ENV),
     { ok: false, errors: ["invalid_blob_pathname"] },
   );
   assert.deepEqual(
@@ -682,10 +724,92 @@ await test("private blob submit reads server-side blob and forwards ATLAS multip
   assert.equal(calls[1].options.body instanceof FormData, true);
   assert.equal(calls[1].options.body.get("support_platform"), "zendesk");
   assert.equal(calls[1].options.body.get("company_name"), "Acme Co.");
+  assert.equal(calls[1].options.body.get("limit"), "1000");
   assert.equal(await calls[1].options.body.get("csv_file").text(), csv);
   assert.deepEqual(deleteCalls, [
     {
       pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+});
+
+await test("private blob submit forwards Zendesk full-thread JSON without CSV inspect", async () => {
+  const calls = [];
+  const deleteCalls = [];
+  const threadJson = JSON.stringify({
+    ticket: { id: 123, status: "solved", satisfaction_rating: { score: "good" } },
+    comments: [
+      { id: 1, public: true, author_role: "end_user", body: "How do I export reports?" },
+      { id: 2, public: false, author_role: "agent", body: "Private triage note" },
+      { id: 3, public: true, author_role: "agent", body: "Open Reports, then Export." },
+    ],
+  });
+  const result = await submitPrivateBlob({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      importer_mode: FULL_THREAD_IMPORTER_MODE,
+      support_platform: "intercom",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    getBlobImpl: async (pathname, options) => {
+      assert.equal(pathname, `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`);
+      assert.deepEqual(options, {
+        access: "private",
+        token: ENV.BLOB_READ_WRITE_TOKEN,
+        useCache: false,
+      });
+      return {
+        statusCode: 200,
+        stream: new Blob([threadJson], { type: "application/json" }).stream(),
+        blob: {
+          size: Buffer.byteLength(threadJson),
+          contentType: "application/json",
+        },
+      };
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      assert.equal(url.endsWith(INSPECT_PATH), false);
+      assert.equal(url.endsWith(SUBMIT_PATH), true);
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ request_id: "content-ops-json123" });
+        },
+      };
+    },
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.result_path.includes("content-ops-json123"), true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
+  assert.equal("Content-Type" in calls[0].options.headers, false);
+  assert.equal(calls[0].options.body instanceof FormData, true);
+  assert.equal(calls[0].options.body.get("support_platform"), "zendesk");
+  assert.equal(calls[0].options.body.get("company_name"), "Acme Co.");
+  assert.equal(calls[0].options.body.get("limit"), "1000");
+  assert.equal(calls[0].options.body.get("importer_mode"), FULL_THREAD_IMPORTER_MODE);
+  assert.equal(await calls[0].options.body.get("json_file").text(), threadJson);
+  assert.equal(calls[0].options.body.get("csv_file"), null);
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
       options: { token: ENV.BLOB_READ_WRITE_TOKEN },
     },
   ]);
@@ -966,6 +1090,61 @@ await test("private blob reader rejects unsafe or oversized blob references", as
     }),
     { ok: false, statusCode: 413, error: "deflection_submit_csv_too_large" },
   );
+});
+
+await test("private blob submit fails closed on importer mode and blob extension mismatch", async () => {
+  let externalCalled = false;
+  const common = {
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    getBlobImpl: async () => {
+      externalCalled = true;
+      throw new Error("must not call blob store");
+    },
+    fetchImpl: async () => {
+      externalCalled = true;
+      throw new Error("must not call ATLAS");
+    },
+    deleteBlobImpl: async () => {
+      externalCalled = true;
+    },
+  };
+
+  assert.deepEqual(
+    await submitPrivateBlob({
+      ...common,
+      payload: {
+        blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+        importer_mode: FULL_THREAD_IMPORTER_MODE,
+      },
+    }),
+    { ok: false, statusCode: 400, error: "invalid_blob_reference" },
+  );
+  assert.deepEqual(
+    await submitPrivateBlob({
+      ...common,
+      payload: {
+        blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      },
+    }),
+    { ok: false, statusCode: 400, error: "invalid_blob_reference" },
+  );
+  assert.deepEqual(
+    await submitPrivateBlob({
+      ...common,
+      payload: {
+        blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+        importer_mode: "raw_json",
+      },
+    }),
+    { ok: false, statusCode: 400, error: "invalid_importer_mode" },
+  );
+  assert.equal(externalCalled, false);
 });
 
 await test("portfolio submit forwarding times out hung ATLAS calls", async () => {
