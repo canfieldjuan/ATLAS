@@ -18,12 +18,27 @@ const INSPECT_ENDPOINT = "/api/content-ops/deflection/inspect";
 const BLOB_UPLOAD_ENDPOINT = "/api/content-ops/deflection/upload";
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
+const FULL_THREAD_IMPORTER_MODE = "full_thread";
 const SUPPORT_PLATFORMS = [
   { value: "zendesk", label: "Zendesk" },
   { value: "intercom", label: "Intercom" },
   { value: "help_scout", label: "Help Scout" },
   { value: "other", label: "Freshdesk / other" },
 ] as const;
+const UPLOAD_MODES = [
+  {
+    value: "csv",
+    label: "CSV",
+    description: "Inspect mapped ticket rows before private upload.",
+  },
+  {
+    value: "zendesk_full_thread",
+    label: "Zendesk JSON",
+    description: "Import ticket metadata plus public comment threads.",
+  },
+] as const;
+
+type UploadMode = (typeof UPLOAD_MODES)[number]["value"];
 
 type UploadState =
   | { status: "empty" }
@@ -60,28 +75,34 @@ function formatBytes(bytes: number) {
   return `${bytes} bytes`;
 }
 
-function fileState(file: File | undefined): UploadState {
+function fileState(file: File | undefined, uploadMode: UploadMode): UploadState {
   if (!file) return { status: "empty" };
   const lowerName = file.name.toLowerCase();
-  if (!lowerName.endsWith(".csv")) {
-    return { status: "invalid", message: "Select a CSV export." };
+  const isFullThreadUpload = uploadMode === "zendesk_full_thread";
+  const extension = isFullThreadUpload ? ".json" : ".csv";
+  const formatLabel = isFullThreadUpload ? "Zendesk JSON export" : "CSV export";
+  if (!lowerName.endsWith(extension)) {
+    return { status: "invalid", message: `Select a ${formatLabel}.` };
   }
   if (file.size <= 0) {
-    return { status: "invalid", message: "The selected CSV is empty." };
+    return { status: "invalid", message: `The selected ${formatLabel} is empty.` };
   }
   if (file.size > MAX_CSV_BYTES) {
-    return { status: "invalid", message: "CSV exports must be 50 MB or smaller." };
+    return { status: "invalid", message: "Uploads must be 50 MB or smaller." };
   }
   return { status: "ready", file, fileName: file.name, fileSize: file.size };
 }
 
-function blobPathname(fileName: string) {
+function blobPathname(fileName: string, uploadMode: UploadMode) {
+  const isFullThreadUpload = uploadMode === "zendesk_full_thread";
+  const extension = isFullThreadUpload ? ".json" : ".csv";
+  const fallback = isFullThreadUpload ? "zendesk-thread.json" : "tickets.csv";
   const cleaned = fileName
     .toLowerCase()
     .replace(/[^a-z0-9_.-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  const csvName = cleaned.endsWith(".csv") ? cleaned : "tickets.csv";
-  return `${BLOB_UPLOAD_PATH_PREFIX}${Date.now()}-${csvName}`;
+  const uploadName = cleaned.endsWith(extension) ? cleaned : fallback;
+  return `${BLOB_UPLOAD_PATH_PREFIX}${Date.now()}-${uploadName}`;
 }
 
 function boundedProgress(percentage: number | undefined) {
@@ -152,9 +173,13 @@ export default function FaqDeflectionUpload() {
   const [companyName, setCompanyName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [supportPlatform, setSupportPlatform] = useState<string>(SUPPORT_PLATFORMS[0].value);
+  const [uploadMode, setUploadMode] = useState<UploadMode>("csv");
   const [upload, setUpload] = useState<UploadState>({ status: "empty" });
   const [inspect, setInspect] = useState<InspectState>({ status: "idle" });
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
+  const isFullThreadUpload = uploadMode === "zendesk_full_thread";
+  const uploadLabel = isFullThreadUpload ? "Zendesk full-thread JSON" : "Support-ticket CSV";
+  const uploadFormat = isFullThreadUpload ? "Zendesk JSON" : "CSV";
 
   const fieldsReady = useMemo(
     () =>
@@ -176,26 +201,30 @@ export default function FaqDeflectionUpload() {
   const startSubmit = async () => {
     if (upload.status !== "ready" || !fieldsReady) return;
 
-    let phase: "inspect" | "upload" = "inspect";
+    let phase: "inspect" | "upload" = isFullThreadUpload ? "upload" : "inspect";
     try {
-      setSubmit({ status: "inspecting" });
-      setInspect({ status: "checking" });
-      const diagnostics = await inspectDeflectionCsv(upload.file);
-      if (!diagnostics.ok) {
-        setInspect({
-          status: "not_ready",
-          diagnostics,
-          message: inspectMessage(diagnostics),
-        });
-        setSubmit({ status: "idle" });
-        return;
+      if (!isFullThreadUpload) {
+        setSubmit({ status: "inspecting" });
+        setInspect({ status: "checking" });
+        const diagnostics = await inspectDeflectionCsv(upload.file);
+        if (!diagnostics.ok) {
+          setInspect({
+            status: "not_ready",
+            diagnostics,
+            message: inspectMessage(diagnostics),
+          });
+          setSubmit({ status: "idle" });
+          return;
+        }
+        setInspect({ status: "ready", diagnostics });
+        phase = "upload";
+      } else {
+        setInspect({ status: "idle" });
       }
-      setInspect({ status: "ready", diagnostics });
-      phase = "upload";
       setSubmit({ status: "uploading", percentage: 0 });
-      const blob = await uploadBlob(blobPathname(upload.fileName), upload.file, {
+      const blob = await uploadBlob(blobPathname(upload.fileName, uploadMode), upload.file, {
         access: "private",
-        contentType: "text/csv",
+        contentType: isFullThreadUpload ? "application/json" : "text/csv",
         handleUploadUrl: BLOB_UPLOAD_ENDPOINT,
         multipart: upload.fileSize > 4 * 1024 * 1024,
         onUploadProgress: (event) => {
@@ -214,10 +243,11 @@ export default function FaqDeflectionUpload() {
         },
         body: JSON.stringify({
           blob_pathname: blob.pathname,
-          support_platform: supportPlatform,
+          support_platform: isFullThreadUpload ? "zendesk" : supportPlatform,
           company_name: companyName.trim(),
           contact_email: contactEmail.trim(),
           limit: "1000",
+          ...(isFullThreadUpload ? { importer_mode: FULL_THREAD_IMPORTER_MODE } : {}),
         }),
       });
       const payload = (await response.json().catch(() => null)) as {
@@ -299,7 +329,46 @@ export default function FaqDeflectionUpload() {
               chatbot interpretation.
             </p>
 
-            <div className="mt-8 grid gap-5 md:grid-cols-2">
+            <div
+              className="mt-8 grid gap-3 rounded-lg border border-surface-700/70 bg-surface-900/45 p-3 sm:grid-cols-2"
+              data-atlas-deflection-upload-mode
+              role="radiogroup"
+              aria-label="Upload format"
+            >
+              {UPLOAD_MODES.map((mode) => {
+                const selected = uploadMode === mode.value;
+                return (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    data-atlas-deflection-upload-mode-option={mode.value}
+                    className={`rounded-md border px-4 py-3 text-left transition ${
+                      selected
+                        ? "border-primary-400 bg-primary-500/15 text-primary-100"
+                        : "border-surface-700 bg-surface-950/60 text-surface-200 hover:border-surface-500"
+                    }`}
+                    onClick={() => {
+                      setUploadMode(mode.value);
+                      setUpload({ status: "empty" });
+                      setInspect({ status: "idle" });
+                      setSubmit({ status: "idle" });
+                      if (mode.value === "zendesk_full_thread") {
+                        setSupportPlatform("zendesk");
+                      }
+                    }}
+                  >
+                    <span className="block text-sm font-semibold">{mode.label}</span>
+                    <span className="mt-1 block text-xs leading-5 opacity-75">
+                      {mode.description}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-6 grid gap-5 md:grid-cols-2">
               <label className="block">
                 <span className="text-sm font-medium text-surface-100">Company</span>
                 <input
@@ -326,9 +395,10 @@ export default function FaqDeflectionUpload() {
               <label className="block">
                 <span className="text-sm font-medium text-surface-100">Support platform</span>
                 <select
-                  className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-3 text-sm text-white outline-none transition focus:border-primary-400"
+                  className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-3 text-sm text-white outline-none transition focus:border-primary-400 disabled:cursor-not-allowed disabled:text-surface-200/55"
                   data-atlas-deflection-support-platform
                   value={supportPlatform}
+                  disabled={isFullThreadUpload}
                   onChange={(event) => {
                     setSupportPlatform(event.target.value);
                     setInspect({ status: "idle" });
@@ -354,15 +424,17 @@ export default function FaqDeflectionUpload() {
             <label className="mt-6 block rounded-lg border border-dashed border-surface-600 bg-surface-900/55 p-5 transition focus-within:border-primary-400">
               <span className="flex items-center gap-3 text-sm font-medium text-surface-100">
                 <Upload size={18} className="text-primary-300" />
-                Support-ticket CSV
+                {uploadLabel}
               </span>
               <input
+                key={uploadMode}
                 className="mt-4 block w-full cursor-pointer rounded-lg border border-surface-700 bg-surface-900 text-sm text-surface-100 file:mr-4 file:border-0 file:bg-primary-500 file:px-4 file:py-3 file:text-sm file:font-semibold file:text-surface-900"
                 data-atlas-deflection-csv-file
+                data-atlas-deflection-upload-file
                 type="file"
-                accept=".csv,text/csv"
+                accept={isFullThreadUpload ? ".json,application/json" : ".csv,text/csv"}
                 onChange={(event) => {
-                  setUpload(fileState(event.target.files?.[0]));
+                  setUpload(fileState(event.target.files?.[0], uploadMode));
                   setInspect({ status: "idle" });
                 }}
               />
@@ -371,13 +443,14 @@ export default function FaqDeflectionUpload() {
                 data-atlas-deflection-export-guidance
               >
                 <p className="font-semibold text-surface-100">
-                  Best input: full ticket threads with customer questions plus
-                  agent replies, resolution text, or resolved ticket notes.
+                  {isFullThreadUpload
+                    ? "Best input: Zendesk ticket JSON with public requester comments, public agent replies, status, and satisfaction fields."
+                    : "Best input: full ticket threads with customer questions plus agent replies, resolution text, or resolved ticket notes."}
                 </p>
                 <p>
-                  Question-only exports still work for clustering and a gap
-                  list, but publishable answers require uploaded resolution
-                  evidence.
+                  {isFullThreadUpload
+                    ? "Private notes are dropped during import. ATLAS validates the thread shape during submit before the locked report is created."
+                    : "Question-only exports still work for clustering and a gap list, but publishable answers require uploaded resolution evidence."}
                 </p>
               </div>
               <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
@@ -390,8 +463,8 @@ export default function FaqDeflectionUpload() {
                 </p>
               </div>
               <span className="mt-3 block text-xs text-surface-200/60">
-                Up to 50 MB. CSV inspection and private storage both run
-                server-side; service tokens never reach the browser.
+                Up to 50 MB. {isFullThreadUpload ? "JSON import" : "CSV inspection"} and
+                private storage both run server-side; service tokens never reach the browser.
               </span>
             </label>
 
@@ -416,13 +489,13 @@ export default function FaqDeflectionUpload() {
                   data-atlas-deflection-upload-progress
                 >
                   <div className="flex items-center justify-between gap-3 text-xs font-medium text-primary-100">
-                    <span>Uploading CSV to private Blob</span>
+                    <span>Uploading {uploadFormat} to private Blob</span>
                     <span>{submit.percentage}%</span>
                   </div>
                   <div
                     className="mt-3 h-2 overflow-hidden rounded-full bg-surface-900"
                     role="progressbar"
-                    aria-label="CSV upload progress"
+                    aria-label={`${uploadFormat} upload progress`}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={submit.percentage}
@@ -524,7 +597,7 @@ export default function FaqDeflectionUpload() {
               ) : submit.status === "uploading" ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Uploading CSV
+                  Uploading {uploadFormat}
                 </>
               ) : submit.status === "submitting" ? (
                 <>
@@ -545,7 +618,8 @@ export default function FaqDeflectionUpload() {
             </button>
             {submit.status === "error" && (
               <p className="mt-3 text-xs leading-5 text-amber-200" data-atlas-deflection-retry>
-                {submit.message} Retry keeps the selected CSV and starts a new private upload.
+                {submit.message} Retry keeps the selected {uploadFormat} and starts a new
+                private upload.
               </p>
             )}
           </form>
@@ -573,9 +647,9 @@ export default function FaqDeflectionUpload() {
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              ATLAS checks the CSV first, stores it privately after validation,
-              then sends the browser to the locked result page for snapshot
-              hydration and Checkout.
+              {isFullThreadUpload
+                ? "ATLAS reads the private Zendesk JSON server-side, imports public thread evidence, then sends the browser to the locked result page for snapshot hydration and Checkout."
+                : "ATLAS checks the CSV first, stores it privately after validation, then sends the browser to the locked result page for snapshot hydration and Checkout."}
             </p>
           </aside>
         </div>

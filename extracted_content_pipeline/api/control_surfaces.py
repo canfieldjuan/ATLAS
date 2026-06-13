@@ -1354,15 +1354,31 @@ async def _load_deflection_submit_rows_from_request(
                     status_code=400,
                     detail="Multipart deflection submit body could not be parsed.",
                 ) from exc
+            data = _deflection_submit_form_to_mapping(form)
+            if data.get("importer_mode") == "full_thread":
+                csv_file = form.get("csv_file") if hasattr(form, "get") else None
+                if csv_file is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="csv_file is not accepted with importer_mode=full_thread",
+                    )
+                json_file = form.get("json_file") if hasattr(form, "get") else None
+                if json_file is None:
+                    raise HTTPException(status_code=422, detail="json_file is required")
+                rows, byte_count, load_warnings = await _load_deflection_submit_json_upload_rows(
+                    json_file,
+                    max_bytes=max_bytes,
+                )
+                return data, rows, byte_count, "uploaded_bytes", load_warnings
+            json_file = form.get("json_file") if hasattr(form, "get") else None
+            if json_file is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="json_file requires importer_mode=full_thread",
+                )
             csv_file = form.get("csv_file") if hasattr(form, "get") else None
             if csv_file is None:
                 raise HTTPException(status_code=422, detail="csv_file is required")
-            data = _deflection_submit_form_to_mapping(form)
-            if data.get("importer_mode") == "full_thread":
-                raise HTTPException(
-                    status_code=422,
-                    detail="importer_mode=full_thread requires JSON blob_url submit",
-                )
             rows, byte_count, load_warnings = await _load_deflection_submit_upload_rows(
                 csv_file,
                 max_bytes=max_bytes,
@@ -1559,6 +1575,34 @@ async def _load_deflection_submit_upload_rows(
         data,
         parse_error_detail="Uploaded CSV could not be parsed.",
     )
+
+
+async def _load_deflection_submit_json_upload_rows(
+    json_file: Any,
+    *,
+    max_bytes: int,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    try:
+        data = await json_file.read(max_bytes + 1)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded Zendesk full-thread JSON could not be read.",
+        ) from exc
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "reason": "deflection_submit_full_thread_too_large",
+                "max_file_bytes": max_bytes,
+            },
+        )
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded Zendesk full-thread JSON is empty.",
+        )
+    return _parse_deflection_submit_zendesk_thread_bytes(data)
 
 
 def _load_deflection_submit_blob_rows_sync(

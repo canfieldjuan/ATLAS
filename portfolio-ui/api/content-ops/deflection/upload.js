@@ -3,6 +3,8 @@ import { clean } from "./atlas-report.js";
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
 const MAX_BLOB_CSV_BYTES = 50 * 1024 * 1024;
 const CSV_CONTENT_TYPES = ["text/csv", "application/vnd.ms-excel", "application/csv"];
+const JSON_CONTENT_TYPES = ["application/json", "text/json"];
+const BLOB_UPLOAD_CONTENT_TYPES = [...CSV_CONTENT_TYPES, ...JSON_CONTENT_TYPES];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function json(res, statusCode, payload) {
@@ -45,7 +47,15 @@ function uploadTokenConfig(pathname, clientPayload, env = process.env) {
   const payload = parseClientPayload(clientPayload);
   const accountId = clean(payload.account_id);
   const errors = [...config.errors];
-  if (!pathname.startsWith(BLOB_UPLOAD_PATH_PREFIX) || !pathname.toLowerCase().endsWith(".csv")) {
+  const lowerPathname = pathname.toLowerCase();
+  const hasAllowedExtension = lowerPathname.endsWith(".csv") || lowerPathname.endsWith(".json");
+  if (
+    !pathname.startsWith(BLOB_UPLOAD_PATH_PREFIX) ||
+    !hasAllowedExtension ||
+    pathname.includes("..") ||
+    pathname.includes("\\") ||
+    pathname.startsWith("/")
+  ) {
     errors.push("invalid_blob_pathname");
   }
   if (accountId && accountId !== config.accountId) {
@@ -56,7 +66,7 @@ function uploadTokenConfig(pathname, clientPayload, env = process.env) {
     ok: true,
     token: config.token,
     options: {
-      allowedContentTypes: CSV_CONTENT_TYPES,
+      allowedContentTypes: BLOB_UPLOAD_CONTENT_TYPES,
       maximumSizeInBytes: MAX_BLOB_CSV_BYTES,
       addRandomSuffix: true,
       tokenPayload: JSON.stringify({ account_id: config.accountId }),
@@ -70,8 +80,10 @@ async function handleBlobUpload(options) {
 }
 
 export {
+  BLOB_UPLOAD_CONTENT_TYPES,
   BLOB_UPLOAD_PATH_PREFIX,
   CSV_CONTENT_TYPES,
+  JSON_CONTENT_TYPES,
   MAX_BLOB_CSV_BYTES,
   handleBlobUpload,
   parseClientPayload,
