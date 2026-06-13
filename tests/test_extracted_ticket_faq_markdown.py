@@ -24,6 +24,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     _resolution_advisory_signals,
     _resolution_signal_tokens,
     _resolution_text_is_publishable,
+    _safe_vocabulary_representative_label,
     _source_date_span,
     build_ticket_faq_markdown,
     normalize_intent_rules,
@@ -828,7 +829,8 @@ def test_build_ticket_faq_markdown_counts_resolution_sources_not_unique_texts() 
                     "resolution_text": "Send the reset email from Account Settings.",
                 }],
             },
-        ]
+        ],
+        documentation_terms=("Export issue",),
     )
 
     item = result.items[0]
@@ -871,7 +873,8 @@ def test_build_ticket_faq_markdown_keeps_distinct_questions_from_sharing_resolut
                     ),
                 }],
             },
-        ]
+        ],
+        documentation_terms=("Export issue",),
     )
 
     by_question = {item["question"]: item for item in result.items}
@@ -1697,11 +1700,12 @@ def test_build_ticket_faq_markdown_derives_question_from_complaint_narrative() -
     assert "contact support at https://example.com/support" in result.markdown
 
 
-def test_build_ticket_faq_markdown_uses_source_policy_question_when_customer_wording_is_missing() -> None:
+def test_build_ticket_faq_markdown_uses_representative_label_when_customer_wording_is_missing() -> None:
     result = build_ticket_faq_markdown(
         [
             {
                 "source_type": "support_ticket",
+                "support_ticket_cluster": "reporting friction",
                 "source_title": "Export issue",
                 "evidence": [{
                     "text": "The dashboard export button disappears for analysts.",
@@ -1711,6 +1715,7 @@ def test_build_ticket_faq_markdown_uses_source_policy_question_when_customer_wor
             },
             {
                 "source_type": "support_ticket",
+                "support_ticket_cluster": "reporting friction",
                 "source_title": "Export issue",
                 "evidence": [{
                     "text": "The dashboard export button disappears for our analysts.",
@@ -1718,13 +1723,436 @@ def test_build_ticket_faq_markdown_uses_source_policy_question_when_customer_wor
                     "source_type": "support_ticket",
                 }],
             },
-        ]
+        ],
+        documentation_terms=("Dashboard export",),
     )
 
     assert result.items[0]["topic"] == "reporting friction"
-    assert result.items[0]["question"] == "What should I do about reporting friction?"
+    assert result.items[0]["question"] == "What should I do about dashboard export?"
     assert result.items[0]["question_source"] == "source_policy"
     assert result.output_checks["uses_user_vocabulary"] is True
+
+
+def test_build_ticket_faq_markdown_uses_safe_terms_instead_of_pii_source_title() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Reset password for Sarah Chen",
+                "text": "Reset password for Sarah Chen blocks support.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Reset password for Sarah Chen",
+                "text": "Reset password for Sarah Chen blocks support.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Reset password",),
+    )
+
+    assert result.items[0]["question"] == "What should I do about reset password?"
+    assert "sarah" not in result.items[0]["question"].lower()
+    assert "chen" not in result.items[0]["question"].lower()
+
+
+def test_build_ticket_faq_markdown_ignores_clean_source_title_without_safe_vocabulary() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Billing portal outage",
+                "text": "The support case is still blocked for our team.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Billing portal outage",
+                "text": "The support case is still blocked for our admins.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "What should I do about technical support?"
+    assert "billing" not in result.items[0]["question"].lower()
+    assert "portal" not in result.items[0]["question"].lower()
+
+
+def test_build_ticket_faq_markdown_ignores_unlisted_structured_issue_vocabulary_without_documentation_terms() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject A",
+                "product": "Support operations",
+                "issue": "Device reboot loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject B",
+                "product": "Support operations",
+                "issue": "Device reboot loop",
+                "text": "Device reboot loop still blocks admins.",
+                "source_id": "ticket-2",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject C",
+                "product": "Analytics",
+                "issue": "Export timeout",
+                "text": "The analytics export timeout blocks analysts.",
+                "source_id": "ticket-3",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject D",
+                "product": "Analytics",
+                "issue": "Export timeout",
+                "text": "Analytics export timeout still blocks managers.",
+                "source_id": "ticket-4",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert [item["question"] for item in result.items] == [
+        "What should I do about technical support?",
+        "What should I do about technical support?",
+    ]
+    assert all(item["question_source"] == "source_policy" for item in result.items)
+    assert "customer subject" not in " ".join(item["question"].lower() for item in result.items)
+    assert "device reboot" not in " ".join(item["question"].lower() for item in result.items)
+
+
+def test_build_ticket_faq_markdown_uses_known_taxonomy_without_documentation_terms() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject A",
+                "product": "Debt collection",
+                "issue": "Communication tactics",
+                "text": "Debt collection communication tactics keep blocking customers.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject B",
+                "product": "Debt collection",
+                "issue": "Communication tactics",
+                "text": "The communication tactics in debt collection still block customers.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "What should I do about debt collection communication tactics?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert "customer subject" not in result.items[0]["question"].lower()
+
+
+def test_build_ticket_faq_markdown_uses_safe_terms_instead_of_pii_gist_tokens() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "Duplicate fee for jane.doe@acme.com account 4829103 remains open.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "Duplicate fee for jane.doe@acme.com account 4829103 remains open.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Duplicate fee",),
+    )
+
+    assert result.items[0]["question"] == "What should I do about duplicate fee?"
+    assert "4829103" not in result.items[0]["question"]
+    assert "acme" not in result.items[0]["question"].lower()
+
+
+def test_build_ticket_faq_markdown_uses_repeated_gist_tokens_for_representative_label() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "The export timeout blocks agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "The export timeout blocks admins.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Export timeout",),
+    )
+
+    assert result.items[0]["question"] == "What should I do about export timeout?"
+
+
+def test_safe_vocabulary_representative_label_rejects_single_occurrence_tokens() -> None:
+    assert _safe_vocabulary_representative_label(
+        "technical support",
+        [
+            {
+                "text": "Asdf baz blarg blocks agents.",
+            },
+            {
+                "text": "Frobnicate quux zorb blocks admins.",
+            },
+        ],
+        documentation_terms=("Asdf baz", "Frobnicate quux"),
+    ) == ""
+
+
+@pytest.mark.parametrize(
+    "unsafe_documentation_term",
+    (
+        "Reset password for jane.doe@acme.com",
+        "Reset password for account 4829103",
+    ),
+)
+def test_build_ticket_faq_markdown_ignores_unsafe_documentation_terms(
+    unsafe_documentation_term: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "Reset password blocks agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "technical support",
+                "text": "Reset password blocks admins.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+        documentation_terms=(unsafe_documentation_term,),
+    )
+
+    assert result.items[0]["question"] == "What should I do about technical support?"
+    assert "reset" not in result.items[0]["question"].lower()
+    assert "4829103" not in result.items[0]["question"]
+    assert "@" not in result.items[0]["question"]
+
+
+def test_build_ticket_faq_markdown_labels_topic_degraded_subclusters_without_merging() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device reboot loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device restart loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-2",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Export timeout",
+                "text": "The analytics export timeout blocks support agents.",
+                "source_id": "ticket-3",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Analytics export timeout",
+                "text": "The analytics export timeout blocks support agents.",
+                "source_id": "ticket-4",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Device reboot loop", "Analytics export timeout"),
+    )
+
+    assert result.as_dict()["generated"] == 2
+    assert [
+        (item["question"], item["source_ids"], item["ticket_count"])
+        for item in result.items
+    ] == [
+        ("What should I do about device reboot loop?", ("ticket-1", "ticket-2"), 2),
+        ("What should I do about analytics export timeout?", ("ticket-3", "ticket-4"), 2),
+    ]
+    assert {item["question_source"] for item in result.items} == {"source_policy"}
+    assert {item["answer_evidence_status"] for item in result.items} == {"draft_needs_review"}
+
+
+def test_build_ticket_faq_markdown_keeps_identical_topic_degraded_content_together() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device reboot loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device restart loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-2",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device reboot loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-3",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device restart loop",
+                "text": "The device reboot loop blocks support agents.",
+                "source_id": "ticket-4",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Device reboot loop",),
+    )
+
+    assert result.as_dict()["generated"] == 1
+    assert result.items[0]["question"] == "What should I do about device reboot loop?"
+    assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2", "ticket-3", "ticket-4")
+    assert result.items[0]["ticket_count"] == 4
+
+
+def test_build_ticket_faq_markdown_preserves_topic_degraded_creation_order_under_cap() -> None:
+    labels = [
+        "Alpha connector freeze",
+        "Bravo invoice failure",
+        "Charlie webhook delay",
+        "Delta profile lock",
+        "Echo export timeout",
+        "Foxtrot seat limit",
+        "Golf billing retry",
+        "Hotel invite bounce",
+        "India report blank",
+        "Juliet sync pause",
+        "Kilo audit stall",
+    ]
+    opportunities = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": label,
+            "text": f"{label} blocks the account team.",
+            "source_id": f"ticket-{index}-{suffix}",
+        }
+        for index, label in enumerate(labels)
+        for suffix in ("a", "b")
+    ]
+
+    result = build_ticket_faq_markdown(
+        opportunities,
+        max_items=5,
+        documentation_terms=tuple(labels),
+    )
+
+    assert [item["question"] for item in result.items[:4]] == [
+        "What should I do about alpha connector freeze?",
+        "What should I do about bravo invoice failure?",
+        "What should I do about charlie webhook delay?",
+        "What should I do about delta profile lock?",
+    ]
+    assert result.items[-1]["topic"] == "other support issues"
+    assert result.items[-1]["source_ids"] == tuple(
+        f"ticket-{index}-{suffix}"
+        for index in range(4, 11)
+        for suffix in ("a", "b")
+    )
+
+
+def test_build_ticket_faq_markdown_does_not_merge_resolution_backed_same_label() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Device reboot loop",
+                "evidence": [{
+                    "text": "The device reboot loop blocks support agents.",
+                    "source_id": "ticket-1",
+                    "source_type": "support_ticket",
+                    "resolution_text": (
+                        "Open Settings then Firmware, choose version 4.1, "
+                        "and restart the device."
+                    ),
+                }],
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Export timeout",
+                "evidence": [{
+                    "text": "The analytics export timeout blocks support agents.",
+                    "source_id": "ticket-2",
+                    "source_type": "support_ticket",
+                    "resolution_text": (
+                        "Open Settings then Exports, increase the timeout, "
+                        "and retry the job."
+                    ),
+                }],
+            },
+        ],
+        max_items=0,
+        documentation_terms=("Device reboot loop", "Export timeout"),
+    )
+
+    assert result.as_dict()["generated"] == 2
+    assert [item["question"] for item in result.items] == [
+        "What should I do about technical support?",
+        "What should I do about technical support?",
+    ]
+    assert {
+        item["answer_evidence_status"] for item in result.items
+    } == {"resolution_evidence"}
+    assert all(item["source_ids"] in {("ticket-1",), ("ticket-2",)} for item in result.items)
 
 
 def test_build_ticket_faq_markdown_uses_source_policy_when_customer_question_is_too_long() -> None:

@@ -43,6 +43,8 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
             "Subject": "How do I change my login email?",
             "Description": "I cannot find where to update the email on my account.",
             "Pain Category": "profile updates",
+            "Product": "Account settings",
+            "Issue": "Email profile updates",
             "Created At": "2026-05-01",
         },
         {
@@ -113,6 +115,8 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "company_name": "Acme Logistics",
         "vendor_name": "HelpDeskPro",
         "pain_category": "profile updates",
+        "product": "Account settings",
+        "issue": "Email profile updates",
         "created_at": "2026-05-01",
         "support_ticket_cluster": "profile updates",
         "support_ticket_cluster_key": "explicit:profile-updates",

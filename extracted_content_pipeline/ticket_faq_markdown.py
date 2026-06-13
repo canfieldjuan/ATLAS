@@ -50,6 +50,21 @@ _SPEAKER_LABEL_RE = re.compile(
 )
 _CUSTOMER_SPEAKERS = {"customer", "user", "requester", "client"}
 _SUPPORTED_QUESTION_SOURCES = {"customer_wording", "source_policy"}
+_REPRESENTATIVE_EMAIL_RE = re.compile(r"\b\S+@\S+\b")
+_REPRESENTATIVE_LONG_NUMBER_RE = re.compile(r"\b\d{4,}\b")
+_REPRESENTATIVE_LABEL_SOURCE_TYPES = {
+    "ticket",
+    "support_ticket",
+    "case",
+    "chat",
+    "chat_transcript",
+    "conversation",
+    "transcript",
+    "sales_call",
+    "meeting",
+    "sales_objection",
+    "objection",
+}
 _GENERIC_QUESTION_TEXTS = {
     "help?",
     "need help?",
@@ -170,10 +185,52 @@ _DATE_KEYS = (
 )
 _SOURCE_CONTEXT_KEYS = (
     "product",
+    "product_name",
     "category",
     "sub_product",
+    "sub_product_name",
     "issue",
     "sub_issue",
+    "sub_issue_type",
+)
+_REPRESENTATIVE_SAFE_CONTEXT_KEYS = (
+    "product",
+    "product_name",
+    "sub_product",
+    "sub_product_name",
+    "issue",
+    "issue_type",
+    "sub_issue",
+    "sub_issue_type",
+)
+_REPRESENTATIVE_TAXONOMY_TERMS = (
+    "Advertising",
+    "Attempts to collect debt not owed",
+    "Checking or savings account",
+    "Closing an account",
+    "Communication tactics",
+    "Credit card or prepaid card",
+    "Credit reporting, credit repair services, or other personal consumer reports",
+    "Customer service",
+    "Debt collection",
+    "Fees or interest",
+    "Getting a credit card",
+    "Improper use of your report",
+    "Managing an account",
+    "Managing the loan or lease",
+    "Money transfer, virtual currency, or money service",
+    "Mortgage",
+    "Opening an account",
+    "Other service problem",
+    "Other transaction problem",
+    "Struggling to pay mortgage",
+    "Trouble during payment process",
+    "Vehicle loan or lease",
+    "Wire transfer problem",
+)
+_REPRESENTATIVE_TAXONOMY_KEYS = frozenset(
+    _KEY_SEPARATOR_RE.sub("", term.strip().lower())
+    for term in _REPRESENTATIVE_TAXONOMY_TERMS
 )
 _DOCUMENTATION_SOURCE_TYPES = {
     "article",
@@ -645,6 +702,14 @@ def build_ticket_faq_markdown(
                 "source_title": support_ticket_plain_text(
                     evidence.get("source_title") or opportunity.get("source_title")
                 ),
+                "support_ticket_cluster": support_ticket_plain_text(
+                    evidence.get("support_ticket_cluster")
+                    or opportunity.get("support_ticket_cluster")
+                ),
+                "safe_label_context": _representative_safe_context_text(
+                    opportunity,
+                    evidence,
+                ),
                 "source_date": source_date.isoformat() if source_date is not None else "",
                 "evidence_group_key": evidence_group_key,
                 "results_count": _first_present(evidence, opportunity, key="results_count"),
@@ -981,9 +1046,23 @@ def _intent_topic(
 
 
 def _source_context_text(*rows: Mapping[str, Any]) -> str:
+    return _context_text(_SOURCE_CONTEXT_KEYS, *rows)
+
+
+def _representative_safe_context_text(*rows: Mapping[str, Any]) -> str:
     values: list[str] = []
     for row in rows:
-        for key in _SOURCE_CONTEXT_KEYS:
+        for key in _REPRESENTATIVE_SAFE_CONTEXT_KEYS:
+            text = _compact(_field_value(row, key))
+            if text and _compact_key(text) in _REPRESENTATIVE_TAXONOMY_KEYS:
+                values.append(text)
+    return " ".join(values)
+
+
+def _context_text(keys: Sequence[str], *rows: Mapping[str, Any]) -> str:
+    values: list[str] = []
+    for row in rows:
+        for key in keys:
             text = _compact(_field_value(row, key))
             if text:
                 values.append(text)
@@ -1023,15 +1102,13 @@ def _item(
         snippets,
         " / ".join(_clean(row.get("source_title")) for row in display_rows if _clean(row.get("source_title"))),
     ))
+    question, question_source, question_row = _resolve_question_label(
+        topic,
+        rows,
+        max_evidence_per_item=max_evidence_per_item,
+        documentation_terms=documentation_terms,
+    )
     has_mixed_evidence_scopes = _has_mixed_evidence_scopes(rows)
-    if has_mixed_evidence_scopes:
-        question, question_source, question_row = (
-            _MIXED_EVIDENCE_REVIEW_QUESTION,
-            "source_policy",
-            None,
-        )
-    else:
-        question, question_source, question_row = _question(topic, display_rows)
     summary_rows = _rows_with_question_source_first(display_rows, question_row)
     summary = _summary(
         topic=topic,
@@ -1854,15 +1931,126 @@ def _first_present(*rows: Mapping[str, Any], key: str) -> Any:
 def _question(
     topic: str,
     rows: Sequence[Mapping[str, str]],
+    documentation_terms: Sequence[str],
 ) -> tuple[str, str, Mapping[str, str] | None]:
     for row in rows:
         text = _question_text(row.get("text", ""))
         if text:
             return (text, "customer_wording", row)
+    representative_question = _representative_source_question(
+        topic,
+        rows,
+        documentation_terms=documentation_terms,
+    )
+    if representative_question:
+        return (representative_question, "source_policy", None)
     policy_question = _policy_question(topic)
     if policy_question:
         return (policy_question, "source_policy", None)
     return (f"What are customers asking about {topic}?", "topic_fallback", None)
+
+
+def _representative_source_question(
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+    *,
+    documentation_terms: Sequence[str],
+) -> str:
+    if not any(_clean(row.get("support_ticket_cluster")) for row in rows):
+        return ""
+    if not any(
+        _source_type_key(row.get("source_type")) in _REPRESENTATIVE_LABEL_SOURCE_TYPES
+        for row in rows
+    ):
+        return ""
+    label = _safe_vocabulary_representative_label(
+        topic,
+        rows,
+        documentation_terms=documentation_terms,
+    )
+    if not label:
+        return ""
+    question = _normalize_question_text(f"What should I do about {label.lower()}")
+    return question if _usable_question(question) else ""
+
+
+def _safe_vocabulary_representative_label(
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+    *,
+    documentation_terms: Sequence[str],
+) -> str:
+    safe_tokens = _safe_representative_tokens(
+        (
+            *documentation_terms,
+            *(
+                _clean(row.get("safe_label_context"))
+                for row in rows
+                if _clean(row.get("safe_label_context"))
+            ),
+        )
+    )
+    if not safe_tokens:
+        return ""
+    topic_tokens = support_ticket_tokens(topic)
+    token_counts: dict[str, int] = {}
+    for row in rows:
+        text = str(row.get("text") or "")
+        for token in _question_gist_tokens(text):
+            if (
+                token not in safe_tokens
+                or token in topic_tokens
+                or _REDACTION_TOKEN_RE.fullmatch(token)
+            ):
+                continue
+            token_counts[token] = token_counts.get(token, 0) + 1
+    repeated_tokens = {
+        token: count
+        for token, count in token_counts.items()
+        if count >= 2
+    }
+    if len(repeated_tokens) < 2:
+        return ""
+    tokens = sorted(
+        repeated_tokens,
+        key=lambda token: (-repeated_tokens[token], safe_tokens[token][0], token),
+    )[:5]
+    return " ".join(safe_tokens[token][1] for token in tokens)
+
+
+def _safe_representative_tokens(
+    documentation_terms: Sequence[str],
+) -> dict[str, tuple[int, str]]:
+    ordered: dict[str, tuple[int, str]] = {}
+    for term in documentation_terms:
+        if _has_representative_label_pii(term):
+            continue
+        for token, display in _ordered_support_ticket_tokens(term):
+            if _REDACTION_TOKEN_RE.fullmatch(token):
+                continue
+            ordered.setdefault(token, (len(ordered), display))
+    return ordered
+
+
+def _ordered_support_ticket_tokens(value: Any) -> tuple[tuple[str, str], ...]:
+    tokens = support_ticket_tokens(value)
+    ordered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[a-z0-9]+", support_ticket_plain_text(value).lower()):
+        folded = support_ticket_tokens(raw)
+        for token in sorted(folded):
+            if token in tokens and token not in seen:
+                ordered.append((token, raw))
+                seen.add(token)
+    return tuple(ordered)
+
+
+def _has_representative_label_pii(value: Any) -> bool:
+    text = support_ticket_plain_text(value)
+    return bool(
+        _REPRESENTATIVE_EMAIL_RE.search(text)
+        or _REPRESENTATIVE_LONG_NUMBER_RE.search(text)
+    )
 
 
 def _rows_with_question_source_first(
@@ -2147,6 +2335,23 @@ def _term_mapping_impact_line(mapping: Mapping[str, Any]) -> str:
     if opportunity_score:
         parts.append(f"mapping score {opportunity_score}")
     return f"({'; '.join(parts)}.)"
+
+
+def _resolve_question_label(
+    topic: str,
+    rows: Sequence[Mapping[str, str]],
+    *,
+    max_evidence_per_item: int,
+    documentation_terms: Sequence[str],
+) -> tuple[str, str, Mapping[str, str] | None]:
+    if _has_mixed_evidence_scopes(rows):
+        return (
+            _MIXED_EVIDENCE_REVIEW_QUESTION,
+            "source_policy",
+            None,
+        )
+    display_rows = rows[:max_evidence_per_item]
+    return _question(topic, display_rows, documentation_terms)
 
 
 def _summary(
