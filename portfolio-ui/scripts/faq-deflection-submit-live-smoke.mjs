@@ -8,11 +8,17 @@ import submitHandler, {
 } from "../api/content-ops/deflection/submit.js";
 
 const SUPPORT_PLATFORMS = new Set(["zendesk", "intercom", "help_scout", "other"]);
+const IMPORTER_MODES = new Set(["csv", "full_thread"]);
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LOCAL_HOSTS = new Set(["localhost", "0.0.0.0", "::1"]);
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_FIXTURE_PATHNAME = `${BLOB_UPLOAD_PATH_PREFIX}live-smoke.csv`;
+const DEFAULT_FULL_THREAD_PATHNAME = `${BLOB_UPLOAD_PATH_PREFIX}zendesk-live-smoke.json`;
+const DEFAULT_ZENDESK_JSON_FIXTURE = new URL(
+  "../../tests/fixtures/zendesk_full_thread_seed_sample.json",
+  import.meta.url,
+);
 const SAMPLE_CSV = [
   "ticket_id,subject,message,resolution_text,pain_category",
   "ticket-1,Export reports,How do I export attribution reports?,Open Analytics and download the CSV.,exports",
@@ -32,6 +38,8 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
     blobPathname: clean(sourceEnv.ATLAS_DEFLECTION_BLOB_PATHNAME),
     blobToken: clean(sourceEnv.BLOB_READ_WRITE_TOKEN),
     csvFile: clean(sourceEnv.ATLAS_DEFLECTION_SUBMIT_CSV_FILE),
+    jsonFile: clean(sourceEnv.ATLAS_DEFLECTION_SUBMIT_JSON_FILE),
+    importerMode: clean(sourceEnv.ATLAS_DEFLECTION_IMPORTER_MODE) || "csv",
     supportPlatform: clean(sourceEnv.ATLAS_DEFLECTION_SUPPORT_PLATFORM) || "zendesk",
     companyName: clean(sourceEnv.ATLAS_DEFLECTION_COMPANY_NAME) || "Atlas Smoke Co.",
     contactEmail: clean(sourceEnv.ATLAS_DEFLECTION_CONTACT_EMAIL) || "smoke@example.com",
@@ -64,11 +72,13 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
 
   options.timeoutMs = Number.parseInt(String(options.timeoutMs), 10);
   options.limit = String(options.limit);
+  options.importerMode = clean(options.importerMode) || "csv";
   return options;
 }
 
 function validationErrors(options) {
   const errors = [];
+  const importerMode = clean(options.importerMode) || "csv";
   if (!clean(options.baseUrl) || !URL.canParse(options.baseUrl)) {
     errors.push("ATLAS_API_BASE_URL or --base-url must be an absolute HTTPS URL");
   } else {
@@ -84,6 +94,9 @@ function validationErrors(options) {
   }
   if (!SUPPORT_PLATFORMS.has(clean(options.supportPlatform))) {
     errors.push("--support-platform must be one of: help_scout, intercom, other, zendesk");
+  }
+  if (!IMPORTER_MODES.has(importerMode)) {
+    errors.push("--importer-mode must be one of: csv, full_thread");
   }
   const limit = Number.parseInt(clean(options.limit), 10);
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
@@ -101,14 +114,29 @@ function validationErrors(options) {
   if (options.routeHandler && clean(options.csvFile)) {
     errors.push("--route-handler cannot use --csv-file");
   }
-  if (clean(options.blobPathname) && clean(options.csvFile)) {
-    errors.push("use either --blob-pathname or --csv-file, not both");
+  if (options.routeHandler && clean(options.jsonFile)) {
+    errors.push("--route-handler cannot use --json-file");
   }
-  if (!clean(options.blobPathname) && !clean(options.csvFile)) {
-    return errors;
+  if (clean(options.blobPathname) && (clean(options.csvFile) || clean(options.jsonFile))) {
+    errors.push("use either --blob-pathname or a local fixture file, not both");
+  }
+  if (importerMode === "full_thread" && clean(options.csvFile)) {
+    errors.push("--csv-file cannot be used with --importer-mode full_thread");
+  }
+  if (importerMode === "csv" && clean(options.jsonFile)) {
+    errors.push("--json-file requires --importer-mode full_thread");
   }
   if (clean(options.blobPathname) && !options.blobPathname.startsWith(BLOB_UPLOAD_PATH_PREFIX)) {
     errors.push("--blob-pathname must stay under faq-deflection/uploads/");
+  }
+  if (clean(options.blobPathname)) {
+    const lowerPathname = options.blobPathname.toLowerCase();
+    if (importerMode === "full_thread" && !lowerPathname.endsWith(".json")) {
+      errors.push("--blob-pathname must end in .json with --importer-mode full_thread");
+    }
+    if (importerMode === "csv" && !lowerPathname.endsWith(".csv")) {
+      errors.push("--blob-pathname must end in .csv with --importer-mode csv");
+    }
   }
   return errors;
 }
@@ -128,6 +156,21 @@ async function localCsvBlobReader(csvFile) {
   };
 }
 
+async function localJsonBlobReader(jsonFile) {
+  const body = await readFile(jsonFile || DEFAULT_ZENDESK_JSON_FIXTURE);
+  if (body.length > MAX_BLOB_CSV_BYTES) {
+    return { statusCode: 200, stream: new Blob([body]).stream(), blob: { size: body.length } };
+  }
+  return {
+    statusCode: 200,
+    stream: new Blob([body], { type: "application/json" }).stream(),
+    blob: {
+      size: body.length,
+      contentType: "application/json",
+    },
+  };
+}
+
 function resultPayload(result, options, sourceMode) {
   return {
     ok: result.ok,
@@ -143,13 +186,19 @@ function resultPayload(result, options, sourceMode) {
 }
 
 function routePayloadFromOptions(options) {
-  return {
+  const payload = {
     blob_pathname: clean(options.blobPathname),
-    support_platform: clean(options.supportPlatform),
+    support_platform: clean(options.importerMode) === "full_thread"
+      ? "zendesk"
+      : clean(options.supportPlatform),
     company_name: clean(options.companyName),
     contact_email: clean(options.contactEmail),
     limit: clean(options.limit),
   };
+  if (clean(options.importerMode) === "full_thread") {
+    payload.importer_mode = "full_thread";
+  }
+  return payload;
 }
 
 function mockRouteResponse() {
@@ -249,11 +298,14 @@ async function runSubmitSmoke(options) {
     return { ok: false, status: "preflight_failed", errors };
   }
 
+  const isFullThread = clean(options.importerMode) === "full_thread";
   const sourceMode = options.routeHandler
     ? "portfolio_submit_route"
     : clean(options.blobPathname)
       ? "private_blob"
-      : "local_csv_fixture";
+      : isFullThread
+        ? "local_zendesk_full_thread_fixture"
+        : "local_csv_fixture";
   if (options.preflightOnly) {
     return { ok: true, status: "preflight_ok", source_mode: sourceMode };
   }
@@ -262,13 +314,18 @@ async function runSubmitSmoke(options) {
   }
 
   const payload = {
-    blob_pathname: clean(options.blobPathname) || DEFAULT_FIXTURE_PATHNAME,
-    support_platform: clean(options.supportPlatform),
+    blob_pathname: clean(options.blobPathname) ||
+      (isFullThread ? DEFAULT_FULL_THREAD_PATHNAME : DEFAULT_FIXTURE_PATHNAME),
+    support_platform: isFullThread ? "zendesk" : clean(options.supportPlatform),
     company_name: clean(options.companyName),
     contact_email: clean(options.contactEmail),
     limit: clean(options.limit),
   };
-  const usesLocalFixture = sourceMode === "local_csv_fixture";
+  if (isFullThread) {
+    payload.importer_mode = "full_thread";
+  }
+  const usesLocalFixture =
+    sourceMode === "local_csv_fixture" || sourceMode === "local_zendesk_full_thread_fixture";
   const result = await submitPrivateBlob({
     config: {
       baseUrl: clean(options.baseUrl),
@@ -279,7 +336,11 @@ async function runSubmitSmoke(options) {
     blobToken: usesLocalFixture ? "local-fixture" : clean(options.blobToken),
     payload,
     getBlobImpl: usesLocalFixture
-      ? async () => localCsvBlobReader(clean(options.csvFile))
+      ? async () => (
+          isFullThread
+            ? localJsonBlobReader(clean(options.jsonFile))
+            : localCsvBlobReader(clean(options.csvFile))
+        )
       : undefined,
     deleteBlobImpl: usesLocalFixture ? async () => {} : undefined,
   });

@@ -458,6 +458,10 @@ await test("submit live smoke exercises the production private blob helper", asy
   assert.match(submitSmokeSource, /submitPrivateBlob/);
   assert.match(submitSmokeSource, /submitHandler/);
   assert.match(submitSmokeSource, /local_csv_fixture/);
+  assert.match(submitSmokeSource, /local_zendesk_full_thread_fixture/);
+  assert.match(submitSmokeSource, /ATLAS_DEFLECTION_IMPORTER_MODE/);
+  assert.match(submitSmokeSource, /ATLAS_DEFLECTION_SUBMIT_JSON_FILE/);
+  assert.match(submitSmokeSource, /zendesk_full_thread_seed_sample\.json/);
   assert.match(submitSmokeSource, /portfolio_submit_route/);
   assert.doesNotMatch(submitSmokeSource, /ATLAS_B2B_JWT[^\\n]*console\\.log/);
   assert.deepEqual(
@@ -488,14 +492,84 @@ await test("submit live smoke exercises the production private blob helper", asy
       baseUrl: ENV.ATLAS_API_BASE_URL,
       token: ENV.ATLAS_B2B_JWT,
       accountId: ACCOUNT_ID,
+      blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      jsonFile: "zendesk-thread.json",
+      importerMode: "full_thread",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+      routeHandler: true,
+    }).includes("--route-handler cannot use --json-file"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      csvFile: "tickets.csv",
+      importerMode: "full_thread",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+    }).includes("--csv-file cannot be used with --importer-mode full_thread"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
       blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
       blobToken: ENV.BLOB_READ_WRITE_TOKEN,
       csvFile: "tickets.csv",
+      importerMode: "csv",
       supportPlatform: "zendesk",
       limit: "1000",
       timeoutMs: 1000,
       routeHandler: true,
     }).includes("--route-handler cannot use --csv-file"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}tickets.csv`,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      importerMode: "full_thread",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+    }).includes("--blob-pathname must end in .json with --importer-mode full_thread"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      importerMode: "csv",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+    }).includes("--blob-pathname must end in .csv with --importer-mode csv"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      importerMode: "xml",
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+    }).includes("--importer-mode must be one of: csv, full_thread"),
     true,
   );
 
@@ -509,6 +583,20 @@ await test("submit live smoke exercises the production private blob helper", asy
     status: "preflight_ok",
     source_mode: "local_csv_fixture",
   });
+  const fullThreadOptions = parseSubmitSmokeArgs([
+    "--preflight-only",
+    "--importer-mode",
+    "full_thread",
+  ], {
+    ATLAS_API_BASE_URL: ENV.ATLAS_API_BASE_URL,
+    ATLAS_B2B_JWT: ENV.ATLAS_B2B_JWT,
+    ATLAS_ACCOUNT_ID: ACCOUNT_ID,
+  });
+  assert.deepEqual(await runSubmitSmoke(fullThreadOptions), {
+    ok: true,
+    status: "preflight_ok",
+    source_mode: "local_zendesk_full_thread_fixture",
+  });
 
   const routeOptions = parseSubmitSmokeArgs([
     "--route-handler",
@@ -519,6 +607,21 @@ await test("submit live smoke exercises the production private blob helper", asy
     ...ENV,
   });
   assert.deepEqual(await runSubmitSmoke(routeOptions), {
+    ok: true,
+    status: "preflight_ok",
+    source_mode: "portfolio_submit_route",
+  });
+  const fullThreadRouteOptions = parseSubmitSmokeArgs([
+    "--route-handler",
+    "--preflight-only",
+    "--importer-mode",
+    "full_thread",
+    "--blob-pathname",
+    `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+  ], {
+    ...ENV,
+  });
+  assert.deepEqual(await runSubmitSmoke(fullThreadRouteOptions), {
     ok: true,
     status: "preflight_ok",
     source_mode: "portfolio_submit_route",
@@ -568,6 +671,99 @@ await test("submit live smoke route-handler mode omits buyer account header", as
     atlas_status: undefined,
     base_host: "atlas.example.com",
   });
+});
+
+await test("submit live smoke route-handler mode carries full-thread importer mode", async () => {
+  const options = parseSubmitSmokeArgs([
+    "--route-handler",
+    "--importer-mode",
+    "full_thread",
+    "--blob-pathname",
+    `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+    "--support-platform",
+    "intercom",
+  ], {
+    ...ENV,
+  });
+  const result = await runRouteHandlerSmoke(options, async (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.headers["content-type"], "application/json");
+    assert.equal("x-atlas-account-id" in req.headers, false);
+    assert.deepEqual(JSON.parse(req.body), {
+      blob_pathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      support_platform: "zendesk",
+      company_name: "Atlas Smoke Co.",
+      contact_email: "smoke@example.com",
+      limit: "1000",
+      importer_mode: "full_thread",
+    });
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({
+      ok: true,
+      request_id: "content-ops-json123",
+      account_id: ACCOUNT_ID,
+      result_path: "/services/faq-deflection/results/content-ops-json123",
+    }));
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    source_mode: "portfolio_submit_route",
+    statusCode: 200,
+    request_id: "content-ops-json123",
+    account_id: ACCOUNT_ID,
+    result_path: "/services/faq-deflection/results/content-ops-json123",
+    error: undefined,
+    atlas_status: undefined,
+    base_host: "atlas.example.com",
+  });
+});
+
+await test("submit live smoke full-thread local fixture forwards JSON submit", async () => {
+  const previousFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    assert.equal(url.endsWith(INSPECT_PATH), false);
+    assert.equal(url.endsWith(SUBMIT_PATH), true);
+    assert.equal(options.body instanceof FormData, true);
+    assert.equal(options.body.get("support_platform"), "zendesk");
+    assert.equal(options.body.get("importer_mode"), "full_thread");
+    assert.equal(options.body.get("csv_file"), null);
+    const jsonFile = options.body.get("json_file");
+    assert.equal(await jsonFile.text().then((text) => text.includes("Internal note")), true);
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({ request_id: "content-ops-localjson123" });
+      },
+    };
+  };
+  try {
+    const options = parseSubmitSmokeArgs([
+      "--importer-mode",
+      "full_thread",
+    ], {
+      ATLAS_API_BASE_URL: ENV.ATLAS_API_BASE_URL,
+      ATLAS_B2B_JWT: ENV.ATLAS_B2B_JWT,
+      ATLAS_ACCOUNT_ID: ACCOUNT_ID,
+    });
+    assert.deepEqual(await runSubmitSmoke(options), {
+      ok: true,
+      source_mode: "local_zendesk_full_thread_fixture",
+      statusCode: 200,
+      request_id: "content-ops-localjson123",
+      account_id: ACCOUNT_ID,
+      result_path: "/services/faq-deflection/results/content-ops-localjson123",
+      error: undefined,
+      atlas_status: undefined,
+      base_host: "atlas.example.com",
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+  assert.equal(calls.length, 1);
 });
 
 await test("portfolio submit endpoint rejects direct multipart before ATLAS", async () => {
