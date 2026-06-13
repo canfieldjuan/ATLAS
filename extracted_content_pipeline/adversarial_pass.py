@@ -132,6 +132,12 @@ def corroborated_categories_across(
     once -- using only substantiated findings, the same filter applied when
     findings are folded into the verdict. Counting is value-based, so a category
     decoded as a plain string in one pass corroborates the enum member in another.
+
+    Reused ``pass_id`` values are treated as duplicate submissions of the same
+    pass, with first occurrence winning. Later rows with the same ID are skipped
+    entirely for corroboration, including any categories that differ from the
+    first row. This intentionally under-counts malformed duplicate-ID input
+    rather than inflating an advisory signal.
     """
 
     if min_passes < 1:

@@ -319,3 +319,50 @@ def test_corroborated_across_dedupes_by_pass_id() -> None:
     # A genuinely distinct pass id does corroborate.
     other = AdversarialPass(pass_id="b", findings=(_finding(AdversarialFindingCategory.OVERCLAIM),))
     assert corroborated_categories_across((one, other)) == frozenset({AdversarialFindingCategory.OVERCLAIM})
+
+
+def test_corroborated_across_reused_pass_id_first_row_wins() -> None:
+    # Issue #1493: malformed reused IDs with divergent findings under-count
+    # corroboration. Later rows for the same pass_id do not add categories.
+    first = AdversarialPass(
+        pass_id="a",
+        findings=(_finding(AdversarialFindingCategory.OVERCLAIM),),
+    )
+    divergent_retry = AdversarialPass(
+        pass_id="a",
+        findings=(_finding(AdversarialFindingCategory.VOICE_SLIP),),
+    )
+    independent = AdversarialPass(
+        pass_id="b",
+        findings=(_finding(AdversarialFindingCategory.VOICE_SLIP),),
+    )
+
+    assert (
+        corroborated_categories_across((first, divergent_retry, independent))
+        == frozenset()
+    )
+
+
+def test_corroborated_across_blank_pass_id_dedupes_direct_callers() -> None:
+    # MCP decode assigns fallback IDs, but direct host callers can construct
+    # blank IDs. Blank still behaves like any other repeated identity.
+    first_blank = AdversarialPass(
+        pass_id="",
+        findings=(_finding(AdversarialFindingCategory.OVERCLAIM),),
+    )
+    duplicate_blank = AdversarialPass(
+        pass_id="",
+        findings=(_finding(AdversarialFindingCategory.OVERCLAIM),),
+    )
+    distinct = AdversarialPass(
+        pass_id="distinct",
+        findings=(_finding(AdversarialFindingCategory.OVERCLAIM),),
+    )
+
+    assert (
+        corroborated_categories_across((first_blank, duplicate_blank))
+        == frozenset()
+    )
+    assert corroborated_categories_across(
+        (first_blank, duplicate_blank, distinct)
+    ) == frozenset({AdversarialFindingCategory.OVERCLAIM})
