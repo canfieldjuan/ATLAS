@@ -1,0 +1,45 @@
+name: Atlas Migrations Runner Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_migrations_runner_checks.yml"
+      - "atlas_brain/storage/migrations/**"
+      - "tests/test_migrations_runner.py"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_migrations_runner_checks.yml"
+      - "atlas_brain/storage/migrations/**"
+      - "tests/test_migrations_runner.py"
+
+jobs:
+  atlas-migrations-runner-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install asyncpg pytest pytest-asyncio pydantic pydantic-settings
+
+      # No database service: test_migrations_runner.py uses a fake migration pool
+      # and pure-Path prefix checks. A real-DB apply check for the deflection
+      # migrations (328/332/336) lives on the #1462 reconciliation slice, where a
+      # fresh DB can apply that chain without the migration set's out-of-band
+      # product_metadata dependency (referenced by 076+ but never created by a
+      # migration, so a full fresh apply is not viable here).
+      - name: Run migrations runner tests
+        run: |
+          python -m pytest \
+            tests/test_migrations_runner.py \
+            -q
