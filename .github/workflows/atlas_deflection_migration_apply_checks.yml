@@ -1,0 +1,59 @@
+name: Atlas Deflection Migration Apply Checks
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atlas_deflection_migration_apply_checks.yml"
+      - "tests/test_deflection_migrations_apply.py"
+      - "atlas_brain/storage/migrations/328_content_ops_deflection_reports.sql"
+      - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
+      - "atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/atlas_deflection_migration_apply_checks.yml"
+      - "tests/test_deflection_migrations_apply.py"
+      - "atlas_brain/storage/migrations/328_content_ops_deflection_reports.sql"
+      - "atlas_brain/storage/migrations/332_content_ops_deflection_report_deliveries.sql"
+      - "atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql"
+
+jobs:
+  atlas-deflection-migration-apply-checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atlas
+          POSTGRES_PASSWORD: atlas
+          POSTGRES_DB: atlas_migration_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas -d atlas_migration_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install asyncpg pytest pytest-asyncio
+
+      - name: Apply the deflection migration chain to a fresh database
+        run: |
+          python -m pytest \
+            tests/test_deflection_migrations_apply.py \
+            -q
