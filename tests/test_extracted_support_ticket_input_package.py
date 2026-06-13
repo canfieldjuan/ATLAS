@@ -1420,6 +1420,87 @@ def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes()
     assert "A member of the support team will get back to you" not in str(by_id["41"])
 
 
+def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-private-first",
+                "subject": "Internal migration workaround",
+                "description": (
+                    "Internal note: explain the real workaround only to the owner."
+                ),
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": False,
+                    "plain_body": (
+                        "Internal note: explain the real workaround only to the owner."
+                    ),
+                },
+                {
+                    "author_id": "requester-1",
+                    "public": True,
+                    "plain_body": "What permission do I need for account exports?",
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    assert result.rows == [{
+        "ticket_id": "zd-private-first",
+        "source_id": "zd-private-first",
+        "source_type": "support_ticket",
+        "subject": "Internal migration workaround",
+        "description": "What permission do I need for account exports?",
+    }]
+    package = build_support_ticket_input_package(result.rows)
+    assert "Internal note" not in json.dumps(package.as_dict())
+    assert package.inputs["faq_questions"] == [
+        "What permission do I need for account exports?"
+    ]
+
+
+def test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate() -> None:
+    result = rows_from_zendesk_full_thread({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-boilerplate-answer",
+                "subject": "How do I export invoices?",
+                "description": "Where do invoice exports live?",
+                "requester_id": "requester-1",
+            },
+            "comments": [
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": (
+                        "Thanks for reaching out. Open Billing > Invoices, "
+                        "then choose Export CSV."
+                    ),
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": (
+                        "A member of the support team will get back to you within "
+                        "the next 48 hours."
+                    ),
+                },
+            ],
+        }],
+    })
+
+    assert result.warnings == ()
+    row = result.rows[0]
+    assert row["resolution_text"] == (
+        "Thanks for reaching out. Open Billing > Invoices, then choose Export CSV."
+    )
+    assert "A member of the support team" not in str(row)
+
+
 def test_zendesk_full_thread_rows_feed_status_csat_and_resolution_package() -> None:
     result = load_zendesk_full_thread_rows_from_json_bytes(
         ZENDESK_THREAD_SAMPLE.read_bytes()

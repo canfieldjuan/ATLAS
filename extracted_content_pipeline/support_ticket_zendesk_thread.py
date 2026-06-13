@@ -12,14 +12,24 @@ from .support_ticket_clustering import support_ticket_plain_text
 
 
 _WHITESPACE_RE = re.compile(r"\s+")
-_AUTO_ACK_RE = re.compile(
-    r"\b("
-    r"a member of (the )?support team will get back to you|"
-    r"we (received|got) your (ticket|request)|"
-    r"thanks? for (contacting|reaching out)|"
-    r"we'?ll get back to you"
-    r")\b",
-    re.IGNORECASE,
+_AUTO_ACK_PATTERNS = (
+    re.compile(
+        r"^a member of (the )?support team will get back to you"
+        r"(?: within [^.]+)?[.!]?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^we (received|got) your (ticket|request)"
+        r"(?: and (will|we'?ll) get back to you(?: soon| within [^.]+)?)?[.!]?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(thanks?|thank you) for (contacting|reaching out)"
+        r"(?: to support)?[.!;]?"
+        r"(?: we (received|got) your (ticket|request)[.!]?)?"
+        r"(?: we'?ll get back to you(?: soon| within [^.]+)?[.!]?)?$",
+        re.IGNORECASE,
+    ),
 )
 _UNRATED_ZENDESK_SCORES = frozenset({"unoffered", "offered"})
 
@@ -110,7 +120,6 @@ def _row_from_entry(
     customer_parts: list[str] = []
     resolution_parts: list[str] = []
     warnings: list[dict[str, Any]] = []
-    _append_unique(customer_parts, _plain(ticket.get("description")))
     comments = entry.get("comments")
     if comments in (None, "", [], {}):
         comments = ()
@@ -126,6 +135,14 @@ def _row_from_entry(
             "message": "Ignored Zendesk comments because they were not a list.",
         })
         comments = ()
+    private_comment_keys = {
+        _text_key(_comment_text(comment))
+        for comment in comments
+        if isinstance(comment, Mapping) and comment.get("public") is False
+    }
+    description = _plain(ticket.get("description"))
+    if description and _text_key(description) not in private_comment_keys:
+        _append_unique(customer_parts, description)
     for comment in comments:
         if not isinstance(comment, Mapping):
             warnings.append({
@@ -203,11 +220,16 @@ def _append_unique(parts: list[str], value: str) -> None:
 
 
 def _looks_like_auto_ack(value: str) -> bool:
-    return bool(_AUTO_ACK_RE.search(_plain(value)))
+    text = _plain(value)
+    return any(pattern.fullmatch(text) for pattern in _AUTO_ACK_PATTERNS)
 
 
 def _plain(value: Any) -> str:
     return _WHITESPACE_RE.sub(" ", support_ticket_plain_text(_clean(value))).strip()
+
+
+def _text_key(value: Any) -> str:
+    return _plain(value).lower()
 
 
 def _id_text(value: Any) -> str:

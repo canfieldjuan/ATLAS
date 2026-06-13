@@ -90,8 +90,9 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest tests/test_extracted_support_ticket_input_package.py tests/test_extracted_content_deflection_submit.py -q` - passed, 98 tests.
-- Local full-artifact proof against `/home/juan-canfield/Downloads/zendesk_trial_full_thread_seed_20260613_with_csat.json` - passed: 49 rows, 0 warnings, status summary `{'resolved': 29, 'open': 20}`, CSAT `24 good / 5 bad`, no private-note leak, no auto-ack leak.
+- `python -m pytest tests/test_extracted_support_ticket_input_package.py::test_zendesk_full_thread_rows_suppress_private_first_description tests/test_extracted_support_ticket_input_package.py::test_zendesk_full_thread_rows_keep_substantive_agent_reply_after_boilerplate tests/test_extracted_support_ticket_input_package.py::test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes tests/test_extracted_content_deflection_submit.py::test_deflection_submit_accepts_zendesk_full_thread_blob -q` - passed, 4 tests.
+- `python -m pytest tests/test_extracted_support_ticket_input_package.py tests/test_extracted_content_deflection_submit.py -q` - passed, 100 tests.
+- Local full-artifact proof against `/home/juan-canfield/Downloads/zendesk_trial_full_thread_seed_20260613_with_csat.json` - passed: 49 rows, 0 warnings, resolution evidence count 38, status summary `{'resolved': 29, 'open': 20}`, CSAT `24 good / 5 bad`, no private-note leak, no auto-ack leak.
 - `scripts/validate_extracted_content_pipeline.sh` via bash - passed.
 - `python extracted/_shared/scripts/forbid_atlas_reasoning_imports.py extracted_content_pipeline` - passed.
 - `python scripts/audit_extracted_standalone.py --fail-on-debt` - passed.
@@ -105,9 +106,9 @@ Parked hardening: none.
 |---|---:|
 | `extracted_content_pipeline/api/control_surfaces.py` | 96 |
 | `extracted_content_pipeline/manifest.json` | 3 |
-| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 225 |
-| `plans/PR-Deflection-Zendesk-Full-Thread-Importer.md` | 113 |
+| `extracted_content_pipeline/support_ticket_zendesk_thread.py` | 247 |
+| `plans/PR-Deflection-Zendesk-Full-Thread-Importer.md` | 114 |
 | `tests/fixtures/zendesk_full_thread_seed_sample.json` | 133 |
 | `tests/test_extracted_content_deflection_submit.py` | 112 |
-| `tests/test_extracted_support_ticket_input_package.py` | 101 |
-| **Total** | **783** |
+| `tests/test_extracted_support_ticket_input_package.py` | 182 |
+| **Total** | **887** |
