@@ -280,6 +280,71 @@ async def test_delivery_worker_claim_query_retries_stale_sending_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_worker_does_not_double_send_on_reclaim_after_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #1461: a crash between send() and _mark_delivered leaves the row
+    # 'sending'; the claim re-tries stale 'sending' rows, so the worker calls
+    # send() again. A deterministic idempotency key keeps the resend deduped.
+    class _IdempotentResendSender:
+        """Resend-style sender: identical Idempotency-Key values are deduped."""
+
+        def __init__(self) -> None:
+            self.calls: list[SendRequest] = []
+            self.delivered: dict[str, str] = {}
+
+        async def send(self, request: SendRequest) -> SendResult:
+            self.calls.append(request)
+            key = request.idempotency_key or ""
+            if key in self.delivered:
+                message_id = self.delivered[key]
+                return SendResult(
+                    provider="resend",
+                    message_id=message_id,
+                    raw={"id": message_id, "deduped": True},
+                )
+            message_id = f"email-{len(self.delivered) + 1}"
+            self.delivered[key] = message_id
+            return SendResult(
+                provider="resend", message_id=message_id, raw={"id": message_id}
+            )
+
+    _install_fake_pdf_renderer(monkeypatch, lambda _artifact: b"%PDF-fake-bytes")
+    sender = _IdempotentResendSender()
+    row = _row()
+
+    # Run 1: the delivered-mark UPDATE raises, so the process dies before
+    # finalizing and the row stays 'sending'.
+    class _CrashOnMarkPool(_Pool):
+        async def execute(self, query: str, *args: Any) -> str:
+            raise RuntimeError("crash between send and mark")
+
+    crash_pool = _CrashOnMarkPool([row])
+    with pytest.raises(RuntimeError, match="crash between send and mark"):
+        await send_pending_deflection_report_deliveries(
+            crash_pool, sender=sender, config=_config()
+        )
+    assert len(sender.calls) == 1
+    assert len(sender.delivered) == 1  # one real email so far
+
+    # Run 2: the claim re-tries the still-'sending' row; the resend carries the
+    # same deterministic key, so Resend dedupes it and no second email is sent.
+    reclaim_pool = _Pool([row])
+    summary = await send_pending_deflection_report_deliveries(
+        reclaim_pool, sender=sender, config=_config()
+    )
+
+    assert summary.sent == 1
+    assert len(sender.calls) == 2
+    assert sender.calls[0].idempotency_key == sender.calls[1].idempotency_key
+    assert (
+        sender.calls[1].idempotency_key
+        == "deflection-report:acct-123:content-ops-abc123"
+    )
+    assert len(sender.delivered) == 1  # still one unique email -- no duplicate
+
+
+@pytest.mark.asyncio
 async def test_delivery_worker_marks_missing_email_failed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

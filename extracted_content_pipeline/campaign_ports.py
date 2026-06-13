@@ -140,6 +140,11 @@ class SendRequest:
     tags: Sequence[Mapping[str, str]] = field(default_factory=tuple)
     attachments: Sequence[Mapping[str, str]] = field(default_factory=tuple)
     metadata: JsonDict = field(default_factory=dict)
+    # Optional provider idempotency key. When set, an idempotency-capable sender
+    # (e.g. Resend) forwards it so a retried send with the same key is deduped
+    # server-side rather than producing a duplicate email. Backward-compatible:
+    # senders that do not support idempotency ignore it.
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)

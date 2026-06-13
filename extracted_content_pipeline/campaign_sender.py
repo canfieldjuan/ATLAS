@@ -79,6 +79,11 @@ class ResendCampaignSender:
             "Authorization": f"Bearer {self._config.api_key}",
             "Content-Type": "application/json",
         }
+        # Resend dedupes identical Idempotency-Key values server-side for 24h,
+        # so a retried send (e.g. a re-claimed delivery row) does not produce a
+        # second email.
+        if request.idempotency_key:
+            headers["Idempotency-Key"] = request.idempotency_key
         if self._http_client is not None:
             response = await self._http_client.post(
                 self._config.api_url,

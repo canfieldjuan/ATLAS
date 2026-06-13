@@ -112,6 +112,32 @@ async def test_resend_sender_builds_payload_and_returns_message_id():
 
 
 @pytest.mark.asyncio
+async def test_resend_sender_forwards_idempotency_key_as_http_header():
+    client = _HTTPClient(_Response({"id": "resend-1"}))
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
+
+    await sender.send(_request(idempotency_key="deflection-report:acct-1:req-1"))
+
+    assert client.calls[0]["headers"] == {
+        "Authorization": "Bearer re_key",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "deflection-report:acct-1:req-1",
+    }
+    # The idempotency key is an HTTP request header, not an email payload header.
+    assert "Idempotency-Key" not in client.calls[0]["json"].get("headers", {})
+
+
+@pytest.mark.asyncio
+async def test_resend_sender_omits_idempotency_header_when_unset():
+    client = _HTTPClient(_Response({"id": "resend-1"}))
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
+
+    await sender.send(_request())
+
+    assert "Idempotency-Key" not in client.calls[0]["headers"]
+
+
+@pytest.mark.asyncio
 async def test_resend_sender_includes_attachments_when_requested():
     client = _HTTPClient(_Response({"id": "resend-1"}))
     sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=client)
