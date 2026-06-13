@@ -34,7 +34,25 @@ Out of scope: making the full migration set fresh-appliable (the missing
 `product_metadata` migration) -- separate migration-debt issue; any production
 code change.
 
-- Reviewer rules triggered: R2, R4, R12.
+### Review Contract
+
+- Acceptance criteria:
+  - [ ] The deflection chain (328 -> 332 -> 336) applies in order to a fresh Postgres.
+  - [ ] All three `content_ops_deflection*` tables exist after apply.
+  - [ ] `content_ops_deflection_paid_reconciliation` has its expected columns.
+  - [ ] A second insert on `(account_id, request_id, stripe_session_id)` dedupes
+        (the `ON CONFLICT DO NOTHING` guarantee `record_paid_report_missing` relies on).
+  - [ ] The test skips cleanly when `ATLAS_MIGRATION_TEST_DATABASE_URL` is unset, so
+        local unit runs are unaffected.
+- Affected surfaces: one env-guarded test (`tests/test_deflection_migrations_apply.py`)
+  and one CI workflow (`.github/workflows/atlas_deflection_migration_apply_checks.yml`,
+  Postgres service).
+  No production code path changes.
+- Risk areas: CI-only behavior; the test must skip without the env var; the job stays
+  dependency-light (asyncpg only, resolves the migrations dir by path with no
+  `atlas_brain` import).
+- Reviewer rules triggered: R2 (failure-branch / fixtures), R4, R12 (CI runs the
+  enrolled test).
 
 ### Files touched
 
