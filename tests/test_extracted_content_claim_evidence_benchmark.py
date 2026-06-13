@@ -17,6 +17,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     StabilityScore,
     build_claim_evidence_prompt_contract,
     build_claim_evidence_result_artifact,
+    claim_evidence_result_artifact_files,
     claim_evidence_response_json_schema,
     evaluate_thresholds,
     intra_model_stability,
@@ -925,6 +926,68 @@ def test_result_writeup_fails_closed_on_malformed_renderer_input() -> None:
     assert "artifact must be ClaimEvidenceResultArtifact" in markdown
     assert "No model scores." in markdown
     assert "No failure cases." in markdown
+
+
+def test_result_artifact_files_bundle_json_and_markdown_outputs() -> None:
+    triples = (
+        _triple("easy", True, EASY),
+        _triple("hard", False, HARD),
+    )
+    claude_run = _model_run(
+        "claude",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    gpt_run = _model_run(
+        "gpt",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    artifact = build_claim_evidence_result_artifact(
+        triples,
+        (gpt_run, claude_run),
+        stability_runs_by_model_id={
+            "gpt": (gpt_run, gpt_run),
+            "claude": (claude_run, claude_run),
+        },
+        thresholds=BenchmarkThresholds(
+            easy_accuracy_min=1.0,
+            hard_accuracy_min=1.0,
+            inter_model_agreement_min=1.0,
+            intra_model_stability_min=1.0,
+            high_confidence_accuracy_min=0.90,
+        ),
+    )
+
+    files = claim_evidence_result_artifact_files(artifact)
+
+    assert [file.path for file in files] == [
+        "claim_evidence_result.json",
+        "claim_evidence_result.md",
+    ]
+    assert [file.content_type for file in files] == [
+        "application/json",
+        "text/markdown",
+    ]
+    assert files[0].content.endswith("\n")
+    payload = json.loads(files[0].content)
+    assert payload["go_no_go"] == "go"
+    assert payload["ok"] is True
+    assert payload["model_scores"][0]["model_id"] == "claude"
+    assert files[1].content == render_claim_evidence_result_markdown(artifact)
+    assert "- Go/no-go: GO" in files[1].content
+
+
+def test_result_artifact_files_fail_closed_on_malformed_input() -> None:
+    files = claim_evidence_result_artifact_files({"not": "an artifact"})
+
+    payload = json.loads(files[0].content)
+    assert payload["go_no_go"] == "no_go"
+    assert payload["ok"] is False
+    assert payload["errors"] == ["artifact must be ClaimEvidenceResultArtifact"]
+    assert payload["verdict"]["failure_reasons"] == [
+        "artifact must be ClaimEvidenceResultArtifact"
+    ]
+    assert "- Go/no-go: NO_GO" in files[1].content
+    assert "artifact must be ClaimEvidenceResultArtifact" in files[1].content
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:

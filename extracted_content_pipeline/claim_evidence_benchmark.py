@@ -416,17 +416,44 @@ class ClaimEvidenceResultArtifact:
         return payload
 
 
+@dataclass(frozen=True)
+class ClaimEvidenceResultFile:
+    """One deterministic operator-facing benchmark result file."""
+
+    path: str
+    content_type: str
+    content: str
+
+
+def claim_evidence_result_artifact_files(
+    artifact: object,
+) -> tuple[ClaimEvidenceResultFile, ...]:
+    """Return stable JSON + Markdown result files for an existing artifact."""
+
+    typed_artifact = _coerce_result_artifact(artifact)
+    json_payload = json.dumps(
+        typed_artifact.as_mapping(),
+        indent=2,
+        sort_keys=True,
+    )
+    return (
+        ClaimEvidenceResultFile(
+            path="claim_evidence_result.json",
+            content_type="application/json",
+            content=json_payload + "\n",
+        ),
+        ClaimEvidenceResultFile(
+            path="claim_evidence_result.md",
+            content_type="text/markdown",
+            content=render_claim_evidence_result_markdown(typed_artifact),
+        ),
+    )
+
+
 def render_claim_evidence_result_markdown(artifact: object) -> str:
     """Render a benchmark result artifact as an operator-facing Markdown report."""
 
-    typed_artifact = (
-        artifact
-        if isinstance(artifact, ClaimEvidenceResultArtifact)
-        else _failed_result_artifact(
-            DEFAULT_THRESHOLDS,
-            ("artifact must be ClaimEvidenceResultArtifact",),
-        )
-    )
+    typed_artifact = _coerce_result_artifact(artifact)
     lines = [
         "# Claim Evidence Benchmark Result",
         "",
@@ -537,6 +564,15 @@ def render_claim_evidence_result_markdown(artifact: object) -> str:
     lines.extend(("", "## Failure Cases", ""))
     lines.extend(_failure_case_table(typed_artifact.failure_cases))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _coerce_result_artifact(artifact: object) -> ClaimEvidenceResultArtifact:
+    if isinstance(artifact, ClaimEvidenceResultArtifact):
+        return artifact
+    return _failed_result_artifact(
+        DEFAULT_THRESHOLDS,
+        ("artifact must be ClaimEvidenceResultArtifact",),
+    )
 
 
 @dataclass(frozen=True)
