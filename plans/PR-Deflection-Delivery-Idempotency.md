@@ -34,7 +34,9 @@ Slice phase: Production hardening
 Out of scope: the billing 409 retry-storm (#1462, separate slice); any schema /
 migration change; the SES sender.
 
-- Reviewer rules triggered: R1, R2, R10.
+- Reviewer rules triggered: R1, R2, R6, R8, R10. (R6 error-handling/observability
+  and R8 concurrency/idempotency: this is a retry/idempotency slice that changes
+  how a provider conflict is handled on the delivery path.)
 
 ### Files touched
 
@@ -124,10 +126,13 @@ Parked hardening: none.
   (the two Resend Idempotency-Key HTTP-header forwarding tests + the 409
   `invalid_idempotent_request` -> `IdempotentReplayConflict` test and the
   non-idempotency-409 still-raises test), and
-  `tests/test_send_content_ops_deflection_report_deliveries.py`.
+  `tests/test_send_content_ops_deflection_report_deliveries.py`, plus an end-to-end
+  regression using the real `ResendCampaignSender` + a payload-aware fake HTTP
+  client + the real render->link-only fallback (same key, different body ->
+  delivered, not failed).
 - ASCII gate `scripts/check_ascii_python.sh` -- passed.
 - Python compile check for the touched modules -- passed.
-- Full gauntlet `scripts/run_extracted_pipeline_checks.sh` -- 3909 passed,
+- Full gauntlet `scripts/run_extracted_pipeline_checks.sh` -- 3910 passed,
   10 skipped, 0 failed; existing torch/pynvml warning.
 - Standalone audit `scripts/audit_extracted_standalone.py` (with --fail-on-debt)
   -- 0 import findings.

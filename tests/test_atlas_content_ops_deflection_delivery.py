@@ -376,6 +376,81 @@ async def test_delivery_worker_marks_idempotent_replay_delivered_not_failed(
 
 
 @pytest.mark.asyncio
+async def test_reclaim_changing_attachment_payload_marks_delivered_via_real_resend_sender(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # End-to-end regression for the R8 BLOCKER (real ResendCampaignSender + the
+    # real render->link-only fallback transition): first send carries the PDF
+    # attachment; on re-claim the render fails so the email is link-only -- a
+    # DIFFERENT payload under the SAME idempotency key. A Resend-like client
+    # returns 409 invalid_idempotent_request for that mismatch, and the delivery
+    # path must mark the row delivered (idempotent replay), not failed.
+    from extracted_content_pipeline.campaign_sender import (
+        ResendCampaignSender,
+        ResendSenderConfig,
+    )
+
+    class _Resp:
+        def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class _IdempotentResendHTTP:
+        """Records the first body per key; a different body on the same key 409s."""
+
+        def __init__(self) -> None:
+            self.seen: dict[str, Any] = {}
+            self.posts: list[dict[str, Any]] = []
+
+        async def post(self, url: str, *, json: Any, headers: Any) -> _Resp:
+            key = headers.get("Idempotency-Key")
+            self.posts.append({"key": key, "json": json})
+            if key and key in self.seen and self.seen[key] != json:
+                return _Resp(
+                    {"name": "invalid_idempotent_request", "message": "different payload"},
+                    status_code=409,
+                )
+            self.seen.setdefault(key, json)
+            return _Resp({"id": f"email-{len(self.seen)}"})
+
+    http = _IdempotentResendHTTP()
+    sender = ResendCampaignSender(ResendSenderConfig(api_key="re_key"), http_client=http)
+
+    render_calls = {"n": 0}
+
+    def _renderer(_artifact: Any) -> bytes:
+        render_calls["n"] += 1
+        if render_calls["n"] == 1:
+            return b"%PDF-first-render"
+        raise RuntimeError("render failed on reclaim")
+
+    _install_fake_pdf_renderer(monkeypatch, _renderer)
+    row = _row()
+
+    first = await send_pending_deflection_report_deliveries(
+        _Pool([row]), sender=sender, config=_config()
+    )
+    assert first.sent == 1 and first.failed == 0
+
+    # Re-claim: render now fails -> link-only -> different payload, same key.
+    second = await send_pending_deflection_report_deliveries(
+        _Pool([row]), sender=sender, config=_config()
+    )
+    assert second.sent == 1  # delivered via idempotent replay, NOT failed
+    assert second.failed == 0
+    assert len(http.posts) == 2
+    assert http.posts[0]["key"] == http.posts[1]["key"]  # same idempotency key
+    assert http.posts[0]["json"] != http.posts[1]["json"]  # attachment vs link-only
+
+
+@pytest.mark.asyncio
 async def test_delivery_worker_marks_missing_email_failed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
