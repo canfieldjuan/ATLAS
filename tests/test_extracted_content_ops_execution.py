@@ -1091,6 +1091,7 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
                 "faq_as_of_date": "2026-05-20",
                 "faq_support_contact": "1-800-555-0100",
                 "faq_documentation_terms": ["Single sign-on setup"],
+                "faq_representative_taxonomy_terms": ["Authentication"],
                 "faq_vocabulary_gap_rules": [["SSO", "single sign-on"]],
             },
         },
@@ -1106,6 +1107,9 @@ async def test_execute_runs_faq_markdown_service_from_source_material() -> None:
     assert "contact support at 1-800-555-0100" in step["result"]["markdown"]
     assert result["plan"]["steps"][0]["config"]["documentation_terms"] == [
         "Single sign-on setup"
+    ]
+    assert result["plan"]["steps"][0]["config"]["representative_taxonomy_terms"] == [
+        "Authentication"
     ]
     assert result["plan"]["steps"][0]["config"]["vocabulary_gap_rules"] == [
         ["SSO", "single sign-on"]

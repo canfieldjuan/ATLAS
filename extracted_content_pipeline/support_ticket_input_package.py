@@ -43,6 +43,31 @@ DEFAULT_FAQ_REPORT_OFFER = (
 DEFAULT_FAQ_REPORT_CTA_LABEL = "Upload Ticket CSV -- Free Analysis"
 DEFAULT_FAQ_REPORT_CTA_URL = "/systems/ai-content-ops/intake"
 DEFAULT_FAQ_REPORT_TARGET_KEYWORD = "support ticket FAQ report"
+DEFAULT_FAQ_REPRESENTATIVE_TAXONOMY_TERMS: tuple[str, ...] = (
+    "Advertising",
+    "Attempts to collect debt not owed",
+    "Checking or savings account",
+    "Closing an account",
+    "Communication tactics",
+    "Credit card or prepaid card",
+    "Credit reporting, credit repair services, or other personal consumer reports",
+    "Customer service",
+    "Debt collection",
+    "Fees or interest",
+    "Getting a credit card",
+    "Improper use of your report",
+    "Managing an account",
+    "Managing the loan or lease",
+    "Money transfer, virtual currency, or money service",
+    "Mortgage",
+    "Opening an account",
+    "Other service problem",
+    "Other transaction problem",
+    "Struggling to pay mortgage",
+    "Trouble during payment process",
+    "Vehicle loan or lease",
+    "Wire transfer problem",
+)
 
 _QUESTION_RE = re.compile(
     r"\b(can|could|do|does|how|is|should|what|when|where|why)\b[^?]*\?",
@@ -368,6 +393,9 @@ def build_support_ticket_input_package(
         "source_material": source_material_rows,
         "faq_source_types": faq_source_types,
         "faq_title": campaign_name,
+        "faq_representative_taxonomy_terms": list(
+            DEFAULT_FAQ_REPRESENTATIVE_TAXONOMY_TERMS
+        ),
         "topic": SUPPORT_TICKET_DEFAULT_TOPIC,
         "filters": support_ticket_topic_filter(),
         "campaign_name": campaign_name,

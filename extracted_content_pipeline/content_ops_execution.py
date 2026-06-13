@@ -1041,6 +1041,10 @@ async def _dispatch_faq_markdown(
         support_contact=_step_config_text(step.config, "support_contact"),
         intent_rules=_step_config_intent_rules(step.config, "intent_rules"),
         documentation_terms=_step_config_sequence(step.config, "documentation_terms"),
+        representative_taxonomy_terms=_step_config_sequence(
+            step.config,
+            "representative_taxonomy_terms",
+        ),
         vocabulary_gap_rules=_step_config_nested_sequence(
             step.config,
             "vocabulary_gap_rules",
@@ -1074,6 +1078,10 @@ async def _dispatch_faq_deflection_report(
         support_contact=_step_config_text(step.config, "support_contact"),
         intent_rules=_step_config_intent_rules(step.config, "intent_rules"),
         documentation_terms=_step_config_sequence(step.config, "documentation_terms"),
+        representative_taxonomy_terms=_step_config_sequence(
+            step.config,
+            "representative_taxonomy_terms",
+        ),
         vocabulary_gap_rules=_step_config_nested_sequence(
             step.config,
             "vocabulary_gap_rules",

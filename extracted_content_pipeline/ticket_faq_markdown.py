@@ -203,35 +203,6 @@ _REPRESENTATIVE_SAFE_CONTEXT_KEYS = (
     "sub_issue",
     "sub_issue_type",
 )
-_REPRESENTATIVE_TAXONOMY_TERMS = (
-    "Advertising",
-    "Attempts to collect debt not owed",
-    "Checking or savings account",
-    "Closing an account",
-    "Communication tactics",
-    "Credit card or prepaid card",
-    "Credit reporting, credit repair services, or other personal consumer reports",
-    "Customer service",
-    "Debt collection",
-    "Fees or interest",
-    "Getting a credit card",
-    "Improper use of your report",
-    "Managing an account",
-    "Managing the loan or lease",
-    "Money transfer, virtual currency, or money service",
-    "Mortgage",
-    "Opening an account",
-    "Other service problem",
-    "Other transaction problem",
-    "Struggling to pay mortgage",
-    "Trouble during payment process",
-    "Vehicle loan or lease",
-    "Wire transfer problem",
-)
-_REPRESENTATIVE_TAXONOMY_KEYS = frozenset(
-    _KEY_SEPARATOR_RE.sub("", term.strip().lower())
-    for term in _REPRESENTATIVE_TAXONOMY_TERMS
-)
 _DOCUMENTATION_SOURCE_TYPES = {
     "article",
     "document",
@@ -483,6 +454,7 @@ class TicketFAQMarkdownConfig:
     support_contact: str | None = None
     intent_rules: tuple[tuple[str, tuple[str, ...]], ...] = DEFAULT_INTENT_RULES
     documentation_terms: tuple[str, ...] = ()
+    representative_taxonomy_terms: tuple[str, ...] = ()
     vocabulary_gap_rules: tuple[tuple[str, ...], ...] = ()
 
 
@@ -514,6 +486,7 @@ class TicketFAQMarkdownService:
         support_contact: str | None = None,
         intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
         documentation_terms: Sequence[str] | None = None,
+        representative_taxonomy_terms: Sequence[str] | None = None,
         vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
@@ -564,6 +537,11 @@ class TicketFAQMarkdownService:
             if documentation_terms is not None
             else self.config.documentation_terms
         )
+        resolved_representative_taxonomy_terms = (
+            tuple(_clean(term) for term in representative_taxonomy_terms if _clean(term))
+            if representative_taxonomy_terms is not None
+            else self.config.representative_taxonomy_terms
+        )
         resolved_vocabulary_gap_rules = (
             vocabulary_gap_rules
             if vocabulary_gap_rules is not None
@@ -581,6 +559,7 @@ class TicketFAQMarkdownService:
             support_contact=resolved_support_contact,
             intent_rules=resolved_intent_rules,
             documentation_terms=resolved_documentation_terms,
+            representative_taxonomy_terms=resolved_representative_taxonomy_terms,
             vocabulary_gap_rules=resolved_vocabulary_gap_rules,
         )
         result = replace(
@@ -609,6 +588,9 @@ class TicketFAQMarkdownService:
                             as_of_date=resolved_as_of_date,
                         ),
                         **_documentation_term_metadata(resolved_documentation_terms),
+                        **_representative_taxonomy_term_metadata(
+                            resolved_representative_taxonomy_terms
+                        ),
                         **_vocabulary_gap_rule_metadata(resolved_vocabulary_gap_rules),
                     },
                 )
@@ -630,6 +612,7 @@ def build_ticket_faq_markdown(
     support_contact: str | None = None,
     intent_rules: Sequence[tuple[str, Sequence[str]]] = DEFAULT_INTENT_RULES,
     documentation_terms: Sequence[str] = (),
+    representative_taxonomy_terms: Sequence[str] = (),
     vocabulary_gap_rules: Sequence[Sequence[str]] = (),
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
@@ -641,6 +624,7 @@ def build_ticket_faq_markdown(
     allowed = {_source_type_key(item) for item in source_types if _source_type_key(item)}
     date_window = _date_window(window_days=window_days, as_of_date=as_of_date)
     resolved_documentation_terms = _documentation_terms(opportunities, documentation_terms)
+    resolved_representative_taxonomy_terms = _clean_terms(representative_taxonomy_terms)
     resolved_vocabulary_gap_rules = _vocabulary_gap_rules(vocabulary_gap_rules)
     groups: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
@@ -709,6 +693,7 @@ def build_ticket_faq_markdown(
                 "safe_label_context": _representative_safe_context_text(
                     opportunity,
                     evidence,
+                    representative_taxonomy_terms=resolved_representative_taxonomy_terms,
                 ),
                 "source_date": source_date.isoformat() if source_date is not None else "",
                 "evidence_group_key": evidence_group_key,
@@ -1049,14 +1034,28 @@ def _source_context_text(*rows: Mapping[str, Any]) -> str:
     return _context_text(_SOURCE_CONTEXT_KEYS, *rows)
 
 
-def _representative_safe_context_text(*rows: Mapping[str, Any]) -> str:
+def _representative_safe_context_text(
+    *rows: Mapping[str, Any],
+    representative_taxonomy_terms: Sequence[str],
+) -> str:
+    taxonomy_keys = _representative_taxonomy_keys(representative_taxonomy_terms)
+    if not taxonomy_keys:
+        return ""
     values: list[str] = []
     for row in rows:
         for key in _REPRESENTATIVE_SAFE_CONTEXT_KEYS:
             text = _compact(_field_value(row, key))
-            if text and _compact_key(text) in _REPRESENTATIVE_TAXONOMY_KEYS:
+            if text and _compact_key(text) in taxonomy_keys:
                 values.append(text)
     return " ".join(values)
+
+
+def _representative_taxonomy_keys(terms: Sequence[str]) -> frozenset[str]:
+    return frozenset(
+        _compact_key(term)
+        for term in terms
+        if _compact_key(term)
+    )
 
 
 def _context_text(keys: Sequence[str], *rows: Mapping[str, Any]) -> str:
@@ -2657,6 +2656,15 @@ def _documentation_term_metadata(documentation_terms: Sequence[str]) -> dict[str
     if not terms:
         return {}
     return {"documentation_terms": list(terms)}
+
+
+def _representative_taxonomy_term_metadata(
+    representative_taxonomy_terms: Sequence[str],
+) -> dict[str, Any]:
+    terms = _clean_terms(representative_taxonomy_terms)
+    if not terms:
+        return {}
+    return {"representative_taxonomy_terms": list(terms)}
 
 
 def _vocabulary_gap_rule_metadata(rules: Sequence[Sequence[str]]) -> dict[str, Any]:
