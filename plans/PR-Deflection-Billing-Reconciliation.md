@@ -41,11 +41,11 @@ failure (281/282/283/298) which is unrelated to this slice.
 
 ### Files touched
 
-- `plans/PR-Deflection-Billing-Reconciliation.md`
 - `atlas_brain/api/billing.py`
 - `atlas_brain/config.py`
 - `atlas_brain/content_ops_deflection_reconciliation.py`
 - `atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql`
+- `plans/PR-Deflection-Billing-Reconciliation.md`
 - `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`
 
 ## Mechanism
@@ -98,14 +98,9 @@ than the extracted store, since the billing webhook is host-only.
 - A sweeper/operator surface that lists and clears
   `content_ops_deflection_paid_reconciliation` rows (this slice only writes the
   ledger; reading/clearing is a follow-up).
-- Two pre-existing CI-red test failures are red on `origin/main` independently
-  of this slice (verified by stashing) and are handled in a separate CI-hygiene
-  follow-up PR, not here: `test_repo_migration_prefix_collisions_are_only_historical_exceptions`
-  (collisions at 281/282/283/298 missing from its allowlist) and
-  `test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks` (its
-  expected snapshot summary predates the merged #1486 measured-repetition /
-  #1466 proven-answer-gate counts). The latter is what makes the
-  `atlas-content-ops-deflection-stripe-paid-checks` lane red on this PR.
+- The earlier unrelated CI-red paid-flow and migration-prefix expectation drift
+  was handled in #1516; this branch is rebased on that fix so the
+  `atlas-content-ops-deflection-stripe-paid-checks` lane can validate this slice.
 
 Parked hardening: none.
 
@@ -118,14 +113,16 @@ Parked hardening: none.
 - Focused pytest over the three deflection-billing test files
   `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py`,
   `tests/test_smoke_content_ops_deflection_stripe_paid_unlock.py`, and
-  `tests/test_content_ops_deflection_incidents.py` -- passed, 58 tests.
+  `tests/test_content_ops_deflection_incidents.py` -- passed, 59 tests.
+- Full `atlas-content-ops-deflection-stripe-paid-checks` pytest list -- passed,
+  184 tests after rebasing on #1516.
 - `python -c "from atlas_brain.config import settings; ..."` -- the new
   `stripe_content_ops_deflection_report_reconcile_grace_seconds` field loads
   (default 300).
 - Migration 336 is the next free atlas_brain prefix and is collision-free
-  (`_find_duplicate_migration_prefixes` does not list 336). The migration-prefix
-  collision test fails identically on `origin/main` without this change
-  (verified by stashing) -- pre-existing, unrelated.
+  (`_find_duplicate_migration_prefixes` does not list 336). The historical
+  migration-prefix allowlist drift was handled in #1516; 336 remains outside the
+  historical collision set.
 - Non-ASCII scan of the touched atlas_brain files + migration -- clean.
 - `python -m py_compile` for the touched modules -- passed.
 
@@ -133,10 +130,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `atlas_brain/api/billing.py` | 60 |
+| `atlas_brain/api/billing.py` | 67 |
 | `atlas_brain/config.py` | 12 |
-| `atlas_brain/content_ops_deflection_reconciliation.py` | 50 |
-| `atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql` | 23 |
-| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 75 |
-| `plans/PR-Deflection-Billing-Reconciliation.md` | 130 |
-| **Total** | **~350** |
+| `atlas_brain/content_ops_deflection_reconciliation.py` | 48 |
+| `atlas_brain/storage/migrations/336_content_ops_deflection_paid_reconciliation.sql` | 22 |
+| `plans/PR-Deflection-Billing-Reconciliation.md` | 139 |
+| `tests/test_atlas_billing_content_ops_deflection_stripe_paid.py` | 88 |
+| **Total** | **376** |
