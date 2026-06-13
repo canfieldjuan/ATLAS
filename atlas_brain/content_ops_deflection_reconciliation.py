@@ -35,14 +35,16 @@ async def record_paid_report_missing(
 
     Idempotent on (account_id, request_id, stripe_session_id) so Stripe retries
     -- or a later genuine arrival of the same event -- do not create duplicate
-    ledger rows.
+    ledger rows. A missing/empty session id is normalized to '' (never NULL):
+    Postgres treats NULL as DISTINCT in a UNIQUE constraint, so a NULL session
+    id would defeat the ON CONFLICT dedup. Migration 337 enforces NOT NULL.
     """
 
     await pool.execute(
         _INSERT_PAID_RECONCILIATION_SQL,
         account_id,
         request_id,
-        stripe_session_id,
+        stripe_session_id or "",
         event_type,
         reason,
     )
