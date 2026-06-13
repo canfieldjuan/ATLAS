@@ -33,6 +33,10 @@ class ContentOpsZendeskCredentialRecord:
     revoked_at: Optional[datetime]
 
 
+class ZendeskCredentialLookupError(RuntimeError):
+    """Stored Zendesk credentials could not be read or decrypted."""
+
+
 async def upsert_zendesk_credentials(
     pool,
     *,
@@ -158,7 +162,7 @@ async def lookup_zendesk_credentials(
         )
     except Exception:
         logger.exception("zendesk credential lookup failed account_id=%s", account_uuid)
-        return None
+        raise ZendeskCredentialLookupError("zendesk_credentials_unavailable")
     if row is None:
         return None
     token = decrypt_secret(bytes(row["encrypted_api_token"]), str(row["encryption_kid"]))
@@ -168,7 +172,7 @@ async def lookup_zendesk_credentials(
             account_uuid,
             row["id"],
         )
-        return None
+        raise ZendeskCredentialLookupError("zendesk_credentials_unavailable")
     credentials = ZendeskMacroCredentials(
         email=str(row["email"] or "").strip(),
         api_token=token,
@@ -181,7 +185,7 @@ async def lookup_zendesk_credentials(
             account_uuid,
             row["id"],
         )
-        return None
+        raise ZendeskCredentialLookupError("zendesk_credentials_unavailable")
     await _touch_credentials(pool, credential_id=row["id"])
     return credentials
 
@@ -255,6 +259,7 @@ async def _touch_credentials(pool, *, credential_id: _uuid.UUID) -> None:
 __all__ = [
     "ContentOpsZendeskCredentialRecord",
     "TOKEN_PREFIX_LEN",
+    "ZendeskCredentialLookupError",
     "list_zendesk_credentials",
     "lookup_zendesk_credentials",
     "revoke_zendesk_credentials",
