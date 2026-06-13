@@ -1,6 +1,7 @@
 """Stripe billing endpoints: checkout, portal, status, webhook."""
 
 import logging
+import time
 import uuid as _uuid
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from ..auth.dependencies import AuthUser, require_auth
 from ..config import settings
 from ..content_ops_deflection_incidents import emit_deflection_paid_funnel_incident_alert
+from ..content_ops_deflection_reconciliation import record_paid_report_missing
 from ..storage.database import get_db_pool
 from extracted_content_pipeline.deflection_report_access import (
     PostgresDeflectionReportArtifactStore,
@@ -406,6 +408,7 @@ async def stripe_webhook(request: Request):
                     obj,
                     meta,
                     event_type=event_type,
+                    event_created=getattr(event, "created", None),
                 )
         else:
             account_id = await _handle_checkout_completed(pool, obj)
@@ -421,6 +424,7 @@ async def stripe_webhook(request: Request):
                     obj,
                     meta,
                     event_type=event_type,
+                    event_created=getattr(event, "created", None),
                 )
 
     elif event_type == "checkout.session.async_payment_failed":
@@ -620,12 +624,28 @@ async def _handle_vendor_checkout_completed(pool, session, meta: dict) -> None:
         logger.exception("Failed to send vendor checkout confirmation email")
 
 
+def _event_age_seconds(event_created: int | None) -> int | None:
+    """Seconds since a Stripe event was created, or None if unknown.
+
+    Used to tell a transient write-ordering race (recent event -> retry) from a
+    permanent paid-but-missing report (aged event -> reconcile). #1462.
+    """
+
+    if not event_created:
+        return None
+    try:
+        return max(0, int(time.time()) - int(event_created))
+    except (TypeError, ValueError):
+        return None
+
+
 async def _handle_content_ops_deflection_report_checkout_completed(
     pool: Any,
     session: Any,
     meta: Mapping[str, Any],
     *,
     event_type: str = "checkout.session.completed",
+    event_created: int | None = None,
 ) -> None:
     """Handle one-time deflection report checkout completion."""
 
@@ -682,6 +702,53 @@ async def _handle_content_ops_deflection_report_checkout_completed(
         payment_reference=session_id or None,
     )
     if not marked:
+        age = _event_age_seconds(event_created)
+        grace = int(
+            getattr(
+                settings.saas_auth,
+                "stripe_content_ops_deflection_report_reconcile_grace_seconds",
+                300,
+            )
+            or 300
+        )
+        if age is not None and age > grace:
+            # Aged past the write-ordering race window: the report row will not
+            # appear on retry, so this is a permanent paid-but-missing case.
+            # Record it for manual reconciliation and return 2xx so Stripe stops
+            # retrying a non-2xx for hours (#1462).
+            await record_paid_report_missing(
+                pool,
+                account_id=account_id_text,
+                request_id=request_id,
+                stripe_session_id=session_id or None,
+                event_type=event_type,
+            )
+            await emit_deflection_paid_funnel_incident_alert(
+                logger,
+                incident_type="paid_report_missing_after_payment",
+                severity="error",
+                account_id=account_id_text,
+                request_id=request_id,
+                event_type=event_type,
+                stripe_session_id=session_id,
+                disposition="reconciled",
+                event_age_seconds=age,
+            )
+            logger.error(
+                "Deflection report checkout completed but report was not found "
+                "(permanent, recorded for reconciliation): account=%s request=%s "
+                "session=%s age=%ss",
+                account_id_text,
+                request_id,
+                session_id,
+                age,
+            )
+            return
+        # Within the race window (or unknown event age): 409 so Stripe retries
+        # and finds the report row once its write commits. Real Stripe events
+        # always carry `created`, so a genuinely permanent miss ages past the
+        # window above; only the transient race (or a malformed/timestampless
+        # event) lands here.
         await emit_deflection_paid_funnel_incident_alert(
             logger,
             incident_type="paid_report_missing_after_payment",
