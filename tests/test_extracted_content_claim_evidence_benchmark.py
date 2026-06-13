@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from extracted_content_pipeline.claim_evidence_benchmark import (
     EASY,
@@ -10,6 +11,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     BenchmarkThresholds,
     ClaimEvidenceModelRun,
     ClaimEvidenceResponse,
+    ClaimEvidenceResultFile,
     ClaimEvidenceRunRow,
     ClaimEvidenceTriple,
     ModelScore,
@@ -27,6 +29,8 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     run_claim_evidence_provider,
     score_model,
     validate_claim_evidence_fixture,
+    write_claim_evidence_result_artifact_files,
+    _result_file_path_errors,
 )
 
 
@@ -988,6 +992,225 @@ def test_result_artifact_files_fail_closed_on_malformed_input() -> None:
     ]
     assert "- Go/no-go: NO_GO" in files[1].content
     assert "artifact must be ClaimEvidenceResultArtifact" in files[1].content
+
+
+def test_result_artifact_writer_writes_bundle_to_directory(tmp_path) -> None:
+    triples = (
+        _triple("easy", True, EASY),
+        _triple("hard", False, HARD),
+    )
+    claude_run = _model_run(
+        "claude",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    gpt_run = _model_run(
+        "gpt",
+        {"easy": _response(True, 5), "hard": _response(False, 4)},
+    )
+    artifact = build_claim_evidence_result_artifact(
+        triples,
+        (gpt_run, claude_run),
+        stability_runs_by_model_id={
+            "gpt": (gpt_run, gpt_run),
+            "claude": (claude_run, claude_run),
+        },
+        thresholds=BenchmarkThresholds(
+            easy_accuracy_min=1.0,
+            hard_accuracy_min=1.0,
+            inter_model_agreement_min=1.0,
+            intra_model_stability_min=1.0,
+            high_confidence_accuracy_min=0.90,
+        ),
+    )
+    output_dir = tmp_path / "claim-evidence-result"
+
+    result = write_claim_evidence_result_artifact_files(artifact, output_dir)
+
+    assert result.ok is True
+    assert result.output_dir == str(output_dir)
+    assert [file.path for file in result.files] == [
+        "claim_evidence_result.json",
+        "claim_evidence_result.md",
+    ]
+    json_path = output_dir / "claim_evidence_result.json"
+    markdown_path = output_dir / "claim_evidence_result.md"
+    assert json_path.exists()
+    assert markdown_path.exists()
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["go_no_go"] == "go"
+    assert payload["ok"] is True
+    assert markdown_path.read_text(encoding="utf-8") == (
+        render_claim_evidence_result_markdown(artifact)
+    )
+    assert result.files[0].content_type == "application/json"
+    assert result.files[0].bytes_written == len(
+        json_path.read_text(encoding="utf-8").encode("utf-8")
+    )
+
+
+def test_result_artifact_writer_creates_missing_parent_directories(tmp_path) -> None:
+    output_dir = tmp_path / "nested" / "claim-evidence"
+
+    result = write_claim_evidence_result_artifact_files(
+        {"not": "an artifact"},
+        output_dir,
+    )
+
+    assert result.ok is True
+    assert output_dir.is_dir()
+    payload = json.loads(
+        (output_dir / "claim_evidence_result.json").read_text(encoding="utf-8")
+    )
+    assert payload["go_no_go"] == "no_go"
+    assert payload["errors"] == ["artifact must be ClaimEvidenceResultArtifact"]
+    assert "artifact must be ClaimEvidenceResultArtifact" in (
+        output_dir / "claim_evidence_result.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_result_artifact_writer_rejects_file_output_path(tmp_path) -> None:
+    output_path = tmp_path / "result-file"
+    output_path.write_text("already a file", encoding="utf-8")
+
+    result = write_claim_evidence_result_artifact_files(
+        {"not": "an artifact"},
+        output_path,
+    )
+
+    assert result.ok is False
+    assert result.files == ()
+    assert result.errors == (f"output_dir is not a directory: {output_path}",)
+    assert output_path.read_text(encoding="utf-8") == "already a file"
+
+
+def test_result_artifact_writer_rejects_non_path_output_dir() -> None:
+    result = write_claim_evidence_result_artifact_files(
+        {"not": "an artifact"},
+        None,
+    )
+
+    assert result.ok is False
+    assert result.output_dir == ""
+    assert result.files == ()
+    assert result.errors == ("output_dir must be a path",)
+
+
+def test_result_artifact_writer_reports_directory_creation_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "blocked"
+    original_mkdir = Path.mkdir
+
+    def fail_mkdir(self, *args, **kwargs):
+        if self == output_dir:
+            raise PermissionError("permission denied")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+
+    result = write_claim_evidence_result_artifact_files(
+        {"not": "an artifact"},
+        output_dir,
+    )
+
+    assert result.ok is False
+    assert result.files == ()
+    assert result.errors == (
+        f"output_dir could not be created: {output_dir}: permission denied",
+    )
+    assert output_dir.exists() is False
+
+
+def test_result_artifact_writer_reports_file_write_failure(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_dir = tmp_path / "claim-evidence"
+    original_write_text = Path.write_text
+
+    def fail_markdown_write(self, data, *args, **kwargs):
+        if self.name == "claim_evidence_result.md":
+            raise PermissionError("permission denied")
+        return original_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_markdown_write)
+
+    result = write_claim_evidence_result_artifact_files(
+        {"not": "an artifact"},
+        output_dir,
+    )
+
+    assert result.ok is False
+    assert [file.path for file in result.files] == ["claim_evidence_result.json"]
+    assert result.errors == (
+        f"result file could not be written: "
+        f"{output_dir / 'claim_evidence_result.md'}: permission denied",
+    )
+    assert (output_dir / "claim_evidence_result.json").exists()
+    assert (output_dir / "claim_evidence_result.md").exists() is False
+
+
+def test_result_artifact_writer_rejects_symlinked_bundle_paths(tmp_path) -> None:
+    cases = (
+        ("claim_evidence_result.json", "existing-file"),
+        ("claim_evidence_result.md", "existing-file"),
+        ("claim_evidence_result.json", "missing-file"),
+        ("claim_evidence_result.md", "missing-file"),
+        ("claim_evidence_result.json", "directory"),
+        ("claim_evidence_result.md", "directory"),
+    )
+
+    for index, (bundle_name, target_kind) in enumerate(cases):
+        output_dir = tmp_path / f"case-{index}" / "artifact-dir"
+        output_dir.mkdir(parents=True)
+        target = tmp_path / f"case-{index}" / "external-target"
+        if target_kind == "existing-file":
+            target.write_text("PROTECTED-CONTENT", encoding="utf-8")
+            expected_target_text = "PROTECTED-CONTENT"
+        elif target_kind == "directory":
+            target.mkdir()
+            expected_target_text = None
+        else:
+            expected_target_text = None
+        (output_dir / bundle_name).symlink_to(
+            target,
+            target_is_directory=target_kind == "directory",
+        )
+
+        result = write_claim_evidence_result_artifact_files(
+            {"not": "an artifact"},
+            output_dir,
+        )
+
+        assert result.ok is False
+        assert result.errors == (
+            f"result file path is a symlink: {output_dir / bundle_name}",
+        )
+        if bundle_name == "claim_evidence_result.json":
+            assert result.files == ()
+        else:
+            assert [file.path for file in result.files] == ["claim_evidence_result.json"]
+        if expected_target_text is not None:
+            assert target.read_text(encoding="utf-8") == expected_target_text
+        elif target_kind == "missing-file":
+            assert target.exists() is False
+        else:
+            assert target.is_dir()
+
+
+def test_result_file_path_errors_rejects_pseudo_parent_filename() -> None:
+    errors = _result_file_path_errors(
+        (
+            ClaimEvidenceResultFile(
+                path="..",
+                content_type="application/json",
+                content="{}",
+            ),
+        )
+    )
+
+    assert errors == ("result file path must be a relative filename: ..",)
 
 
 def test_model_score_counts_easy_hard_and_high_confidence_accuracy() -> None:
