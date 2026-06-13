@@ -1142,3 +1142,119 @@ def test_support_ticket_input_package_rejects_invalid_window_and_row_limit() -> 
         assert str(exc) == "max_rows must be at least 1"
     else:
         raise AssertionError("expected max_rows validation error")
+
+
+def test_support_ticket_input_package_recognizes_status_and_csat_columns() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "Ticket ID": "zd-1",
+            "Subject": "How do I reset my password?",
+            "Description": "I cannot reset my password from the login screen.",
+            "Ticket Status": "Closed",
+            "Customer Satisfaction Rating": "5",
+        },
+        {
+            "ticket_id": "zd-2",
+            "subject": "Billing question",
+            "description": "Why was I charged twice this month?",
+            "status": "Open",
+            "satisfaction_score": 2,
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+    assert rows[0]["ticket_status"] == "Closed"
+    assert rows[0]["ticket_status_state"] == "resolved"
+    assert rows[0]["csat"] == "5"
+    assert rows[0]["csat_score"] == 5.0
+    assert rows[1]["ticket_status_state"] == "open"
+    assert rows[1]["csat_score"] == 2.0
+
+    assert package.metadata["ticket_status_present"] is True
+    assert package.metadata["ticket_status_present_count"] == 2
+    assert package.metadata["ticket_status_summary"] == {"resolved": 1, "open": 1}
+    assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_score_count"] == 2
+    assert package.metadata["csat_score_average"] == 3.5
+
+
+def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
+    statuses = {
+        "done": "resolved",
+        "Solved": "resolved",
+        "In Progress": "open",
+        "Pending Customer Approval": "open",
+        "reopened": "reopened",
+        "Cancelled": "cancelled",
+        "Escalated": "other",
+    }
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": f"t-{index}",
+            "description": f"How do I handle scenario {index} for my account export?",
+            "issue_status": raw,
+        }
+        for index, raw in enumerate(statuses, start=1)
+    ])
+
+    got = {
+        row["ticket_status"]: row["ticket_status_state"]
+        for row in package.inputs["source_material"]
+    }
+    assert got == statuses
+    # the reopened bucket is the churn signal #1419/#1466 consume; keep it distinct
+    assert package.metadata["ticket_status_summary"]["reopened"] == 1
+
+
+def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "t-1",
+            "description": "How do I export the dashboard before renewal?",
+            "csat": "4",
+        },
+        {
+            "ticket_id": "t-2",
+            "description": "Where do I update my billing contact details?",
+            "csat": "good",
+        },
+        {
+            "ticket_id": "t-3",
+            "description": "Why did my report fail to generate overnight?",
+            "satisfaction_rating": 2,
+        },
+    ])
+
+    rows = package.inputs["source_material"]
+    assert rows[0]["csat"] == "4"
+    assert rows[0]["csat_score"] == 4.0
+    # textual ratings are kept raw but yield no numeric score (threshold is #1419's call)
+    assert rows[1]["csat"] == "good"
+    assert "csat_score" not in rows[1]
+    assert rows[2]["csat_score"] == 2.0
+
+    assert package.metadata["csat_present"] is True
+    assert package.metadata["csat_score_count"] == 2
+    assert package.metadata["csat_score_average"] == 3.0
+
+
+def test_support_ticket_input_package_without_status_or_csat_is_unchanged() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "t-1",
+            "subject": "How do I reset my password?",
+            "description": "I cannot reset my password from the login screen.",
+        },
+    ])
+
+    row = package.inputs["source_material"][0]
+    assert "ticket_status" not in row
+    assert "ticket_status_state" not in row
+    assert "csat" not in row
+    assert "csat_score" not in row
+    assert package.metadata["ticket_status_present"] is False
+    assert package.metadata["ticket_status_present_count"] == 0
+    assert package.metadata["ticket_status_summary"] == {}
+    assert package.metadata["csat_present"] is False
+    assert package.metadata["csat_score_count"] == 0
+    assert package.metadata["csat_score_average"] is None
