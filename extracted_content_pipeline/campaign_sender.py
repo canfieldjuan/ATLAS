@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 import httpx
 
-from .campaign_ports import SendRequest, SendResult
+from .campaign_ports import IdempotentReplayConflict, SendRequest, SendResult
 
 
 RESEND_API_URL = "https://api.resend.com/emails"
@@ -33,6 +33,27 @@ def normalize_tags(tags: Any) -> list[dict[str, str]]:
             continue
         normalized.append({"name": name, "value": sanitize_tag_value(value)})
     return normalized
+
+
+def _is_idempotency_conflict(response: Any) -> bool:
+    """True when a Resend 409 body is the idempotency-key payload mismatch.
+
+    Matches Resend's documented ``invalid_idempotent_request`` error so only an
+    idempotency conflict (not any other 409) is treated as an idempotent replay.
+    """
+
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    if isinstance(body, Mapping):
+        name = str(body.get("name") or body.get("error") or "")
+        message = str(body.get("message") or "")
+        return (
+            "invalid_idempotent_request" in name
+            or "invalid_idempotent_request" in message
+        )
+    return "invalid_idempotent_request" in str(body)
 
 
 @dataclass(frozen=True)
@@ -79,6 +100,11 @@ class ResendCampaignSender:
             "Authorization": f"Bearer {self._config.api_key}",
             "Content-Type": "application/json",
         }
+        # Resend dedupes identical Idempotency-Key values server-side for 24h,
+        # so a retried send (e.g. a re-claimed delivery row) does not produce a
+        # second email.
+        if request.idempotency_key:
+            headers["Idempotency-Key"] = request.idempotency_key
         if self._http_client is not None:
             response = await self._http_client.post(
                 self._config.api_url,
@@ -92,6 +118,15 @@ class ResendCampaignSender:
                     json=payload,
                     headers=headers,
                 )
+        # Resend returns 409 invalid_idempotent_request when this key was already
+        # used with a different payload -- positive proof the original email was
+        # accepted. Surface it as an idempotent replay (delivered), not a generic
+        # HTTP failure, so a re-claimed delivery whose attachment re-renders to
+        # different bytes is not mismarked as failed.
+        if getattr(response, "status_code", 200) == 409 and _is_idempotency_conflict(
+            response
+        ):
+            raise IdempotentReplayConflict(request.idempotency_key or "")
         response.raise_for_status()
         data = response.json()
         return SendResult(provider="resend", message_id=str(data["id"]), raw=data)

@@ -140,6 +140,11 @@ class SendRequest:
     tags: Sequence[Mapping[str, str]] = field(default_factory=tuple)
     attachments: Sequence[Mapping[str, str]] = field(default_factory=tuple)
     metadata: JsonDict = field(default_factory=dict)
+    # Optional provider idempotency key. When set, an idempotency-capable sender
+    # (e.g. Resend) forwards it so a retried send with the same key is deduped
+    # server-side rather than producing a duplicate email. Backward-compatible:
+    # senders that do not support idempotency ignore it.
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -147,6 +152,25 @@ class SendResult:
     provider: str
     message_id: str
     raw: Any | None = None
+
+
+class IdempotentReplayConflict(Exception):
+    """A retried send reused an idempotency key with a different payload.
+
+    The provider (Resend: HTTP 409 ``invalid_idempotent_request``) rejects the
+    retry because an email was already accepted for this key with a different
+    body. It is positive proof the original send succeeded, so callers should
+    treat it as delivered (idempotent replay), NOT as a send failure -- the
+    second email never goes out.
+    """
+
+    def __init__(self, idempotency_key: str = "") -> None:
+        self.idempotency_key = idempotency_key
+        super().__init__(
+            f"idempotent replay conflict for key {idempotency_key!r}"
+            if idempotency_key
+            else "idempotent replay conflict"
+        )
 
 
 @dataclass(frozen=True)
