@@ -1,6 +1,6 @@
 # Plan archive index
 
-1004 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1005 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -225,6 +225,7 @@
 - [PR-Content-Ops-Claim-Evidence-Fixture-Loader](archive/PR-Content-Ops-Claim-Evidence-Fixture-Loader.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Evidence-Prompt-Schema](archive/PR-Content-Ops-Claim-Evidence-Prompt-Schema.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Evidence-Result-Artifact](archive/PR-Content-Ops-Claim-Evidence-Result-Artifact.md) - lane: content-ops/review-contract | phase: Functional validation
+- [PR-Content-Ops-Claim-Evidence-Result-Validate-CLI](archive/PR-Content-Ops-Claim-Evidence-Result-Validate-CLI.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Evidence-Runner-Harness](archive/PR-Content-Ops-Claim-Evidence-Runner-Harness.md) - lane: content-ops/review-contract | phase: Functional validation
 - [PR-Content-Ops-Claim-Registry-Persistence](archive/PR-Content-Ops-Claim-Registry-Persistence.md) - lane: content-ops/review-contract | phase: Vertical slice
 - [PR-Content-Ops-Claims-Map](archive/PR-Content-Ops-Claims-Map.md) - lane: content-ops/review-contract | phase: Vertical slice
