@@ -1229,15 +1229,22 @@ def _resolution_text(*rows: Mapping[str, Any], question_text: str = "") -> str:
 # Split on sentence terminators but KEEP them attached (lookbehind), so a
 # trailing "?" survives and an interrogative sentence ("Did the lights change?")
 # can be told apart from a step. The lead word and object shapes are anchored to
-# the start of each sentence, so a retained terminator does not affect them.
-_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-_RESOLUTION_STEP_STRUCTURE_RE = re.compile(r"(?m)^\s*(?:step\s*)?\d+[.):]\s+\S")
+# the start of each sentence, so a retained terminator does not affect them. The
+# `(?<![0-9].)` guard keeps a list-number period ("1. Open ...") from splitting
+# the number off its step, so the per-sentence reject filters still apply to the
+# whole numbered sentence (a numbered question is rejected, not accepted).
+_RESOLUTION_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])(?<![0-9].)\s+|\n+")
 _RESOLUTION_UI_PATH_RE = re.compile(
     r"\b[a-z][\w-]*\s+then\s+[a-z][\w-]*\b", re.IGNORECASE
 )
 # A leading clause that precedes the real instruction ("To fix this, reset ...").
+# A list-number prefix ("1.", "2)", "step 3:") is stripped here too, so a
+# numbered step is evaluated by the same lead/object logic as any other sentence
+# -- the numbering is not a standalone "this is a step" signal that could bypass
+# the question/declarative/redirect rejects (round-7 review BLOCKER).
 _RESOLUTION_INSTRUCTION_PREFIX_RE = re.compile(
     r"^(?:please\s+|kindly\s+|first[,]?\s+|then[,]?\s+|next[,]?\s+|now[,]?\s+"
+    r"|(?:step\s+)?\d+[.):]\s+"
     r"|to\s+[a-z]+\s+(?:this|it|that|the\s+(?:issue|problem|error))\s*[,:]\s*)+",
     re.IGNORECASE,
 )
@@ -1329,17 +1336,16 @@ def _resolution_text_is_publishable(value: Any, *, question_text: str) -> bool:
 def _resolution_text_looks_instructional(text: str) -> bool:
     """True when the resolution reads like a step a user can follow.
 
-    Recognizes numbered/step structure, a UI navigation path ("Settings then
-    Phone"), or any sentence that opens with an imperative verb -- known
-    (`_RESOLUTION_ACTION_TERMS`) or by the "<verb> the/your/a <noun>" shape for
-    verbs not in the list. Disposition status sentences ("Replied to the
-    customer ...") never count, even though they open with a verb.
+    Every positive signal -- a UI navigation path ("Settings then Phone"), a
+    known action verb, or the "<verb> the/your/a <noun>" imperative shape for
+    verbs not in the list -- is evaluated per sentence and only AFTER that
+    sentence clears the question / disposition / contact-redirect /
+    declarative-lead rejects. A numbered/UI-path/declarative diagnostic ("1. Did
+    the lights change?", "The issue is in Billing then Plan ...") therefore can
+    no longer short-circuit those rejects (round-7 review BLOCKER); list numbers
+    are stripped as a prefix, not treated as a standalone "this is a step" flag.
     """
 
-    if _RESOLUTION_STEP_STRUCTURE_RE.search(text):
-        return True
-    if _RESOLUTION_UI_PATH_RE.search(text):
-        return True
     for sentence in _RESOLUTION_SENTENCE_SPLIT_RE.split(text):
         stripped = sentence.strip()
         if not stripped:
@@ -1369,6 +1375,13 @@ def _resolution_text_looks_instructional(text: str) -> bool:
         lead = lead_match.group(1).lower()
         if lead in _RESOLUTION_NON_VERB_LEADS or lead in _RESOLUTION_COPULA_LEADS:
             continue
+        # A UI navigation path ("Settings then Phone") is a step -- but only now
+        # that the sentence has cleared the question / disposition / redirect /
+        # non-verb-lead rejects above, so a declarative ("The issue is in Billing
+        # then Plan") or question ("Did Settings then Phone show ...?") cannot
+        # qualify through the path shape.
+        if _RESOLUTION_UI_PATH_RE.search(remainder):
+            return True
         # Stem the lead so past-tense / gerund action verbs ("Enabled the SSO",
         # "Configured ...", "Updating ...") still register as instructions.
         if _resolution_signal_token(lead) in _RESOLUTION_ACTION_TERMS:

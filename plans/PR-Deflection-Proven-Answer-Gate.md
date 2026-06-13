@@ -122,6 +122,19 @@ converge. The predicate now is:
    - **Answer-is-a-question**: the sentence splitter now retains terminators, so
      a sentence ending in "?" ("Did the lights change on the router?") -- a
      diagnostic prompt back to the requester -- is skipped, not parsed as a step.
+8. **Structural recognizers moved behind the per-sentence rejects** (round-7
+   re-review BLOCKER fix). The numbered-step and UI-path recognizers previously
+   `return True` over the whole text *before* the per-sentence loop, so a
+   numbered or UI-path diagnostic question/declarative bypassed the
+   question/disposition/redirect/declarative rejects ("1. Did the lights
+   change?", "Did Settings then Phone show the toggle?", "The issue is in
+   Billing then Plan ..." all published). Now: the list-number prefix
+   ("1.", "2)", "step 3:") is stripped as a sentence prefix and the UI-path
+   check runs *inside* the loop after the rejects and after the non-verb/copula
+   lead check. A numbered sentence is evaluated by the same lead/object logic as
+   any other (numbering is no longer a standalone "this is a step" signal); the
+   splitter gained a `(?<![0-9].)` guard so a list-number period keeps its step
+   on one sentence. Real UI-path / numbered instructions still publish.
 
 The action-term-membership and question-topic-overlap checks are **demoted, not
 deleted**, to advisory signals (`_resolution_advisory_signals`): the maps stay
@@ -180,14 +193,16 @@ Parked hardening: none.
 ## Verification
 
 - Option-1 inversion (operator decision): held-out probe of
-  `_resolution_text_is_publishable` -- 20/20 realistic answers publish
+  `_resolution_text_is_publishable` -- 21/21 realistic answers publish
   (varied verbs incl. schedule/pin/narrow/forward/assign/rename/archive/submit/
   cancel + symptom/fix synonym pairs login-SSO/crash-cache/charged-refund +
   past-tense/first-person + numbered steps + "to fix this," preamble + round-7
-  redirect/question guards: real "send"/"message" steps and step-then-fallback
-  still publish), 19/19 honesty-floor non-answers rejected (incl. round-7
-  contact-redirect + non-copula question), 0 misses either direction. The corpus
-  is pinned into the test file (`_HELD_OUT_PUBLISHABLE` / `_HELD_OUT_REJECTED`).
+  redirect/question guards + a real UI-path instruction: real "send"/"message"
+  steps and step-then-fallback still publish), 22/22 honesty-floor non-answers
+  rejected (incl. round-7 contact-redirect + non-copula question + the round-7
+  re-review's UI-path question, numbered question, and UI-path declarative), 0
+  misses either direction. The corpus is pinned into the test file
+  (`_HELD_OUT_PUBLISHABLE` / `_HELD_OUT_REJECTED`).
 - Round-7 real-corpus calibration: ran the gate over 400 real Twitter brand
   replies (reject-side) and 400 real Ubuntu QA responses (recall-side). The two
   new disqualifiers drop Twitter publish 15% -> 10% (the DM/clarifying-question
@@ -195,11 +210,11 @@ Parked hardening: none.
 - `drafted_answer_count` does not regress: the resolution-bearing live-proof,
   saas-demo, and macro-writeback fixtures keep their drafted counts;
   measured-repetition merged-state language-filter test stays green.
-- Full extracted gauntlet (`scripts/run_extracted_pipeline_checks.sh`) -- 3952
+- Full extracted gauntlet (`scripts/run_extracted_pipeline_checks.sh`) -- 3956
   passed, 10 skipped, 0 failed (inversion + measured-repetition reconciliation
-  + round-7 redirect/question disqualifiers).
+  + round-7 redirect/question disqualifiers + structural-recognizer bypass fix).
 - Focused pytest for `tests/test_extracted_ticket_faq_markdown.py`.
-  - Passed, 219 tests.
+  - Passed, 223 tests.
 - Downstream pytest targets in `tests/test_content_ops_deflection_resolution_live_proof.py`,
   `tests/test_extracted_ticket_faq_macro_writeback.py`,
   `tests/test_extracted_ticket_faq_output_ingestion.py`, and
@@ -217,7 +232,7 @@ Parked hardening: none.
   and `tests/test_extracted_ticket_faq_markdown.py`
   - Passed.
 - `./scripts/run_extracted_pipeline_checks.sh`
-  - Passed, 3952 passed, 10 skipped; existing torch/pynvml warning.
+  - Passed, 3956 passed, 10 skipped; existing torch/pynvml warning.
 
 ## Estimated diff size
 

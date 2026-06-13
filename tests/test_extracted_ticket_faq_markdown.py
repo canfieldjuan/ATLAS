@@ -5257,6 +5257,9 @@ _HELD_OUT_PUBLISHABLE = (
     ("Where do I send it?", "Send the report to your team from the Export menu."),
     ("App errors out", "Reset the cache, then DM us if the error persists."),
     ("Service is down", "Check the logs. Did it work? If not, restart the service."),
+    # A real UI-path instruction must still publish after the structural
+    # recognizers were moved behind the per-sentence rejects (round-7 BLOCKER).
+    ("Disable airplane mode", "Go to Settings then Phone and toggle airplane mode off."),
 )
 
 _HELD_OUT_REJECTED = (
@@ -5288,6 +5291,12 @@ _HELD_OUT_REJECTED = (
     # step they can follow (a non-copula interrogative, complementing the
     # existing "Is the account still active?" copula case above).
     ("Internet keeps dropping", "Did the lights change on the router when this happened?"),
+    # Structural recognizers must not bypass the per-sentence rejects (round-7
+    # BLOCKER): a UI-path or numbered diagnostic question, and a UI-path
+    # declarative, are non-answers even though they carry a step-like shape.
+    ("Phone carrier", "Did Settings then Phone show the carrier toggle?"),
+    ("Router lights", "1. Did the lights change on the router?"),
+    ("Billing location", "The issue is in Billing then Plan and not your account."),
 )
 
 
