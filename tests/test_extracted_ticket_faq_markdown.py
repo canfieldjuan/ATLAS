@@ -24,6 +24,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     _resolution_advisory_signals,
     _resolution_signal_tokens,
     _resolution_text_is_publishable,
+    _source_date_span,
     build_ticket_faq_markdown,
     normalize_intent_rules,
     weighted_source_volume_by_group,
@@ -133,6 +134,21 @@ def _run_ticket_faq_cli(path: Path, *args: str) -> subprocess.CompletedProcess[s
         capture_output=True,
         text=True,
     )
+
+
+def test_source_date_span_accepts_us_export_dates() -> None:
+    span = _source_date_span([
+        {"source_id": "ticket-1", "date": "05/01/2026"},
+        {"source_id": "ticket-2", "created_at": "5-3-26"},
+    ])
+
+    assert span == {
+        "start": "2026-05-01",
+        "end": "2026-05-03",
+        "window_days": 3,
+        "dated_source_count": 2,
+        "missing_source_count": 0,
+    }
 
 
 def test_single_ticket_with_multiple_evidence_rows_is_not_a_repeat() -> None:

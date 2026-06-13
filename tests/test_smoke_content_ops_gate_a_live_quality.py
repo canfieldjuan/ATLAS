@@ -39,7 +39,25 @@ def test_messy_grounding_fixture_exercises_noisy_lopsided_ticket_shape() -> None
     assert [warning["code"] for warning in package.warnings] == [
         "ticket_row_missing_text",
         "ticket_row_missing_text",
+        "support_ticket_date_window_disabled",
     ]
+    assert package.warnings[-1] == {
+        "code": "support_ticket_date_window_disabled",
+        "message": (
+            "Disabled the dated support-ticket source window because 12 of 42 "
+            "included ticket rows did not include a parseable source date."
+        ),
+        "included_row_count": 42,
+        "dated_row_count": 30,
+        "missing_or_unparseable_date_count": 12,
+        "example_source_ids": [
+            "messy-003",
+            "messy-005",
+            "messy-006",
+            "messy-008",
+            "messy-015",
+        ],
+    }
     assert package.inputs["top_ticket_clusters"][:4] == [
         {"label": "reporting export", "count": 11},
         {"label": "dashboard freshness", "count": 7},

@@ -14,6 +14,9 @@ from extracted_content_pipeline.support_ticket_clustering import (
     support_ticket_plain_text,
     support_ticket_tokens,
 )
+from extracted_content_pipeline.support_ticket_dates import (
+    parse_support_ticket_source_date,
+)
 from extracted_content_pipeline.support_ticket_input_package import (
     DEFAULT_FAQ_REPORT_CTA_LABEL,
     build_support_ticket_input_package,
@@ -113,6 +116,32 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
         "singleton_cluster_count": 2,
         "largest_cluster_count": 1,
     }
+
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ("2026-05-01", "2026-05-01"),
+        ("2026-05-01T12:00:00Z", "2026-05-01"),
+        ("05/01/2026", "2026-05-01"),
+        ("5/1/2026", "2026-05-01"),
+        ("05/01/26", "2026-05-01"),
+        ("05-01-2026", "2026-05-01"),
+    ),
+)
+def test_support_ticket_source_date_parser_accepts_us_export_dates(
+    raw: str,
+    expected: str,
+) -> None:
+    parsed = parse_support_ticket_source_date(raw)
+
+    assert parsed is not None
+    assert parsed.isoformat() == expected
+
+
+def test_support_ticket_source_date_parser_rejects_natural_language() -> None:
+    assert parse_support_ticket_source_date("last week") is None
 
 
 def test_support_ticket_bundle_inherits_parent_fields_and_comment_text() -> None:
@@ -372,21 +401,21 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
             "Id": "zd-100",
             "Subject": "How do I reset MFA?",
             "Description": "I cannot get the login code on my new phone.",
-            "Created at": "2026-05-01T09:00:00Z",
+            "Created at": "05/01/2026",
             "Requester email": "maya@example.test",
         },
         {
             "Ticket ID": "fd-200",
             "Ticket Subject": "Where do I update billing?",
             "Ticket Description": "Why was I charged twice this month?",
-            "Created time": "2026-05-02 10:15:00",
+            "Created time": "5/2/2026",
             "Contact email address": "ops@example.test",
         },
         {
             "Conversation ID": "ic-300",
             "Conversation title": "Cancellation before renewal",
             "Conversation body": "How do I cancel my account before it renews?",
-            "Conversation created at": "2026-05-03",
+            "Conversation created at": "05-03-26",
             "User email": "founder@example.test",
         },
     ])
@@ -407,7 +436,7 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
         "text": (
             "How do I reset MFA? I cannot get the login code on my new phone."
         ),
-        "created_at": "2026-05-01T09:00:00Z",
+        "created_at": "05/01/2026",
         "contact_email": "maya@example.test",
         "support_ticket_cluster": "code login mfa new",
         "support_ticket_cluster_key": "tokens:code-login-mfa-new",
@@ -418,14 +447,14 @@ def test_support_ticket_input_package_accepts_common_platform_csv_shapes() -> No
     assert rows[1]["text"] == (
         "Where do I update billing? Why was I charged twice this month?"
     )
-    assert rows[1]["created_at"] == "2026-05-02 10:15:00"
+    assert rows[1]["created_at"] == "5/2/2026"
     assert rows[1]["contact_email"] == "ops@example.test"
     assert rows[2]["source_id"] == "ic-300"
     assert rows[2]["source_title"] == "Cancellation before renewal"
     assert rows[2]["text"] == (
         "Cancellation before renewal How do I cancel my account before it renews?"
     )
-    assert rows[2]["created_at"] == "2026-05-03"
+    assert rows[2]["created_at"] == "05-03-26"
     assert rows[2]["contact_email"] == "founder@example.test"
 
 
@@ -869,6 +898,36 @@ def test_support_ticket_input_package_omits_window_filter_without_row_dates() ->
     assert "faq_window_days" not in package.inputs
     assert package.inputs["source_period"] == "Uploaded support tickets"
     assert package.inputs["has_dated_window"] is False
+    assert package.warnings == ()
+
+
+def test_support_ticket_input_package_warns_when_date_column_is_blank() -> None:
+    package = build_support_ticket_input_package([
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Login email change",
+            "message": "How do I change my email address?",
+            "created_at": "",
+        }
+    ])
+
+    assert "faq_window_days" not in package.inputs
+    assert package.inputs["source_period"] == "Uploaded support tickets"
+    assert package.inputs["has_dated_window"] is False
+    assert package.warnings == (
+        {
+            "code": "support_ticket_date_window_disabled",
+            "message": (
+                "Disabled the dated support-ticket source window because "
+                "1 of 1 included ticket rows did not include a parseable "
+                "source date."
+            ),
+            "included_row_count": 1,
+            "dated_row_count": 0,
+            "missing_or_unparseable_date_count": 1,
+            "example_source_ids": ["ticket-1"],
+        },
+    )
 
 
 def test_support_ticket_input_package_omits_window_filter_without_parseable_row_dates() -> None:
@@ -884,6 +943,20 @@ def test_support_ticket_input_package_omits_window_filter_without_parseable_row_
     assert "faq_window_days" not in package.inputs
     assert package.inputs["source_period"] == "Uploaded support tickets"
     assert package.inputs["has_dated_window"] is False
+    assert package.warnings == (
+        {
+            "code": "support_ticket_date_window_disabled",
+            "message": (
+                "Disabled the dated support-ticket source window because "
+                "1 of 1 included ticket rows did not include a parseable "
+                "source date."
+            ),
+            "included_row_count": 1,
+            "dated_row_count": 0,
+            "missing_or_unparseable_date_count": 1,
+            "example_source_ids": ["ticket-1"],
+        },
+    )
 
 
 def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() -> None:
@@ -903,6 +976,20 @@ def test_support_ticket_input_package_omits_window_filter_for_mixed_date_rows() 
 
     assert "faq_window_days" not in package.inputs
     assert package.inputs["has_dated_window"] is False
+    assert package.warnings == (
+        {
+            "code": "support_ticket_date_window_disabled",
+            "message": (
+                "Disabled the dated support-ticket source window because "
+                "1 of 2 included ticket rows did not include a parseable "
+                "source date."
+            ),
+            "included_row_count": 2,
+            "dated_row_count": 1,
+            "missing_or_unparseable_date_count": 1,
+            "example_source_ids": ["ticket-2"],
+        },
+    )
 
 
 def test_support_ticket_input_package_accepts_single_mapping_comment_thread() -> None:
