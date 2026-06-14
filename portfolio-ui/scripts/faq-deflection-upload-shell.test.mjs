@@ -12,6 +12,10 @@ import submitHandler, {
   readPrivateCsvBlob,
   submitPrivateBlob,
 } from "../api/content-ops/deflection/submit.js";
+import zendeskExportSubmitHandler, {
+  ZENDESK_EXPORT_PATH,
+  submitZendeskCredentialFlow,
+} from "../api/content-ops/deflection/zendesk-export-submit.js";
 import inspectHandler, {
   INSPECT_PATH,
   MAX_INSPECT_MULTIPART_BYTES,
@@ -39,6 +43,10 @@ const appSource = await readFile(resolve(root, "src/App.tsx"), "utf8");
 const servicesSource = await readFile(resolve(root, "src/pages/Services.tsx"), "utf8");
 const uploadSource = await readFile(resolve(root, "src/pages/FaqDeflectionUpload.tsx"), "utf8");
 const submitSource = await readFile(resolve(root, "api/content-ops/deflection/submit.js"), "utf8");
+const zendeskExportSubmitSource = await readFile(
+  resolve(root, "api/content-ops/deflection/zendesk-export-submit.js"),
+  "utf8",
+);
 const inspectSource = await readFile(resolve(root, "api/content-ops/deflection/inspect.js"), "utf8");
 const submitSmokeSource = await readFile(
   resolve(root, "scripts/faq-deflection-submit-live-smoke.mjs"),
@@ -55,6 +63,7 @@ const ENV = {
   ATLAS_API_BASE_URL: "https://atlas.example.com",
   ATLAS_B2B_JWT: "secret-service-token",
   ATLAS_ACCOUNT_ID: ACCOUNT_ID,
+  ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN: "operator-export-access-token",
   BLOB_READ_WRITE_TOKEN: "vercel_blob_rw_token",
 };
 const READY_INSPECT_PAYLOAD = {
@@ -208,7 +217,11 @@ await test("upload shell exposes live submit markers and avoids browser credenti
     "data-atlas-deflection-submit",
     "data-atlas-deflection-inspect-endpoint",
     "data-atlas-deflection-upload-endpoint",
+    "data-atlas-deflection-zendesk-export-submit-endpoint",
     "data-atlas-deflection-upload-progress",
+    "data-atlas-deflection-zendesk-api-source",
+    "data-atlas-deflection-zendesk-export-access-token",
+    "data-atlas-deflection-zendesk-export-progress",
     "data-atlas-deflection-inspect-preview",
     "data-atlas-deflection-export-guidance",
     "data-atlas-deflection-retry",
@@ -239,6 +252,21 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /publishable answers require uploaded resolution\s+evidence/);
   assert.match(uploadSource, /value: "zendesk_full_thread"/);
   assert.match(uploadSource, /Zendesk JSON/);
+  assert.match(uploadSource, /value: "zendesk_api"/);
+  assert.match(uploadSource, /Zendesk API/);
+  assert.match(uploadSource, /ZENDESK_EXPORT_SUBMIT_ENDPOINT = "\/api\/content-ops\/deflection\/zendesk-export-submit"/);
+  assert.match(uploadSource, /fetch\(ZENDESK_EXPORT_SUBMIT_ENDPOINT/);
+  assert.match(uploadSource, /Authorization": `Bearer \$\{zendeskExportAccessToken\.trim\(\)\}`/);
+  assert.match(uploadSource, /setSubmit\(\{ status: "exporting" \}\)/);
+  assert.match(uploadSource, /The browser receives only the locked report path/);
+  assert.match(uploadSource, /ticket artifacts stay server-side/);
+  assert.match(zendeskExportSubmitSource, /ZENDESK_EXPORT_PATH = "\/api\/v1\/content-ops\/zendesk-export\/full-thread"/);
+  assert.match(zendeskExportSubmitSource, /ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN/);
+  assert.match(zendeskExportSubmitSource, /zendesk_export_auth_required/);
+  assert.match(zendeskExportSubmitSource, /bodyParser: false/);
+  assert.match(zendeskExportSubmitSource, /submitPrivateBlob/);
+  assert.match(zendeskExportSubmitSource, /access: "private"/);
+  assert.match(zendeskExportSubmitSource, /addRandomSuffix: true/);
   assert.match(uploadSource, /public requester comments[\s\S]*public agent replies/);
   assert.match(uploadSource, /Private notes are dropped during import/);
   assert.match(uploadSource, /ATLAS validates the thread shape during submit/);
@@ -279,7 +307,7 @@ await test("upload shell exposes live submit markers and avoids browser credenti
   assert.match(uploadSource, /JSON\.stringify/);
   assert.doesNotMatch(uploadSource, /X-Atlas-Account-Id|account_id/);
   assert.doesNotMatch(uploadSource, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
-  assert.doesNotMatch(uploadSource, /Authorization/);
+  assert.doesNotMatch(uploadSource, /BLOB_READ_WRITE_TOKEN|ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN/);
   assert.doesNotMatch(uploadSource, /\/paid\b/);
 });
 
@@ -1009,6 +1037,499 @@ await test("private blob submit forwards Zendesk full-thread JSON without CSV in
       options: { token: ENV.BLOB_READ_WRITE_TOKEN },
     },
   ]);
+});
+
+await test("Zendesk credential flow exports server-side, stores private JSON, then submits", async () => {
+  const calls = [];
+  const putCalls = [];
+  const deleteCalls = [];
+  const artifact = {
+    tickets: [
+      {
+        ticket: { id: 123, status: "solved", satisfaction_rating: { score: "good" } },
+        comments: [
+          { id: 1, public: true, author_role: "end_user", body: "How do I export reports?" },
+          { id: 2, public: true, author_role: "agent", body: "Open Reports, then Export." },
+        ],
+      },
+    ],
+  };
+  let storedBody = null;
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      account_id: "3b2b950d-f64b-4852-bc30-f92a34cdf169",
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+      start_time: "0",
+    },
+    nowMs: 123456,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith(ZENDESK_EXPORT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              importer_mode: FULL_THREAD_IMPORTER_MODE,
+              support_platform: "zendesk",
+              ticket_count: 1,
+              limit: 1000,
+              start_time: 0,
+              artifact,
+            });
+          },
+        };
+      }
+      assert.equal(url.endsWith(SUBMIT_PATH), true);
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ request_id: "content-ops-zendeskapi123" });
+        },
+      };
+    },
+    putBlobImpl: async (pathname, body, options) => {
+      putCalls.push({ pathname, body, options });
+      storedBody = body;
+      return {
+        pathname: `${BLOB_UPLOAD_PATH_PREFIX}123456-zendesk-api-export-random.json`,
+        url: `https://blob.example.com/private/zendesk-api-export.json?token=${ENV.BLOB_READ_WRITE_TOKEN}`,
+      };
+    },
+    getBlobImpl: async (pathname, options) => {
+      assert.equal(pathname, `${BLOB_UPLOAD_PATH_PREFIX}123456-zendesk-api-export-random.json`);
+      assert.deepEqual(options, {
+        access: "private",
+        token: ENV.BLOB_READ_WRITE_TOKEN,
+        useCache: false,
+      });
+      return {
+        statusCode: 200,
+        stream: new Blob([storedBody], { type: "application/json" }).stream(),
+        blob: {
+          size: storedBody.length,
+          contentType: "application/json",
+        },
+      };
+    },
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.payload.result_path.includes("content-ops-zendeskapi123"), true);
+  const resultJson = JSON.stringify(result);
+  assert.equal(resultJson.includes("tickets"), false);
+  assert.equal(resultJson.includes("https://blob.example.com/private"), false);
+  assert.equal(resultJson.includes(ENV.BLOB_READ_WRITE_TOKEN), false);
+  assert.equal(resultJson.includes(ENV.ATLAS_B2B_JWT), false);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${ZENDESK_EXPORT_PATH}`);
+  assert.equal(calls[0].options.headers.Authorization, `Bearer ${ENV.ATLAS_B2B_JWT}`);
+  assert.equal(calls[0].options.headers["Content-Type"], "application/json");
+  assert.deepEqual(JSON.parse(calls[0].options.body), { limit: 1000, start_time: 0 });
+  assert.equal(calls[0].options.body.includes("account_id"), false);
+  assert.equal(calls[0].options.body.includes(ENV.BLOB_READ_WRITE_TOKEN), false);
+  assert.equal(putCalls.length, 1);
+  assert.equal(putCalls[0].pathname, `${BLOB_UPLOAD_PATH_PREFIX}123456-zendesk-api-export.json`);
+  assert.deepEqual(putCalls[0].options, {
+    access: "private",
+    addRandomSuffix: true,
+    contentType: "application/json",
+    token: ENV.BLOB_READ_WRITE_TOKEN,
+  });
+  assert.equal(putCalls[0].body.toString("utf8"), JSON.stringify(artifact));
+  assert.equal(calls[1].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.equal(calls[1].options.body.get("support_platform"), "zendesk");
+  assert.equal(calls[1].options.body.get("importer_mode"), FULL_THREAD_IMPORTER_MODE);
+  assert.equal(await calls[1].options.body.get("json_file").text(), JSON.stringify(artifact));
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}123456-zendesk-api-export-random.json`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+});
+
+await test("Zendesk credential flow fails closed when private Blob write fails", async () => {
+  const calls = [];
+  const artifact = {
+    tickets: [
+      {
+        ticket: { id: 123, status: "solved" },
+        comments: [{ id: 1, public: true, author_role: "agent", body: "Use Reports." }],
+      },
+    ],
+  };
+
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith(ZENDESK_EXPORT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              importer_mode: FULL_THREAD_IMPORTER_MODE,
+              support_platform: "zendesk",
+              artifact,
+            });
+          },
+        };
+      }
+      throw new Error("must not submit after failed Blob write");
+    },
+    putBlobImpl: async () => {
+      throw new Error(`blob failed with ${ENV.BLOB_READ_WRITE_TOKEN}`);
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 502,
+    error: "zendesk_export_blob_unavailable",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${ZENDESK_EXPORT_PATH}`);
+  assert.equal(JSON.stringify(result).includes(ENV.BLOB_READ_WRITE_TOKEN), false);
+  assert.equal(JSON.stringify(result).includes("tickets"), false);
+});
+
+await test("Zendesk credential flow fails closed on malformed Blob write envelope", async () => {
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    fetchImpl: async (url) => {
+      assert.equal(url.endsWith(ZENDESK_EXPORT_PATH), true);
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            importer_mode: FULL_THREAD_IMPORTER_MODE,
+            support_platform: "zendesk",
+            artifact: { tickets: [{ ticket: { id: 123 }, comments: [] }] },
+          });
+        },
+      };
+    },
+    putBlobImpl: async () => ({ url: "https://blob.example.com/private/no-pathname.json" }),
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 502,
+    error: "zendesk_export_blob_contract_violation",
+  });
+  assert.equal(JSON.stringify(result).includes("https://blob.example.com/private"), false);
+});
+
+await test("Zendesk credential flow preserves submit failure after export and Blob success", async () => {
+  const calls = [];
+  const deleteCalls = [];
+  let storedBody = null;
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    nowMs: 222,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith(ZENDESK_EXPORT_PATH)) {
+        return {
+          ok: true,
+          status: 200,
+          async text() {
+            return JSON.stringify({
+              importer_mode: FULL_THREAD_IMPORTER_MODE,
+              support_platform: "zendesk",
+              artifact: { tickets: [{ ticket: { id: 123 }, comments: [] }] },
+            });
+          },
+        };
+      }
+      assert.equal(url.endsWith(SUBMIT_PATH), true);
+      return {
+        ok: false,
+        status: 503,
+        async text() {
+          return JSON.stringify({
+            error: "upstream failed",
+            detail: ENV.ATLAS_B2B_JWT,
+          });
+        },
+      };
+    },
+    putBlobImpl: async (_pathname, body) => {
+      storedBody = body;
+      return { pathname: `${BLOB_UPLOAD_PATH_PREFIX}222-zendesk-api-export-random.json` };
+    },
+    getBlobImpl: async (pathname, options) => {
+      assert.equal(pathname, `${BLOB_UPLOAD_PATH_PREFIX}222-zendesk-api-export-random.json`);
+      assert.deepEqual(options, {
+        access: "private",
+        token: ENV.BLOB_READ_WRITE_TOKEN,
+        useCache: false,
+      });
+      return {
+        statusCode: 200,
+        stream: new Blob([storedBody], { type: "application/json" }).stream(),
+        blob: {
+          size: storedBody.length,
+          contentType: "application/json",
+        },
+      };
+    },
+    deleteBlobImpl: async (pathname, options) => {
+      deleteCalls.push({ pathname, options });
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 502,
+    error: "atlas_submit_failed",
+    atlas_status: 503,
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${ZENDESK_EXPORT_PATH}`);
+  assert.equal(calls[1].url, `${ENV.ATLAS_API_BASE_URL}${SUBMIT_PATH}`);
+  assert.deepEqual(deleteCalls, [
+    {
+      pathname: `${BLOB_UPLOAD_PATH_PREFIX}222-zendesk-api-export-random.json`,
+      options: { token: ENV.BLOB_READ_WRITE_TOKEN },
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes(ENV.ATLAS_B2B_JWT), false);
+  assert.equal(JSON.stringify(result).includes("tickets"), false);
+});
+
+await test("Zendesk credential flow fails closed on malformed export envelope", async () => {
+  let putCalled = false;
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      async text() {
+        return JSON.stringify({
+          importer_mode: FULL_THREAD_IMPORTER_MODE,
+          support_platform: "zendesk",
+          artifact: { ticket: [] },
+        });
+      },
+    }),
+    putBlobImpl: async () => {
+      putCalled = true;
+      throw new Error("must not persist malformed export");
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 502,
+    error: "zendesk_export_contract_violation",
+  });
+  assert.equal(putCalled, false);
+});
+
+await test("Zendesk credential flow reports missing credentials without leaking upstream body", async () => {
+  let putCalled = false;
+  const result = await submitZendeskCredentialFlow({
+    config: {
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      timeoutMs: 1000,
+    },
+    blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+    payload: {
+      company_name: "Acme Co.",
+      contact_email: "lead@acme.example",
+      limit: "1000",
+    },
+    fetchImpl: async () => ({
+      ok: false,
+      status: 404,
+      async text() {
+        return JSON.stringify({
+          detail: {
+            reason: "zendesk_credentials_missing",
+            message: `missing ${ENV.ATLAS_B2B_JWT}`,
+          },
+        });
+      },
+    }),
+    putBlobImpl: async () => {
+      putCalled = true;
+      throw new Error("must not persist failed export");
+    },
+  });
+
+  assert.deepEqual(result, {
+    ok: false,
+    statusCode: 404,
+    error: "zendesk_credentials_missing",
+    atlas_status: 404,
+  });
+  assert.equal(JSON.stringify(result).includes(ENV.ATLAS_B2B_JWT), false);
+  assert.equal(putCalled, false);
+});
+
+await test("Zendesk credential flow endpoint gates method, content type, and access token", async () => {
+  const previousFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    throw new Error("must not call ATLAS before route auth passes");
+  };
+  try {
+    const methodRes = mockResponse();
+    await zendeskExportSubmitHandler(
+      request({
+        method: "GET",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN}`,
+        },
+        body: Buffer.from("{}"),
+      }),
+      methodRes,
+    );
+    assert.equal(methodRes.statusCode, 405);
+    assert.deepEqual(JSON.parse(methodRes.body), { ok: false, error: "method_not_allowed" });
+
+    const contentTypeRes = mockResponse();
+    await zendeskExportSubmitHandler(
+      request({
+        headers: {
+          "content-type": "text/plain",
+          authorization: `Bearer ${ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN}`,
+        },
+        body: Buffer.from("{}"),
+      }),
+      contentTypeRes,
+    );
+    assert.equal(contentTypeRes.statusCode, 415);
+    assert.deepEqual(JSON.parse(contentTypeRes.body), {
+      ok: false,
+      error: "zendesk_export_json_required",
+    });
+
+    const authRes = mockResponse();
+    await withEnv(ENV, async () => {
+      await zendeskExportSubmitHandler(
+        request({
+          headers: { "content-type": "application/json" },
+          body: Buffer.from(JSON.stringify({
+            company_name: "Acme Co.",
+            contact_email: "lead@acme.example",
+          })),
+        }),
+        authRes,
+      );
+    });
+    assert.equal(authRes.statusCode, 401);
+    assert.deepEqual(JSON.parse(authRes.body), {
+      ok: false,
+      error: "zendesk_export_auth_required",
+    });
+    assert.equal(authRes.body.includes(ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN), false);
+    assert.equal(authRes.body.includes(ENV.ATLAS_B2B_JWT), false);
+    assert.equal(fetchCalled, false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+await test("Zendesk credential flow endpoint rejects account spoofing before ATLAS", async () => {
+  const previousFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = async (url, options) => {
+    fetchCalled = true;
+    throw new Error(`must not call ATLAS: ${url} ${options?.method}`);
+  };
+  const res = mockResponse();
+  try {
+    await withEnv(ENV, async () => {
+      await zendeskExportSubmitHandler(
+        request({
+          headers: {
+            "content-type": "application/json",
+            "authorization": `Bearer ${ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN}`,
+            "x-atlas-account-id": "3b2b950d-f64b-4852-bc30-f92a34cdf169",
+          },
+          body: Buffer.from(JSON.stringify({
+            company_name: "Acme Co.",
+            contact_email: "lead@acme.example",
+          })),
+        }),
+        res,
+      );
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+
+  assert.equal(fetchCalled, false);
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.headers["Cache-Control"], "no-store");
+  assert.deepEqual(JSON.parse(res.body), { ok: false, error: "invalid_account_id" });
+  assert.equal(res.body.includes(ENV.ATLAS_B2B_JWT), false);
 });
 
 await test("private blob submit blocks not-ready inspect before report submit", async () => {

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   FileSpreadsheet,
+  KeyRound,
   Loader2,
   RotateCcw,
   Send,
@@ -16,6 +17,7 @@ import { SeoHead } from "@/components/seo/SeoHead";
 const SUBMIT_ENDPOINT = "/api/content-ops/deflection/submit";
 const INSPECT_ENDPOINT = "/api/content-ops/deflection/inspect";
 const BLOB_UPLOAD_ENDPOINT = "/api/content-ops/deflection/upload";
+const ZENDESK_EXPORT_SUBMIT_ENDPOINT = "/api/content-ops/deflection/zendesk-export-submit";
 const BLOB_UPLOAD_PATH_PREFIX = "faq-deflection/uploads/";
 const MAX_CSV_BYTES = 50 * 1024 * 1024;
 const FULL_THREAD_IMPORTER_MODE = "full_thread";
@@ -36,6 +38,11 @@ const UPLOAD_MODES = [
     label: "Zendesk JSON",
     description: "Import ticket metadata plus public comment threads.",
   },
+  {
+    value: "zendesk_api",
+    label: "Zendesk API",
+    description: "Use stored tenant credentials to fetch public ticket threads.",
+  },
 ] as const;
 
 type UploadMode = (typeof UPLOAD_MODES)[number]["value"];
@@ -48,6 +55,7 @@ type UploadState =
 type SubmitState =
   | { status: "idle" }
   | { status: "inspecting" }
+  | { status: "exporting" }
   | { status: "uploading"; percentage: number }
   | { status: "submitting" }
   | { status: "error"; message: string };
@@ -172,14 +180,25 @@ async function inspectDeflectionCsv(file: File): Promise<InspectDiagnostics> {
 export default function FaqDeflectionUpload() {
   const [companyName, setCompanyName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
+  const [zendeskExportAccessToken, setZendeskExportAccessToken] = useState("");
   const [supportPlatform, setSupportPlatform] = useState<string>(SUPPORT_PLATFORMS[0].value);
   const [uploadMode, setUploadMode] = useState<UploadMode>("csv");
   const [upload, setUpload] = useState<UploadState>({ status: "empty" });
   const [inspect, setInspect] = useState<InspectState>({ status: "idle" });
   const [submit, setSubmit] = useState<SubmitState>({ status: "idle" });
   const isFullThreadUpload = uploadMode === "zendesk_full_thread";
-  const uploadLabel = isFullThreadUpload ? "Zendesk full-thread JSON" : "Support-ticket CSV";
-  const uploadFormat = isFullThreadUpload ? "Zendesk JSON" : "CSV";
+  const isZendeskApi = uploadMode === "zendesk_api";
+  const isZendeskSource = isFullThreadUpload || isZendeskApi;
+  const uploadLabel = isZendeskApi
+    ? "Stored Zendesk credentials"
+    : isFullThreadUpload
+      ? "Zendesk full-thread JSON"
+      : "Support-ticket CSV";
+  const uploadFormat = isZendeskApi
+    ? "Zendesk API export"
+    : isFullThreadUpload
+      ? "Zendesk JSON"
+      : "CSV";
 
   const fieldsReady = useMemo(
     () =>
@@ -187,19 +206,63 @@ export default function FaqDeflectionUpload() {
         companyName.trim() &&
           contactEmail.trim() &&
           supportPlatform &&
-          upload.status === "ready",
+          (!isZendeskApi || zendeskExportAccessToken.trim()) &&
+          (isZendeskApi || upload.status === "ready"),
       ),
-    [companyName, contactEmail, supportPlatform, upload.status],
+    [companyName, contactEmail, isZendeskApi, supportPlatform, upload.status, zendeskExportAccessToken],
   );
   const canSubmit =
     fieldsReady &&
     submit.status !== "inspecting" &&
+    submit.status !== "exporting" &&
     submit.status !== "uploading" &&
     submit.status !== "submitting";
   const isRetry = submit.status === "error";
 
   const startSubmit = async () => {
-    if (upload.status !== "ready" || !fieldsReady) return;
+    if (!fieldsReady) return;
+
+    if (isZendeskApi) {
+      try {
+        setInspect({ status: "idle" });
+        setSubmit({ status: "exporting" });
+        const response = await fetch(ZENDESK_EXPORT_SUBMIT_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${zendeskExportAccessToken.trim()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            company_name: companyName.trim(),
+            contact_email: contactEmail.trim(),
+            limit: "1000",
+            start_time: "0",
+          }),
+        });
+        const payload = (await response.json().catch(() => null)) as {
+          result_path?: unknown;
+          error?: unknown;
+        } | null;
+        if (!response.ok || !payload || typeof payload.result_path !== "string") {
+          const message =
+            payload && typeof payload.error === "string"
+              ? payload.error
+              : "Zendesk export submit could not be started.";
+          setSubmit({ status: "error", message });
+          return;
+        }
+        window.location.assign(payload.result_path);
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : "Zendesk export submit could not be completed.";
+        setSubmit({ status: "error", message });
+      }
+      return;
+    }
+
+    if (upload.status !== "ready") return;
 
     let phase: "inspect" | "upload" = isFullThreadUpload ? "upload" : "inspect";
     try {
@@ -293,6 +356,7 @@ export default function FaqDeflectionUpload() {
         data-atlas-deflection-submit-endpoint={SUBMIT_ENDPOINT}
         data-atlas-deflection-inspect-endpoint={INSPECT_ENDPOINT}
         data-atlas-deflection-upload-endpoint={BLOB_UPLOAD_ENDPOINT}
+        data-atlas-deflection-zendesk-export-submit-endpoint={ZENDESK_EXPORT_SUBMIT_ENDPOINT}
       >
         <Link
           to="/services"
@@ -354,7 +418,7 @@ export default function FaqDeflectionUpload() {
                       setUpload({ status: "empty" });
                       setInspect({ status: "idle" });
                       setSubmit({ status: "idle" });
-                      if (mode.value === "zendesk_full_thread") {
+                      if (mode.value !== "csv") {
                         setSupportPlatform("zendesk");
                       }
                     }}
@@ -398,7 +462,7 @@ export default function FaqDeflectionUpload() {
                   className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-900 px-3 py-3 text-sm text-white outline-none transition focus:border-primary-400 disabled:cursor-not-allowed disabled:text-surface-200/55"
                   data-atlas-deflection-support-platform
                   value={supportPlatform}
-                  disabled={isFullThreadUpload}
+                  disabled={isZendeskSource}
                   onChange={(event) => {
                     setSupportPlatform(event.target.value);
                     setInspect({ status: "idle" });
@@ -421,55 +485,108 @@ export default function FaqDeflectionUpload() {
               </div>
             </div>
 
-            <label className="mt-6 block rounded-lg border border-dashed border-surface-600 bg-surface-900/55 p-5 transition focus-within:border-primary-400">
-              <span className="flex items-center gap-3 text-sm font-medium text-surface-100">
-                <Upload size={18} className="text-primary-300" />
-                {uploadLabel}
-              </span>
-              <input
-                key={uploadMode}
-                className="mt-4 block w-full cursor-pointer rounded-lg border border-surface-700 bg-surface-900 text-sm text-surface-100 file:mr-4 file:border-0 file:bg-primary-500 file:px-4 file:py-3 file:text-sm file:font-semibold file:text-surface-900"
-                data-atlas-deflection-csv-file
-                data-atlas-deflection-upload-file
-                type="file"
-                accept={isFullThreadUpload ? ".json,application/json" : ".csv,text/csv"}
-                onChange={(event) => {
-                  setUpload(fileState(event.target.files?.[0], uploadMode));
-                  setInspect({ status: "idle" });
-                }}
-              />
+            {isZendeskApi ? (
               <div
-                className="mt-4 space-y-2 text-xs leading-5 text-surface-200/70"
-                data-atlas-deflection-export-guidance
+                className="mt-6 rounded-lg border border-surface-700 bg-surface-900/55 p-5"
+                data-atlas-deflection-zendesk-api-source
               >
-                <p className="font-semibold text-surface-100">
-                  {isFullThreadUpload
-                    ? "Best input: Zendesk ticket JSON with public requester comments, public agent replies, status, and satisfaction fields."
-                    : "Best input: full ticket threads with customer questions plus agent replies, resolution text, or resolved ticket notes."}
-                </p>
-                <p>
-                  {isFullThreadUpload
-                    ? "Private notes are dropped during import. ATLAS validates the thread shape during submit before the locked report is created."
-                    : "Question-only exports still work for clustering and a gap list, but publishable answers require uploaded resolution evidence."}
-                </p>
+                <span className="flex items-center gap-3 text-sm font-medium text-surface-100">
+                  <KeyRound size={18} className="text-primary-300" />
+                  {uploadLabel}
+                </span>
+                <div
+                  className="mt-4 space-y-2 text-xs leading-5 text-surface-200/70"
+                  data-atlas-deflection-export-guidance
+                >
+                  <p className="font-semibold text-surface-100">
+                    ATLAS exports Zendesk tickets server-side using the stored
+                    tenant credentials for this workspace.
+                  </p>
+                  <p>
+                    The browser receives only the locked report path. Exported
+                    ticket threads are written to private Blob and submitted as
+                    full-thread Zendesk JSON without exposing the artifact.
+                  </p>
+                </div>
+                <label className="mt-4 block">
+                  <span className="text-sm font-medium text-surface-100">
+                    Export access token
+                  </span>
+                  <input
+                    className="mt-2 w-full rounded-lg border border-surface-700 bg-surface-950 px-3 py-3 text-sm text-white outline-none transition focus:border-primary-400"
+                    data-atlas-deflection-zendesk-export-access-token
+                    type="password"
+                    value={zendeskExportAccessToken}
+                    onChange={(event) => setZendeskExportAccessToken(event.target.value)}
+                    autoComplete="off"
+                    placeholder="Paste route access token"
+                  />
+                </label>
+                <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
+                  <p className="text-sm font-semibold text-primary-100">
+                    🛡️ 100% Deterministic Engine
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-primary-100/80">
+                    This tool does not use LLMs or generative AI to analyze your
+                    logs. We use deterministic clustering to sort your data.
+                  </p>
+                </div>
+                <span className="mt-3 block text-xs text-surface-200/60">
+                  Up to 1,000 tickets per export. Credentials, service tokens,
+                  private Blob tokens, and ticket artifacts stay server-side.
+                </span>
               </div>
-              <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
-                <p className="text-sm font-semibold text-primary-100">
-                  🛡️ 100% Deterministic Engine
-                </p>
-                <p className="mt-2 text-xs leading-5 text-primary-100/80">
-                  This tool does not use LLMs or generative AI to analyze your
-                  logs. We use deterministic clustering to sort your data.
-                </p>
-              </div>
-              <span className="mt-3 block text-xs text-surface-200/60">
-                Up to 50 MB. {isFullThreadUpload ? "JSON import" : "CSV inspection"} and
-                private storage both run server-side; service tokens never reach the browser.
-              </span>
-            </label>
+            ) : (
+              <label className="mt-6 block rounded-lg border border-dashed border-surface-600 bg-surface-900/55 p-5 transition focus-within:border-primary-400">
+                <span className="flex items-center gap-3 text-sm font-medium text-surface-100">
+                  <Upload size={18} className="text-primary-300" />
+                  {uploadLabel}
+                </span>
+                <input
+                  key={uploadMode}
+                  className="mt-4 block w-full cursor-pointer rounded-lg border border-surface-700 bg-surface-900 text-sm text-surface-100 file:mr-4 file:border-0 file:bg-primary-500 file:px-4 file:py-3 file:text-sm file:font-semibold file:text-surface-900"
+                  data-atlas-deflection-csv-file
+                  data-atlas-deflection-upload-file
+                  type="file"
+                  accept={isFullThreadUpload ? ".json,application/json" : ".csv,text/csv"}
+                  onChange={(event) => {
+                    setUpload(fileState(event.target.files?.[0], uploadMode));
+                    setInspect({ status: "idle" });
+                  }}
+                />
+                <div
+                  className="mt-4 space-y-2 text-xs leading-5 text-surface-200/70"
+                  data-atlas-deflection-export-guidance
+                >
+                  <p className="font-semibold text-surface-100">
+                    {isFullThreadUpload
+                      ? "Best input: Zendesk ticket JSON with public requester comments, public agent replies, status, and satisfaction fields."
+                      : "Best input: full ticket threads with customer questions plus agent replies, resolution text, or resolved ticket notes."}
+                  </p>
+                  <p>
+                    {isFullThreadUpload
+                      ? "Private notes are dropped during import. ATLAS validates the thread shape during submit before the locked report is created."
+                      : "Question-only exports still work for clustering and a gap list, but publishable answers require uploaded resolution evidence."}
+                  </p>
+                </div>
+                <div className="mt-4 rounded-md border border-primary-500/30 bg-primary-500/10 px-4 py-3">
+                  <p className="text-sm font-semibold text-primary-100">
+                    🛡️ 100% Deterministic Engine
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-primary-100/80">
+                    This tool does not use LLMs or generative AI to analyze your
+                    logs. We use deterministic clustering to sort your data.
+                  </p>
+                </div>
+                <span className="mt-3 block text-xs text-surface-200/60">
+                  Up to 50 MB. {isFullThreadUpload ? "JSON import" : "CSV inspection"} and
+                  private storage both run server-side; service tokens never reach the browser.
+                </span>
+              </label>
+            )}
 
             <div className="mt-5 min-h-12">
-              {upload.status === "ready" && (
+              {!isZendeskApi && upload.status === "ready" && (
                 <div className="flex items-start gap-3 rounded-lg border border-primary-500/30 bg-primary-500/10 p-4 text-sm text-primary-100">
                   <CheckCircle2 className="mt-0.5 h-5 w-5 flex-none text-primary-300" />
                   <p>
@@ -477,7 +594,7 @@ export default function FaqDeflectionUpload() {
                   </p>
                 </div>
               )}
-              {upload.status === "invalid" && (
+              {!isZendeskApi && upload.status === "invalid" && (
                 <div className="flex items-start gap-3 rounded-lg border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
                   <AlertTriangle className="mt-0.5 h-5 w-5 flex-none text-amber-300" />
                   <p>{upload.message}</p>
@@ -505,6 +622,15 @@ export default function FaqDeflectionUpload() {
                       style={{ width: `${submit.percentage}%` }}
                     />
                   </div>
+                </div>
+              )}
+              {submit.status === "exporting" && (
+                <div
+                  className="flex items-start gap-3 rounded-lg border border-primary-500/30 bg-primary-500/10 p-4 text-sm text-primary-100"
+                  data-atlas-deflection-zendesk-export-progress
+                >
+                  <Loader2 className="mt-0.5 h-5 w-5 flex-none animate-spin text-primary-300" />
+                  <p>Exporting Zendesk tickets with stored workspace credentials.</p>
                 </div>
               )}
               {inspect.status === "checking" && (
@@ -594,6 +720,11 @@ export default function FaqDeflectionUpload() {
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Checking CSV
                 </>
+              ) : submit.status === "exporting" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Exporting Zendesk
+                </>
               ) : submit.status === "uploading" ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -618,8 +749,10 @@ export default function FaqDeflectionUpload() {
             </button>
             {submit.status === "error" && (
               <p className="mt-3 text-xs leading-5 text-amber-200" data-atlas-deflection-retry>
-                {submit.message} Retry keeps the selected {uploadFormat} and starts a new
-                private upload.
+                {submit.message}{" "}
+                {isZendeskApi
+                  ? "Retry starts a new server-side Zendesk export."
+                  : `Retry keeps the selected ${uploadFormat} and starts a new private upload.`}
               </p>
             )}
           </form>
@@ -642,12 +775,14 @@ export default function FaqDeflectionUpload() {
               <div>
                 <dt className="text-surface-200/60">Submit mode</dt>
                 <dd className="mt-1 font-mono text-xs text-surface-100">
-                  private_blob_persistence
+                  {isZendeskApi ? "zendesk_api_export" : "private_blob_persistence"}
                 </dd>
               </div>
             </dl>
             <p className="mt-5 text-sm leading-6 text-surface-200/70">
-              {isFullThreadUpload
+              {isZendeskApi
+                ? "ATLAS exports from stored Zendesk credentials server-side, stores the artifact privately, then sends the browser to the locked result page for snapshot hydration and Checkout."
+                : isFullThreadUpload
                 ? "ATLAS reads the private Zendesk JSON server-side, imports public thread evidence, then sends the browser to the locked result page for snapshot hydration and Checkout."
                 : "ATLAS checks the CSV first, stores it privately after validation, then sends the browser to the locked result page for snapshot hydration and Checkout."}
             </p>
