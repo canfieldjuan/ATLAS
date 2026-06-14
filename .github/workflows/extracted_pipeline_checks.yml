@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/extracted_pipeline_checks.yml"
+      - "docs/extraction/validation/**"
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
       - "atlas_brain/reasoning/state.py"
@@ -128,6 +129,7 @@ on:
   push:
     paths:
       - ".github/workflows/extracted_pipeline_checks.yml"
+      - "docs/extraction/validation/**"
       - "extracted_content_pipeline/**"
       - "extracted_reasoning_core/**"
       - "atlas_brain/reasoning/state.py"

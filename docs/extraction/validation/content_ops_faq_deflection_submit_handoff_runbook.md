@@ -99,6 +99,25 @@ an account-less result URL:
 /services/faq-deflection/results/{request_id}
 ```
 
+## Source Role Guidance
+
+Use the source according to the proof being run:
+
+- CFPB full-volume exports are stress/scale evidence. They are useful for
+  proving hosted upload size, parser throughput, generation scale, snapshot and
+  artifact gates, and delivery plumbing without storing private customer data.
+  They are not Zendesk-like ticket calibration and are not a buyer-readiness
+  standard for product-quality report wording.
+- Zendesk-shaped full-thread exports are product/integration evidence. They
+  are useful for proving ticket/comment object shape, public requester wording,
+  public agent resolution evidence, private-note exclusion, and publishable
+  answer extraction. Small seeded Zendesk fixtures do not prove full-volume
+  performance by themselves.
+
+For #1440 funnel validation, keep both classes visible: CFPB proves the flow can
+survive realistic volume, while Zendesk-shaped data proves the flow is pointed
+at the support-ticket object model the buyer actually uses.
+
 ## Hosted Smoke
 
 ```bash
@@ -201,6 +220,10 @@ first committed live full-volume proof result of 27,384 repeat tickets while
 still rejecting tiny fixture reports. If a stricter proof is intentional, pass a
 nonzero explicit `--min-*` flag; explicit minimums can raise profile defaults
 but cannot lower them.
+
+Do not reuse `full-volume-cfpb` as a Zendesk or buyer-readiness threshold. It is
+a CFPB stress-proof profile only. Product-quality proof needs Zendesk-shaped
+ticket/comment evidence in addition to any CFPB stress run.
 
 ## Portfolio Result Page Smoke
 

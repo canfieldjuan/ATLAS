@@ -21,6 +21,11 @@ run, the full buyer funnel was blocked by three live findings:
 3. The deployed Stripe webhook rejected the local signing secret with
    `Invalid signature`, so paid unlock and delivery were not proven.
 
+Source role: this is CFPB stress/scale evidence. It proves the funnel can
+process a large public corpus with messy long-form narratives. It is not a
+Zendesk-like ticket calibration source, and its repeat-ticket threshold is not a
+buyer-readiness standard for product-quality support output.
+
 ## Input
 
 The raw CSV is not committed. It was regenerated locally from:
@@ -94,6 +99,10 @@ keeps the same row/byte/generated/top-question gates and lowers the repeat
 minimum to 25,000, below the observed 27,384 repeat tickets while still rejecting
 tiny smoke fixtures. Explicit nonzero `--min-*` flags remain available when a
 stricter run is intentional.
+
+The calibrated profile is deliberately named `full-volume-cfpb` because the
+thresholds belong to this stress corpus. Do not treat the 25,000 repeat-ticket
+minimum as a Zendesk product-quality gate.
 
 ## Portfolio Result Page
 
