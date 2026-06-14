@@ -408,6 +408,14 @@ async def test_describe_control_surfaces_route_returns_catalog_and_presets():
         "asset": "faq_markdown",
         "group": "vocabulary_gap",
     }
+    assert input_contracts["faq_representative_taxonomy_terms"] == {
+        "key": "faq_representative_taxonomy_terms",
+        "label": "Representative taxonomy terms",
+        "type": "string_list",
+        "placeholder": "Debt collection\nCommunication tactics",
+        "asset": "faq_markdown",
+        "group": "vocabulary_gap",
+    }
     assert input_contracts["faq_vocabulary_gap_rules"] == {
         "key": "faq_vocabulary_gap_rules",
         "label": "Vocabulary-gap rules",

@@ -11,6 +11,7 @@ TICKET_FAQ_VOCABULARY_GAP_INPUT_GROUP = "vocabulary_gap"
 
 FAQ_INTENT_RULES_INPUT = "faq_intent_rules"
 FAQ_DOCUMENTATION_TERMS_INPUT = "faq_documentation_terms"
+FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT = "faq_representative_taxonomy_terms"
 FAQ_VOCABULARY_GAP_RULES_INPUT = "faq_vocabulary_gap_rules"
 
 _TICKET_FAQ_INTENT_MAPPING_INPUT_CONTRACTS: tuple[dict[str, Any], ...] = (
@@ -31,6 +32,12 @@ _TICKET_FAQ_VOCABULARY_GAP_INPUT_CONTRACTS: tuple[dict[str, Any], ...] = (
         "label": "Documentation terms",
         "type": "string_list",
         "placeholder": "Single sign-on setup\nData export guide",
+    },
+    {
+        "key": FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT,
+        "label": "Representative taxonomy terms",
+        "type": "string_list",
+        "placeholder": "Debt collection\nCommunication tactics",
     },
     {
         "key": FAQ_VOCABULARY_GAP_RULES_INPUT,
@@ -73,6 +80,7 @@ def ticket_faq_vocabulary_gap_input_contracts() -> dict[str, dict[str, Any]]:
 __all__ = [
     "FAQ_DOCUMENTATION_TERMS_INPUT",
     "FAQ_INTENT_RULES_INPUT",
+    "FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT",
     "FAQ_VOCABULARY_GAP_RULES_INPUT",
     "TICKET_FAQ_INPUT_ASSET",
     "TICKET_FAQ_INTENT_MAPPING_INPUT_GROUP",

@@ -1838,7 +1838,38 @@ def test_build_ticket_faq_markdown_ignores_unlisted_structured_issue_vocabulary_
     assert "device reboot" not in " ".join(item["question"].lower() for item in result.items)
 
 
-def test_build_ticket_faq_markdown_uses_known_taxonomy_without_documentation_terms() -> None:
+def test_build_ticket_faq_markdown_uses_injected_taxonomy_without_documentation_terms() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject A",
+                "product": "Support operations",
+                "issue": "Device reboot loop",
+                "text": "Support operations device reboot loop blocks agents.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Customer subject B",
+                "product": "Support operations",
+                "issue": "Device reboot loop",
+                "text": "The device reboot loop in support operations still blocks admins.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+        representative_taxonomy_terms=("Support operations", "Device reboot loop"),
+    )
+
+    assert result.items[0]["question"] == "What should I do about operations device reboot loop?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert "customer subject" not in result.items[0]["question"].lower()
+
+
+def test_build_ticket_faq_markdown_does_not_use_structured_taxonomy_without_injection() -> None:
     result = build_ticket_faq_markdown(
         [
             {
@@ -1863,9 +1894,9 @@ def test_build_ticket_faq_markdown_uses_known_taxonomy_without_documentation_ter
         max_items=0,
     )
 
-    assert result.items[0]["question"] == "What should I do about debt collection communication tactics?"
-    assert result.items[0]["question_source"] == "source_policy"
-    assert "customer subject" not in result.items[0]["question"].lower()
+    assert result.items[0]["question"] == "What should I do about technical support?"
+    assert "debt collection" not in result.items[0]["question"].lower()
+    assert "communication tactics" not in result.items[0]["question"].lower()
 
 
 def test_build_ticket_faq_markdown_uses_safe_terms_instead_of_pii_gist_tokens() -> None:

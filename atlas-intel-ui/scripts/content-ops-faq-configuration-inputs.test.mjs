@@ -20,6 +20,7 @@ async function loadTsModule(path) {
 const {
   FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT,
   FAQ_MARKDOWN_OUTPUT,
+  FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT,
   faqConfigurationControlsVisible,
   faqConfigurationInputsSelected,
   faqIntentRulesDraftValue,
@@ -63,10 +64,17 @@ test('new run page uses the shared FAQ configuration output predicate', () => {
   assert.ok(newRunSource.includes('{faqConfigurationControlsVisibleForCatalog && ('))
   assert.ok(newRunSource.includes('{faqIntentRulesContract && ('))
   assert.ok(newRunSource.includes('{faqDocumentationTermsContract && ('))
+  assert.ok(
+    newRunSource.includes('{faqRepresentativeTaxonomyTermsContract && ('),
+  )
   assert.ok(newRunSource.includes('{faqVocabularyGapRulesContract && ('))
   assert.ok(!newRunSource.includes('faqMarkdownOutputSelected'))
   assert.ok(newRunSource.includes('FAQ vocabulary-gap inputs'))
   assert.ok(newRunSource.includes('FAQ_INTENT_RULES_INPUT'))
+  assert.ok(newRunSource.includes('FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT'))
+  assert.ok(
+    newRunSource.includes('handleFaqRepresentativeTaxonomyTermsChange'),
+  )
   assert.ok(newRunSource.includes('handleFaqIntentRulesChange'))
 })
 
@@ -78,6 +86,14 @@ test('FAQ configuration controls require selected output and advertised catalog 
     true,
   )
   assert.equal(
+    faqConfigurationControlsVisible([FAQ_DEFLECTION_REPORT_OUTPUT], {
+      representativeTaxonomyTerms: {
+        key: FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT,
+      },
+    }),
+    true,
+  )
+  assert.equal(
     faqConfigurationControlsVisible([FAQ_DEFLECTION_REPORT_OUTPUT], {}),
     false,
   )
@@ -85,6 +101,9 @@ test('FAQ configuration controls require selected output and advertised catalog 
     faqConfigurationControlsVisible(['landing_page'], {
       intentRules: { key: 'faq_intent_rules' },
       documentationTerms: { key: 'faq_documentation_terms' },
+      representativeTaxonomyTerms: {
+        key: FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT,
+      },
       vocabularyGapRules: { key: 'faq_vocabulary_gap_rules' },
     }),
     false,

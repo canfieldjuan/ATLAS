@@ -744,6 +744,7 @@ def test_plan_maps_faq_deflection_report_to_report_service():
                 "deflection_report_title": "Customer FAQ Deflection Report",
                 "faq_title": "Source FAQ",
                 "faq_documentation_terms": ["Download report"],
+                "faq_representative_taxonomy_terms": ["Support operations"],
                 "faq_vocabulary_gap_rules": [["export", "download"]],
             },
         }
@@ -774,6 +775,7 @@ def test_plan_maps_faq_deflection_report_to_report_service():
         ],
         "max_text_chars": 1200,
         "documentation_terms": ["Download report"],
+        "representative_taxonomy_terms": ["Support operations"],
         "vocabulary_gap_rules": [["export", "download"]],
         "report_title": "Customer FAQ Deflection Report",
     }

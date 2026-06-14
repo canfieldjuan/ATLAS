@@ -22,6 +22,7 @@ from extracted_content_pipeline.support_ticket_dates import (
 )
 from extracted_content_pipeline.support_ticket_input_package import (
     DEFAULT_FAQ_REPORT_CTA_LABEL,
+    DEFAULT_FAQ_REPRESENTATIVE_TAXONOMY_TERMS,
     build_support_ticket_input_package,
 )
 from extracted_content_pipeline.support_ticket_zendesk_thread import (
@@ -70,6 +71,9 @@ def test_support_ticket_input_package_feeds_existing_content_ops_plan() -> None:
     ]
     assert request.inputs["faq_window_days"] == 90
     assert request.inputs["faq_source_types"] == ["support_ticket"]
+    assert request.inputs["faq_representative_taxonomy_terms"] == list(
+        DEFAULT_FAQ_REPRESENTATIVE_TAXONOMY_TERMS
+    )
     assert request.inputs["source_period"] == "Last 90 days of support tickets"
     assert request.inputs["has_dated_window"] is True
     assert request.inputs["cta_label"] == DEFAULT_FAQ_REPORT_CTA_LABEL

@@ -59,6 +59,7 @@ import {
   FAQ_DOCUMENTATION_TERMS_INPUT,
   FAQ_DEFLECTION_REPORT_OUTPUT,
   FAQ_INTENT_RULES_INPUT,
+  FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT,
   FAQ_RESOLUTION_EVIDENCE_STATUS,
   FAQ_VOCABULARY_GAP_RULES_INPUT,
   DEFAULT_SOCIAL_POST_CHANNELS,
@@ -194,6 +195,10 @@ const FAQ_INTENT_RULES_DISPLAY_FALLBACK = {
 const FAQ_DOCUMENTATION_TERMS_DISPLAY_FALLBACK = {
   label: 'Documentation terms',
   placeholder: 'Single sign-on setup\nData export guide',
+}
+const FAQ_REPRESENTATIVE_TAXONOMY_TERMS_DISPLAY_FALLBACK = {
+  label: 'Representative taxonomy terms',
+  placeholder: 'Debt collection\nCommunication tactics',
 }
 const FAQ_VOCABULARY_GAP_RULES_DISPLAY_FALLBACK = {
   label: 'Vocabulary-gap rules',
@@ -367,6 +372,9 @@ export default function ContentOpsNewRun() {
   const faqDocumentationTermsContract = faqConfigurationOutputSelected
     ? catalog.inputContracts[FAQ_DOCUMENTATION_TERMS_INPUT]
     : undefined
+  const faqRepresentativeTaxonomyTermsContract = faqConfigurationOutputSelected
+    ? catalog.inputContracts[FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT]
+    : undefined
   const faqVocabularyGapRulesContract = faqConfigurationOutputSelected
     ? catalog.inputContracts[FAQ_VOCABULARY_GAP_RULES_INPUT]
     : undefined
@@ -378,6 +386,10 @@ export default function ContentOpsNewRun() {
     faqVocabularyGapRulesContract,
     FAQ_VOCABULARY_GAP_RULES_DISPLAY_FALLBACK,
   )
+  const faqRepresentativeTaxonomyTermsDisplay = inputContractDisplay(
+    faqRepresentativeTaxonomyTermsContract,
+    FAQ_REPRESENTATIVE_TAXONOMY_TERMS_DISPLAY_FALLBACK,
+  )
   const faqIntentRulesDisplay = inputContractDisplay(
     faqIntentRulesContract,
     FAQ_INTENT_RULES_DISPLAY_FALLBACK,
@@ -386,6 +398,7 @@ export default function ContentOpsNewRun() {
     faqConfigurationControlsVisible(request.outputs, {
       intentRules: faqIntentRulesContract,
       documentationTerms: faqDocumentationTermsContract,
+      representativeTaxonomyTerms: faqRepresentativeTaxonomyTermsContract,
       vocabularyGapRules: faqVocabularyGapRulesContract,
     })
   const landingPageRepairAttemptContract = landingPageOutputSelected
@@ -469,6 +482,16 @@ export default function ContentOpsNewRun() {
 
   const handleFaqDocumentationTermsChange = (value: string) => {
     const updated = updateFaqDocumentationTermsInputJson(inputsJson, value)
+    if (!updated.ok) return
+    setInputsJson(updated.value)
+    markStale()
+  }
+
+  const handleFaqRepresentativeTaxonomyTermsChange = (value: string) => {
+    const updated = updateFaqRepresentativeTaxonomyTermsInputJson(
+      inputsJson,
+      value,
+    )
     if (!updated.ok) return
     setInputsJson(updated.value)
     markStale()
@@ -1426,6 +1449,25 @@ export default function ContentOpsNewRun() {
                       disabled={faqInputsDisabled}
                       className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                       placeholder={faqDocumentationTermsDisplay.placeholder}
+                    />
+                  </label>
+                )}
+                {faqRepresentativeTaxonomyTermsContract && (
+                  <label className="block text-sm">
+                    <span className="text-slate-300">
+                      {faqRepresentativeTaxonomyTermsDisplay.label}
+                    </span>
+                    <textarea
+                      value={faqRepresentativeTaxonomyTermsDraftValue(
+                        parsedInputsForControls,
+                      )}
+                      onChange={(e) =>
+                        handleFaqRepresentativeTaxonomyTermsChange(e.target.value)
+                      }
+                      rows={4}
+                      disabled={faqInputsDisabled}
+                      className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder={faqRepresentativeTaxonomyTermsDisplay.placeholder}
                     />
                   </label>
                 )}
@@ -3115,6 +3157,33 @@ function updateFaqDocumentationTermsInputJson(
     delete next[FAQ_DOCUMENTATION_TERMS_INPUT]
   } else {
     next[FAQ_DOCUMENTATION_TERMS_INPUT] = values
+  }
+
+  return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }
+}
+
+function faqRepresentativeTaxonomyTermsDraftValue(
+  parsed: ParsedInputsJsonObject,
+): string {
+  if (!parsed.ok) return ''
+  const raw = parsed.value[FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT]
+  if (raw === null || typeof raw === 'undefined') return ''
+  return stringListDraftValue(raw)
+}
+
+function updateFaqRepresentativeTaxonomyTermsInputJson(
+  current: string,
+  draftValue: string,
+): UpdatedInputsJson {
+  const parsed = parseInputsJsonObject(current)
+  if (!parsed.ok) return parsed
+
+  const next = { ...parsed.value }
+  const values = stringListFromDraft(draftValue)
+  if (values.length === 0) {
+    delete next[FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT]
+  } else {
+    next[FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT] = values
   }
 
   return { ok: true, value: `${JSON.stringify(next, null, 2)}\n` }

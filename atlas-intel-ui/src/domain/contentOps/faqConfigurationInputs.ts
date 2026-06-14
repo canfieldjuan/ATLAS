@@ -2,6 +2,8 @@ export const FAQ_MARKDOWN_OUTPUT = 'faq_markdown'
 export const FAQ_DEFLECTION_REPORT_CONFIGURATION_OUTPUT = 'faq_deflection_report'
 export const FAQ_INTENT_RULES_INPUT = 'faq_intent_rules'
 export const FAQ_DOCUMENTATION_TERMS_INPUT = 'faq_documentation_terms'
+export const FAQ_REPRESENTATIVE_TAXONOMY_TERMS_INPUT =
+  'faq_representative_taxonomy_terms'
 export const FAQ_VOCABULARY_GAP_RULES_INPUT = 'faq_vocabulary_gap_rules'
 
 export const FAQ_CONFIGURATION_OUTPUTS = [
@@ -22,6 +24,7 @@ export function faqConfigurationInputsSelected(
 export interface FAQConfigurationInputContracts {
   intentRules?: unknown
   documentationTerms?: unknown
+  representativeTaxonomyTerms?: unknown
   vocabularyGapRules?: unknown
 }
 
@@ -34,6 +37,7 @@ export function faqConfigurationControlsVisible(
     Boolean(
       contracts.intentRules ||
         contracts.documentationTerms ||
+        contracts.representativeTaxonomyTerms ||
         contracts.vocabularyGapRules,
     )
   )

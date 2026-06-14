@@ -95,6 +95,7 @@ class FAQDeflectionReportService:
         support_contact: str | None = None,
         intent_rules: Sequence[tuple[str, Sequence[str]]] | None = None,
         documentation_terms: Sequence[str] | None = None,
+        representative_taxonomy_terms: Sequence[str] | None = None,
         vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
         **kwargs: Any,
     ) -> DeflectionReportArtifact:
@@ -113,6 +114,7 @@ class FAQDeflectionReportService:
             support_contact=support_contact,
             intent_rules=intent_rules,
             documentation_terms=documentation_terms,
+            representative_taxonomy_terms=representative_taxonomy_terms,
             vocabulary_gap_rules=vocabulary_gap_rules,
         )
         return build_deflection_report_artifact(

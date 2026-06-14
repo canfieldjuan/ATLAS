@@ -324,6 +324,10 @@ def _faq_markdown_config_for_request(request: ContentOpsRequest) -> TicketFAQMar
             _text_sequence_input(request.inputs, "faq_documentation_terms")
             or defaults.documentation_terms
         ),
+        representative_taxonomy_terms=(
+            _text_sequence_input(request.inputs, "faq_representative_taxonomy_terms")
+            or defaults.representative_taxonomy_terms
+        ),
         vocabulary_gap_rules=(
             _nested_text_sequence_input(request.inputs, "faq_vocabulary_gap_rules")
             or defaults.vocabulary_gap_rules
@@ -567,6 +571,10 @@ def _step_for_output(output: str, request: ContentOpsRequest) -> GenerationPlanS
             ]
         if config.documentation_terms:
             step_config["documentation_terms"] = list(config.documentation_terms)
+        if config.representative_taxonomy_terms:
+            step_config["representative_taxonomy_terms"] = list(
+                config.representative_taxonomy_terms
+            )
         if config.vocabulary_gap_rules:
             step_config["vocabulary_gap_rules"] = [
                 list(rule) for rule in config.vocabulary_gap_rules
