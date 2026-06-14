@@ -1,6 +1,6 @@
 # Plan archive index
 
-1037 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1038 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -847,6 +847,7 @@
 - [PR-FAQ-Source-ID-Execute-Smoke](archive/PR-FAQ-Source-ID-Execute-Smoke.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
 - [PR-FAQ-Source-ID-Live-Harness](archive/PR-FAQ-Source-ID-Live-Harness.md) - lane: content-ops/faq-output-ingestion | phase: Functional validation
 - [PR-FAQ-Source-ID-UI-Selection](archive/PR-FAQ-Source-ID-UI-Selection.md) - lane: content-ops/faq-output-ingestion | phase: Vertical slice
+- [PR-FastAPI-0137-CI-Pin](archive/PR-FastAPI-0137-CI-Pin.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Frontend-Test-CI-Enrollment-Rule](archive/PR-Frontend-Test-CI-Enrollment-Rule.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Gate-A-Blog-Publishable-Prose-Gate](archive/PR-Gate-A-Blog-Publishable-Prose-Gate.md) - lane: content-ops/gate-a-output-quality | phase: Production hardening
 - [PR-Gate-A-Blog-Variant-Persistence](archive/PR-Gate-A-Blog-Variant-Persistence.md) - lane: content-ops/gate-a-blog-variant-persistence | phase: Production hardening
