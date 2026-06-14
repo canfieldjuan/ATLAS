@@ -172,6 +172,51 @@ The command does not call providers, read API credentials, write benchmark
 results, or expose verifier/MCP behavior. Provider adapters and response capture
 remain a later slice.
 
+## Prompt Response Import
+
+After model witnesses fill the exported packets out of band, import the returned
+rows into the recorded-response JSON shape consumed by the artifact CLI:
+
+```bash
+python scripts/import_content_ops_claim_evidence_prompt_responses.py \
+  path/to/claim_evidence_prompt_packets.json \
+  path/to/returned_prompt_responses.json \
+  path/to/recorded_responses.json
+
+python scripts/import_content_ops_claim_evidence_prompt_responses.py \
+  path/to/claim_evidence_prompt_packets.jsonl \
+  path/to/returned_prompt_responses.jsonl \
+  path/to/recorded_responses.json
+```
+
+Returned rows repeat the prompt-packet identity and include the strict
+structured response:
+
+```json
+{
+  "model_id": "claude-sonnet",
+  "triple_id": "real-001",
+  "contract_version": "verify_claim_evidence.v1",
+  "response": {
+    "supports": true,
+    "confidence": 5,
+    "reason": "The quote directly states the claim."
+  }
+}
+```
+
+Rows may optionally include `"run_type": "stability"` and a non-empty `run_id`
+to populate `stability_runs_by_model_id`. Rows without `run_type`, or with
+`run_type` set to `main`, populate the primary `model_runs`.
+
+The importer rejects returned rows that do not match an exported
+model/triple/contract packet, duplicate main rows, duplicate stability rows,
+missing main coverage, malformed strict responses, non-UTF-8 input, directory
+outputs, symlink outputs, and output paths that match either input path. It
+writes only the recorded-response JSON; it does not call providers, read
+credentials, score benchmark results, write final artifacts, or expose
+verifier/MCP behavior.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
