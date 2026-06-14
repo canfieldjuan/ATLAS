@@ -613,7 +613,10 @@ class TicketFAQMarkdownService:
         )
         result = replace(
             result,
-            warnings=tuple(warning.as_dict() for warning in normalized.warnings),
+            warnings=(
+                *(warning.as_dict() for warning in normalized.warnings),
+                *result.warnings,
+            ),
         )
         if self._ticket_faqs is None or not result.items:
             return result
@@ -833,17 +836,25 @@ def build_ticket_faq_markdown(
     else:
         selected_groups = tuple(sorted_groups)
 
-    items = tuple(
-        _item(
-            topic,
+    item_records = tuple(
+        (
             rows,
-            max_evidence_per_item=max_evidence_per_item,
-            support_contact=support_contact,
-            documentation_terms=resolved_documentation_terms,
-            vocabulary_gap_rules=resolved_vocabulary_gap_rules,
+            _item(
+                topic,
+                rows,
+                max_evidence_per_item=max_evidence_per_item,
+                support_contact=support_contact,
+                documentation_terms=resolved_documentation_terms,
+                vocabulary_gap_rules=resolved_vocabulary_gap_rules,
+            ),
         )
         for topic, rows in selected_groups
     )
+    items, disambiguation_warnings = _disambiguate_source_policy_question_collisions(
+        item_records,
+        documentation_terms=resolved_documentation_terms,
+    )
+    warnings.extend(disambiguation_warnings)
     return TicketFAQMarkdownResult(
         markdown=_render(title=title, items=items, source_count=len(opportunities), ticket_source_count=len(source_keys)),
         items=items,
@@ -2301,6 +2312,135 @@ def _safe_vocabulary_representative_label(
         key=lambda token: (-repeated_tokens[token], safe_tokens[token][0], token),
     )[:5]
     return " ".join(safe_tokens[token][1] for token in tokens)
+
+
+def _disambiguate_source_policy_question_collisions(
+    item_records: Sequence[tuple[Sequence[Mapping[str, str]], Mapping[str, Any]]],
+    *,
+    documentation_terms: Sequence[str],
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    items = [dict(item) for _rows, item in item_records]
+    indexes_by_question: dict[str, list[int]] = defaultdict(list)
+    for index, item in enumerate(items):
+        if item.get("question_source") != "source_policy":
+            continue
+        question = _clean(item.get("question"))
+        if question:
+            indexes_by_question[question].append(index)
+
+    warnings: list[dict[str, Any]] = []
+    for question, indexes in indexes_by_question.items():
+        if len(indexes) < 2:
+            continue
+        suffixes: list[str] = []
+        seen_suffixes: set[str] = set()
+        for index in indexes:
+            rows = item_records[index][0]
+            suffix = _source_policy_disambiguation_suffix(
+                question,
+                rows,
+                documentation_terms=documentation_terms,
+            )
+            if not suffix or suffix in seen_suffixes:
+                suffixes = []
+                break
+            suffixes.append(suffix)
+            seen_suffixes.add(suffix)
+        if len(suffixes) != len(indexes):
+            warnings.append(_duplicate_source_policy_question_warning(question, items, indexes))
+            continue
+        disambiguated_questions = tuple(
+            _disambiguated_question(question, suffix) for suffix in suffixes
+        )
+        if not all(disambiguated_questions):
+            warnings.append(_duplicate_source_policy_question_warning(question, items, indexes))
+            continue
+        for index, disambiguated in zip(indexes, disambiguated_questions):
+            items[index]["question"] = disambiguated
+            items[index]["answer"] = _answer_for_disambiguated_question(
+                items[index],
+                disambiguated,
+            )
+    return (tuple(items), tuple(warnings))
+
+
+def _answer_for_disambiguated_question(
+    item: Mapping[str, Any],
+    question: str,
+) -> str:
+    if item.get("answer_evidence_status") == "resolution_evidence":
+        return str(item.get("answer") or "")
+    return _answer_summary(
+        question=question,
+        source_count=len(_list(item.get("source_ids"))),
+        answer_evidence_status=str(item.get("answer_evidence_status") or ""),
+    )
+
+
+def _source_policy_disambiguation_suffix(
+    question: str,
+    rows: Sequence[Mapping[str, str]],
+    *,
+    documentation_terms: Sequence[str],
+) -> str:
+    safe_tokens = _safe_representative_tokens(
+        (
+            *documentation_terms,
+            *(
+                _clean(row.get("safe_label_context"))
+                for row in rows
+                if _clean(row.get("safe_label_context"))
+            ),
+        )
+    )
+    if not safe_tokens:
+        return ""
+    question_tokens = support_ticket_tokens(question)
+    token_counts: dict[str, int] = {}
+    for row in rows:
+        for token in _question_gist_tokens(str(row.get("text") or "")):
+            if (
+                token not in safe_tokens
+                or token in question_tokens
+                or _REDACTION_TOKEN_RE.fullmatch(token)
+            ):
+                continue
+            token_counts[token] = token_counts.get(token, 0) + 1
+    if not token_counts:
+        return ""
+    tokens = sorted(
+        token_counts,
+        key=lambda token: (-token_counts[token], safe_tokens[token][0], token),
+    )[:3]
+    return " ".join(safe_tokens[token][1] for token in tokens)
+
+
+def _disambiguated_question(question: str, suffix: str) -> str:
+    stem = _clean(question).rstrip("?.!,;: ")
+    suffix_text = _clean(suffix).lower()
+    if not stem or not suffix_text:
+        return ""
+    disambiguated = _normalize_question_text(f"{stem} - {suffix_text}")
+    return disambiguated if _usable_question(disambiguated) else ""
+
+
+def _duplicate_source_policy_question_warning(
+    question: str,
+    items: Sequence[Mapping[str, Any]],
+    indexes: Sequence[int],
+) -> dict[str, Any]:
+    source_ids: list[str] = []
+    for index in indexes:
+        source_ids.extend(str(source_id) for source_id in _list(items[index].get("source_ids")))
+    return {
+        "code": "duplicate_source_policy_questions",
+        "message": (
+            "Some source-policy FAQ headings remain duplicated because no safe "
+            "controlled-vocabulary disambiguator was available."
+        ),
+        "question": question,
+        "source_ids": source_ids,
+    }
 
 
 def _safe_representative_tokens(

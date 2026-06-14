@@ -2111,6 +2111,141 @@ def test_build_ticket_faq_markdown_uses_repeated_gist_tokens_for_representative_
     assert result.items[0]["question"] == "What should I do about export timeout?"
 
 
+def test_build_ticket_faq_markdown_disambiguates_colliding_safe_source_policy_labels() -> None:
+    common = "workspace connector dashboard export billing"
+    refund = "invoice refund ledger credit memo adjustment dispute"
+    reboot = "device reboot loop firmware crash restart kernel"
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": "technical support",
+            "text": f"{common} {extra}",
+            "source_id": f"{prefix}-{index}",
+        }
+        for prefix, extra in (("refund", refund), ("reboot", reboot))
+        for index in range(2)
+    ]
+
+    result = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        documentation_terms=(common, refund, reboot),
+    )
+
+    assert [
+        (item["question"], item["source_ids"])
+        for item in result.items
+    ] == [
+        (
+            "What should I do about workspace connector dashboard export billing - invoice refund ledger?",
+            ("refund-0", "refund-1"),
+        ),
+        (
+            "What should I do about workspace connector dashboard export billing - device reboot loop?",
+            ("reboot-0", "reboot-1"),
+        ),
+    ]
+    assert result.items[0]["question"] in result.items[0]["answer"]
+    assert result.items[1]["question"] in result.items[1]["answer"]
+    assert not result.items[0]["answer"].endswith(
+        "What should I do about workspace connector dashboard export billing?"
+    )
+    assert result.warnings == ()
+
+
+def test_build_ticket_faq_markdown_does_not_disambiguate_customer_wording_questions() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "text": "How do I update the workspace billing contact?",
+                "source_id": "ticket-1",
+                "resolution_text": "Send the billing admin update form.",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "text": "How do I update the workspace billing contact?",
+                "source_id": "ticket-2",
+                "resolution_text": "Escalate the request to workspace finance.",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert [item["question_source"] for item in result.items] == [
+        "customer_wording",
+        "customer_wording",
+    ]
+    assert [item["question"] for item in result.items] == [
+        "How do I update the workspace billing contact?",
+        "How do I update the workspace billing contact?",
+    ]
+    assert result.warnings == ()
+
+
+def test_build_ticket_faq_markdown_warns_when_duplicate_source_policy_labels_remain() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Case for jane.doe@example.com",
+                "text": "workspace connector dashboard export billing jane doe",
+                "source_id": "ticket-1a",
+                "resolution_text": "Resolve from refund queue.",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Case for jane.doe@example.com",
+                "text": "workspace connector dashboard export billing jane doe",
+                "source_id": "ticket-1b",
+                "resolution_text": "Resolve from refund queue.",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Case for jane.doe@example.com",
+                "text": "workspace connector dashboard export billing jane doe",
+                "source_id": "ticket-2a",
+                "resolution_text": "Resolve from reboot queue.",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Case for jane.doe@example.com",
+                "text": "workspace connector dashboard export billing jane doe",
+                "source_id": "ticket-2b",
+                "resolution_text": "Resolve from reboot queue.",
+            },
+        ],
+        max_items=0,
+        documentation_terms=("workspace connector dashboard export billing",),
+    )
+
+    assert [item["question"] for item in result.items] == [
+        "What should I do about workspace connector dashboard export billing?",
+        "What should I do about workspace connector dashboard export billing?",
+    ]
+    assert [item["source_ids"] for item in result.items] == [
+        ("ticket-1a", "ticket-1b"),
+        ("ticket-2a", "ticket-2b"),
+    ]
+    assert result.warnings == ({
+        "code": "duplicate_source_policy_questions",
+        "message": (
+            "Some source-policy FAQ headings remain duplicated because no safe "
+            "controlled-vocabulary disambiguator was available."
+        ),
+        "question": "What should I do about workspace connector dashboard export billing?",
+        "source_ids": ["ticket-1a", "ticket-1b", "ticket-2a", "ticket-2b"],
+    },)
+    assert "jane.doe@example.com" not in result.markdown
+
+
 def test_safe_vocabulary_representative_label_rejects_single_occurrence_tokens() -> None:
     assert _safe_vocabulary_representative_label(
         "technical support",
@@ -2689,8 +2824,8 @@ def test_build_ticket_faq_markdown_does_not_merge_resolution_backed_same_label()
 
     assert result.as_dict()["generated"] == 2
     assert [item["question"] for item in result.items] == [
-        "What should I do about technical support?",
-        "What should I do about technical support?",
+        "What should I do about technical support - device reboot loop?",
+        "What should I do about technical support - export timeout?",
     ]
     assert {
         item["answer_evidence_status"] for item in result.items
@@ -3749,6 +3884,63 @@ async def test_ticket_faq_service_exposes_source_normalization_warnings() -> Non
 
     assert result.as_dict()["generated"] == 1
     assert result.as_dict()["warnings"][0]["code"] == "missing_source_text"
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_preserves_renderer_duplicate_heading_warning() -> None:
+    service = TicketFAQMarkdownService()
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "ticket-1a",
+                    "subject": "Case for jane.doe@example.com",
+                    "message": "workspace connector dashboard export billing jane doe",
+                    "pain_category": "reporting friction",
+                    "resolution_text": "Resolve from refund queue.",
+                },
+                {
+                    "ticket_id": "ticket-1b",
+                    "subject": "Case for jane.doe@example.com",
+                    "message": "workspace connector dashboard export billing jane doe",
+                    "pain_category": "reporting friction",
+                    "resolution_text": "Resolve from refund queue.",
+                },
+                {
+                    "ticket_id": "ticket-2a",
+                    "subject": "Case for jane.doe@example.com",
+                    "message": "workspace connector dashboard export billing jane doe",
+                    "pain_category": "reporting friction",
+                    "resolution_text": "Resolve from reboot queue.",
+                },
+                {
+                    "ticket_id": "ticket-2b",
+                    "subject": "Case for jane.doe@example.com",
+                    "message": "workspace connector dashboard export billing jane doe",
+                    "pain_category": "reporting friction",
+                    "resolution_text": "Resolve from reboot queue.",
+                },
+            ]
+        },
+        max_items=0,
+        documentation_terms=("workspace connector dashboard export billing",),
+    )
+
+    warning_codes = [warning["code"] for warning in result.as_dict()["warnings"]]
+    assert "missing_company_name" in warning_codes
+    assert "duplicate_source_policy_questions" in warning_codes
+    assert result.as_dict()["warnings"][-1] == {
+        "code": "duplicate_source_policy_questions",
+        "message": (
+            "Some source-policy FAQ headings remain duplicated because no safe "
+            "controlled-vocabulary disambiguator was available."
+        ),
+        "question": "What should I do about reporting friction?",
+        "source_ids": ["ticket-1a", "ticket-1b", "ticket-2a", "ticket-2b"],
+    }
 
 
 @pytest.mark.asyncio
