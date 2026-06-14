@@ -650,6 +650,187 @@ def _full_volume_snapshot() -> dict[str, Any]:
     }
 
 
+def _observed_full_volume_snapshot() -> dict[str, Any]:
+    return {
+        **SNAPSHOT,
+        "summary": {
+            **SNAPSHOT["summary"],
+            "generated": 1659,
+            "repeat_ticket_count": 27384,
+        },
+        "top_questions": [
+            {
+                **SNAPSHOT["top_questions"][0],
+                "rank": index,
+                "ticket_count": 2000 - index,
+            }
+            for index in range(1, 6)
+        ],
+    }
+
+
+def _observed_full_volume_metadata() -> dict[str, Any]:
+    return {
+        "source": "portfolio_deflection_submit",
+        "source_row_count": 40383,
+        "submitted_row_count": 40383,
+        "truncated_row_count": 0,
+        "max_source_material_rows": 40383,
+        "blob_bytes": 52428276,
+        "support_platform": "zendesk",
+    }
+
+
+def test_run_passes_calibrated_full_volume_cfpb_profile(
+    monkeypatch,
+    tmp_path,
+):
+    snapshot = _observed_full_volume_snapshot()
+    _patch_open(
+        monkeypatch,
+        [
+            (
+                200,
+                _submit_payload(
+                    snapshot=snapshot,
+                    metadata=_observed_full_volume_metadata(),
+                ),
+            ),
+            (200, snapshot),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--volume-gate-profile",
+            "full-volume-cfpb",
+        ])
+    )
+
+    assert summary["ok"] is True
+    assert summary["volume_gates"] == {
+        "profile": "full-volume-cfpb",
+        "configured": {
+            "uploaded_bytes": 50000000,
+            "source_row_count": 30000,
+            "submitted_row_count": 30000,
+            "generated_questions": 30,
+            "repeat_ticket_count": 25000,
+            "top_question_count": 5,
+        },
+        "actual": {
+            "uploaded_bytes": 52428276,
+            "source_row_count": 40383,
+            "submitted_row_count": 40383,
+            "generated_questions": 1659,
+            "repeat_ticket_count": 27384,
+            "top_question_count": 5,
+        },
+        "ok": True,
+        "errors": [],
+    }
+
+
+def test_run_fails_calibrated_full_volume_cfpb_profile_for_tiny_fixture(
+    monkeypatch,
+    tmp_path,
+):
+    _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload()),
+            (200, SNAPSHOT),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--volume-gate-profile",
+            "full-volume-cfpb",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["profile"] == "full-volume-cfpb"
+    assert summary["volume_gates"]["configured"]["repeat_ticket_count"] == 25000
+    assert (
+        "volume gate repeat_ticket_count expected >= 25000, got 4"
+        in summary["volume_gates"]["errors"]
+    )
+
+
+def test_run_explicit_repeat_gate_overrides_full_volume_cfpb_profile(
+    monkeypatch,
+    tmp_path,
+):
+    snapshot = _observed_full_volume_snapshot()
+    _patch_open(
+        monkeypatch,
+        [
+            (
+                200,
+                _submit_payload(
+                    snapshot=snapshot,
+                    metadata=_observed_full_volume_metadata(),
+                ),
+            ),
+            (200, snapshot),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--volume-gate-profile",
+            "full-volume-cfpb",
+            "--min-repeat-ticket-count",
+            "30000",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["configured"]["repeat_ticket_count"] == 30000
+    assert summary["volume_gates"]["errors"] == [
+        "volume gate repeat_ticket_count expected >= 30000, got 27384"
+    ]
+
+
+def test_run_lower_explicit_gate_cannot_loosen_full_volume_cfpb_profile(
+    monkeypatch,
+    tmp_path,
+):
+    _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload()),
+            (200, SNAPSHOT),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--volume-gate-profile",
+            "full-volume-cfpb",
+            "--min-uploaded-bytes",
+            "1",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["configured"]["uploaded_bytes"] == 50000000
+    assert (
+        "volume gate uploaded_bytes expected >= 50000000, got 200"
+        in summary["volume_gates"]["errors"]
+    )
+
+
 def test_run_passes_configured_full_volume_gates(monkeypatch, tmp_path):
     snapshot = _full_volume_snapshot()
     metadata = {
