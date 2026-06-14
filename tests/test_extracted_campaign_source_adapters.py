@@ -316,6 +316,25 @@ def test_load_source_rows_rejects_collapsed_mixed_delimiter_at_threshold(
         load_source_rows_from_file(path, file_format="csv")
 
 
+def test_load_source_rows_allows_single_column_message_with_delimiters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_ticket_messages.csv"
+    path.write_text(
+        "\n".join([
+            "message",
+            "I tried A; then B failed, and setup still loops",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [{
+        "message": "I tried A; then B failed, and setup still loops",
+    }]
+
+
 def test_load_source_rows_preserves_single_quote_quoted_commas(
     tmp_path: Path,
 ) -> None:

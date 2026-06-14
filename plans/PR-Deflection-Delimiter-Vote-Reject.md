@@ -6,6 +6,8 @@ Issue #1459 is the next launch-readiness parser gap after #1455: the unified CSV
 
 Root cause: the CSV loader modeled delimiter detection as an opaque Sniffer choice rather than an explicit candidate contract, so it could not distinguish true delimiter evidence from free-text delimiter characters or report collapse. The review follow-up found the first implementation still treated a collapsed competing-delimiter row as a soft ratio miss, and modeled delimiter without quotechar, which was a symptom fix rather than the full parser contract. This PR fixes the root by making delimiter, quotechar, row-width fit, and collapsed-row detection part of one deterministic candidate model.
 
+Review follow-up root cause: a collapsed competing-delimiter row only exists when the expected table shape has multiple columns. The first hard-reject treated every single-cell row with delimiter-like text as collapse, which falsely rejected valid single-column `message` exports. The fix keeps the hard reject at the parser-candidate layer, but scopes it to `header_width >= 2`.
+
 Diff-size note: the review fix brings the slice above the 400 LOC soft cap because the root fix needs parser-state changes plus two regression fixtures: the >=90% collapsed-row boundary and single-quote quotechar preservation. Splitting those would leave one reviewed regression unprotected on the same import path.
 
 ## Scope (this PR)
@@ -24,6 +26,7 @@ Slice phase: Vertical slice
   - A semicolon-delimited support-ticket CSV still parses correctly through `load_source_rows_from_file`.
   - A malformed mixed-delimiter CSV fails with a clear delimiter/column-consistency error instead of returning one-column or misaligned rows.
   - A >=90% mostly-consistent CSV still fails if one row collapses into a competing-delimiter one-cell row.
+  - A valid single-column `message` CSV whose free-text data contains `;` or `,` still parses as one column.
   - Single-quote-quoted CSV fields with embedded commas continue to parse through the shared import path.
   - Campaign CSV loading continues to support semicolon exports through the same shared loader.
 - Affected surfaces:
@@ -64,23 +67,23 @@ Parked hardening: none.
 ## Verification
 
 - python -m py_compile extracted_content_pipeline/campaign_customer_data.py tests/test_extracted_campaign_source_adapters.py (pass)
-- pytest tests/test_extracted_campaign_source_adapters.py -q -k "delimiter or quote or multiline or semicolon" (6 passed, 79 deselected)
+- pytest tests/test_extracted_campaign_source_adapters.py -q -k "delimiter or quote or multiline or semicolon or single_column" (7 passed, 79 deselected)
 - pytest tests/test_build_deflection_messy_csv_fixtures.py -q -k "ragged_short_rows or ragged_extra_cells" (2 passed, 9 deselected)
 - pytest tests/test_smoke_content_ops_support_ticket_package.py -q -k "no_rows_survive" (1 passed, 17 deselected)
-- pytest tests/test_extracted_campaign_source_adapters.py -q (85 passed)
+- pytest tests/test_extracted_campaign_source_adapters.py -q (86 passed)
 - pytest tests/test_extracted_campaign_customer_data.py -q (10 passed)
 - pytest tests/test_build_deflection_messy_csv_fixtures.py -q (11 passed)
 - pytest tests/test_smoke_content_ops_support_ticket_package.py -q (18 passed)
 - pytest tests/test_extracted_content_deflection_submit.py -q -k "embedded_quotes_and_newlines" (1 passed, 53 deselected)
 - pytest tests/test_extracted_content_deflection_submit.py -q (54 passed)
 - bash scripts/check_ascii_python.sh (pass)
-- bash scripts/run_extracted_pipeline_checks.sh (4138 passed, 10 skipped, 1 warning)
+- bash scripts/run_extracted_pipeline_checks.sh (4139 passed, 10 skipped, 1 warning)
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/campaign_customer_data.py` | 256 |
-| `plans/PR-Deflection-Delimiter-Vote-Reject.md` | 86 |
-| `tests/test_extracted_campaign_source_adapters.py` | 99 |
-| **Total** | **441** |
+| `extracted_content_pipeline/campaign_customer_data.py` | 259 |
+| `plans/PR-Deflection-Delimiter-Vote-Reject.md` | 89 |
+| `tests/test_extracted_campaign_source_adapters.py` | 118 |
+| **Total** | **466** |

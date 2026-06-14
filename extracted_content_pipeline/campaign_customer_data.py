@@ -663,7 +663,10 @@ def _csv_delimiter_candidate(
             if not any(str(value or "").strip() for value in row):
                 continue
             data_rows += 1
-            collapsed = _csv_short_row_uses_competing_delimiter(row, delimiter=delimiter)
+            collapsed = (
+                header_width >= 2
+                and _csv_short_row_uses_competing_delimiter(row, delimiter=delimiter)
+            )
             if collapsed and first_collapsed_row is None:
                 first_collapsed_row = row_number
             if len(row) == header_width:
