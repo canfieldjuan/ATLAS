@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="980" viewBox="0 0 1200 980" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker>
+    <marker id="arAmber" markerWidth="12" markerHeight="12" refX="8" refY="3.5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3.5 L0,7 Z" fill="#d97706"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="980" fill="#ffffff"/>
+
+  <!-- Header -->
+  <rect x="0" y="0" width="1200" height="96" fill="#0b1f3a"/>
+  <text x="40" y="46" fill="#ffffff" font-size="30" font-weight="700">Content Ops: Marketer Verify</text>
+  <text x="40" y="76" fill="#9fb3d1" font-size="15">Writer proposes, a deterministic Referee disposes -- approval is computed from a coverage matrix, never opined. The LLM is evidence, not the judge.</text>
+  <text x="1160" y="42" fill="#5b7aa6" font-size="13" text-anchor="end">Juan Canfield</text>
+  <text x="1160" y="62" fill="#5b7aa6" font-size="13" text-anchor="end">Founding / Staff AI Platform Engineer</text>
+
+  <!-- Band A: verify path -->
+  <text x="40" y="126" fill="#0b1f3a" font-size="15" font-weight="700">THE VERIFY PATH</text>
+  <text x="218" y="126" fill="#64748b" font-size="12">same submission + same frozen rule-pack -&gt; the same verdict, regardless of model or mood</text>
+  <line x1="40" y1="134" x2="1160" y2="134" stroke="#e2e8f0" stroke-width="1"/>
+
+  <g stroke="#64748b" stroke-width="2">
+    <line x1="296" y1="187" x2="326" y2="187" marker-end="url(#ar)"/>
+    <line x1="586" y1="187" x2="616" y2="187" marker-end="url(#ar)"/>
+    <line x1="876" y1="187" x2="906" y2="187" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- Writer -->
+  <rect x="40" y="148" width="250" height="86" rx="10" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
+  <text x="58" y="174" fill="#0b1f3a" font-size="15" font-weight="700">Writer  <tspan fill="#64748b" font-size="11" font-weight="400">(AI client)</tspan></text>
+  <text x="58" y="198" fill="#475569" font-size="10.5">Fills the brief + typed asset schema, drafts</text>
+  <text x="58" y="214" fill="#475569" font-size="10.5">the copy. Free to generate; proposes only.</text>
+
+  <!-- Referee -->
+  <rect x="330" y="148" width="256" height="86" rx="10" fill="#f0fdfa" stroke="#0d9488" stroke-width="3"/>
+  <text x="348" y="174" fill="#0b1f3a" font-size="15" font-weight="700">Referee  <tspan fill="#0f766e" font-size="11" font-weight="600">deterministic Content-PR</tspan></text>
+  <text x="348" y="198" fill="#475569" font-size="10.5">Computes approval from a coverage matrix.</text>
+  <text x="348" y="214" fill="#0f766e" font-size="10.5" font-weight="600">Model-free. No required rule passes silently.</text>
+
+  <!-- Editor -->
+  <rect x="620" y="148" width="256" height="86" rx="10" fill="#ffffff" stroke="#0d9488" stroke-width="2.5"/>
+  <text x="638" y="174" fill="#0b1f3a" font-size="15" font-weight="700">Editor  <tspan fill="#64748b" font-size="11" font-weight="400">(accountable)</tspan></text>
+  <text x="638" y="198" fill="#475569" font-size="10.5">Resolves evidence; owns taste + persuasion.</text>
+  <text x="638" y="214" fill="#475569" font-size="10.5">BLOCK / REVISE / APPROVE / EXCEPTION.</text>
+
+  <!-- Publish -->
+  <rect x="910" y="148" width="250" height="86" rx="10" fill="#fff7ed" stroke="#d97706" stroke-width="2.5"/>
+  <text x="928" y="174" fill="#9a3412" font-size="15" font-weight="700">Publish  <tspan fill="#b45309" font-size="11" font-weight="400">(midpoint)</tspan></text>
+  <text x="928" y="198" fill="#7c2d12" font-size="10.5">Experiment contract frozen first; the market</text>
+  <text x="928" y="214" fill="#7c2d12" font-size="10.5">settles effectiveness, not the editor's opinion.</text>
+
+  <!-- flywheel -->
+  <path d="M1035,234 C1035,288 130,288 130,236" fill="none" stroke="#d97706" stroke-width="2.5" marker-end="url(#arAmber)"/>
+  <rect x="392" y="259" width="416" height="32" rx="16" fill="#fff7ed" stroke="#d97706" stroke-width="1.5"/>
+  <text x="600" y="280" fill="#9a3412" font-size="12" font-weight="600" text-anchor="middle">Flywheel: miss -&gt; gate (at a 3+ threshold) &#183; win -&gt; prior &#183; override -&gt; calibration</text>
+
+  <!-- Band B: verify engine -->
+  <text x="40" y="322" fill="#0b1f3a" font-size="15" font-weight="700">THE DETERMINISTIC VERIFY ENGINE</text>
+  <text x="360" y="322" fill="#64748b" font-size="12">three+ parallel checks, each emitting one uniform CoverageRow -- counting, looking up, comparing; zero model in the verdict</text>
+  <rect x="1052" y="308" width="56" height="18" rx="9" fill="#dcfce7"/><text x="1080" y="321" fill="#166534" font-size="10" font-weight="600" text-anchor="middle">BUILT</text>
+  <line x1="40" y1="330" x2="1160" y2="330" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- 4 check cards: x=32,320,608,896 w=272 h=110 y=344 -->
+  <g>
+    <rect x="32" y="344" width="272" height="110" rx="10" fill="#f1f5f9"/><rect x="32" y="344" width="6" height="110" rx="3" fill="#2563eb"/>
+    <text x="54" y="370" fill="#0b1f3a" font-size="13" font-weight="700">3A &#183; Schema</text>
+    <text x="54" y="392" fill="#475569" font-size="10.5">Required fields, asset format, channel</text>
+    <text x="54" y="408" fill="#475569" font-size="10.5">constraints, CTA present.</text>
+    <text x="54" y="440" fill="#1e40af" font-size="10" font-style="italic">-&gt; CoverageRow</text>
+  </g>
+  <g>
+    <rect x="320" y="344" width="272" height="110" rx="10" fill="#f1f5f9"/><rect x="320" y="344" width="6" height="110" rx="3" fill="#2563eb"/>
+    <text x="342" y="370" fill="#0b1f3a" font-size="13" font-weight="700">Claim Coverage</text>
+    <text x="342" y="392" fill="#475569" font-size="10.5">Every claim mapped to a versioned</text>
+    <text x="342" y="408" fill="#475569" font-size="10.5">registry; mismatch / expiry = FAIL.</text>
+    <text x="342" y="440" fill="#1e40af" font-size="10" font-style="italic">claims_map.py -&gt; CoverageRow</text>
+  </g>
+  <g>
+    <rect x="608" y="344" width="272" height="110" rx="10" fill="#f1f5f9"/><rect x="608" y="344" width="6" height="110" rx="3" fill="#2563eb"/>
+    <text x="630" y="370" fill="#0b1f3a" font-size="13" font-weight="700">Quality Gate</text>
+    <text x="630" y="392" fill="#475569" font-size="10.5">Aggregates upstream findings by</text>
+    <text x="630" y="408" fill="#475569" font-size="10.5">severity; any BLOCKER blocks approval.</text>
+    <text x="630" y="440" fill="#1e40af" font-size="10" font-style="italic">quality-gate packs -&gt; CoverageRow</text>
+  </g>
+  <g>
+    <rect x="896" y="344" width="272" height="110" rx="10" fill="#f1f5f9"/><rect x="896" y="344" width="6" height="110" rx="3" fill="#2563eb"/>
+    <text x="918" y="370" fill="#0b1f3a" font-size="13" font-weight="700">Brand Voice</text>
+    <text x="918" y="392" fill="#475569" font-size="10.5">Banned terms + tenant voice profile;</text>
+    <text x="918" y="408" fill="#475569" font-size="10.5">drift -&gt; warning row.</text>
+    <text x="918" y="440" fill="#1e40af" font-size="10" font-style="italic">voice profiles -&gt; CoverageRow</text>
+  </g>
+
+  <!-- CoverageRow strip -->
+  <rect x="32" y="466" width="1136" height="58" rx="10" fill="#0b1f3a"/>
+  <text x="52" y="490" fill="#7f9bc2" font-size="12" font-weight="700">CoverageRow</text>
+  <g font-size="11.5" font-weight="600">
+    <rect x="142" y="476" width="92" height="22" rx="6" fill="#16243f"/><text x="188" y="491" fill="#cdd9ea" text-anchor="middle">rule_id</text>
+    <rect x="242" y="476" width="112" height="22" rx="6" fill="#16243f"/><text x="298" y="491" fill="#cdd9ea" text-anchor="middle">requirement</text>
+    <rect x="362" y="476" width="86" height="22" rx="6" fill="#16243f"/><text x="405" y="491" fill="#cdd9ea" text-anchor="middle">required</text>
+    <rect x="456" y="476" width="78" height="22" rx="6" fill="#16243f"/><text x="495" y="491" fill="#cdd9ea" text-anchor="middle">status</text>
+    <rect x="542" y="476" width="92" height="22" rx="6" fill="#16243f"/><text x="588" y="491" fill="#cdd9ea" text-anchor="middle">evidence</text>
+  </g>
+  <text x="662" y="485" fill="#9fb3d1" font-size="10.5">status &#8712; PASS / FAIL / NOT_APPLICABLE / UNRESOLVED</text>
+  <text x="662" y="503" fill="#fca5a5" font-size="10.5">Resolved only with a real status + cited evidence.</text>
+  <text x="662" y="517" fill="#fca5a5" font-size="10.5">UNRESOLVED -- or PASS/FAIL with no evidence -- blocks approval.</text>
+
+  <!-- Band C: MCP + LLM role -->
+  <text x="40" y="560" fill="#0b1f3a" font-size="15" font-weight="700">THE MCP SERVER -- two profiles, one referee</text>
+  <text x="640" y="560" fill="#0b1f3a" font-size="15" font-weight="700">THE LLM IS EVIDENCE, NOT THE JUDGE</text>
+  <line x1="40" y1="568" x2="600" y2="568" stroke="#e2e8f0" stroke-width="1"/>
+  <line x1="640" y1="568" x2="1160" y2="568" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- left MCP panel -->
+  <rect x="32" y="582" width="568" height="148" rx="10" fill="#eef2ff" stroke="#c7d2fe"/><rect x="32" y="582" width="6" height="148" rx="3" fill="#4f46e5"/>
+  <!-- Claude profile -->
+  <rect x="54" y="598" width="84" height="22" rx="11" fill="#4f46e5"/><text x="96" y="614" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">verify_draft()</text>
+  <text x="148" y="610" fill="#312e81" font-size="12" font-weight="700">Claude</text>
+  <rect x="206" y="600" width="62" height="18" rx="9" fill="#fde68a"/><text x="237" y="613" fill="#92400e" font-size="9.5" font-weight="600" text-anchor="middle">designed</text>
+  <text x="54" y="638" fill="#475569" font-size="10.5">Rich direct tool: returns the full CoverageRow matrix in one call.</text>
+  <!-- ChatGPT profile -->
+  <rect x="54" y="654" width="76" height="22" rx="11" fill="#4f46e5"/><text x="92" y="670" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">search()</text>
+  <rect x="136" y="654" width="68" height="22" rx="11" fill="#4f46e5"/><text x="170" y="670" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">fetch()</text>
+  <text x="214" y="670" fill="#312e81" font-size="12" font-weight="700">ChatGPT</text>
+  <rect x="290" y="656" width="48" height="18" rx="9" fill="#dcfce7"/><text x="314" y="669" fill="#166534" font-size="9.5" font-weight="600" text-anchor="middle">built</text>
+  <text x="54" y="694" fill="#475569" font-size="10.5">2-tool connector; unpaid-safe; tenant-bound (never an account_id arg).</text>
+  <text x="54" y="716" fill="#4338ca" font-size="10.5" font-style="italic">Cross-model auditable -- the verdict logic is identical behind both.</text>
+
+  <!-- right LLM-role panel -->
+  <rect x="640" y="582" width="528" height="148" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <circle cx="662" cy="608" r="4" fill="#0d9488"/><text x="676" y="612" fill="#0b1f3a" font-size="11.5" font-weight="600">Deterministic core ships first</text><text x="888" y="612" fill="#475569" font-size="11">zero LLM in the verdict path.</text>
+  <circle cx="662" cy="640" r="4" fill="#0d9488"/><text x="676" y="644" fill="#0b1f3a" font-size="11.5" font-weight="600">3C -- LLM fills evidence rows</text>
+  <rect x="888" y="630" width="62" height="18" rx="9" fill="#fde68a"/><text x="919" y="643" fill="#92400e" font-size="9.5" font-weight="600" text-anchor="middle">designed</text>
+  <text x="676" y="662" fill="#475569" font-size="11">cited spans + an adversarial pass. Never "LGTM".</text>
+  <circle cx="662" cy="688" r="4" fill="#0d9488"/><text x="676" y="692" fill="#0b1f3a" font-size="11.5" font-weight="600">3D -- human holds the verdict</text><text x="900" y="692" fill="#475569" font-size="11">bots advisory, never auto-applied.</text>
+  <text x="676" y="714" fill="#0f766e" font-size="10.5" font-style="italic">A naive auto-apply loop degrades copy -- so the model never decides.</text>
+
+  <!-- Band D: source of truth + honest limits -->
+  <rect x="32" y="748" width="1136" height="84" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="52" y="772" fill="#0b1f3a" font-size="12.5" font-weight="700">Living source of truth</text>
+  <text x="210" y="772" fill="#475569" font-size="11.5">queried before every brief: Campaign ledger &#183; Claim registry &#183; Brand-voice contract &#183; Calibration library</text>
+  <text x="52" y="800" fill="#9a3412" font-size="12.5" font-weight="700">Honest limits</text>
+  <text x="160" y="800" fill="#475569" font-size="11">(1) the 3+ threshold tolerates up to 2 repeats before a gate hardens;</text>
+  <text x="160" y="818" fill="#475569" font-size="11">(2) schema rigidity -- if EXCEPTION becomes the norm, determinism collapses;  (3) integrity depends on registry/voice currency.</text>
+
+  <!-- Footer principles -->
+  <rect x="32" y="850" width="1136" height="118" rx="10" fill="#0b1f3a"/>
+  <text x="56" y="878" fill="#ffffff" font-size="14" font-weight="700">Principles worth stealing</text>
+  <g fill="#cdd9ea" font-size="11.5">
+    <text x="56" y="902">1.  Separate the Writer from the Referee -- the proposer never grades its own work.</text>
+    <text x="56" y="922">2.  Approval is computed, not opined -- a verdict is a function of a coverage matrix, so it's reproducible and auditable.</text>
+    <text x="56" y="942">3.  No required rule passes silently -- UNRESOLVED or evidence-free = blocked.</text>
+    <text x="620" y="902">4.  The LLM produces evidence, never verdicts -- gates block, models cite spans, humans decide, the market settles it.</text>
+    <text x="620" y="922">5.  Build schemas, not briefs -- the typed contract is the interface; f(inputs) = output.</text>
+    <text x="620" y="942" fill="#7f9bc2">The job isn't to make humans or models reliable -- it's to make unreliability visible, logged, and harder to repeat.</text>
+  </g>
+</svg>
