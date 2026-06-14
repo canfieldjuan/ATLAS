@@ -15,6 +15,12 @@ captured Zendesk trial API artifact shaped as `tickets + comments`:
 - `public=false` internal notes are excluded;
 - Zendesk `status` and `satisfaction_rating` remain diagnostics.
 
+Source role: this is Zendesk-shaped product/integration evidence. It proves the
+support-ticket object model, public/private comment handling, and
+resolution-evidence lane are pointed at the buyer's actual support workflow. It
+is not a full-volume stress proof by itself because the committed fixture is
+small.
+
 CI proof:
 
 ```bash
@@ -56,3 +62,6 @@ This closes the deterministic #1419 proof gap for the Zendesk full-thread
 path: an API-shaped Zendesk export with public agent replies can unlock
 publishable help-center copy, while private notes and diagnostics do not leak
 into customer-facing answers.
+
+Pair this proof with CFPB stress/scale evidence before claiming the whole #1440
+funnel is proven at both product-quality shape and full-volume size.
