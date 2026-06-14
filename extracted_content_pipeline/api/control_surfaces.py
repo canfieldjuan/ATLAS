@@ -1652,23 +1652,94 @@ def _load_deflection_submit_blob_rows_sync(
     max_bytes: int,
     importer_mode: str = "csv",
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
-    data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
-    if not data:
-        detail = (
-            "Zendesk full-thread JSON is empty."
-            if importer_mode == "full_thread"
-            else "Blob CSV is empty."
+    if importer_mode == "full_thread":
+        data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
+        if not data:
+            raise HTTPException(
+                status_code=400,
+                detail="Zendesk full-thread JSON is empty.",
+            )
+        return _parse_deflection_submit_zendesk_thread_bytes(data)
+    return _load_deflection_submit_csv_blob_rows_sync(blob_url, max_bytes=max_bytes)
+
+
+def _load_deflection_submit_csv_blob_rows_sync(
+    blob_url: str,
+    *,
+    max_bytes: int,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-deflection-submit-",
+            suffix=".csv",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            byte_count = _copy_bounded_https_blob_to_tempfile(
+                blob_url,
+                handle,
+                max_bytes=max_bytes,
+            )
+        if byte_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Blob CSV is empty.",
+            )
+        return _parse_deflection_submit_csv_file(
+            temp_path,
+            byte_count=byte_count,
+            parse_error_detail="Blob CSV could not be parsed.",
         )
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Content Ops deflection submit temp cleanup failed")
+
+
+def _copy_bounded_https_blob_to_tempfile(
+    blob_url: str,
+    handle: Any,
+    *,
+    max_bytes: int,
+) -> int:
+    response: Any | None = None
+    byte_count = 0
+    try:
+        response = _open_validated_https_blob_response(blob_url)
+        while True:
+            chunk = response.read(_DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES)
+            if not chunk:
+                return byte_count
+            next_byte_count = byte_count + len(chunk)
+            if next_byte_count > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail={
+                        "reason": "deflection_submit_blob_too_large",
+                        "max_file_bytes": max_bytes,
+                    },
+                )
+            try:
+                handle.write(chunk)
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Blob CSV could not be staged.",
+                ) from exc
+            byte_count = next_byte_count
+    except HTTPException:
+        raise
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
         raise HTTPException(
             status_code=400,
-            detail=detail,
-        )
-    if importer_mode == "full_thread":
-        return _parse_deflection_submit_zendesk_thread_bytes(data)
-    return _parse_deflection_submit_csv_bytes(
-        data,
-        parse_error_detail="Blob CSV could not be parsed.",
-    )
+            detail="Blob URL could not be fetched.",
+        ) from exc
+    finally:
+        if response is not None:
+            _close_https_blob_response(response)
 
 
 def _parse_deflection_submit_zendesk_thread_bytes(
@@ -1682,33 +1753,6 @@ def _parse_deflection_submit_zendesk_thread_bytes(
             detail="Zendesk full-thread JSON could not be parsed.",
         ) from exc
     return result.rows, len(data), result.warnings
-
-
-def _parse_deflection_submit_csv_bytes(
-    data: bytes,
-    *,
-    parse_error_detail: str,
-) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            prefix="content-ops-deflection-submit-",
-            suffix=".csv",
-            delete=False,
-        ) as handle:
-            temp_path = Path(handle.name)
-            handle.write(data)
-        return _parse_deflection_submit_csv_file(
-            temp_path,
-            byte_count=len(data),
-            parse_error_detail=parse_error_detail,
-        )
-    finally:
-        if temp_path is not None:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                logger.warning("Content Ops deflection submit temp cleanup failed")
 
 
 def _parse_deflection_submit_csv_file(
@@ -1731,6 +1775,32 @@ def _parse_deflection_submit_csv_file(
 
 
 def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
+    response: Any | None = None
+    try:
+        response = _open_validated_https_blob_response(blob_url)
+        data = response.read(max_bytes + 1)
+    except HTTPException:
+        raise
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Blob URL could not be fetched.",
+        ) from exc
+    finally:
+        if response is not None:
+            _close_https_blob_response(response)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "reason": "deflection_submit_blob_too_large",
+                "max_file_bytes": max_bytes,
+            },
+        )
+    return data
+
+
+def _open_validated_https_blob_response(blob_url: str) -> Any:
     target = _validate_https_blob_fetch_target(blob_url)
     response: Any | None = None
     try:
@@ -1749,7 +1819,7 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
                 status_code=400,
                 detail="Blob URL could not be fetched.",
             )
-        data = response.read(max_bytes + 1)
+        return response
     except urllib.error.HTTPError as exc:
         if 300 <= int(getattr(exc, "code", 0) or 0) < 400:
             raise HTTPException(
@@ -1760,23 +1830,15 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
             status_code=400,
             detail="Blob URL could not be fetched.",
         ) from exc
+    except HTTPException:
+        if response is not None:
+            _close_https_blob_response(response)
+        raise
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
         raise HTTPException(
             status_code=400,
             detail="Blob URL could not be fetched.",
         ) from exc
-    finally:
-        if response is not None:
-            _close_https_blob_response(response)
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "reason": "deflection_submit_blob_too_large",
-                "max_file_bytes": max_bytes,
-            },
-        )
-    return data
 
 
 @dataclass(frozen=True)
