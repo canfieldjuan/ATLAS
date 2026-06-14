@@ -1,0 +1,178 @@
+{
+  "comment_count": 126,
+  "no_proven_answer_count": 1,
+  "normalization_warning_count": 0,
+  "normalized_row_count": 50,
+  "package_metadata": {
+    "csat_present": true,
+    "csat_present_count": 29,
+    "csat_score_average": null,
+    "csat_score_count": 0,
+    "source_row_count": 50,
+    "support_ticket_resolution_evidence_count": 40,
+    "support_ticket_resolution_evidence_present": true,
+    "ticket_status_present": true,
+    "ticket_status_present_count": 50,
+    "ticket_status_summary": {
+      "open": 21,
+      "resolved": 29
+    }
+  },
+  "private_comment_count": 4,
+  "private_note_leak_checks": {
+    "auto_ack_present_in_markdown": false,
+    "private_marker_present_in_markdown": false
+  },
+  "public_comment_count": 122,
+  "publishable_answer_count": 7,
+  "publishable_samples": [
+    {
+      "answer_excerpt": "To resolve this, we confirmed the duplicate billing event and refunded the extra charge. Then refunds normally appear on the original payment method in 5-10 business days.",
+      "question": "How do I get the duplicate charge refunded?",
+      "source_count": null
+    },
+    {
+      "answer_excerpt": "To resolve this, reset MFA from Admin Settings > Security > Two-factor authentication, then send the user a new invite. Then if SSO is enforced, confirm the user is assigned to the app in the identity provider.",
+      "question": "[Atlas seed 10] Login and MFA access issue How do I reset two factor authentication for a teammate who lost their phone?",
+      "source_count": null
+    },
+    {
+      "answer_excerpt": "To resolve this, open the order details page, confirm the destination address, and use the replacement shipment workflow. Then if tracking is stale for more than 72 hours, support can issue a replacement or return label.",
+      "question": "[Atlas seed 22] Shipping or replacement question Where is my replacement device?",
+      "source_count": null
+    },
+    {
+      "answer_excerpt": "To resolve this, update the account setting from the admin profile, then retry the verification or billing workflow. Then if the localized page is missing the control, switch to English temporarily and contact support.",
+      "question": "\u00bfD\u00f3nde est\u00e1 el bot\u00f3n correcto?",
+      "source_count": null
+    },
+    {
+      "answer_excerpt": "To resolve this, update the reset-password article link to the current route, then ask the user to request a fresh magic link. Then expired tokens cannot be reused.",
+      "question": "What should I do about atla?",
+      "source_count": null
+    }
+  ],
+  "raw_export_committed": false,
+  "report_summary": {
+    "csat_present_count": 22,
+    "drafted_answer_count": 7,
+    "generated": 8,
+    "negative_csat_ticket_count": 4,
+    "no_proven_answer_count": 1,
+    "non_repeat_question_count": 19,
+    "non_repeat_ticket_count": 19,
+    "outcome_diagnostic_ticket_count": 31,
+    "outcome_diagnostics_present": true,
+    "outcome_risk_ticket_count": 4,
+    "output_checks": {
+      "condensed": true,
+      "has_action_items": true,
+      "resolution_evidence_scoped": false,
+      "uses_user_vocabulary": true
+    },
+    "reopened_ticket_count": 0,
+    "source_count": 50,
+    "source_date_end": "2026-06-13",
+    "source_date_start": "2026-06-13",
+    "source_window_days": 1,
+    "support_ticket_resolution_evidence_count": 7,
+    "support_ticket_resolution_evidence_present": true,
+    "ticket_source_count": 50,
+    "ticket_status_summary": {
+      "open": 9,
+      "resolved": 22
+    },
+    "top_opportunity_score": 24,
+    "top_question": "How do I get the duplicate charge refunded?"
+  },
+  "snapshot_summary": {
+    "drafted_answer_count": 7,
+    "generated": 8,
+    "no_proven_answer_count": 1,
+    "non_repeat_ticket_count": 22,
+    "repeat_ticket_count": 28,
+    "source_date_end": "2026-06-13",
+    "source_date_start": "2026-06-13",
+    "source_window_days": 1,
+    "support_ticket_resolution_evidence_count": 7,
+    "support_ticket_resolution_evidence_present": true
+  },
+  "source": "zendesk_trial_api_live_export",
+  "ticket_count": 50,
+  "top_questions": [
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "How do I get the duplicate charge refunded?",
+      "rank": 1,
+      "resolution_evidence_scope": "scoped",
+      "ticket_count": 8,
+      "weighted_frequency": 8
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "[Atlas seed 10] Login and MFA access issue How do I reset two factor authentication for a teammate who lost their phone?",
+      "rank": 2,
+      "resolution_evidence_scope": "scoped",
+      "ticket_count": 7,
+      "weighted_frequency": 7
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "[Atlas seed 22] Shipping or replacement question Where is my replacement device?",
+      "rank": 3,
+      "resolution_evidence_scope": "scoped",
+      "ticket_count": 5,
+      "weighted_frequency": 5
+    },
+    {
+      "answer_evidence_status": "draft_needs_review",
+      "question": "What should I do about atla?",
+      "rank": 4,
+      "resolution_evidence_scope": "not_applicable",
+      "ticket_count": 4,
+      "weighted_frequency": 4
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "\u00bfD\u00f3nde est\u00e1 el bot\u00f3n correcto?",
+      "rank": 5,
+      "resolution_evidence_scope": "scoped",
+      "ticket_count": 4,
+      "weighted_frequency": 4
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "What should I do about atla?",
+      "rank": 6,
+      "resolution_evidence_scope": "missing_question_scope",
+      "ticket_count": 1,
+      "weighted_frequency": 1
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "Can admins skip that step?",
+      "rank": 7,
+      "resolution_evidence_scope": "scoped",
+      "ticket_count": 1,
+      "weighted_frequency": 1
+    },
+    {
+      "answer_evidence_status": "resolution_evidence",
+      "question": "What should I do about atla?",
+      "rank": 8,
+      "resolution_evidence_scope": "missing_question_scope",
+      "ticket_count": 1,
+      "weighted_frequency": 1
+    }
+  ],
+  "zendesk_satisfaction_score_counts": {
+    "bad": 5,
+    "good": 24,
+    "unoffered": 21
+  },
+  "zendesk_status_counts": {
+    "open": 16,
+    "pending": 5,
+    "solved": 29
+  }
+}
