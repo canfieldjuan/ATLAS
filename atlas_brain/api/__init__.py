@@ -171,6 +171,7 @@ try:
     )
     from .._content_ops_input_provider import build_content_ops_input_provider
     from .._content_ops_infrastructure import (
+        build_content_ops_faq_embedding_port,
         build_content_ops_llm_client,
         build_content_ops_skill_store,
     )
@@ -242,6 +243,11 @@ try:
         ).strip()
         return policy or None
 
+    def _build_content_ops_faq_embedding_port_if_enabled():
+        if settings.b2b_campaign.content_ops_faq_embedding_booster_enabled:
+            return build_content_ops_faq_embedding_port()
+        return None
+
     content_ops_config = ContentOpsControlSurfaceApiConfig(
         deflection_checkout_amount_cents=(
             settings.saas_auth.stripe_content_ops_deflection_report_amount_cents
@@ -263,6 +269,9 @@ try:
             build_content_ops_execution_services(
                 enable_db_services=True,
                 expose_faq_markdown_output=False,
+                faq_embedding_port_factory=(
+                    _build_content_ops_faq_embedding_port_if_enabled
+                ),
             )
         ),
         scope_provider=build_content_ops_scope,

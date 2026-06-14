@@ -43,6 +43,8 @@ Test inventory covers:
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -51,10 +53,13 @@ import pytest
 from atlas_brain._content_ops_services import (
     build_content_ops_execution_services,
 )
+from atlas_brain.config import B2BCampaignConfig
 from extracted_content_pipeline.campaign_ports import LLMResponse, TenantScope
 from extracted_content_pipeline.content_ops_execution import (
     execute_content_ops_from_mapping,
 )
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _make_llm_stub() -> Any:
@@ -92,6 +97,18 @@ class _SocialPostLLMStub:
             ),
             model="test-model",
             usage={"input_tokens": 3, "output_tokens": 5},
+        )
+
+
+class _FAQEmbeddingPortStub:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    def embed_texts(self, texts):
+        self.calls.append(tuple(texts))
+        return tuple(
+            (1.0, 0.0) if "money back" in text else (0.99, 0.01)
+            for text in texts
         )
 
 
@@ -241,6 +258,49 @@ async def test_faq_markdown_persists_when_db_services_enabled() -> None:
     assert step["status"] == "completed"
     assert step["result"]["saved_ids"] == ["faq-uuid-1"]
     assert "INSERT INTO ticket_faq_markdown" in pool.fetchval_calls[0]["query"]
+
+
+@pytest.mark.asyncio
+async def test_faq_markdown_uses_injected_host_embedding_port() -> None:
+    port = _FAQEmbeddingPortStub()
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+        faq_embedding_port_factory=lambda: port,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": [
+                    {
+                        "ticket_id": "refund-a",
+                        "source_type": "ticket",
+                        "message": "How do I get my money back?",
+                        "pain_category": "refunds",
+                    },
+                    {
+                        "ticket_id": "refund-b",
+                        "source_type": "ticket",
+                        "message": "What is the process for a refund?",
+                        "pain_category": "refunds",
+                    },
+                ]
+            },
+        },
+        services=services,
+    )
+
+    step = result["steps"][0]
+    assert step["status"] == "completed"
+    assert step["result"]["generated"] == 1
+    assert step["result"]["items"][0]["ticket_count"] == 2
+    assert port.calls == [(
+        "How do I get my money back?",
+        "What is the process for a refund?",
+    )]
 
 
 @pytest.mark.asyncio
@@ -554,12 +614,14 @@ async def test_faq_deflection_report_runs_through_host_bundle() -> None:
 @pytest.mark.asyncio
 async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None:
     pool = _FAQPoolStub()
+    port = _FAQEmbeddingPortStub()
     services = build_content_ops_execution_services(
         llm_factory=_no_llm,
         skills_factory=_make_skill_store_stub,
         pool_factory=lambda: pool,
         enable_db_services=True,
         expose_faq_markdown_output=False,
+        faq_embedding_port_factory=lambda: port,
     )
 
     assert services.faq_markdown is None
@@ -579,19 +641,17 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
             "inputs": {
                 "deflection_report_title": "Hidden FAQ Source Report",
                 "source_material": [
-                    # #1460: a repeat partner keeps the question a billable
-                    # FAQ cluster (one-off questions are excluded).
                     {
                         "ticket_id": "ticket-1",
                         "source_type": "ticket",
-                        "message": "How do I fix failed exports?",
-                        "pain_category": "exports",
+                        "message": "How do I get my money back?",
+                        "pain_category": "refunds",
                     },
                     {
                         "ticket_id": "ticket-2",
                         "source_type": "ticket",
-                        "message": "How can I fix failed exports?",
-                        "pain_category": "exports",
+                        "message": "What is the process for a refund?",
+                        "pain_category": "refunds",
                     },
                 ],
             },
@@ -605,6 +665,114 @@ async def test_faq_markdown_can_be_hidden_while_deflection_report_runs() -> None
     assert step["status"] == "completed"
     assert step["result"]["summary"]["generated"] == 1
     assert step["result"]["markdown"].startswith("# Hidden FAQ Source Report")
+    assert port.calls == [(
+        "How do I get my money back?",
+        "What is the process for a refund?",
+    )]
+
+
+@pytest.mark.asyncio
+async def test_faq_markdown_default_bundle_keeps_no_port_behavior() -> None:
+    services = build_content_ops_execution_services(
+        llm_factory=_no_llm,
+        skills_factory=_make_skill_store_stub,
+        pool_factory=_make_pool_stub,
+    )
+
+    result = await execute_content_ops_from_mapping(
+        {
+            "outputs": ["faq_markdown"],
+            "inputs": {
+                "source_material": [
+                    {
+                        "ticket_id": "refund-a",
+                        "source_type": "ticket",
+                        "message": "How do I get my money back?",
+                        "pain_category": "refunds",
+                    },
+                    {
+                        "ticket_id": "refund-b",
+                        "source_type": "ticket",
+                        "message": "What is the process for a refund?",
+                        "pain_category": "refunds",
+                    },
+                ]
+            },
+        },
+        services=services,
+    )
+
+    step = result["steps"][0]
+    assert step["status"] == "completed"
+    assert step["result"]["generated"] == 0
+
+
+def test_content_ops_faq_embedding_booster_config_defaults_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(
+        "ATLAS_CONTENT_OPS_FAQ_EMBEDDING_BOOSTER_ENABLED",
+        raising=False,
+    )
+    config = B2BCampaignConfig(_env_file=None)
+
+    assert config.content_ops_faq_embedding_booster_enabled is False
+
+
+def test_content_ops_faq_embedding_booster_config_accepts_env_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(
+        "ATLAS_CONTENT_OPS_FAQ_EMBEDDING_BOOSTER_ENABLED",
+        raising=False,
+    )
+    monkeypatch.setenv("ATLAS_CONTENT_OPS_FAQ_EMBEDDING_BOOSTER_ENABLED", "true")
+
+    config = B2BCampaignConfig(_env_file=None)
+
+    assert config.content_ops_faq_embedding_booster_enabled is True
+
+
+def test_content_ops_api_route_gates_pinned_faq_embedding_factory() -> None:
+    """Route wiring keeps the hosted FAQ embedding booster opt-in."""
+
+    tree = ast.parse((_ROOT / "atlas_brain/api/__init__.py").read_text())
+    provider_uses_gate = False
+    helper_checks_flag = False
+    helper_calls_factory = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and (
+            node.name == "_build_content_ops_faq_embedding_port_if_enabled"
+        ):
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Attribute)
+                    and child.attr == "content_ops_faq_embedding_booster_enabled"
+                ):
+                    helper_checks_flag = True
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == "build_content_ops_faq_embedding_port"
+                ):
+                    helper_calls_factory = True
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id != "build_content_ops_execution_services":
+            continue
+        for keyword in node.keywords:
+            if (
+                keyword.arg == "faq_embedding_port_factory"
+                and isinstance(keyword.value, ast.Name)
+                and keyword.value.id == "_build_content_ops_faq_embedding_port_if_enabled"
+            ):
+                provider_uses_gate = True
+
+    assert provider_uses_gate is True
+    assert helper_checks_flag is True
+    assert helper_calls_factory is True
 
 
 def test_landing_page_wired_when_llm_active_and_db_enabled() -> None:

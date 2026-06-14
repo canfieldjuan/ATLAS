@@ -23,9 +23,13 @@ class SentenceTransformerEmbedding:
         self,
         model_name: str = "all-MiniLM-L6-v2",
         device: Optional[str] = None,
+        revision: Optional[str] = None,
+        local_files_only: bool = False,
     ):
         self.model_name = model_name
         self.device = device
+        self.revision = revision
+        self.local_files_only = bool(local_files_only)
         self._model = None
         self._dimension = 384
 
@@ -49,10 +53,13 @@ class SentenceTransformerEmbedding:
             from sentence_transformers import SentenceTransformer
 
             logger.info("Loading embedding model: %s", self.model_name)
-            self._model = SentenceTransformer(
-                self.model_name,
-                device=self.device,
-            )
+            kwargs = {
+                "device": self.device,
+                "local_files_only": self.local_files_only,
+            }
+            if self.revision is not None:
+                kwargs["revision"] = self.revision
+            self._model = SentenceTransformer(self.model_name, **kwargs)
             self._dimension = self._model.get_sentence_embedding_dimension()
             logger.info(
                 "Embedding model loaded (dim=%d, device=%s)",

@@ -40,15 +40,26 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 from typing import Any
 
 import pytest
 
+pytest.importorskip("torch")
+
 from atlas_brain._content_ops_infrastructure import (
+    CONTENT_OPS_FAQ_EMBEDDING_DEVICE,
+    CONTENT_OPS_FAQ_EMBEDDING_MODEL,
+    CONTENT_OPS_FAQ_EMBEDDING_REVISION,
+    _HostEmbeddingPort,
     _HostLLMClient,
     _HostSkillStore,
+    build_content_ops_faq_embedding_port,
     build_content_ops_llm_client,
     build_content_ops_skill_store,
+)
+from atlas_brain.services.embedding.sentence_transformer import (
+    SentenceTransformerEmbedding,
 )
 from extracted_content_pipeline.campaign_llm_client import PipelineLLMClient
 from extracted_content_pipeline.campaign_ports import LLMMessage
@@ -133,6 +144,98 @@ def test_host_skill_store_returns_none_for_missing_skill() -> None:
 
     store = build_content_ops_skill_store()
     assert store.get_prompt("digest/__definitely_not_a_real_skill__") is None
+
+
+def test_host_embedding_port_converts_batch_output_to_float_vectors() -> None:
+    """Host embedding service output is normalized to the extracted port shape."""
+
+    class _ArrayLike:
+        def tolist(self):
+            return [["1.0", 2], [3.5, "4.25"]]
+
+    class _FakeEmbeddingService:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def embed_batch(self, texts: list[str]) -> _ArrayLike:
+            self.calls.append(texts)
+            return _ArrayLike()
+
+    service = _FakeEmbeddingService()
+    port = _HostEmbeddingPort(service)
+
+    assert port.embed_texts(["refund help", "password reset"]) == (
+        (1.0, 2.0),
+        (3.5, 4.25),
+    )
+    assert service.calls == [["refund help", "password reset"]]
+
+
+def test_content_ops_faq_embedding_factory_pins_mxbai_offline_model() -> None:
+    """Factory builds the mxbai service with the pinned offline contract."""
+
+    received: dict[str, Any] = {}
+
+    class _FakeEmbeddingService:
+        def __init__(self, **kwargs: Any) -> None:
+            received.update(kwargs)
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            return [[float(len(text)), 1.0] for text in texts]
+
+    port = build_content_ops_faq_embedding_port(
+        embedding_service_factory=_FakeEmbeddingService
+    )
+
+    assert received == {
+        "model_name": CONTENT_OPS_FAQ_EMBEDDING_MODEL,
+        "device": CONTENT_OPS_FAQ_EMBEDDING_DEVICE,
+        "revision": CONTENT_OPS_FAQ_EMBEDDING_REVISION,
+        "local_files_only": True,
+    }
+    assert port.embed_texts(["a", "abcd"]) == ((1.0, 1.0), (4.0, 1.0))
+
+
+def test_sentence_transformer_embedding_load_uses_revision_and_offline_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host embedding service passes revision/offline args to the loader."""
+
+    received: dict[str, Any] = {}
+
+    class _FakeSentenceTransformer:
+        device = "cpu"
+
+        def __init__(self, model_name: str, **kwargs: Any) -> None:
+            received["model_name"] = model_name
+            received["kwargs"] = kwargs
+
+        def get_sentence_embedding_dimension(self) -> int:
+            return 1024
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=_FakeSentenceTransformer),
+    )
+
+    service = SentenceTransformerEmbedding(
+        model_name="example/model",
+        device="cpu",
+        revision="abc123",
+        local_files_only=True,
+    )
+    service.load()
+
+    assert received == {
+        "model_name": "example/model",
+        "kwargs": {
+            "device": "cpu",
+            "local_files_only": True,
+            "revision": "abc123",
+        },
+    }
+    assert service.dimension == 1024
 
 
 @pytest.mark.asyncio
