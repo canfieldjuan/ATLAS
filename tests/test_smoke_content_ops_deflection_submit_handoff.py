@@ -306,6 +306,63 @@ def test_validate_submit_envelope_accepts_locked_gated_result() -> None:
     assert diagnostics["metadata"]["source_row_count"] == 3
 
 
+def test_validate_submit_envelope_accepts_generated_questions_without_customer_wording() -> None:
+    snapshot = {
+        **SNAPSHOT,
+        "top_questions": [
+            {
+                **SNAPSHOT["top_questions"][0],
+                "question_source": "source_policy",
+                "customer_wording": "",
+            },
+            {
+                **SNAPSHOT["top_questions"][0],
+                "rank": 2,
+                "question": "What are customers asking about exports?",
+                "question_source": "topic_fallback",
+                "customer_wording": "",
+            },
+            {
+                **SNAPSHOT["top_questions"][0],
+                "rank": 3,
+                "question": "What should I do about export reporting?",
+                "customer_wording": "",
+            },
+        ],
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert errors == []
+
+
+@pytest.mark.parametrize("question_source", ["customer_wording", "internal_taxonomy"])
+def test_validate_submit_envelope_requires_customer_wording_for_customer_sources(
+    question_source: str,
+) -> None:
+    top_question = {
+        **SNAPSHOT["top_questions"][0],
+        "customer_wording": "",
+        "question_source": question_source,
+    }
+    snapshot = {
+        **SNAPSHOT,
+        "top_questions": [top_question],
+    }
+
+    _request_id, _snapshot, _diagnostics, errors = smoke._validate_submit_envelope(
+        _submit_payload(snapshot=snapshot)
+    )
+
+    assert any(
+        "snapshot.top_questions[0].customer_wording must be non-empty "
+        "for customer-wording questions" in error
+        for error in errors
+    )
+
+
 def test_validate_submit_envelope_requires_json_blob_byte_counter() -> None:
     payload = _submit_payload(metadata={
         "source": "portfolio_deflection_submit",

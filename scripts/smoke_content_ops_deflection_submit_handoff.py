@@ -47,6 +47,10 @@ FORBIDDEN_SNAPSHOT_KEYS = frozenset({
     "steps",
     "term_mappings",
 })
+OPTIONAL_CUSTOMER_WORDING_QUESTION_SOURCES = frozenset({
+    "source_policy",
+    "topic_fallback",
+})
 
 try:
     from dotenv import load_dotenv
@@ -435,8 +439,16 @@ def _validate_snapshot(snapshot: Any, *, label: str) -> list[str]:
                 errors.append(f"{label}.top_questions[{index}].rank must be an integer")
             if not _clean(item.get("question")):
                 errors.append(f"{label}.top_questions[{index}].question must be non-empty")
-            if not _clean(item.get("customer_wording")):
-                errors.append(f"{label}.top_questions[{index}].customer_wording must be non-empty")
+            question_source = _clean(item.get("question_source"))
+            if (
+                not _clean(item.get("customer_wording"))
+                and question_source
+                and question_source not in OPTIONAL_CUSTOMER_WORDING_QUESTION_SOURCES
+            ):
+                errors.append(
+                    f"{label}.top_questions[{index}].customer_wording must be non-empty "
+                    "for customer-wording questions"
+                )
             if not isinstance(item.get("weighted_frequency"), (int, float)):
                 errors.append(
                     f"{label}.top_questions[{index}].weighted_frequency must be numeric"
