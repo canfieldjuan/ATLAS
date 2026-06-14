@@ -28,7 +28,7 @@ _CSV_UTF16_NUL_SIDE_RATIO = 0.30
 _CSV_REPLACEMENT_WARNING_RATIO = 0.01
 _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO = 0.05
 _CSV_UTF8_MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2\u20ac", "\u00e2\u201a")
-_CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
+_CSV_IMPLAUSIBLE_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
 _CSV_BOM_ENCODINGS = (
     (b"\xff\xfe\x00\x00", "utf-32"),
     (b"\x00\x00\xfe\xff", "utf-32"),
@@ -566,26 +566,50 @@ def _legacy_fallback_corruption_warnings(
     legacy_text: str,
     recovered_text: str,
 ) -> tuple[CampaignOpportunityWarning, ...]:
-    if not recovered_text.count("\ufffd"):
+    artifact_count = _legacy_fallback_implausible_artifact_count(
+        legacy_text,
+        recovered_text,
+    )
+    if not artifact_count:
         return ()
     if _utf8_mojibake_score(legacy_text):
-        return ()
-    suspicious_count = sum(
-        legacy_text.count(char) for char in _CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS
-    )
-    if not suspicious_count:
         return ()
     return (
         CampaignOpportunityWarning(
             code="csv_encoding_ambiguous",
             field="encoding",
             message=(
-                "CSV failed strict UTF-8 decoding and legacy fallback produced "
-                f"{suspicious_count} suspicious character(s); verify the source "
-                "encoding before relying on these rows."
+                "CSV failed strict UTF-8 decoding; legacy fallback decoded the "
+                "bytes, but UTF-8 recovery would contain "
+                f"{artifact_count} replacement character(s). Verify the "
+                "source encoding before relying on these rows."
             ),
         ),
     )
+
+
+def _legacy_fallback_implausible_artifact_count(
+    legacy_text: str,
+    recovered_text: str,
+) -> int:
+    count = 0
+    for index, char in enumerate(recovered_text):
+        if char != "\ufffd":
+            continue
+        legacy_char = legacy_text[index] if index < len(legacy_text) else ""
+        if not _is_implausible_legacy_fallback_char(legacy_char):
+            continue
+        count += 1
+    return count
+
+
+def _is_implausible_legacy_fallback_char(char: str) -> bool:
+    if not char:
+        return False
+    if char in _CSV_IMPLAUSIBLE_LEGACY_FALLBACK_CHARS:
+        return True
+    codepoint = ord(char)
+    return 0x80 <= codepoint <= 0x9F
 
 
 def _csv_decode_warnings(
