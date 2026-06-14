@@ -46,11 +46,21 @@ def _route(router: Any, path: str, method: str) -> Any:
 class _BlobResponse:
     def __init__(self, data: bytes, *, status: int = 200) -> None:
         self._data = data
+        self._offset = 0
         self.status = status
         self.closed = False
+        self.read_sizes: list[int] = []
 
-    def read(self, _size: int) -> bytes:
-        return self._data
+    def read(self, size: int) -> bytes:
+        self.read_sizes.append(size)
+        if self._offset >= len(self._data):
+            return b""
+        if size < 0:
+            size = len(self._data) - self._offset
+        end = min(len(self._data), self._offset + size)
+        chunk = self._data[self._offset:end]
+        self._offset = end
+        return chunk
 
     def close(self) -> None:
         self.closed = True
@@ -187,6 +197,78 @@ def _install_public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
         )]
 
     monkeypatch.setattr(api_module.socket, "getaddrinfo", _getaddrinfo)
+
+
+def test_deflection_submit_blob_csv_streams_response_to_tempfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    message = "How do I export reports? " * 4000
+    data = _csv_bytes(
+        ["ticket_id,message"]
+        + [f"ticket-{index},{message}" for index in range(12)]
+    )
+    response = _BlobResponse(data)
+
+    monkeypatch.setattr(
+        api_module,
+        "_open_https_blob_request",
+        lambda _target, *, timeout: response,
+    )
+
+    rows, byte_count, load_warnings = api_module._load_deflection_submit_blob_rows_sync(
+        "https://portfolio.example/blob/tickets.csv",
+        max_bytes=len(data) + 1024,
+        importer_mode="csv",
+    )
+
+    assert byte_count == len(data)
+    assert load_warnings == ()
+    assert rows[0]["ticket_id"] == "ticket-0"
+    assert response.closed
+    assert response.read_sizes
+    assert all(
+        size == api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+        for size in response.read_sizes
+    )
+    assert len(data) + 1025 not in response.read_sizes
+
+
+def test_copy_bounded_https_blob_rejects_oversize_before_writing_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    data = b"a" * (api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 2)
+    response = _BlobResponse(data)
+
+    monkeypatch.setattr(
+        api_module,
+        "_open_https_blob_request",
+        lambda _target, *, timeout: response,
+    )
+
+    with tempfile.NamedTemporaryFile() as handle:
+        with pytest.raises(api_module.HTTPException) as exc_info:
+            api_module._copy_bounded_https_blob_to_tempfile(
+                "https://portfolio.example/blob/tickets.csv",
+                handle,
+                max_bytes=api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 1,
+            )
+        handle.flush()
+        handle.seek(0)
+        staged = handle.read()
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail == {
+        "reason": "deflection_submit_blob_too_large",
+        "max_file_bytes": api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 1,
+    }
+    assert staged == b"a" * api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+    assert response.closed
+    assert response.read_sizes == [
+        api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES,
+        api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES,
+    ]
 
 
 @pytest.mark.asyncio
