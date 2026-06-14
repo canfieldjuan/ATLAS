@@ -143,6 +143,35 @@ Runner output is a per-model in-memory result:
 The harness does not choose models, read credentials, call network providers,
 write benchmark result files, or expose verifier/MCP behavior.
 
+## Prompt Packet Export
+
+Before a live provider adapter exists, operators can export the exact
+prompt/schema packets that a model witness must receive:
+
+```bash
+python scripts/export_content_ops_claim_evidence_prompt_packets.py \
+  path/to/final.json \
+  path/to/claim_evidence_prompt_packets.json \
+  --model-id claude-sonnet \
+  --model-id gpt \
+  --require-final-shape
+
+python scripts/export_content_ops_claim_evidence_prompt_packets.py \
+  path/to/final.jsonl \
+  path/to/claim_evidence_prompt_packets.jsonl \
+  --model-id claude-sonnet \
+  --output-format jsonl
+```
+
+The command validates the fixture before writing packets. Each packet includes
+the model id, triple id, claim/source metadata, contract version, prompt, and
+strict response schema. It intentionally omits `expected_supports` so operator
+labels are not sent to model witnesses.
+
+The command does not call providers, read API credentials, write benchmark
+results, or expose verifier/MCP behavior. Provider adapters and response capture
+remain a later slice.
+
 ## Hard Cases
 
 Hard rows should feel like realistic B2B SaaS marketing copy and include cases
