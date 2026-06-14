@@ -10,12 +10,14 @@ Partial live proof, not a full funnel pass.
 
 The hosted ATLAS submit path accepted and processed a regenerated near-50 MB
 CFPB CSV. The run proved real multipart upload, hosted generation, snapshot
-fetch, and locked unpaid artifact behavior at full volume. The full buyer
-funnel is still blocked by three live findings:
+fetch, and locked unpaid artifact behavior at full volume. At the time of the
+run, the full buyer funnel was blocked by three live findings:
 
 1. The configured repeat-ticket gate was too high for this regenerated sample:
    expected at least 30,000, got 27,384.
-2. The public portfolio result route returned 404 for the generated request.
+2. The public portfolio result route returned 404 for the generated request
+   (resolved after this proof by portfolio PRs #307 and #308; see the
+   resolution note below).
 3. The deployed Stripe webhook rejected the local signing secret with
    `Invalid signature`, so paid unlock and delivery were not proven.
 
@@ -117,6 +119,17 @@ Observed result:
 The ATLAS request exists and remains locked before payment, but the public
 portfolio route did not render the result page.
 
+Resolution update: portfolio PR #307 changed expected snapshot-fetch/config
+failures on the canonical
+`/systems/support-ticket-deflection/results/{request_id}` route from raw 500s to
+a buyer-safe unavailable state. Portfolio PR #308 added a permanent redirect
+from `/services/faq-deflection/results/{request_id}` to that canonical route.
+The post-deploy probe recorded in issue #1440 observed a `308` from the legacy
+URL to the canonical URL, preserving `checkout=success&priceVariant=partner`,
+and a redirect-following `200` on the canonical route. The canonical page still
+rendered `SNAPSHOT TEMPORARILY UNAVAILABLE`, so real snapshot rendering remains
+dependent on deployed portfolio-to-ATLAS config/data availability.
+
 ## Paid Unlock
 
 Command shape:
@@ -160,5 +173,7 @@ Fix or configure the live surfaces in this order:
 
 1. Rerun the hosted submit proof with `--volume-gate-profile full-volume-cfpb`
    if a fresh submit artifact is needed after calibration.
-2. Align the local/operator Stripe webhook secret with the deployed
+2. Rerun the portfolio result-page smoke after deployed portfolio-to-ATLAS
+   snapshot config/data availability is confirmed.
+3. Align the local/operator Stripe webhook secret with the deployed
    `atlas-brain` secret, then rerun paid unlock and delivery.

@@ -800,6 +800,37 @@ def test_run_explicit_repeat_gate_overrides_full_volume_cfpb_profile(
     ]
 
 
+def test_run_lower_explicit_gate_cannot_loosen_full_volume_cfpb_profile(
+    monkeypatch,
+    tmp_path,
+):
+    _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload()),
+            (200, SNAPSHOT),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--volume-gate-profile",
+            "full-volume-cfpb",
+            "--min-uploaded-bytes",
+            "1",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["configured"]["uploaded_bytes"] == 50000000
+    assert (
+        "volume gate uploaded_bytes expected >= 50000000, got 200"
+        in summary["volume_gates"]["errors"]
+    )
+
+
 def test_run_passes_configured_full_volume_gates(monkeypatch, tmp_path):
     snapshot = _full_volume_snapshot()
     metadata = {

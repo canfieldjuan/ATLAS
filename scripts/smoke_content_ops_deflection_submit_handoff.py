@@ -123,7 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Apply a named volume-gate profile. Explicit nonzero --min-* "
-            "flags override profile defaults."
+            "flags can raise profile defaults."
         ),
     )
     parser.add_argument("--timeout", type=float, default=30.0)
@@ -631,7 +631,7 @@ def _configured_volume_gates(args: argparse.Namespace) -> dict[str, int]:
     }
     for gate, minimum in explicit.items():
         if minimum > 0:
-            configured[gate] = minimum
+            configured[gate] = max(configured[gate], minimum)
     return configured
 
 

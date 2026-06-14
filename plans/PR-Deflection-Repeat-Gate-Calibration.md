@@ -14,6 +14,11 @@ report generation. This slice replaces the hand-entered threshold bundle with a
 named `full-volume-cfpb` gate profile whose repeat threshold is below the
 observed proof but still high enough to reject tiny/smoke fixtures.
 
+The diff is over the 400 LOC target because the review fix adds a focused
+regression test proving lower explicit minimums cannot weaken profile floors,
+and the live proof doc now records the portfolio route resolution without
+removing the remaining real-snapshot rerun step.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-full-volume
@@ -24,12 +29,12 @@ Slice phase: Functional validation
 2. Calibrate that profile from the committed #1440 live proof: repeat-ticket
    minimum 25,000, source/submitted rows 30,000, generated questions 30,
    uploaded bytes 50,000,000, top questions 5.
-3. Preserve the existing explicit `--min-*` flags; nonzero explicit minimums
-   override the profile when the operator intentionally wants a stricter gate.
+3. Preserve the existing explicit `--min-*` flags; nonzero explicit minimums can
+   raise profile floors when the operator intentionally wants a stricter gate.
 4. Update the #1440 proof docs/runbook to use the named profile instead of the
    disproven ad hoc repeat threshold.
-5. Add focused tests for profile pass, tiny-fixture fail, and explicit stricter
-   override fail.
+5. Add focused tests for profile pass, tiny-fixture fail, explicit stricter
+   override fail, and lower explicit minimums not weakening profile floors.
 
 ### Review Contract
 
@@ -38,7 +43,9 @@ Slice phase: Functional validation
         `full-volume-cfpb` profile.
   - [ ] A tiny/smoke fixture fails the same profile.
   - [ ] An explicit nonzero `--min-repeat-ticket-count 30000` still fails a
-        27,384-repeat result, proving overrides remain possible.
+        27,384-repeat result, proving stricter overrides remain possible.
+  - [ ] An explicit lower `--min-*` value cannot weaken a selected profile
+        floor.
   - [ ] Existing no-profile gate behavior is unchanged.
 - Affected surfaces: smoke script, smoke tests, validation docs.
 - Risk areas: false-green validation, CI enrollment, operator runbook drift.
@@ -56,8 +63,8 @@ Slice phase: Functional validation
 
 The smoke gets a `--volume-gate-profile full-volume-cfpb` option. When selected,
 the configured volume gates start from the profile defaults. Existing explicit
-`--min-*` values remain supported and override profile defaults only when they
-are greater than zero.
+`--min-*` values remain supported and raise profile floors only when they are
+greater than the profile default for that gate.
 
 The profile defaults are:
 
@@ -98,9 +105,9 @@ Parked hardening: none.
 
 ## Verification
 
-- pytest tests/test_smoke_content_ops_deflection_submit_handoff.py - 40 passed.
+- pytest tests/test_smoke_content_ops_deflection_submit_handoff.py - 41 passed.
 - python -m py_compile scripts/smoke_content_ops_deflection_submit_handoff.py - passed.
-- bash scripts/run_extracted_pipeline_checks.sh - 4,186 passed, 10 skipped,
+- bash scripts/run_extracted_pipeline_checks.sh - 4,189 passed, 10 skipped,
   1 existing torch warning.
 - bash scripts/local_pr_review.sh with the current PR body - passed.
 
@@ -108,9 +115,9 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `docs/extraction/validation/content_ops_faq_deflection_submit_handoff_runbook.md` | 24 |
-| `docs/extraction/validation/deflection_full_volume_live_proof_2026-06-14.md` | 17 |
-| `plans/PR-Deflection-Repeat-Gate-Calibration.md` | 116 |
+| `docs/extraction/validation/content_ops_faq_deflection_submit_handoff_runbook.md` | 25 |
+| `docs/extraction/validation/deflection_full_volume_live_proof_2026-06-14.md` | 36 |
+| `plans/PR-Deflection-Repeat-Gate-Calibration.md` | 123 |
 | `scripts/smoke_content_ops_deflection_submit_handoff.py` | 87 |
-| `tests/test_smoke_content_ops_deflection_submit_handoff.py` | 150 |
-| **Total** | **394** |
+| `tests/test_smoke_content_ops_deflection_submit_handoff.py` | 181 |
+| **Total** | **452** |

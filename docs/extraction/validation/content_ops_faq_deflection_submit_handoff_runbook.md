@@ -199,7 +199,8 @@ The profile requires at least 50,000,000 uploaded bytes, 30,000 source rows,
 visible top questions. The repeat-ticket threshold is calibrated below the
 first committed live full-volume proof result of 27,384 repeat tickets while
 still rejecting tiny fixture reports. If a stricter proof is intentional, pass a
-nonzero explicit `--min-*` flag; explicit minimums override profile defaults.
+nonzero explicit `--min-*` flag; explicit minimums can raise profile defaults
+but cannot lower them.
 
 ## Portfolio Result Page Smoke
 
