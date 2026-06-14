@@ -207,6 +207,12 @@ def _fake_open(sequence: list[tuple[int, Any]], calls: list[dict[str, Any]]):
     return _open
 
 
+def _patch_open(monkeypatch, sequence: list[tuple[int, Any]]) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(smoke, "_open_http_request", _fake_open(sequence, calls))
+    return calls
+
+
 def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
     args = smoke._build_parser().parse_args([
         "--base-url",
@@ -244,6 +250,23 @@ def test_validate_args_fails_closed_for_missing_and_unsafe_inputs() -> None:
         "--submit-path must start with /",
         "--snapshot-path-template must include {request_id}",
     ]
+
+
+def test_validate_args_rejects_negative_volume_gates(tmp_path) -> None:
+    flags = (
+        "--min-uploaded-bytes",
+        "--min-source-row-count",
+        "--min-submitted-row-count",
+        "--min-generated-questions",
+        "--min-repeat-ticket-count",
+        "--min-top-question-count",
+    )
+    args = smoke._build_parser().parse_args([
+        *_base_args(tmp_path),
+        *(item for flag in flags for item in (flag, "-1")),
+    ])
+
+    assert smoke._validate_args(args) == [f"{flag} must be zero or greater" for flag in flags]
 
 
 def test_validate_args_fails_closed_for_missing_csv_file(tmp_path) -> None:
@@ -606,6 +629,183 @@ def test_run_sends_explicit_large_submit_limit_when_requested(monkeypatch, tmp_p
     assert summary["ok"] is True
     assert calls[0]["body"]["limit"] == 25000
     assert summary["submit"]["diagnostics"]["metadata"]["max_source_material_rows"] == 25000
+
+
+def _full_volume_snapshot() -> dict[str, Any]:
+    return {
+        **SNAPSHOT,
+        "summary": {
+            **SNAPSHOT["summary"],
+            "generated": 37,
+            "repeat_ticket_count": 35386,
+        },
+        "top_questions": [
+            {
+                **SNAPSHOT["top_questions"][0],
+                "rank": index,
+                "ticket_count": 1000 - index,
+            }
+            for index in range(1, 6)
+        ],
+    }
+
+
+def test_run_passes_configured_full_volume_gates(monkeypatch, tmp_path):
+    snapshot = _full_volume_snapshot()
+    metadata = {
+        "source": "portfolio_deflection_submit",
+        "source_row_count": 35386,
+        "submitted_row_count": 35386,
+        "truncated_row_count": 0,
+        "max_source_material_rows": 35386,
+        "blob_bytes": 52363054,
+        "support_platform": "zendesk",
+    }
+    _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload(snapshot=snapshot, metadata=metadata)),
+            (200, snapshot),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+    flags = (
+        "--min-uploaded-bytes",
+        "50000000",
+        "--min-source-row-count",
+        "30000",
+        "--min-submitted-row-count",
+        "30000",
+        "--min-generated-questions",
+        "30",
+        "--min-repeat-ticket-count",
+        "30000",
+        "--min-top-question-count",
+        "5",
+    )
+    summary = smoke.run(smoke._build_parser().parse_args([*_base_args(tmp_path), *flags]))
+
+    assert summary["ok"] is True
+    assert summary["volume_gates"]["ok"] is True
+    assert summary["volume_gates"]["actual"] == {
+        "uploaded_bytes": 52363054,
+        "source_row_count": 35386,
+        "submitted_row_count": 35386,
+        "generated_questions": 37,
+        "repeat_ticket_count": 35386,
+        "top_question_count": 5,
+    }
+    serialized = json.dumps(summary)
+    assert "token-secret" not in serialized
+    assert "signed-secret" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("flag", "gate", "minimum", "actual"),
+    [
+        ("--min-uploaded-bytes", "uploaded_bytes", "201", 200),
+        ("--min-source-row-count", "source_row_count", "4", 3),
+        ("--min-submitted-row-count", "submitted_row_count", "4", 3),
+        ("--min-generated-questions", "generated_questions", "3", 2),
+        ("--min-repeat-ticket-count", "repeat_ticket_count", "5", 4),
+        ("--min-top-question-count", "top_question_count", "2", 1),
+    ],
+)
+def test_run_fails_each_configured_volume_gate_when_tiny_fixture_passes_shape(
+    monkeypatch,
+    tmp_path,
+    flag: str,
+    gate: str,
+    minimum: str,
+    actual: int,
+):
+    calls = _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload()),
+            (200, SNAPSHOT),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+    summary = smoke.run(
+        smoke._build_parser().parse_args([*_base_args(tmp_path), flag, minimum])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["ok"] is False
+    assert summary["volume_gates"]["errors"] == [
+        f"volume gate {gate} expected >= {minimum}, got {actual}"
+    ]
+    assert summary["errors"] == summary["volume_gates"]["errors"]
+    assert len(calls) == 3
+
+
+def test_run_fails_volume_gate_when_metric_is_missing(monkeypatch, tmp_path):
+    snapshot = {
+        **SNAPSHOT,
+        "summary": {
+            "generated": 2,
+            "drafted_answer_count": 1,
+            "no_proven_answer_count": 1,
+        },
+    }
+    _patch_open(
+        monkeypatch,
+        [
+            (200, _submit_payload(snapshot=snapshot)),
+            (200, snapshot),
+            (403, {"detail": "payment_required"}),
+        ],
+    )
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--min-repeat-ticket-count",
+            "1",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"]["errors"] == [
+        "volume gate repeat_ticket_count expected >= 1, got missing"
+    ]
+
+
+def test_run_marks_configured_volume_gates_skipped_when_envelope_fails(
+    monkeypatch,
+    tmp_path,
+):
+    payload = _submit_payload(metadata={
+        "source": "portfolio_deflection_submit",
+        "source_row_count": 3,
+        "submitted_row_count": 3,
+        "truncated_row_count": 0,
+        "max_source_material_rows": 1000,
+        "support_platform": "zendesk",
+    })
+    calls = _patch_open(monkeypatch, [(200, payload)])
+    summary = smoke.run(
+        smoke._build_parser().parse_args([
+            *_base_args(tmp_path),
+            "--min-generated-questions",
+            "1",
+        ])
+    )
+
+    assert summary["ok"] is False
+    assert summary["volume_gates"] == {
+        "configured": {"generated_questions": 1},
+        "actual": {},
+        "ok": False,
+        "skipped": True,
+        "not_run_reason": "submit_failed",
+        "errors": [],
+    }
+    assert (
+        "input_provider.metadata.blob_bytes must be a positive integer "
+        "for json_blob_url submit"
+    ) in summary["errors"]
+    assert len(calls) == 1
 
 
 def test_run_fails_with_stale_multipart_submit_route_diagnostic(monkeypatch, tmp_path):
