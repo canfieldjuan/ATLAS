@@ -1316,10 +1316,17 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
         "done": "resolved",
         "Solved": "resolved",
         "In Progress": "open",
+        "Pending Customer": "open",
         "Pending Customer Approval": "open",
+        "Pending Customer Response": "open",
+        "Awaiting Customer": "open",
+        "Customer Response": "open",
+        "Waiting on Customer": "open",
         "reopened": "reopened",
         "Cancelled": "cancelled",
         "Escalated": "other",
+        "Customer Escalation": "other",
+        "Pending Vendor Approval": "other",
     }
     package = build_support_ticket_input_package([
         {
@@ -1337,6 +1344,8 @@ def test_support_ticket_status_normalizes_to_canonical_buckets() -> None:
     assert got == statuses
     # the reopened bucket is the churn signal #1419/#1466 consume; keep it distinct
     assert package.metadata["ticket_status_summary"]["reopened"] == 1
+    assert package.metadata["ticket_status_summary"]["open"] == 7
+    assert package.metadata["ticket_status_summary"]["other"] == 3
 
 
 def test_support_ticket_csat_parses_numeric_only_and_averages_numeric() -> None:
