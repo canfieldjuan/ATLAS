@@ -151,6 +151,27 @@ async def test_deflection_submit_upload_parses_bom_semicolon_csv() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deflection_submit_upload_parses_utf16_bom_csv() -> None:
+    data = (
+        "ticket_id,subject,message\n"
+        "ticket-1,Export help,How do I export attribution reports?\n"
+    ).encode("utf-16")
+
+    rows, byte_count, load_warnings = await api_module._load_deflection_submit_upload_rows(
+        _Upload(data),
+        max_bytes=2048,
+    )
+
+    assert byte_count == len(data)
+    assert load_warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export attribution reports?",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_deflection_submit_upload_parses_embedded_quotes_and_newlines() -> None:
     data = _csv_dict_bytes([
         {
