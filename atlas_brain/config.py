@@ -4807,6 +4807,14 @@ class B2BCampaignConfig(BaseSettings):
             "to exact-cache or no-store to default hosted runs."
         ),
     )
+    content_ops_faq_embedding_booster_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ATLAS_CONTENT_OPS_FAQ_EMBEDDING_BOOSTER_ENABLED"),
+        description=(
+            "Enable the hosted Content Ops FAQ embedding booster. Defaults off "
+            "until the mxbai thresholds are live-baselined."
+        ),
+    )
     content_ops_zendesk_email: str = Field(
         default="",
         validation_alias=AliasChoices(

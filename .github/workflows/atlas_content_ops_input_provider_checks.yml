@@ -4,9 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/config.py"
+      - "atlas_brain/_content_ops_infrastructure.py"
       - "atlas_brain/_content_ops_input_provider.py"
       - "atlas_brain/_content_ops_services.py"
+      - "atlas_brain/services/embedding/sentence_transformer.py"
       - "tests/test_atlas_content_ops_input_provider.py"
+      - "tests/test_atlas_content_ops_infrastructure.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
       - "tests/test_support_ticket_provider_landing_blog_execute.py"
@@ -15,9 +20,14 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/config.py"
+      - "atlas_brain/_content_ops_infrastructure.py"
       - "atlas_brain/_content_ops_input_provider.py"
       - "atlas_brain/_content_ops_services.py"
+      - "atlas_brain/services/embedding/sentence_transformer.py"
       - "tests/test_atlas_content_ops_input_provider.py"
+      - "tests/test_atlas_content_ops_infrastructure.py"
       - "tests/test_atlas_content_ops_review_input_provider.py"
       - "tests/test_atlas_content_ops_execution_services.py"
       - "tests/test_support_ticket_provider_landing_blog_execute.py"
@@ -45,6 +55,7 @@ jobs:
         run: |
           python -m pytest \
             tests/test_atlas_content_ops_input_provider.py \
+            tests/test_atlas_content_ops_infrastructure.py \
             tests/test_atlas_content_ops_review_input_provider.py \
             tests/test_atlas_content_ops_execution_services.py \
             tests/test_support_ticket_provider_landing_blog_execute.py \

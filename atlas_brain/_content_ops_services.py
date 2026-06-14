@@ -80,6 +80,7 @@ from extracted_content_pipeline.content_image_provider import (
 from extracted_content_pipeline.content_ops_execution import (
     ContentOpsExecutionServices,
 )
+from extracted_content_pipeline.embedding_port import EmbeddingPort
 from extracted_content_pipeline.faq_deflection_report import (
     FAQDeflectionReportService,
 )
@@ -123,6 +124,7 @@ from extracted_content_pipeline.stat_card_postgres import (
     PostgresStatCardRepository,
 )
 from extracted_content_pipeline.ticket_faq_markdown import (
+    TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
 )
 from extracted_content_pipeline.ticket_faq_postgres import (
@@ -277,12 +279,25 @@ def _build_content_image_provider() -> ContentImageProvider | None:
     )
 
 
-def _build_ticket_faq_service(*, pool: Any) -> TicketFAQMarkdownService | None:
-    """Build the persisted FAQ Markdown service when a DB pool is active."""
+def _build_ticket_faq_service(
+    *,
+    pool: Any,
+    embedding_port: EmbeddingPort | None = None,
+) -> TicketFAQMarkdownService | None:
+    """Build the FAQ Markdown service when persistence or embeddings are active."""
 
-    if pool is None:
+    if pool is None and embedding_port is None:
         return None
-    return TicketFAQMarkdownService(ticket_faqs=PostgresTicketFAQRepository(pool=pool))
+    return TicketFAQMarkdownService(
+        config=(
+            TicketFAQMarkdownConfig(embedding_port=embedding_port)
+            if embedding_port is not None
+            else None
+        ),
+        ticket_faqs=(
+            PostgresTicketFAQRepository(pool=pool) if pool is not None else None
+        ),
+    )
 
 
 def _build_social_post_service(
@@ -337,6 +352,7 @@ def build_content_ops_execution_services(
     llm_factory: Callable[[], LLMClient | None] | None = None,
     skills_factory: Callable[[], SkillStore] | None = None,
     pool_factory: Callable[[], Any] | None = None,
+    faq_embedding_port_factory: Callable[[], EmbeddingPort | None] | None = None,
     enable_db_services: bool = False,
     expose_faq_markdown_output: bool = True,
 ) -> ContentOpsExecutionServices:
@@ -393,9 +409,19 @@ def build_content_ops_execution_services(
     ad_copy = _AD_COPY_SERVICE
     quote_card = _QUOTE_CARD_SERVICE
     stat_card = _STAT_CARD_SERVICE
-    faq_markdown_service = _FAQ_MARKDOWN_SERVICE
+    faq_embedding_port = (
+        faq_embedding_port_factory() if faq_embedding_port_factory is not None else None
+    )
+    faq_markdown_service = (
+        _build_ticket_faq_service(pool=None, embedding_port=faq_embedding_port)
+        or _FAQ_MARKDOWN_SERVICE
+    )
     faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
-    faq_deflection_report = _FAQ_DEFLECTION_REPORT_SERVICE
+    faq_deflection_report = (
+        FAQDeflectionReportService(faq_markdown=faq_markdown_service)
+        if faq_embedding_port is not None
+        else _FAQ_DEFLECTION_REPORT_SERVICE
+    )
     if enable_db_services:
         llm = llm_factory()
         skills = skills_factory()
@@ -445,7 +471,13 @@ def build_content_ops_execution_services(
         ad_copy = _build_ad_copy_service(pool=pool)
         quote_card = _build_quote_card_service(pool=pool)
         stat_card = _build_stat_card_service(pool=pool)
-        faq_markdown_service = _build_ticket_faq_service(pool=pool) or _FAQ_MARKDOWN_SERVICE
+        faq_markdown_service = (
+            _build_ticket_faq_service(
+                pool=pool,
+                embedding_port=faq_embedding_port,
+            )
+            or _FAQ_MARKDOWN_SERVICE
+        )
         faq_markdown = faq_markdown_service if expose_faq_markdown_output else None
         faq_deflection_report = FAQDeflectionReportService(
             faq_markdown=faq_markdown_service

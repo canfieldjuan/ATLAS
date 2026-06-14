@@ -31,7 +31,7 @@ contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +42,12 @@ from extracted_content_pipeline.campaign_ports import (
     SkillStore,
 )
 from extracted_content_pipeline.campaign_llm_client import PipelineLLMClient
+from extracted_content_pipeline.embedding_port import EmbeddingPort
+
+
+CONTENT_OPS_FAQ_EMBEDDING_MODEL = "mixedbread-ai/mxbai-embed-large-v1"
+CONTENT_OPS_FAQ_EMBEDDING_REVISION = "b33106f585b9ce46904ad7443a3b52b7a63e231c"
+CONTENT_OPS_FAQ_EMBEDDING_DEVICE = "cpu"
 
 
 class _HostLLMClient:
@@ -154,6 +160,56 @@ class _HostSkillStore:
         return content
 
 
+def _embedding_row_to_tuple(row: Any) -> tuple[float, ...]:
+    values = row.tolist() if hasattr(row, "tolist") else row
+    return tuple(float(value) for value in values)
+
+
+class _HostEmbeddingPort:
+    """Adapter implementing the extracted FAQ embedding port over host embeddings."""
+
+    def __init__(self, host_embedding: Any) -> None:
+        self._host = host_embedding
+
+    def embed_texts(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
+        normalized = [str(text or "") for text in texts]
+        if not normalized:
+            return ()
+        embeddings = self._host.embed_batch(normalized)
+        values = embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
+        return tuple(_embedding_row_to_tuple(row) for row in values)
+
+
+_CONTENT_OPS_FAQ_EMBEDDING_PORT: EmbeddingPort | None = None
+
+
+def build_content_ops_faq_embedding_port(
+    *,
+    embedding_service_factory: Callable[..., Any] | None = None,
+) -> EmbeddingPort:
+    """Return the pinned local embedding port for FAQ question clustering."""
+
+    global _CONTENT_OPS_FAQ_EMBEDDING_PORT
+    kwargs = {
+        "model_name": CONTENT_OPS_FAQ_EMBEDDING_MODEL,
+        "device": CONTENT_OPS_FAQ_EMBEDDING_DEVICE,
+        "revision": CONTENT_OPS_FAQ_EMBEDDING_REVISION,
+        "local_files_only": True,
+    }
+    if embedding_service_factory is not None:
+        return _HostEmbeddingPort(embedding_service_factory(**kwargs))
+
+    if _CONTENT_OPS_FAQ_EMBEDDING_PORT is None:
+        from atlas_brain.services.embedding.sentence_transformer import (
+            SentenceTransformerEmbedding,
+        )
+
+        _CONTENT_OPS_FAQ_EMBEDDING_PORT = _HostEmbeddingPort(
+            SentenceTransformerEmbedding(**kwargs)
+        )
+    return _CONTENT_OPS_FAQ_EMBEDDING_PORT
+
+
 def build_content_ops_llm_client(
     *,
     llm_registry: Any = None,
@@ -259,6 +315,10 @@ def build_content_ops_skill_store(
 
 
 __all__ = [
+    "CONTENT_OPS_FAQ_EMBEDDING_DEVICE",
+    "CONTENT_OPS_FAQ_EMBEDDING_MODEL",
+    "CONTENT_OPS_FAQ_EMBEDDING_REVISION",
+    "build_content_ops_faq_embedding_port",
     "build_content_ops_llm_client",
     "build_content_ops_skill_store",
 ]
