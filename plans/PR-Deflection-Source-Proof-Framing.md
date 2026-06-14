@@ -26,7 +26,8 @@ Slice phase: Functional validation
 3. Update the Zendesk full-thread proof to state what it proves and what it
    does not prove because the committed fixture is small.
 4. Add a docs contract test that fails if the source-role language disappears.
-5. Enroll the test in the extracted pipeline check script.
+5. Enroll the test in the extracted pipeline check script and make docs-only
+   validation changes trigger the extracted workflow.
 
 ### Review Contract
 
@@ -38,6 +39,9 @@ Slice phase: Functional validation
   - [ ] The runbook tells operators when to use each source class.
   - [ ] A committed test protects those source-role claims.
   - [ ] The new test is enrolled in `scripts/run_extracted_pipeline_checks.sh`.
+  - [ ] Docs-only edits under `docs/extraction/validation/**` trigger the
+        extracted workflow so the contract test runs when the protected docs
+        change.
 - Affected surfaces: validation docs, docs contract test, extracted check
   enrollment.
 - Risk areas: source-role drift, false product-quality claims, CI enrollment.
@@ -45,6 +49,7 @@ Slice phase: Functional validation
 
 ### Files touched
 
+- `.github/workflows/extracted_pipeline_checks.yml`
 - `docs/extraction/validation/content_ops_faq_deflection_submit_handoff_runbook.md`
 - `docs/extraction/validation/deflection_full_volume_live_proof_2026-06-14.md`
 - `docs/extraction/validation/deflection_zendesk_full_thread_proof_2026-06-13.md`
@@ -69,6 +74,10 @@ The docs get a source-role section that separates:
 The test reads the three docs as text and asserts the key claims remain present.
 That is intentionally a contract test for proof language, not a parser or
 runtime behavior test.
+
+The extracted workflow path filters include `docs/extraction/validation/**` so
+a docs-only PR that weakens the protected language still runs the contract
+test.
 
 ## Intentional
 
@@ -95,17 +104,18 @@ Parked hardening: none.
 - pytest tests/test_content_ops_deflection_source_proof_docs.py - 3 passed.
 - python scripts/audit_extracted_pipeline_ci_enrollment.py - OK, 179 matching
   tests are enrolled.
-- bash scripts/run_extracted_pipeline_checks.sh - 4,196 passed, 10 skipped,
+- bash scripts/run_extracted_pipeline_checks.sh - 4,199 passed, 10 skipped,
   1 existing torch warning.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/extracted_pipeline_checks.yml` | 2 |
 | `docs/extraction/validation/content_ops_faq_deflection_submit_handoff_runbook.md` | 23 |
 | `docs/extraction/validation/deflection_full_volume_live_proof_2026-06-14.md` | 9 |
 | `docs/extraction/validation/deflection_zendesk_full_thread_proof_2026-06-13.md` | 9 |
-| `plans/PR-Deflection-Source-Proof-Framing.md` | 111 |
+| `plans/PR-Deflection-Source-Proof-Framing.md` | 121 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
-| `tests/test_content_ops_deflection_source_proof_docs.py` | 42 |
-| **Total** | **195** |
+| `tests/test_content_ops_deflection_source_proof_docs.py` | 43 |
+| **Total** | **208** |
