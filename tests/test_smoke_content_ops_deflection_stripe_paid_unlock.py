@@ -174,7 +174,7 @@ def test_main_posts_signed_webhook_and_unlocks_artifact(monkeypatch, tmp_path, c
     payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert printed == payload
     assert payload["ok"] is True
-    assert payload["before_artifact"]["status"] == 403
+    assert payload["before_artifact"] == {"status": 403}
     assert payload["webhook"]["status"] == 200
     assert payload["after_artifact"]["status"] == 200
 
@@ -233,6 +233,7 @@ def test_main_replays_signed_webhook_and_requires_idempotent_response(
     payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert printed == payload
     assert payload["ok"] is True
+    assert payload["before_artifact"] == {"status": 403}
     assert payload["webhook"] == {"status": 200}
     assert payload["replay_webhook"] == {
         "status": 200,
@@ -309,7 +310,53 @@ def test_main_reports_webhook_failure_without_fetching_unlocked_artifact(monkeyp
     assert code == 1
     assert calls == ["GET", "POST"]
     assert payload["errors"] == ["stripe webhook status must be 200, got 409"]
+    assert payload["webhook"] == {
+        "status": 409,
+        "error_detail": "Deflection report not found",
+    }
     assert payload["after_artifact"]["status"] is None
+
+
+def test_main_redacts_reflected_secret_values_from_error_detail(monkeypatch, tmp_path) -> None:
+    secret_values = {
+        "whsec_reflectedsecret",
+        "sk_live_reflectedsecret",
+        "Bearer reflected-token",
+        "ATLAS_SAAS_STRIPE_WEBHOOK_SECRET=reflectedsecret",
+    }
+
+    def _open(request, *, timeout):
+        if request.get_method() == "GET":
+            raise _http_error(request.full_url, 403, {"detail": "payment_required"})
+        raise _http_error(
+            request.full_url,
+            400,
+            {
+                "detail": (
+                    "Invalid signature for whsec_reflectedsecret using "
+                    "sk_live_reflectedsecret and Bearer reflected-token; "
+                    "ATLAS_SAAS_STRIPE_WEBHOOK_SECRET=reflectedsecret"
+                )
+            },
+        )
+
+    monkeypatch.setattr(smoke, "_open_http_request", _open)
+
+    code = smoke.main(_base_args(tmp_path))
+    payload = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    serialized = json.dumps(payload)
+
+    assert code == 1
+    assert payload["webhook"] == {
+        "status": 400,
+        "error_detail": (
+            "Invalid signature for [redacted] using [redacted] and [redacted]; "
+            "[redacted]"
+        ),
+    }
+    assert payload["before_artifact"] == {"status": 403}
+    for value in secret_values:
+        assert value not in serialized
 
 
 def test_main_rejects_unlocked_artifact_without_paid_report_fields(monkeypatch, tmp_path) -> None:

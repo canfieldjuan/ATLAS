@@ -9,6 +9,7 @@ import hmac
 import json
 import math
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +28,14 @@ WEBHOOK_PATH = "/webhooks/stripe"
 ARTIFACT_PATH_TEMPLATE = "/api/v1/content-ops/deflection-reports/{request_id}/artifact"
 DEFAULT_AMOUNT_CENTS = 150000
 DEFAULT_CURRENCY = "usd"
+MAX_ERROR_DETAIL_CHARS = 300
+SECRET_TOKEN_PATTERNS = (
+    re.compile(r"\bwhsec_[A-Za-z0-9_=-]+"),
+    re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9_=-]+"),
+    re.compile(r"\brk_(?:live|test)_[A-Za-z0-9_=-]+"),
+    re.compile(r"\bATLAS_[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|KEY)[A-Z0-9_]*=[^\s,;]+"),
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+)
 
 try:
     from dotenv import load_dotenv
@@ -241,6 +250,36 @@ def _artifact_errors(artifact: Any) -> list[str]:
     return errors
 
 
+def _redact_error_detail(value: Any) -> str:
+    detail = _clean(value)
+    for pattern in SECRET_TOKEN_PATTERNS:
+        detail = pattern.sub("[redacted]", detail)
+    if len(detail) > MAX_ERROR_DETAIL_CHARS:
+        detail = f"{detail[:MAX_ERROR_DETAIL_CHARS]}..."
+    return detail
+
+
+def _safe_error_detail(result: HttpResult | None) -> str:
+    if result is None or not isinstance(result.payload, Mapping):
+        return ""
+    detail = result.payload.get("detail")
+    if detail is None or isinstance(detail, (Mapping, Sequence)) and not isinstance(detail, str):
+        return ""
+    return _redact_error_detail(detail)
+
+
+def _http_summary(
+    result: HttpResult | None,
+    *,
+    include_error_detail: bool = True,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {"status": result.status if result else None}
+    detail = _safe_error_detail(result) if include_error_detail else ""
+    if include_error_detail and detail:
+        summary["error_detail"] = detail
+    return summary
+
+
 def _generated_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
@@ -270,17 +309,20 @@ def _result_payload(
             "token_present": bool(_clean(args.token)),
             "webhook_secret_present": bool(_clean(args.webhook_secret)),
         },
-        "before_artifact": {"status": before_artifact.status if before_artifact else None},
-        "webhook": {"status": webhook.status if webhook else None},
+        "before_artifact": _http_summary(
+            before_artifact,
+            include_error_detail=before_artifact is not None and before_artifact.status != 403,
+        ),
+        "webhook": _http_summary(webhook),
         "replay_webhook": {
-            "status": replay_webhook.status if replay_webhook else None,
+            **_http_summary(replay_webhook),
             "payload_status": (
                 replay_webhook.payload.get("status")
                 if replay_webhook and isinstance(replay_webhook.payload, Mapping)
                 else None
             ),
         },
-        "after_artifact": {"status": after_artifact.status if after_artifact else None},
+        "after_artifact": _http_summary(after_artifact),
     }
 
 
