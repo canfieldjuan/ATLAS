@@ -193,24 +193,26 @@ def sanitize_zendesk_export(
 
 
 def _credentials_from_settings() -> ZendeskMacroCredentials:
+    # The content_ops_zendesk_* fields live on the b2b_campaign sub-config, not
+    # top-level settings. Reuse the canonical builder so the access path stays
+    # in one place (it returns None when the credentials are incomplete).
     from atlas_brain.config import settings
-
-    return ZendeskMacroCredentials(
-        email=_clean(getattr(settings, "content_ops_zendesk_email", "")),
-        api_token=_clean(getattr(settings, "content_ops_zendesk_api_token", "")),
-        subdomain=_clean(getattr(settings, "content_ops_zendesk_subdomain", "")),
-        base_url=_clean(getattr(settings, "content_ops_zendesk_base_url", "")),
+    from atlas_brain._content_ops_macro_writeback import (
+        zendesk_macro_credentials_from_config,
     )
+
+    credentials = zendesk_macro_credentials_from_config(settings.b2b_campaign)
+    if credentials is None:
+        raise SystemExit(
+            "Zendesk credentials are incomplete. Set ATLAS_CONTENT_OPS_ZENDESK_EMAIL, "
+            "ATLAS_CONTENT_OPS_ZENDESK_API_TOKEN, and ATLAS_CONTENT_OPS_ZENDESK_SUBDOMAIN "
+            "(or _BASE_URL) in .env before running the capture."
+        )
+    return credentials
 
 
 async def capture_corpus(*, limit: int, run_tag: str) -> dict[str, Any]:
     credentials = _credentials_from_settings()
-    if not credentials.is_complete():
-        raise SystemExit(
-            "Zendesk credentials are incomplete. Set ATLAS_CONTENT_OPS_ZENDESK_EMAIL, "
-            "ATLAS_CONTENT_OPS_ZENDESK_API_TOKEN, and ATLAS_CONTENT_OPS_ZENDESK_SUBDOMAIN "
-            "(or _BASE_URL) before running the capture."
-        )
     raw = await export_zendesk_full_thread_artifact(credentials, limit=limit)
     subdomain = credentials.normalized_base_url().removeprefix("https://").removesuffix(".zendesk.com")
     return sanitize_zendesk_export(raw, subdomain=subdomain, run_tag=run_tag)
