@@ -556,6 +556,25 @@ limit first. If it is low while `raw_row_count` is high, inspect
 CFPB filters. If `usable_source_count` is healthy but FAQ output checks fail,
 investigate the FAQ grouping/output path.
 
+To compare the no-embedding baseline against the pinned mxbai embedding booster,
+add `--compare-embedding-booster`. The smoke fetches the CFPB rows once, runs
+both FAQ paths from those same loaded rows, writes the boosted Markdown artifact
+when `--output-markdown` is provided, and adds `embedding_comparison` to the JSON
+summary:
+
+```bash
+python scripts/smoke_content_ops_cfpb_faq_markdown.py \
+  --search-term fees \
+  --limit 1000 \
+  --max-rows-scanned 5000 \
+  --max-items 20 \
+  --support-contact "https://support.example.com" \
+  --compare-embedding-booster \
+  --output-source-rows cfpb_sources_1000.jsonl \
+  --output-markdown cfpb_faq_1000_boosted.md \
+  --json > cfpb_faq_1000.embedding-comparison.json
+```
+
 ```bash
 python scripts/smoke_content_ops_cfpb_source_postgres.py \
   --company "Example Bank" \
