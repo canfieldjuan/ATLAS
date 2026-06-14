@@ -144,6 +144,7 @@ _MAX_INGESTION_FILE_BYTES = 25 * 1024 * 1024
 _MAX_DEFLECTION_SUBMIT_BLOB_BYTES = 50 * 1024 * 1024
 _MAX_DEFLECTION_SUBMIT_ROWS = _MAX_DEFLECTION_SUBMIT_BLOB_BYTES
 _MAX_DEFLECTION_SUBMIT_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+_DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES = 1024 * 1024
 _MAX_INGESTION_SAMPLE_LIMIT = 25
 _DEFLECTION_SUBMIT_FETCH_TIMEOUT_SECONDS = 15
 _DEFLECTION_SUBMIT_OUTPUTS = ("faq_deflection_report",)
@@ -1551,30 +1552,71 @@ async def _load_deflection_submit_upload_rows(
     *,
     max_bytes: int,
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    temp_path: Path | None = None
     try:
-        data = await csv_file.read(max_bytes + 1)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded CSV could not be read.",
-        ) from exc
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "reason": "deflection_submit_csv_too_large",
-                "max_file_bytes": max_bytes,
-            },
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-deflection-submit-",
+            suffix=".csv",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            byte_count = await _copy_deflection_submit_upload_to_tempfile(
+                csv_file,
+                handle,
+                max_bytes=max_bytes,
+            )
+        if byte_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded CSV is empty.",
+            )
+        return _parse_deflection_submit_csv_file(
+            temp_path,
+            byte_count=byte_count,
+            parse_error_detail="Uploaded CSV could not be parsed.",
         )
-    if not data:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded CSV is empty.",
-        )
-    return _parse_deflection_submit_csv_bytes(
-        data,
-        parse_error_detail="Uploaded CSV could not be parsed.",
-    )
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Content Ops deflection submit temp cleanup failed")
+
+
+async def _copy_deflection_submit_upload_to_tempfile(
+    csv_file: Any,
+    handle: Any,
+    *,
+    max_bytes: int,
+) -> int:
+    byte_count = 0
+    while True:
+        try:
+            chunk = await csv_file.read(_DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded CSV could not be read.",
+            ) from exc
+        if not chunk:
+            return byte_count
+        next_byte_count = byte_count + len(chunk)
+        if next_byte_count > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "reason": "deflection_submit_csv_too_large",
+                    "max_file_bytes": max_bytes,
+                },
+            )
+        try:
+            handle.write(chunk)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded CSV could not be staged.",
+            ) from exc
+        byte_count = next_byte_count
 
 
 async def _load_deflection_submit_json_upload_rows(
@@ -1656,18 +1698,10 @@ def _parse_deflection_submit_csv_bytes(
         ) as handle:
             temp_path = Path(handle.name)
             handle.write(data)
-        try:
-            rows, load_warnings = load_source_rows_with_warnings_from_file(
-                temp_path,
-                file_format="csv",
-            )
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=parse_error_detail,
-            ) from exc
-        return rows, len(data), tuple(
-            warning.as_dict() for warning in load_warnings
+        return _parse_deflection_submit_csv_file(
+            temp_path,
+            byte_count=len(data),
+            parse_error_detail=parse_error_detail,
         )
     finally:
         if temp_path is not None:
@@ -1675,6 +1709,25 @@ def _parse_deflection_submit_csv_bytes(
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 logger.warning("Content Ops deflection submit temp cleanup failed")
+
+
+def _parse_deflection_submit_csv_file(
+    temp_path: Path,
+    *,
+    byte_count: int,
+    parse_error_detail: str,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    try:
+        rows, load_warnings = load_source_rows_with_warnings_from_file(
+            temp_path,
+            file_format="csv",
+        )
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=parse_error_detail,
+        ) from exc
+    return rows, byte_count, tuple(warning.as_dict() for warning in load_warnings)
 
 
 def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:

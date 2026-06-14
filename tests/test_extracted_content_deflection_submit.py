@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import http.client
 import json
+import tempfile
 from io import StringIO
 from pathlib import Path
 import socket
@@ -64,10 +65,20 @@ class _BlobResponse:
 class _Upload:
     def __init__(self, data: bytes, *, filename: str = "tickets.csv") -> None:
         self._data = data
+        self._offset = 0
         self.filename = filename
+        self.read_sizes: list[int] = []
 
-    async def read(self, _size: int) -> bytes:
-        return self._data
+    async def read(self, size: int) -> bytes:
+        self.read_sizes.append(size)
+        if self._offset >= len(self._data):
+            return b""
+        if size < 0:
+            size = len(self._data) - self._offset
+        end = min(len(self._data), self._offset + size)
+        chunk = self._data[self._offset:end]
+        self._offset = end
+        return chunk
 
 
 class _FormRequest:
@@ -100,6 +111,55 @@ def _csv_dict_bytes(rows: list[dict[str, str]]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return out.getvalue().encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_copy_streams_chunks_not_whole_limit() -> None:
+    data = b"a" * (api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 17)
+    upload = _Upload(data)
+
+    with tempfile.NamedTemporaryFile() as handle:
+        byte_count = await api_module._copy_deflection_submit_upload_to_tempfile(
+            upload,
+            handle,
+            max_bytes=len(data) + 1024,
+        )
+        handle.flush()
+        handle.seek(0)
+        staged = handle.read()
+
+    assert byte_count == len(data)
+    assert staged == data
+    assert upload.read_sizes
+    assert all(
+        size == api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+        for size in upload.read_sizes
+    )
+    assert len(data) + 1025 not in upload.read_sizes
+
+
+@pytest.mark.asyncio
+async def test_deflection_submit_upload_copy_rejects_oversize_mid_stream() -> None:
+    data = b"a" * (api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 2)
+    upload = _Upload(data)
+
+    with tempfile.NamedTemporaryFile() as handle:
+        with pytest.raises(api_module.HTTPException) as exc_info:
+            await api_module._copy_deflection_submit_upload_to_tempfile(
+                upload,
+                handle,
+                max_bytes=api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 1,
+            )
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail == {
+        "reason": "deflection_submit_csv_too_large",
+        "max_file_bytes": api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES + 1,
+    }
+    assert upload.read_sizes == [
+        api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES,
+        api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES,
+    ]
 
 
 def _install_blob(
