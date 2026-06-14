@@ -276,6 +276,7 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         "top_question": _text(items[0].get("question")) if items else "",
         "top_opportunity_score": _int(items[0].get("opportunity_score")) if items else 0,
     }
+    summary.update(_outcome_diagnostics_summary(items))
     source_date_window = _complete_source_date_window({}, items)
     if source_date_window:
         summary.update(source_date_window)
@@ -311,6 +312,7 @@ def render_deflection_report(
         lines.extend(["**Source file:**", "", _md(source_label), ""])
     lines.extend(_help_desk_seo_targeting_section(items))
     lines.extend(_ranked_opportunity_section(items))
+    lines.extend(_outcome_diagnostics_section(items, resolved_summary))
     lines.extend(_drafted_answer_section(proven))
     lines.extend(_no_proven_answer_section(needs_review))
     lines.extend(_vocabulary_gap_section(items))
@@ -445,6 +447,58 @@ def _ranked_opportunity_section(items: Sequence[Mapping[str, Any]]) -> list[str]
     return [*lines, ""]
 
 
+def _outcome_diagnostics_section(
+    items: Sequence[Mapping[str, Any]],
+    summary: Mapping[str, Any],
+) -> list[str]:
+    diagnostic_items = [
+        item for item in items
+        if _item_outcome_diagnostics(item)
+    ]
+    if not diagnostic_items:
+        return []
+    lines = [
+        "## Resolution Outcome Diagnostics",
+        "",
+        (
+            "These status and CSAT signals flag answers that may need review. "
+            "They do not prove a publishable answer; only uploaded resolution "
+            "evidence can do that."
+        ),
+        "",
+        (
+            f"- Tickets with outcome diagnostics: "
+            f"{_count(_int(summary.get('outcome_diagnostic_ticket_count')))}"
+        ),
+        (
+            f"- Tickets with reopened or negative-CSAT risk: "
+            f"{_count(_int(summary.get('outcome_risk_ticket_count')))}"
+        ),
+        (
+            f"- Reopened tickets: "
+            f"{_count(_int(summary.get('reopened_ticket_count')))}"
+        ),
+        (
+            f"- Negative CSAT tickets: "
+            f"{_count(_int(summary.get('negative_csat_ticket_count')))}"
+        ),
+        "",
+        "| Customer question | Status mix | Reopened | Negative CSAT | Guidance |",
+        "|---|---|---:|---:|---|",
+    ]
+    for item in diagnostic_items:
+        diagnostics = _item_outcome_diagnostics(item)
+        lines.append(
+            "| "
+            f"{_cell(item.get('question'))} | "
+            f"{_cell(_status_mix_label(diagnostics))} | "
+            f"{_int(diagnostics.get('reopened_ticket_count'))} | "
+            f"{_int(diagnostics.get('negative_csat_ticket_count'))} | "
+            f"{_cell(_outcome_guidance(diagnostics))} |"
+        )
+    return [*lines, ""]
+
+
 def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
     lines = ["## Publishable Help-Center Copy From Proven Resolutions", ""]
     if not items:
@@ -567,6 +621,68 @@ def _status_label(item: Mapping[str, Any]) -> str:
 
 def _item(value: Mapping[str, Any]) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _item_outcome_diagnostics(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = item.get("outcome_diagnostics")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _outcome_diagnostics_summary(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    status_summary: dict[str, int] = {}
+    diagnostic_count = 0
+    risk_count = 0
+    reopened_count = 0
+    negative_csat_count = 0
+    csat_present_count = 0
+    for item in items:
+        diagnostics = _item_outcome_diagnostics(item)
+        if not diagnostics:
+            continue
+        diagnostic_count += _int(diagnostics.get("diagnostic_ticket_count"))
+        risk_count += _int(diagnostics.get("outcome_risk_ticket_count"))
+        reopened_count += _int(diagnostics.get("reopened_ticket_count"))
+        negative_csat_count += _int(diagnostics.get("negative_csat_ticket_count"))
+        csat_present_count += _int(diagnostics.get("csat_present_count"))
+        raw_summary = diagnostics.get("ticket_status_summary")
+        if isinstance(raw_summary, Mapping):
+            for status, count in raw_summary.items():
+                key = _text(status)
+                if key:
+                    status_summary[key] = status_summary.get(key, 0) + _int(count)
+    if diagnostic_count == 0:
+        return {}
+    return {
+        "outcome_diagnostics_present": True,
+        "outcome_diagnostic_ticket_count": diagnostic_count,
+        "outcome_risk_ticket_count": risk_count,
+        "reopened_ticket_count": reopened_count,
+        "negative_csat_ticket_count": negative_csat_count,
+        "csat_present_count": csat_present_count,
+        "ticket_status_summary": dict(sorted(status_summary.items())),
+    }
+
+
+def _status_mix_label(diagnostics: Mapping[str, Any]) -> str:
+    raw_summary = diagnostics.get("ticket_status_summary")
+    if not isinstance(raw_summary, Mapping) or not raw_summary:
+        return "No status supplied"
+    parts = [
+        f"{_text(status)}: {_count(_int(count))}"
+        for status, count in sorted(raw_summary.items())
+        if _text(status) and _int(count) > 0
+    ]
+    return ", ".join(parts) or "No status supplied"
+
+
+def _outcome_guidance(diagnostics: Mapping[str, Any]) -> str:
+    if _int(diagnostics.get("reopened_ticket_count")):
+        return "Review the answer before publishing because at least one ticket reopened."
+    if _int(diagnostics.get("negative_csat_ticket_count")):
+        return "Review the answer before publishing because CSAT was negative."
+    return "Outcome context only; use resolution evidence to decide publishability."
 
 
 def _artifact_summary(

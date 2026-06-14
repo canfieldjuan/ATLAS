@@ -21,6 +21,10 @@ from .support_ticket_clustering import (
     support_ticket_tokens,
 )
 from .support_ticket_dates import parse_support_ticket_source_date
+from .support_ticket_input_package import (
+    _normalize_status_state as _normalize_ticket_status_state,
+    _parse_csat_score as _parse_ticket_csat_score,
+)
 from .ticket_faq_ports import TicketFAQDraft, TicketFAQRepository
 
 
@@ -412,6 +416,32 @@ _VOCABULARY_GAP_RULES = (
     ("connect", "connection", "integration", "sync"),
     ("cancel", "cancellation", "renewal"),
 )
+_NEGATIVE_TEXTUAL_CSAT = frozenset({
+    "bad",
+    "negative",
+    "poor",
+    "unhappy",
+    "unsatisfied",
+    "dissatisfied",
+})
+_OUTCOME_STATUS_KEYS = (
+    "ticket_status",
+    "issue_status",
+    "case_status",
+    "status",
+    "ticket_state",
+    "state",
+)
+_OUTCOME_CSAT_KEYS = (
+    "csat",
+    "satisfaction_score",
+    "satisfaction_rating",
+    "customer_satisfaction_rating",
+    "customer_satisfaction_score",
+    "customer_satisfaction",
+    "satisfaction",
+    "rating",
+)
 @dataclass(frozen=True)
 class TicketFAQMarkdownResult:
     """FAQ Markdown plus metadata useful for CLI summaries and tests."""
@@ -713,6 +743,17 @@ def build_ticket_faq_markdown(
                 "zero_result": _first_present(evidence, opportunity, key="zero_result"),
                 "source_weight": _source_weight(evidence, opportunity),
                 "resolution_text": resolution_text,
+                "ticket_status_state": _first_present(
+                    evidence, opportunity, key="ticket_status_state"
+                ),
+                "ticket_status": _first_available(
+                    evidence,
+                    opportunity,
+                    keys=_OUTCOME_STATUS_KEYS,
+                ),
+                "csat": _first_present(evidence, opportunity, key="csat"),
+                "csat_score": _first_present(evidence, opportunity, key="csat_score"),
+                "csat_raw": _first_available(evidence, opportunity, keys=_OUTCOME_CSAT_KEYS),
             })
 
     # #1460: topic-degraded groups (scope "topic:*") measure bucket
@@ -1249,6 +1290,9 @@ def _item(
         "displayed_evidence_count": len(display_rows),
         "ticket_count": len(source_ids),
     }
+    outcome_diagnostics = _outcome_diagnostics(rows)
+    if outcome_diagnostics:
+        item["outcome_diagnostics"] = outcome_diagnostics
     source_date_span = _source_date_span(rows)
     if source_date_span is not None:
         item["source_date_span"] = source_date_span
@@ -1290,6 +1334,110 @@ def _opportunity_score(topic: str, rows: Sequence[Mapping[str, str]]) -> dict[st
         "failure_risk_signals": failure_risk_signals,
         "opportunity_score": frequency * (1 + failure_risk_score),
     }
+
+
+def _outcome_diagnostics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    tickets: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(rows, start=1):
+        source_key = _clean(row.get("source_key") or row.get("source_id")) or f"row:{index}"
+        ticket = tickets.setdefault(source_key, {
+            "status": "",
+            "csat_present": False,
+            "csat_score": None,
+            "negative_csat": False,
+        })
+        status = _outcome_status(row)
+        if status:
+            ticket["status"] = _stronger_outcome_status(
+                _clean(ticket.get("status")),
+                status,
+            )
+        csat_text, csat_score = _outcome_csat(row)
+        if csat_text or csat_score is not None:
+            ticket["csat_present"] = True
+        if csat_score is not None and ticket.get("csat_score") is None:
+            ticket["csat_score"] = csat_score
+        if _negative_csat(csat_text, csat_score):
+            ticket["negative_csat"] = True
+
+    status_summary: dict[str, int] = {}
+    csat_scores: list[float] = []
+    diagnostic_keys: set[str] = set()
+    risk_keys: set[str] = set()
+    reopened_count = 0
+    csat_present_count = 0
+    negative_csat_count = 0
+    for source_key, ticket in tickets.items():
+        status = _clean(ticket.get("status")).lower()
+        if status:
+            diagnostic_keys.add(source_key)
+            status_summary[status] = status_summary.get(status, 0) + 1
+            if status == "reopened":
+                reopened_count += 1
+                risk_keys.add(source_key)
+        csat_score = ticket.get("csat_score")
+        if ticket.get("csat_present"):
+            diagnostic_keys.add(source_key)
+            csat_present_count += 1
+        if isinstance(csat_score, (int, float)):
+            csat_scores.append(csat_score)
+        if ticket.get("negative_csat"):
+            negative_csat_count += 1
+            risk_keys.add(source_key)
+    if not diagnostic_keys:
+        return {}
+    out: dict[str, Any] = {
+        "diagnostic_ticket_count": len(diagnostic_keys),
+        "outcome_risk_ticket_count": len(risk_keys),
+    }
+    if status_summary:
+        out["ticket_status_summary"] = dict(sorted(status_summary.items()))
+    if reopened_count:
+        out["reopened_ticket_count"] = reopened_count
+    if csat_present_count:
+        out["csat_present_count"] = csat_present_count
+    if negative_csat_count:
+        out["negative_csat_ticket_count"] = negative_csat_count
+    if csat_scores:
+        out["csat_score_average"] = round(sum(csat_scores) / len(csat_scores), 2)
+    return out
+
+
+def _outcome_status(row: Mapping[str, Any]) -> str:
+    state = _clean(row.get("ticket_status_state")).lower()
+    if state:
+        return state
+    raw_status = _first_available(row, keys=_OUTCOME_STATUS_KEYS)
+    return _normalize_ticket_status_state(raw_status)
+
+
+def _stronger_outcome_status(current: str, candidate: str) -> str:
+    priority = {
+        "reopened": 5,
+        "open": 4,
+        "other": 3,
+        "cancelled": 2,
+        "resolved": 1,
+    }
+    if priority.get(candidate, 0) > priority.get(current, 0):
+        return candidate
+    return current
+
+
+def _outcome_csat(row: Mapping[str, Any]) -> tuple[str, float | None]:
+    raw_text = _first_available(row, keys=("csat_raw", *_OUTCOME_CSAT_KEYS))
+    raw_score = _first_present(row, key="csat_score")
+    score = _parse_ticket_csat_score(raw_score)
+    if score is None:
+        score = _parse_ticket_csat_score(raw_text)
+    text = _clean(raw_text if raw_text not in (None, "", [], {}) else raw_score).lower()
+    return text, score
+
+
+def _negative_csat(csat_text: str, csat_score: float | None) -> bool:
+    if csat_score is not None:
+        return csat_score <= 2
+    return csat_text in _NEGATIVE_TEXTUAL_CSAT
 
 
 def _distinct_source_keys(rows: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
@@ -1999,6 +2147,14 @@ def _integer_or_none(value: Any) -> int | None:
 def _first_present(*rows: Mapping[str, Any], key: str) -> Any:
     for row in rows:
         value = row.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return ""
+
+
+def _first_available(*rows: Mapping[str, Any], keys: Sequence[str]) -> Any:
+    for key in keys:
+        value = _first_present(*rows, key=key)
         if value not in (None, "", [], {}):
             return value
     return ""
