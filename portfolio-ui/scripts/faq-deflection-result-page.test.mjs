@@ -183,8 +183,10 @@ await test("real snapshot page groups bounded customer wording examples", () => 
   assert.match(html, /data-atlas-deflection-resolution-evidence/);
   assert.match(html, /data-atlas-deflection-repeat-volume/);
   assert.match(html, /data-repeat-volume-light="false"/);
-  assert.match(html, /Repeat-ticket volume/);
-  assert.match(html, /12 repeat-ticket hits/);
+  assert.match(html, /Question-level repeat volume/);
+  assert.match(html, /Question-level repeat tickets/);
+  assert.match(html, /12 question-level repeat tickets/);
+  assert.doesNotMatch(html, /repeat-ticket hits/);
   assert.match(html, /substantial paid report preview/);
   assert.match(html, /data-resolution-evidence-present="true"/);
   assert.match(html, /Resolution evidence/);
@@ -262,8 +264,9 @@ await test("hosted result page flags absent resolution evidence as gap list only
   assert.match(html, /data-atlas-deflection-resolution-evidence/);
   assert.match(html, /data-atlas-deflection-repeat-volume/);
   assert.match(html, /data-repeat-volume-light="true"/);
-  assert.match(html, /3 repeat-ticket hits/);
-  assert.match(html, /light on repeat volume/);
+  assert.match(html, /3 question-level repeat tickets/);
+  assert.match(html, /light on question-level repeat volume/);
+  assert.doesNotMatch(html, /repeat-ticket hits/);
   assert.match(html, /data-resolution-evidence-present="false"/);
   assert.match(html, /Resolution evidence/);
   assert.match(html, /Absent/);

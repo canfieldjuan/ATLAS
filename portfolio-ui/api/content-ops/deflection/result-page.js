@@ -94,17 +94,17 @@ function renderResolutionEvidenceDiagnostic(summary) {
 function renderRepeatVolumeDiagnostic(summary) {
   const count = finiteCount(summary.repeat_ticket_count);
   const light = count < LIGHT_REPEAT_TICKET_THRESHOLD;
-  const label = count > 0 ? `${formatNumber(count)} repeat-ticket hits` : "No repeated clusters yet";
+  const label = count > 0 ? `${formatNumber(count)} question-level repeat tickets` : "No repeated questions yet";
   const copy = light
-    ? "This export is light on repeat volume. Review the free snapshot before paying for the full report."
-    : "This export has enough repeated ticket volume for a substantial paid report preview.";
+    ? "This export is light on question-level repeat volume. Review the free snapshot before paying for the full report."
+    : "This export has enough question-level repeat volume for a substantial paid report preview.";
   return `<div
             class="repeat-volume ${light ? "light" : "ready"}"
             data-atlas-deflection-repeat-volume
             data-repeat-volume-light="${light ? "true" : "false"}"
           >
             <div>
-              <span>Repeat-ticket volume</span>
+              <span>Question-level repeat volume</span>
               <strong>${escapeHtml(label)}</strong>
             </div>
             <p>${escapeHtml(copy)}</p>
@@ -126,7 +126,7 @@ function renderSnapshot(report) {
           <h2 id="snapshot-title">Free snapshot</h2>
           <div class="metrics">
             <div><span>Questions found</span><strong>${escapeHtml(formatNumber(summary.generated))}</strong></div>
-            <div><span>Repeat-ticket hits</span><strong>${escapeHtml(formatNumber(finiteCount(summary.repeat_ticket_count)))}</strong></div>
+            <div><span>Question-level repeat tickets</span><strong>${escapeHtml(formatNumber(finiteCount(summary.repeat_ticket_count)))}</strong></div>
             <div><span>Evidence-backed answers</span><strong>${escapeHtml(formatNumber(summary.drafted_answer_count))}</strong></div>
             <div><span>Needs support proof</span><strong>${escapeHtml(formatNumber(summary.no_proven_answer_count))}</strong></div>
           </div>

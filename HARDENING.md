@@ -32,6 +32,15 @@ register under `docs/technical-debt/`.
 
 ## 2026-06-13
 
+### portfolio-ui npm audit vulnerabilities
+- File/location: `portfolio-ui/package-lock.json`
+- Description: `npm ci` in `portfolio-ui` reports 3 dependency audit findings (1 moderate, 2 high).
+- Why it matters: Dependency vulnerabilities can become deploy-time security exposure, but resolving them may require package upgrades outside this repeat-metric copy slice.
+- Effort: M
+- Category: security
+- Owner/session: Codex deflection/clustering
+- Found during: PR-Deflection-Repeat-Metric-Alignment
+
 ### Customer-wording FAQ headings can publish raw PII
 - File/location: `extracted_content_pipeline/ticket_faq_markdown.py` customer-wording question extraction path.
 - Description: The representative-label path now renders only known-safe documentation/glossary terms, but the pre-existing customer-wording path can still promote raw row text containing PII into published FAQ question headings.

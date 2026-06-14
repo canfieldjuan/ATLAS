@@ -90,6 +90,14 @@ def test_resolution_live_proof_artifacts_show_publishable_and_gap_lanes() -> Non
     assert result["status"] == "ok"
     assert result["failed_output_checks"] == []
     assert result["summary"] == summary
+    output_paths = result["output"]
+    assert output_paths == {
+        "markdown_path": REPORT.relative_to(ROOT).as_posix(),
+        "result_path": RESULT.relative_to(ROOT).as_posix(),
+        "summary_path": SUMMARY.relative_to(ROOT).as_posix(),
+    }
+    assert all(not Path(path).is_absolute() for path in output_paths.values())
+    assert all("/tmp/" not in path for path in output_paths.values())
 
     statuses = [
         item["answer_evidence_status"]
