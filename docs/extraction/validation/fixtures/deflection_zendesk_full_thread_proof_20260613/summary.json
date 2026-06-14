@@ -1,0 +1,22 @@
+{
+  "drafted_answer_count": 1,
+  "generated": 1,
+  "no_proven_answer_count": 0,
+  "non_repeat_question_count": 3,
+  "non_repeat_ticket_count": 3,
+  "output_checks": {
+    "condensed": true,
+    "has_action_items": true,
+    "resolution_evidence_scoped": true,
+    "uses_user_vocabulary": true
+  },
+  "source_count": 4,
+  "source_date_end": "2026-06-13",
+  "source_date_start": "2026-06-13",
+  "source_window_days": 1,
+  "support_ticket_resolution_evidence_count": 1,
+  "support_ticket_resolution_evidence_present": true,
+  "ticket_source_count": 4,
+  "top_opportunity_score": 1,
+  "top_question": "How do I get the duplicate charge refunded?"
+}
