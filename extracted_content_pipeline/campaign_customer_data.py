@@ -20,6 +20,19 @@ from .campaign_ports import TenantScope
 CustomerDataFormat = Literal["auto", "json", "csv"]
 _CSV_DETECT_DELIMITERS = ",;\t|"
 _CSV_SNIFFER_SAMPLE_CHARS = 65_536
+_CSV_NUL_REDECODE_RATIO = 0.10
+_CSV_UTF16_NUL_SIDE_RATIO = 0.30
+_CSV_REPLACEMENT_WARNING_RATIO = 0.01
+_CSV_UTF8_RECOVERY_REPLACEMENT_RATIO = 0.05
+_CSV_UTF8_MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2\u20ac", "\u00e2\u201a")
+_CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
+_CSV_BOM_ENCODINGS = (
+    (b"\xff\xfe\x00\x00", "utf-32"),
+    (b"\x00\x00\xfe\xff", "utf-32"),
+    (b"\xef\xbb\xbf", "utf-8-sig"),
+    (b"\xff\xfe", "utf-16"),
+    (b"\xfe\xff", "utf-16"),
+)
 _CSV_HEADER_HINTS = frozenset({
     "account",
     "account_name",
@@ -267,7 +280,7 @@ def _load_csv_dict_rows(
     value_coercer: Callable[[Any], Any] | None = None,
 ) -> tuple[list[dict[str, Any]], tuple[CampaignOpportunityWarning, ...]]:
     rows: list[dict[str, Any]] = []
-    text = _read_csv_text(path)
+    text, decode_warnings = _read_csv_text(path)
     if not text.strip():
         raise ValueError("CSV customer data must include a header row.")
     reader = csv.reader(StringIO(text), dialect=_detect_csv_dialect(text))
@@ -275,7 +288,10 @@ def _load_csv_dict_rows(
     header_index = _csv_header_index(raw_rows)
     if header_index is None:
         raise ValueError("CSV customer data must include a header row.")
-    load_warnings = _leading_rows_skipped_warnings(raw_rows, header_index)
+    load_warnings = decode_warnings + _leading_rows_skipped_warnings(
+        raw_rows,
+        header_index,
+    )
     header_width = len(raw_rows[header_index])
     header_fields = tuple(
         (index, str(field or "").strip())
@@ -360,12 +376,190 @@ def _normalize_csv_header_cell(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _read_csv_text(path: Path) -> str:
+def _read_csv_text(
+    path: Path,
+) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
     data = path.read_bytes()
+    if not data:
+        return "", ()
+    for bom, encoding in _CSV_BOM_ENCODINGS:
+        if data.startswith(bom):
+            return _decode_csv_bytes(data, encoding=encoding)
     try:
-        return data.decode("utf-8-sig")
+        text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return data.decode("cp1252", errors="replace")
+        return _decode_utf8_error_csv_bytes(data)
+    inferred = _utf16_encoding_from_nul_pattern(data, text)
+    if inferred:
+        return _decode_inferred_utf16_csv_bytes(data, encoding=inferred)
+    if _nul_ratio(text) >= _CSV_NUL_REDECODE_RATIO:
+        raise ValueError(
+            "CSV customer data decoded to NUL-heavy text; check the file encoding."
+        )
+    return text, _csv_decode_warnings(text, encoding="utf-8-sig")
+
+
+def _decode_legacy_csv_bytes(
+    data: bytes,
+) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
+    for encoding in ("cp1252", "latin-1"):
+        try:
+            return _decode_csv_bytes(data, encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(
+        "CSV customer data could not be decoded as UTF-8, UTF-16, UTF-32, "
+        "CP1252, or Latin-1."
+    )
+
+
+def _decode_utf8_error_csv_bytes(
+    data: bytes,
+) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
+    inferred = _utf16_encoding_from_nul_bytes(data)
+    if inferred:
+        return _decode_inferred_utf16_csv_bytes(data, encoding=inferred)
+    legacy_text, legacy_warnings = _decode_legacy_csv_bytes(data)
+    recovered_text = data.decode("utf-8-sig", errors="replace")
+    if (
+        _replacement_ratio(recovered_text) <= _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO
+        and _utf8_mojibake_score(legacy_text) > recovered_text.count("\ufffd")
+    ):
+        return recovered_text, _csv_decode_warnings(
+            recovered_text,
+            encoding="utf-8-sig",
+            warn_on_any_replacement=True,
+        )
+    return legacy_text, legacy_warnings + _legacy_fallback_corruption_warnings(
+        legacy_text,
+        recovered_text,
+    )
+
+
+def _decode_inferred_utf16_csv_bytes(
+    data: bytes,
+    *,
+    encoding: str,
+) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
+    decoded, warnings = _decode_csv_bytes(data, encoding=encoding)
+    return decoded, warnings + (
+        CampaignOpportunityWarning(
+            code="csv_encoding_inferred",
+            field="encoding",
+            message=(
+                "CSV contained UTF-16-style NUL bytes without a BOM; "
+                f"decoded as {encoding}."
+            ),
+        ),
+    )
+
+
+def _decode_csv_bytes(
+    data: bytes,
+    *,
+    encoding: str,
+) -> tuple[str, tuple[CampaignOpportunityWarning, ...]]:
+    text = data.decode(encoding)
+    if _nul_ratio(text) >= _CSV_NUL_REDECODE_RATIO:
+        raise ValueError(
+            f"CSV customer data decoded as {encoding} but remained NUL-heavy; "
+            "check the file encoding."
+        )
+    return text, _csv_decode_warnings(text, encoding=encoding)
+
+
+def _utf16_encoding_from_nul_pattern(data: bytes, text: str) -> str | None:
+    if _nul_ratio(text) < _CSV_NUL_REDECODE_RATIO:
+        return None
+    return _utf16_encoding_from_nul_bytes(data)
+
+
+def _utf16_encoding_from_nul_bytes(data: bytes) -> str | None:
+    sample = data[:_CSV_SNIFFER_SAMPLE_CHARS]
+    even = sample[0::2]
+    odd = sample[1::2]
+    if not even or not odd:
+        return None
+    even_nul_ratio = even.count(0) / len(even)
+    odd_nul_ratio = odd.count(0) / len(odd)
+    if (
+        odd_nul_ratio >= _CSV_UTF16_NUL_SIDE_RATIO
+        and even_nul_ratio < _CSV_NUL_REDECODE_RATIO
+    ):
+        return "utf-16-le"
+    if (
+        even_nul_ratio >= _CSV_UTF16_NUL_SIDE_RATIO
+        and odd_nul_ratio < _CSV_NUL_REDECODE_RATIO
+    ):
+        return "utf-16-be"
+    return None
+
+
+def _nul_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return text.count("\x00") / len(text)
+
+
+def _replacement_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return text.count("\ufffd") / len(text)
+
+
+def _utf8_mojibake_score(text: str) -> int:
+    return sum(text.count(marker) for marker in _CSV_UTF8_MOJIBAKE_MARKERS)
+
+
+def _legacy_fallback_corruption_warnings(
+    legacy_text: str,
+    recovered_text: str,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    if not recovered_text.count("\ufffd"):
+        return ()
+    if _utf8_mojibake_score(legacy_text):
+        return ()
+    suspicious_count = sum(
+        legacy_text.count(char) for char in _CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS
+    )
+    if not suspicious_count:
+        return ()
+    return (
+        CampaignOpportunityWarning(
+            code="csv_encoding_ambiguous",
+            field="encoding",
+            message=(
+                "CSV failed strict UTF-8 decoding and legacy fallback produced "
+                f"{suspicious_count} suspicious character(s); verify the source "
+                "encoding before relying on these rows."
+            ),
+        ),
+    )
+
+
+def _csv_decode_warnings(
+    text: str,
+    *,
+    encoding: str,
+    warn_on_any_replacement: bool = False,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    replacement_count = text.count("\ufffd")
+    if not replacement_count:
+        return ()
+    ratio = _replacement_ratio(text)
+    if ratio < _CSV_REPLACEMENT_WARNING_RATIO and not warn_on_any_replacement:
+        return ()
+    return (
+        CampaignOpportunityWarning(
+            code="csv_replacement_characters",
+            field="encoding",
+            message=(
+                f"CSV decoded as {encoding} but contains {replacement_count} "
+                f"Unicode replacement character(s) ({ratio:.1%}); export "
+                "the source again with UTF-8 or UTF-16 encoding."
+            ),
+        ),
+    )
 
 
 def _detect_csv_dialect(text: str) -> csv.Dialect:

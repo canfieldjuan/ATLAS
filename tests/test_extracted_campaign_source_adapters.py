@@ -11,6 +11,7 @@ from extracted_content_pipeline import campaign_source_adapters as adapters
 from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
     load_source_rows_from_file,
+    load_source_rows_with_warnings_from_file,
     parse_default_fields,
     parse_default_fields_with_booking_url_or_exit,
     parse_default_fields_or_exit,
@@ -265,6 +266,202 @@ def test_load_source_rows_preserves_quoted_commas_and_multiline_text(
         "subject": "Export help",
         "message": "How do I export, then download\nthe attribution report?",
     }]
+
+
+def test_load_source_rows_from_utf16_bom_csv_decodes_support_ticket_export(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_utf16.csv"
+    path.write_bytes(
+        (
+            "ticket_id,subject,message\n"
+            "ticket-1,Export help,How do I export attribution reports?\n"
+        ).encode("utf-16")
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": "How do I export attribution reports?",
+    }]
+
+
+@pytest.mark.parametrize("encoding", ("utf-16-le", "utf-16-be"))
+def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
+    tmp_path: Path,
+    encoding: str,
+) -> None:
+    path = tmp_path / f"support_tickets_{encoding}.csv"
+    message = "Le caf\u00e9 export failed."
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Export help,{message}\n"
+    ).encode(encoding))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
+    assert [warning.code for warning in warnings] == ["csv_encoding_inferred"]
+    assert encoding in warnings[0].message
+
+
+@pytest.mark.parametrize(
+    ("encoding", "message"),
+    (
+        ("cp1252", "Customer can\u2019t export reports."),
+        ("latin-1", "Le caf\u00e9 export failed."),
+    ),
+)
+def test_load_source_rows_from_legacy_csv_decodes_clean_text_without_warning(
+    tmp_path: Path,
+    encoding: str,
+    message: str,
+) -> None:
+    path = tmp_path / f"support_tickets_{encoding}.csv"
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Export help,{message}\n"
+    ).encode(encoding))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "\u00c3lvaro can\u2019t export reports.",
+        "\u00c2ngela can\u2019t export reports.",
+    ),
+)
+def test_load_source_rows_prefers_clean_cp1252_marker_text_over_utf8_recovery(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    path = tmp_path / "support_tickets_cp1252_marker.csv"
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Export help,{message}\n"
+    ).encode("cp1252"))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
+    assert "\ufffd" not in rows[0]["message"]
+
+
+def test_load_source_rows_warns_on_high_replacement_character_ratio(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_corrupt.csv"
+    corrupt_text = "\ufffd" * 16
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Corrupt export,{corrupt_text}\n"
+    ).encode("utf-8"))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Corrupt export",
+        "message": corrupt_text,
+    }]
+    assert [warning.code for warning in warnings] == ["csv_replacement_characters"]
+    assert warnings[0].field == "encoding"
+    assert "Unicode replacement character" in warnings[0].message
+
+
+def test_load_source_rows_prefers_warned_utf8_recovery_over_cp1252_mojibake(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_truncated_utf8.csv"
+    message = (
+        "Caf\u00e9 export failed \u2014 cannot save "
+        + "the monthly attribution report " * 20
+    )
+    path.write_bytes(
+        (
+            "ticket_id,subject,message\n"
+            f"ticket-1,Export help,{message}"
+        ).encode("utf-8")
+        + b"\xff\n"
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": f"{message}\ufffd",
+    }]
+    assert [warning.code for warning in warnings] == ["csv_replacement_characters"]
+    assert "CafÃ" not in rows[0]["message"]
+    assert "â" not in rows[0]["message"]
+
+
+def test_load_source_rows_warns_on_ascii_utf8_corrupt_byte_legacy_fallback(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_ascii_corrupt_utf8.csv"
+    message = "Cannot export the monthly attribution report at all today"
+    path.write_bytes(
+        (
+            "ticket_id,subject,message\n"
+            f"ticket-1,Export help,{message}"
+        ).encode("utf-8")
+        + b"\xff\n"
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": f"{message}\u00ff",
+    }]
+    assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
+    assert warnings[0].field == "encoding"
+    assert "failed strict UTF-8" in warnings[0].message
 
 
 def test_source_row_maps_provider_complaint_narrative_aliases() -> None:
