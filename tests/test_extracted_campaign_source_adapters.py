@@ -436,6 +436,34 @@ def test_load_source_rows_prefers_warned_utf8_recovery_over_cp1252_mojibake(
     assert "â" not in rows[0]["message"]
 
 
+def test_load_source_rows_warns_on_ascii_utf8_corrupt_byte_legacy_fallback(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_ascii_corrupt_utf8.csv"
+    message = "Cannot export the monthly attribution report at all today"
+    path.write_bytes(
+        (
+            "ticket_id,subject,message\n"
+            f"ticket-1,Export help,{message}"
+        ).encode("utf-8")
+        + b"\xff\n"
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": f"{message}\u00ff",
+    }]
+    assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
+    assert warnings[0].field == "encoding"
+    assert "failed strict UTF-8" in warnings[0].message
+
+
 def test_source_row_maps_provider_complaint_narrative_aliases() -> None:
     opportunity, warnings = source_row_to_campaign_opportunity({
         "Complaint ID": "3182593",

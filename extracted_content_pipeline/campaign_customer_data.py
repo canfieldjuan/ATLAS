@@ -25,6 +25,7 @@ _CSV_UTF16_NUL_SIDE_RATIO = 0.30
 _CSV_REPLACEMENT_WARNING_RATIO = 0.01
 _CSV_UTF8_RECOVERY_REPLACEMENT_RATIO = 0.05
 _CSV_UTF8_MOJIBAKE_MARKERS = ("\u00c3", "\u00c2", "\u00e2\u20ac", "\u00e2\u201a")
+_CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS = ("\u00ff", "\u00fe")
 _CSV_BOM_ENCODINGS = (
     (b"\xff\xfe\x00\x00", "utf-32"),
     (b"\x00\x00\xfe\xff", "utf-32"),
@@ -429,7 +430,10 @@ def _decode_utf8_error_csv_bytes(
             encoding="utf-8-sig",
             warn_on_any_replacement=True,
         )
-    return legacy_text, legacy_warnings
+    return legacy_text, legacy_warnings + _legacy_fallback_corruption_warnings(
+        legacy_text,
+        recovered_text,
+    )
 
 
 def _decode_inferred_utf16_csv_bytes(
@@ -505,6 +509,32 @@ def _replacement_ratio(text: str) -> float:
 
 def _utf8_mojibake_score(text: str) -> int:
     return sum(text.count(marker) for marker in _CSV_UTF8_MOJIBAKE_MARKERS)
+
+
+def _legacy_fallback_corruption_warnings(
+    legacy_text: str,
+    recovered_text: str,
+) -> tuple[CampaignOpportunityWarning, ...]:
+    if not recovered_text.count("\ufffd"):
+        return ()
+    if _utf8_mojibake_score(legacy_text):
+        return ()
+    suspicious_count = sum(
+        legacy_text.count(char) for char in _CSV_SUSPICIOUS_LEGACY_FALLBACK_CHARS
+    )
+    if not suspicious_count:
+        return ()
+    return (
+        CampaignOpportunityWarning(
+            code="csv_encoding_ambiguous",
+            field="encoding",
+            message=(
+                "CSV failed strict UTF-8 decoding and legacy fallback produced "
+                f"{suspicious_count} suspicious character(s); verify the source "
+                "encoding before relying on these rows."
+            ),
+        ),
+    )
 
 
 def _csv_decode_warnings(
