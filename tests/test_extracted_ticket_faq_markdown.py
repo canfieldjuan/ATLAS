@@ -1771,6 +1771,155 @@ def test_build_ticket_faq_markdown_uses_safe_terms_instead_of_pii_source_title()
     assert "chen" not in result.items[0]["question"].lower()
 
 
+@pytest.mark.parametrize(
+    ("unsafe_question", "blocked_fragment"),
+    (
+        ("How do I reset the password for jane.doe@acme.com?", "jane"),
+        ("How do I reset the password for account 4829103?", "4829103"),
+        ("How do I reset the password for 555-123-4567?", "555"),
+        ("How do I reset the password for XXXXX?", "xxxxx"),
+    ),
+)
+def test_build_ticket_faq_markdown_does_not_publish_pii_customer_wording_headings(
+    unsafe_question: str,
+    blocked_fragment: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Password reset",
+                "text": unsafe_question,
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": "Password reset",
+                "text": unsafe_question,
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "What should I do about technical support?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert blocked_fragment not in result.items[0]["question"].lower()
+    assert f"## 1. {unsafe_question}" not in result.markdown
+    assert "## 1. What should I do about technical support?" in result.markdown
+
+
+def test_build_ticket_faq_markdown_does_not_publish_pii_fallback_topic_or_body_text() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Case for jane.doe@acme.com",
+                "text": "How can jane.doe@acme.com get help?",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Case for jane.doe@acme.com",
+                "text": "How can jane.doe@acme.com get help?",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "What should I do about customer support issues?"
+    assert result.items[0]["question_source"] == "source_policy"
+    assert result.items[0]["evidence_quotes"] == (
+        "`ticket-1`: Customer-provided details omitted for privacy.",
+        "`ticket-2`: Customer-provided details omitted for privacy.",
+    )
+    assert "jane" not in result.markdown.lower()
+    assert "acme" not in result.markdown.lower()
+    assert "Case for" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_keeps_safe_customer_wording_with_account_terms() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Account email",
+                "text": "How do I update the account email?",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Account email",
+                "text": "How do I update the account email?",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "How do I update the account email?"
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+@pytest.mark.parametrize(
+    "safe_question",
+    (
+        "How do I download my 1099?",
+        "How do I update the 2024 pricing?",
+    ),
+)
+def test_build_ticket_faq_markdown_keeps_non_identifier_numbers_in_customer_wording(
+    safe_question: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Safe numeric question",
+                "text": safe_question,
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Safe numeric question",
+                "text": safe_question,
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == safe_question
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
+def test_build_ticket_faq_markdown_skips_unsafe_question_then_uses_safe_customer_wording() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "text": "How do I reset the password for account 4829103?",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Password reset",
+                "text": "How do I reset the password?",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == "How do I reset the password?"
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert "4829103" not in result.items[0]["question"]
+
+
 def test_build_ticket_faq_markdown_ignores_clean_source_title_without_safe_vocabulary() -> None:
     result = build_ticket_faq_markdown(
         [

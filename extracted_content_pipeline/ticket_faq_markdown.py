@@ -57,6 +57,16 @@ _CUSTOMER_SPEAKERS = {"customer", "user", "requester", "client"}
 _SUPPORTED_QUESTION_SOURCES = {"customer_wording", "source_policy"}
 _REPRESENTATIVE_EMAIL_RE = re.compile(r"\b\S+@\S+\b")
 _REPRESENTATIVE_LONG_NUMBER_RE = re.compile(r"\b\d{4,}\b")
+_CUSTOMER_HEADING_PHONE_RE = re.compile(
+    r"(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b"
+)
+_CUSTOMER_IDENTIFIER_NUMBER_RE = re.compile(
+    r"\b(?:account|acct|case|claim|confirmation|customer|id|invoice|member|"
+    r"number|order|ref|reference|ticket)\s*(?:id|number|no\.?|#)?\s*[:#-]?\s*\d{4,}\b"
+    r"|\b\d{4,}\s*(?:account|acct|case|claim|customer|invoice|member|order|ref|reference|ticket)\b",
+    re.IGNORECASE,
+)
+_PUBLISHED_TEXT_PRIVACY_PLACEHOLDER = "Customer-provided details omitted for privacy."
 _REPRESENTATIVE_LABEL_SOURCE_TYPES = {
     "ticket",
     "support_ticket",
@@ -1121,7 +1131,10 @@ def _topic(
             text = _compact(value)
             if text:
                 return text.lower()
-    return (_compact(evidence.get("source_title") or opportunity.get("source_title")) or "customer support issues").lower()
+    fallback_topic = _published_customer_text(
+        evidence.get("source_title") or opportunity.get("source_title")
+    )
+    return (fallback_topic or "customer support issues").lower()
 
 
 def _provided_support_ticket_cluster_topic(
@@ -1247,10 +1260,17 @@ def _item(
     sources = tuple(_source_label(row) for row in display_rows)
     source_keys = (row.get("source_key") or row.get("source_id", "") for row in rows)
     source_ids = tuple(dict.fromkeys(value for value in source_keys if value))
-    snippets = " / ".join(_quote(row.get("text", "")) for row in display_rows)
+    snippets = " / ".join(_published_customer_quote(row.get("text", "")) for row in display_rows)
     action_context = " / ".join((
         snippets,
-        " / ".join(_clean(row.get("source_title")) for row in display_rows if _clean(row.get("source_title"))),
+        " / ".join(
+            title
+            for title in (
+                _published_customer_text(row.get("source_title"))
+                for row in display_rows
+            )
+            if title
+        ),
     ))
     question, question_source, question_row = _resolve_question_label(
         topic,
@@ -2199,7 +2219,7 @@ def _question(
     documentation_terms: Sequence[str],
 ) -> tuple[str, str, Mapping[str, str] | None]:
     for row in rows:
-        text = _question_text(row.get("text", ""))
+        text = _publishable_customer_question_text(row.get("text", ""))
         if text:
             return (text, "customer_wording", row)
     representative_question = _representative_source_question(
@@ -2330,28 +2350,47 @@ def _rows_with_question_source_first(
 
 
 def _question_text(value: Any) -> str:
+    return _question_text_matching(value, _usable_question)
+
+
+def _publishable_customer_question_text(value: Any) -> str:
+    return _question_text_matching(
+        value,
+        _usable_customer_heading_question,
+        context_predicate=lambda text: not _has_customer_heading_pii(text),
+    )
+
+
+def _question_text_matching(
+    value: Any,
+    predicate: Callable[[str], bool],
+    *,
+    context_predicate: Callable[[str], bool] | None = None,
+) -> str:
     for text in _question_candidate_texts(value):
+        if context_predicate is not None and not context_predicate(text):
+            continue
         if "?" in text:
             prefix, remainder = text.split("?", 1)
             prefix = prefix.strip()
             sentence_parts = [part.strip() for part in re.split(r"[.!:;]+", prefix) if part.strip()]
             candidate = sentence_parts[-1] if sentence_parts else prefix
             normalized = _normalize_question_text(candidate)
-            if _usable_question(normalized):
+            if predicate(normalized):
                 return normalized
             tail = _compact(remainder)
             if tail:
-                normalized = _question_start_text(tail)
+                normalized = _question_start_text(tail, predicate=predicate)
                 if normalized:
                     return normalized
-                normalized = _first_person_issue_question_text(tail)
+                normalized = _first_person_issue_question_text(tail, predicate=predicate)
                 if normalized:
                     return normalized
             continue
-        normalized = _question_start_text(text)
+        normalized = _question_start_text(text, predicate=predicate)
         if normalized:
             return normalized
-        normalized = _first_person_issue_question_text(text)
+        normalized = _first_person_issue_question_text(text, predicate=predicate)
         if normalized:
             return normalized
     return ""
@@ -2383,17 +2422,27 @@ def _question_segment(value: str) -> str:
     return _compact(_URL_RE.sub("", value))
 
 
-def _question_start_text(text: str) -> str:
+def _question_start_text(
+    text: str,
+    *,
+    predicate: Callable[[str], bool] | None = None,
+) -> str:
+    resolved_predicate = predicate or _usable_question
     question_starts = ("how ", "what ", "where ", "when ", "why ", "can ", "could ", "do ", "does ", "is ")
     lowered = text.lower()
     if lowered.startswith(question_starts):
         normalized = _normalize_question_text(text)
-        if _usable_question(normalized):
+        if resolved_predicate(normalized):
             return normalized
     return ""
 
 
-def _first_person_issue_question_text(text: str) -> str:
+def _first_person_issue_question_text(
+    text: str,
+    *,
+    predicate: Callable[[str], bool] | None = None,
+) -> str:
+    resolved_predicate = predicate or _usable_question
     sentence = _first_sentence(text)
     lowered = sentence.lower()
     patterns = (
@@ -2418,7 +2467,7 @@ def _first_person_issue_question_text(text: str) -> str:
         if lowered.startswith(prefix):
             remainder = sentence[len(prefix):].strip()
             normalized = _normalize_question_text(f"{question_prefix}{remainder}")
-            if _usable_question(normalized):
+            if resolved_predicate(normalized):
                 return normalized
     complaint_patterns = (
         ("i was ", "What should I do if I was "),
@@ -2436,7 +2485,7 @@ def _first_person_issue_question_text(text: str) -> str:
         if lowered.startswith(prefix):
             remainder = sentence[len(prefix):].strip()
             normalized = _normalize_question_text(f"{question_prefix}{remainder}")
-            if _usable_question(normalized):
+            if resolved_predicate(normalized):
                 return normalized
     return ""
 
@@ -2454,6 +2503,38 @@ def _usable_question(value: str) -> bool:
         and lowered not in _GENERIC_QUESTION_TEXTS
         and not any(phrase in lowered for phrase in _GENERIC_QUESTION_PHRASES)
         and not _looks_malformed_question(value)
+    )
+
+
+def _usable_customer_heading_question(value: str) -> bool:
+    return _usable_question(value) and not _has_customer_heading_pii(value)
+
+
+def _has_customer_heading_pii(value: Any) -> bool:
+    return _has_published_customer_text_pii(value)
+
+
+def _published_customer_text(value: Any) -> str:
+    text = support_ticket_plain_text(value)
+    if not text or _has_published_customer_text_pii(text):
+        return ""
+    return text
+
+
+def _published_customer_quote(value: Any, *, limit: int = 220) -> str:
+    text = _published_customer_text(value)
+    if not text:
+        return _PUBLISHED_TEXT_PRIVACY_PLACEHOLDER
+    return _quote(text, limit=limit)
+
+
+def _has_published_customer_text_pii(value: Any) -> bool:
+    text = support_ticket_plain_text(value)
+    return bool(
+        _REPRESENTATIVE_EMAIL_RE.search(text)
+        or _CUSTOMER_IDENTIFIER_NUMBER_RE.search(text)
+        or _CUSTOMER_HEADING_PHONE_RE.search(text)
+        or _REDACTION_TOKEN_RE.search(text)
     )
 
 
@@ -2564,7 +2645,7 @@ def _render(
 
 def _source_label(row: Mapping[str, str]) -> str:
     source_id = _clean(row.get("source_id"))
-    title = _clean(row.get("source_title"))
+    title = _published_customer_text(row.get("source_title"))
     if source_id and title:
         return f"`{source_id}` - {title}"
     return f"`{source_id or 'unknown'}`"
@@ -2627,7 +2708,11 @@ def _summary(
     question_source: str,
 ) -> str:
     issue = _topic_label(topic)
-    example = _quote(rows[0].get("text", ""), limit=180) if rows else "the cited ticket evidence"
+    example = (
+        _published_customer_quote(rows[0].get("text", ""), limit=180)
+        if rows
+        else "the cited ticket evidence"
+    )
     if source_count > 1:
         if question_source != "customer_wording":
             return (
@@ -2812,7 +2897,7 @@ def _support_sentence(support_contact: str | None) -> str:
 
 def _evidence_quote(row: Mapping[str, str]) -> str:
     label = _source_label(row)
-    text = _quote(row.get("text", ""), limit=220)
+    text = _published_customer_quote(row.get("text", ""), limit=220)
     return f"{label}: {text}"
 
 
