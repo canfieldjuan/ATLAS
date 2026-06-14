@@ -736,6 +736,7 @@ If neither, route by shape:
 
 | Shape | Where | Why |
 |---|---|---|
+| Bounded read-only scouting/checking with a small known surface and no edits planned | Spark subagent (if available), else `Explore` | Lightweight retrieval/checking without pulling raw context into main |
 | Read-only, >400 lines, no edits planned | `Explore` subagent | Pure retrieval; summary lands in main context, raw file does not |
 | Reading 3+ files just to orient | `Explore` subagent | Width without depth -- the subagent's strength |
 | "Find every caller of X" / "where is Y defined" | `grep`/`find` via Bash | Regex match, no LLM needed |
@@ -756,12 +757,21 @@ refresh (three `Explore` agents in parallel mapped churn signals,
 extracted packages, and planned products); without it the same work
 would have cost N round-trips of main-context overhead.
 
-### 5c. The Kimi worker model relationship
+### 5c. Spark and lightweight worker relationships
+
+Spark is the preferred lightweight subagent for bounded read-only scouting and
+checking when it is available: known files, narrow searches, review-thread
+summaries, plan-vs-diff checks, backlog scans, and other retrieval tasks where
+the answer can be a compact list of facts. Do not use Spark for edit-target
+reads that need exact file context in main, architectural decisions,
+root-cause calls, review verdicts, Git/GitHub mutations, or final user-facing
+synthesis. If Spark is unavailable, or the task needs broader multi-file
+orientation, use `Explore`.
 
 If a `claude-coworker-model`-style worker LLM is installed locally
 (Kimi / DeepSeek / Ollama via OpenRouter), it slots in as a
 **cheaper** retrieval channel for cases where an `Explore`
-subagent is overkill -- one big file, no reasoning needed, no other
+or Spark subagent is overkill -- one big file, no reasoning needed, no other
 files to cross-reference. The decision table above is unchanged;
 just add a row:
 
@@ -769,8 +779,8 @@ just add a row:
 |---|---|---|
 | Deep retrieval of one large file, no cross-refs | Worker LLM (if installed), else `Explore` | Worker is cheapest; `Explore` is the in-tree fallback |
 
-The worker never replaces `Explore` for multi-file orientation or
-the main session for judgment.
+The worker never replaces Spark or `Explore` for multi-file orientation, and no
+worker replaces the main session for judgment.
 
 ### 5d. Routing anti-patterns
 
