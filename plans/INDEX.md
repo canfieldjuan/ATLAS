@@ -1,6 +1,6 @@
 # Plan archive index
 
-1016 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1017 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -707,6 +707,7 @@
 - [PR-Deflection-Uncap-Paid-Report](archive/PR-Deflection-Uncap-Paid-Report.md) - lane: content-ops/faq-deflection | phase: Production hardening
 - [PR-Deflection-Zendesk-Credential-Flow](archive/PR-Deflection-Zendesk-Credential-Flow.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Zendesk-Full-Thread-Importer](archive/PR-Deflection-Zendesk-Full-Thread-Importer.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
+- [PR-Deflection-Zendesk-Full-Thread-Proof](archive/PR-Deflection-Zendesk-Full-Thread-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Zendesk-Live-Upload-Smoke](archive/PR-Deflection-Zendesk-Live-Upload-Smoke.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Zendesk-Tenant-Export-Route](archive/PR-Deflection-Zendesk-Tenant-Export-Route.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Zendesk-Upload-Handoff](archive/PR-Deflection-Zendesk-Upload-Handoff.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
