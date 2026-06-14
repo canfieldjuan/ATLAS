@@ -554,8 +554,12 @@ def test_load_source_rows_prefers_warned_utf8_recovery_over_cp1252_mojibake(
     assert "â" not in rows[0]["message"]
 
 
-def test_load_source_rows_warns_on_ascii_utf8_corrupt_byte_legacy_fallback(
+@pytest.mark.parametrize("corrupt_byte", (0x81, 0x8D, 0x8F, 0x90, 0x9D, 0xFE, 0xFF))
+@pytest.mark.parametrize("suffix", (b"\n", b"cd\n"))
+def test_load_source_rows_warns_on_implausible_legacy_fallback_artifacts(
     tmp_path: Path,
+    corrupt_byte: int,
+    suffix: bytes,
 ) -> None:
     path = tmp_path / "support_tickets_ascii_corrupt_utf8.csv"
     message = "Cannot export the monthly attribution report at all today"
@@ -564,22 +568,95 @@ def test_load_source_rows_warns_on_ascii_utf8_corrupt_byte_legacy_fallback(
             "ticket_id,subject,message\n"
             f"ticket-1,Export help,{message}"
         ).encode("utf-8")
-        + b"\xff\n"
+        + bytes([corrupt_byte])
+        + suffix
     )
 
     rows, warnings = load_source_rows_with_warnings_from_file(
         path,
         file_format="csv",
     )
+    try:
+        legacy_char = bytes([corrupt_byte]).decode("cp1252")
+    except UnicodeDecodeError:
+        legacy_char = bytes([corrupt_byte]).decode("latin-1")
 
     assert rows == [{
         "ticket_id": "ticket-1",
         "subject": "Export help",
-        "message": f"{message}\u00ff",
+        "message": f"{message}{legacy_char}{suffix.decode('ascii').strip()}",
     }]
     assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
     assert warnings[0].field == "encoding"
     assert "failed strict UTF-8" in warnings[0].message
+
+
+@pytest.mark.parametrize(
+    ("prefix", "corrupt_byte", "suffix"),
+    (
+        ("oops", 0x81, "cd"),
+        ("aa", 0x90, "bb"),
+    ),
+)
+def test_load_source_rows_warns_on_mid_field_implausible_fallback_artifacts(
+    tmp_path: Path,
+    prefix: str,
+    corrupt_byte: int,
+    suffix: str,
+) -> None:
+    path = tmp_path / "support_tickets_mid_field_corrupt_utf8.csv"
+    path.write_bytes(
+        b"ticket_id,subject,message\n"
+        + f"ticket-1,Export help,{prefix}".encode("utf-8")
+        + bytes([corrupt_byte])
+        + f"{suffix}\n".encode("utf-8")
+    )
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+    legacy_char = bytes([corrupt_byte]).decode("latin-1")
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": f"{prefix}{legacy_char}{suffix}",
+    }]
+    assert [warning.code for warning in warnings] == ["csv_encoding_ambiguous"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Le caf\u00e9",
+        "5\u20ac",
+        "(c)\u00a9",
+        "caf\u00e9,done",
+        "Se\u00f1or \u00fcber",
+    ),
+)
+def test_load_source_rows_does_not_warn_on_clean_cp1252_field_endings(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    path = tmp_path / "support_tickets_cp1252_clean_field_endings.csv"
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f'ticket-1,Export help,"{message}"\n'
+    ).encode("cp1252"))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
 
 
 def test_source_row_maps_provider_complaint_narrative_aliases() -> None:
