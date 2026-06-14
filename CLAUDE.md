@@ -1365,6 +1365,14 @@ Compose files for sub-services:
   hard-code domain prompts inline.
 - **Plans are mandatory** for non-trivial PRs (see *Multi-Session PR
   Workflow* above). No code without a plan doc.
+- **Root cause, not symptoms**: a fix names the underlying problem and
+  addresses it, not the surface symptom or a reviewer's exact wording. A change
+  that fights another stage (split-then-remerge, widen-then-filter,
+  harness-around-a-deferred-step) is a symptom fix; the plan must justify it and
+  reviewers reject it at the plan stage, before code. Fix **as far upstream as
+  is correct** -- the root near a symptom is often a consequence of something
+  coded wrong further up; if you stop short of the true upstream root, name it
+  and the follow-up rather than patch downstream. See `AGENTS.md` §3k.
 - **ASCII Python**: `scripts/check_ascii_python.sh` is part of CI.
   Non-ASCII characters in `.py` files break the gate. Use ASCII-only
   identifiers and string literals.

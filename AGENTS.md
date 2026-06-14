@@ -32,7 +32,7 @@ Required sections, in this order:
 
 | Section | Purpose |
 |---|---|
-| **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. |
+| **Why this slice exists** | What's broken / what's missing / what audit item this closes. Tie to a prior plan, audit finding, or a concrete user request. For a fix/defect/review-finding PR, name the **root cause** (the underlying problem, not the surface symptom or the reviewer's wording) and state whether this change fixes the root or treats a symptom -- see §3k. |
 | **Scope (this PR)** | The narrow surface this PR touches. Start with an `Ownership lane: <lane>` line, then a `Slice phase: <phase>` line, then a numbered list of intent and a "Files touched" subsection. |
 | **Mechanism** | Short prose (and code stub if helpful) explaining *how* the change works -- enough that the reviewer doesn't have to reverse-engineer it from the diff. |
 | **Intentional** | Things that look wrong but aren't -- explicit trade-offs and rejected alternatives ("no `warnings.warn` shim because ..."). Saves reviewer cycles. |
@@ -610,6 +610,42 @@ claiming the fix complete:
 Hardcoding the reviewer's strings, values, paths, or exact examples is an R13
 failure (`docs/REVIEWER_RULES.md`). A fix that can pass only the visible review
 example is not done.
+
+---
+
+### 3k. Root-cause gate (no symptom fixes)
+
+A fix-type PR -- one that resolves a bug, a defect, a review finding, or an
+operator-reported quirk -- must establish the root cause **before it builds**.
+In *Why this slice exists*, state:
+
+1. The **root cause**: the underlying problem, not the surface symptom, the
+   error message, or the reviewer's exact wording.
+2. Whether this change **fixes the root or treats a symptom**. A symptom-only
+   fix must justify why the root is deferred and link the follow-up that fixes
+   it.
+
+**Fix as far upstream as is correct.** The root cause of the current symptom may
+itself be downstream of a deeper defect -- the "root" near the symptom is often
+the *consequence* of something coded wrong further up the data/control flow.
+Trace the chain to its origin and fix at the most-upstream point that is correct
+and in safe scope; an upstream fix removes the defect for every downstream
+consumer, not just this one. A patch one layer up from the symptom that leaves
+the true upstream cause in place is still a symptom fix. If the true root is
+further upstream than this slice can responsibly reach (shared-component blast
+radius, another session's lane per §3a.1), **name the upstream root and link the
+follow-up** -- do not silently patch downstream and call it root-cause.
+
+A change that *fights another part of the pipeline* -- split-then-remerge,
+widen-then-filter, add-then-strip, or building a harness/tool *around* a
+deferred validation or decision step instead of taking the step -- is presumed
+a symptom fix and must clear this bar explicitly.
+
+Reviewers enforce this **at the plan stage, before code**: a fix-PR whose plan
+treats a symptom without this justification is rejected before implementation,
+not after a full review round. Chasing the symptom one layer at a time -- fix
+the named case, ship, get bounced one layer deeper, repeat -- is the
+tail-chasing this gate exists to stop.
 
 ---
 
