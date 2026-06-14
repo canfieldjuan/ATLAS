@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "requirements.txt"
+      - "requirements.asr.txt"
       - "atlas_brain/_content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/content_ops_brand_voice_profiles.py"
@@ -21,6 +23,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_generated_assets_checks.yml"
+      - "requirements.txt"
+      - "requirements.asr.txt"
       - "atlas_brain/_content_ops_brand_voice_profiles.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/content_ops_brand_voice_profiles.py"

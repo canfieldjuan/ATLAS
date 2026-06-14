@@ -1,4 +1,4 @@
-fastapi
+fastapi<0.137
 uvicorn[standard]
 python-multipart
 pydantic>=1.10,<3

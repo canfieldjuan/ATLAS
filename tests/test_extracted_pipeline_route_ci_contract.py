@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -44,9 +45,10 @@ def _workflow_install_command() -> str:
 
 
 def test_extracted_pipeline_installs_fastapi_route_dependencies() -> None:
-    packages = set(_workflow_install_command().split())
+    packages = set(shlex.split(_workflow_install_command()))
 
-    assert "fastapi" in packages
+    assert "fastapi<0.137" in packages
+    assert "fastapi" not in packages
     assert "python-multipart" in packages
 
 
