@@ -15,6 +15,7 @@ from .campaign_source_adapters import (
     source_material_to_source_rows,
     source_rows_to_campaign_opportunities,
 )
+from .embedding_port import EmbeddingPort, cosine_similarity
 from .support_ticket_clustering import (
     support_ticket_plain_text,
     support_ticket_tokens,
@@ -456,6 +457,7 @@ class TicketFAQMarkdownConfig:
     documentation_terms: tuple[str, ...] = ()
     representative_taxonomy_terms: tuple[str, ...] = ()
     vocabulary_gap_rules: tuple[tuple[str, ...], ...] = ()
+    embedding_port: EmbeddingPort | None = None
 
 
 class TicketFAQMarkdownService:
@@ -488,6 +490,7 @@ class TicketFAQMarkdownService:
         documentation_terms: Sequence[str] | None = None,
         representative_taxonomy_terms: Sequence[str] | None = None,
         vocabulary_gap_rules: Sequence[Sequence[str]] | None = None,
+        embedding_port: EmbeddingPort | None = None,
         **kwargs: Any,
     ) -> TicketFAQMarkdownResult:
         del kwargs
@@ -547,6 +550,11 @@ class TicketFAQMarkdownService:
             if vocabulary_gap_rules is not None
             else self.config.vocabulary_gap_rules
         )
+        resolved_embedding_port = (
+            embedding_port
+            if embedding_port is not None
+            else self.config.embedding_port
+        )
         title_text = title or self.config.title
         result = build_ticket_faq_markdown(
             normalized.opportunities,
@@ -561,6 +569,7 @@ class TicketFAQMarkdownService:
             documentation_terms=resolved_documentation_terms,
             representative_taxonomy_terms=resolved_representative_taxonomy_terms,
             vocabulary_gap_rules=resolved_vocabulary_gap_rules,
+            embedding_port=resolved_embedding_port,
         )
         result = replace(
             result,
@@ -614,6 +623,7 @@ def build_ticket_faq_markdown(
     documentation_terms: Sequence[str] = (),
     representative_taxonomy_terms: Sequence[str] = (),
     vocabulary_gap_rules: Sequence[Sequence[str]] = (),
+    embedding_port: EmbeddingPort | None = None,
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -719,7 +729,9 @@ def build_ticket_faq_markdown(
         if not scope.startswith("topic:"):
             subclustered_groups[(topic, scope)] = rows
             continue
-        for cluster_index, cluster_rows in enumerate(_question_subclusters(rows)):
+        for cluster_index, cluster_rows in enumerate(
+            _question_subclusters(rows, embedding_port=embedding_port)
+        ):
             cluster_keys = _row_source_keys(cluster_rows)
             if len(cluster_keys) < 2:
                 excluded_singleton_keys.update(cluster_keys)
@@ -830,14 +842,19 @@ def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], .
 
 _SUBCLUSTER_JACCARD_THRESHOLD = 1 / 3
 _SUBCLUSTER_GIST_TOKEN_LIMIT = 30
+_EMBEDDING_MNN_COSINE_FLOOR = 0.78
+_EMBEDDING_MNN_MARGIN = 0.05
+
+
+def _question_gist_text(text: str) -> str:
+    question = _question_text(text)
+    return question if question else " ".join(text.split()[: _SUBCLUSTER_GIST_TOKEN_LIMIT])
 
 
 def _question_gist_tokens(text: str) -> frozenset[str]:
     """Tokens of the row's question sentence, or its opening gist."""
 
-    question = _question_text(text)
-    source = question if question else " ".join(text.split()[: _SUBCLUSTER_GIST_TOKEN_LIMIT])
-    tokens = support_ticket_tokens(source)
+    tokens = support_ticket_tokens(_question_gist_text(text))
     return frozenset(
         token for token in tokens if not _REDACTION_TOKEN_RE.fullmatch(token)
     )
@@ -874,6 +891,8 @@ def _row_source_keys(rows: Sequence[Mapping[str, str]]) -> set[str]:
 
 def _question_subclusters(
     rows: Sequence[Mapping[str, str]],
+    *,
+    embedding_port: EmbeddingPort | None = None,
 ) -> list[list[Mapping[str, str]]]:
     """Split one degraded topic bucket into question-similarity clusters.
 
@@ -925,10 +944,89 @@ def _question_subclusters(
         for token in prefix:
             prefix_index[token].append(index)
 
+    _apply_embedding_booster(
+        rows,
+        gists=gists,
+        find=find,
+        union=union,
+        embedding_port=embedding_port,
+    )
+
     clusters: dict[int, list[Mapping[str, str]]] = defaultdict(list)
     for index, row in enumerate(rows):
         clusters[find(index)].append(row)
     return [clusters[root] for root in sorted(clusters)]
+
+
+def _apply_embedding_booster(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    gists: Sequence[frozenset[str]],
+    find: Callable[[int], int],
+    union: Callable[[int, int], None],
+    embedding_port: EmbeddingPort | None,
+) -> None:
+    if embedding_port is None or len(rows) < 2:
+        return
+    texts = [
+        _question_gist_text(str(row.get("text") or "")).strip()
+        for row in rows
+    ]
+    component_sizes: dict[int, int] = defaultdict(int)
+    for index in range(len(rows)):
+        component_sizes[find(index)] += 1
+    active_indexes = [
+        index
+        for index, text in enumerate(texts)
+        if text and gists[index] and component_sizes[find(index)] == 1
+    ]
+    if len(active_indexes) < 2:
+        return
+    try:
+        embedded = embedding_port.embed_texts([texts[index] for index in active_indexes])
+    except Exception:
+        return
+    if (
+        not isinstance(embedded, Sequence)
+        or isinstance(embedded, (str, bytes, bytearray))
+        or len(embedded) != len(active_indexes)
+    ):
+        return
+    vectors: dict[int, Sequence[float]] = {
+        index: embedded[position]
+        for position, index in enumerate(active_indexes)
+    }
+    best_by_index: dict[int, tuple[int, float, float]] = {}
+    for index in active_indexes:
+        scored: list[tuple[float, int]] = []
+        for candidate in active_indexes:
+            if candidate == index or find(candidate) == find(index):
+                continue
+            score = cosine_similarity(vectors[index], vectors[candidate])
+            if score is None:
+                continue
+            scored.append((score, candidate))
+        if not scored:
+            continue
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        best_score, best_index = scored[0]
+        runner_up = scored[1][0] if len(scored) > 1 else -1.0
+        best_by_index[index] = (best_index, best_score, runner_up)
+    pairs: set[tuple[int, int]] = set()
+    for index, (candidate, score, runner_up) in best_by_index.items():
+        candidate_best = best_by_index.get(candidate)
+        if candidate_best is None or candidate_best[0] != index:
+            continue
+        if score < _EMBEDDING_MNN_COSINE_FLOOR:
+            continue
+        if score - runner_up < _EMBEDDING_MNN_MARGIN:
+            continue
+        if candidate_best[1] - candidate_best[2] < _EMBEDDING_MNN_MARGIN:
+            continue
+        pairs.add(tuple(sorted((index, candidate))))
+    for left, right in sorted(pairs):
+        if find(left) != find(right):
+            union(left, right)
 
 
 def _topic(
