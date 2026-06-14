@@ -468,6 +468,51 @@ def test_deflection_snapshot_counts_are_raw_and_locked_rows_hide_questions() -> 
     assert "ticket-sso-1" not in encoded
 
 
+def test_deflection_report_surfaces_paid_semantic_merge_provenance() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I request a refund?",
+                "weighted_frequency": 2,
+                "ticket_count": 2,
+                "source_ids": ("refund-a", "refund-b"),
+                "answer_evidence_status": "draft_needs_review",
+                "semantic_merge_provenance": (
+                    {
+                        "left_source_id": "refund-a",
+                        "right_source_id": "refund-b",
+                        "cosine": 0.9912,
+                        "left_margin": 0.1222,
+                        "right_margin": 0.1333,
+                        "token_jaccard": 0.0,
+                    },
+                ),
+            },
+        ),
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    snapshot = build_deflection_snapshot(artifact).as_dict()
+    encoded_snapshot = json.dumps(snapshot, sort_keys=True)
+
+    assert artifact.summary["semantic_merge_present"] is True
+    assert artifact.summary["semantic_merge_count"] == 1
+    assert artifact.summary["semantic_merge_question_count"] == 1
+    assert artifact.summary["semantic_merge_source_count"] == 2
+    assert "## Semantic Match Provenance" in artifact.markdown
+    assert "refund-a <-> refund-b" in artifact.markdown
+    assert "0.9912" in artifact.markdown
+    assert "0.1222 / 0.1333" in artifact.markdown
+    assert "semantic_merge_provenance" not in encoded_snapshot
+    assert "semantic_merge_count" not in encoded_snapshot
+    assert "refund-a" not in encoded_snapshot
+    assert "refund-b" not in encoded_snapshot
+
+
 def test_deflection_snapshot_exposes_complete_source_date_window() -> None:
     result = build_ticket_faq_markdown(
         [

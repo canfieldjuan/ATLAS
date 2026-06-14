@@ -2218,6 +2218,16 @@ def test_embedding_booster_records_only_accepted_semantic_pairs() -> None:
 
     assert len(result.items) == 1
     assert result.items[0]["source_ids"] == ("refund-a", "refund-b")
+    assert result.items[0]["semantic_merge_count"] == 1
+    item_provenance = result.items[0]["semantic_merge_provenance"][0]
+    assert item_provenance["left_source_id"] == "refund-a"
+    assert item_provenance["right_source_id"] == "refund-b"
+    assert item_provenance["cosine"] > 0.99
+    assert item_provenance["left_margin"] > 0.9
+    assert item_provenance["right_margin"] > 0.9
+    assert item_provenance["token_jaccard"] == 0.0
+    assert "left_text" not in item_provenance
+    assert "right_text" not in item_provenance
     assert len(semantic_merges) == 1
     merge = semantic_merges[0]
     assert merge["left_source_id"] == "refund-a"
@@ -2259,6 +2269,43 @@ def test_embedding_booster_records_source_key_when_source_id_is_unknown() -> Non
     assert len(semantic_merges) == 1
     assert semantic_merges[0]["left_source_id"] == "row:1"
     assert semantic_merges[0]["right_source_id"] == "row:2"
+    assert result.items[0]["semantic_merge_provenance"][0]["left_source_id"] == "row:1"
+    assert result.items[0]["semantic_merge_provenance"][0]["right_source_id"] == "row:2"
+
+
+def test_embedding_booster_provenance_uses_row_identity_not_source_pair() -> None:
+    rows = [
+        {
+            "source_id": source_id,
+            "source_type": "support_ticket",
+            "support_ticket_cluster": cluster,
+            "text": text,
+        }
+        for source_id, cluster, text in (
+            ("s1", "export help", "How do I export my report?"),
+            ("s2", "export help", "How do I export my report?"),
+            ("s1", "refund help", "How do I get my money back?"),
+            ("s2", "refund help", "What is the process for a refund?"),
+        )
+    ]
+
+    result = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "What is the process for a refund?": (0.99, 0.01),
+        }),
+    )
+
+    by_topic = {item["topic"]: item for item in result.items}
+
+    assert by_topic["export help"]["source_ids"] == ("s1", "s2")
+    assert by_topic["refund help"]["source_ids"] == ("s1", "s2")
+    assert "semantic_merge_provenance" not in by_topic["export help"]
+    assert by_topic["refund help"]["semantic_merge_count"] == 1
+    assert by_topic["refund help"]["semantic_merge_provenance"][0]["left_source_id"] == "s1"
+    assert by_topic["refund help"]["semantic_merge_provenance"][0]["right_source_id"] == "s2"
 
 
 def test_embedding_booster_skips_malformed_vectors_without_merging() -> None:

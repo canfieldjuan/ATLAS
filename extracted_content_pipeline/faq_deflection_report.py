@@ -276,6 +276,7 @@ def deflection_report_summary(faq_result: TicketFAQMarkdownResult) -> dict[str, 
         "top_question": _text(items[0].get("question")) if items else "",
         "top_opportunity_score": _int(items[0].get("opportunity_score")) if items else 0,
     }
+    summary.update(_semantic_merge_summary(items))
     summary.update(_outcome_diagnostics_summary(items))
     source_date_window = _complete_source_date_window({}, items)
     if source_date_window:
@@ -312,6 +313,7 @@ def render_deflection_report(
         lines.extend(["**Source file:**", "", _md(source_label), ""])
     lines.extend(_help_desk_seo_targeting_section(items))
     lines.extend(_ranked_opportunity_section(items))
+    lines.extend(_semantic_match_provenance_section(items))
     lines.extend(_outcome_diagnostics_section(items, resolved_summary))
     lines.extend(_drafted_answer_section(proven))
     lines.extend(_no_proven_answer_section(needs_review))
@@ -447,6 +449,43 @@ def _ranked_opportunity_section(items: Sequence[Mapping[str, Any]]) -> list[str]
     return [*lines, ""]
 
 
+def _semantic_match_provenance_section(
+    items: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    rows: list[str] = []
+    for item in items:
+        question = _text(item.get("question"))
+        for edge in _semantic_merge_records(item):
+            pair = (
+                f"{edge['left_source_id']} <-> {edge['right_source_id']}"
+            )
+            rows.append(
+                "| "
+                f"{_cell(question)} | "
+                f"{_cell(pair)} | "
+                f"{_cell(_format_ratio(edge.get('cosine')))} | "
+                f"{_cell(_format_margin_pair(edge))} | "
+                f"{_cell(_format_ratio(edge.get('token_jaccard')))} |"
+            )
+    if not rows:
+        return []
+    return [
+        "## Semantic Match Provenance",
+        "",
+        (
+            "These repeated-question groups include source pairs that were joined "
+            "by the embedding booster after lexical overlap alone did not reach "
+            "the repeat threshold. Treat them as auditable grouping evidence, "
+            "not as a savings guarantee."
+        ),
+        "",
+        "| Customer question | Source pair | Cosine | MNN margins | Token overlap |",
+        "|---|---|---:|---:|---:|",
+        *rows,
+        "",
+    ]
+
+
 def _outcome_diagnostics_section(
     items: Sequence[Mapping[str, Any]],
     summary: Mapping[str, Any],
@@ -497,6 +536,56 @@ def _outcome_diagnostics_section(
             f"{_cell(_outcome_guidance(diagnostics))} |"
         )
     return [*lines, ""]
+
+
+def _semantic_merge_summary(
+    items: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    edge_count = 0
+    question_count = 0
+    source_ids: set[str] = set()
+    for item in items:
+        records = _semantic_merge_records(item)
+        if not records:
+            continue
+        question_count += 1
+        edge_count += len(records)
+        for record in records:
+            source_ids.add(record["left_source_id"])
+            source_ids.add(record["right_source_id"])
+    if edge_count == 0:
+        return {}
+    return {
+        "semantic_merge_present": True,
+        "semantic_merge_count": edge_count,
+        "semantic_merge_question_count": question_count,
+        "semantic_merge_source_count": len(source_ids),
+    }
+
+
+def _semantic_merge_records(
+    item: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    raw = item.get("semantic_merge_provenance")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        return ()
+    records: list[dict[str, Any]] = []
+    for value in raw:
+        if not isinstance(value, Mapping):
+            continue
+        left = _text(value.get("left_source_id"))
+        right = _text(value.get("right_source_id"))
+        if not left or not right:
+            continue
+        records.append({
+            "left_source_id": left,
+            "right_source_id": right,
+            "cosine": _float(value.get("cosine")),
+            "left_margin": _float(value.get("left_margin")),
+            "right_margin": _float(value.get("right_margin")),
+            "token_jaccard": _float(value.get("token_jaccard")),
+        })
+    return tuple(records)
 
 
 def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -976,6 +1065,17 @@ def _format_money(value: float | int) -> str:
     return f"${rounded:,}"
 
 
+def _format_ratio(value: Any) -> str:
+    return f"{_float(value):.4f}"
+
+
+def _format_margin_pair(edge: Mapping[str, Any]) -> str:
+    return (
+        f"{_format_ratio(edge.get('left_margin'))} / "
+        f"{_format_ratio(edge.get('right_margin'))}"
+    )
+
+
 def _count(value: int) -> str:
     return f"{value:,}"
 
@@ -1021,6 +1121,19 @@ def _int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _float(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 def _positive_limit(value: Any) -> int:

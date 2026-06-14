@@ -720,6 +720,7 @@ def build_ticket_faq_markdown(
             group_key = (topic, evidence_group_key or f"topic:{_compact_key(topic)}")
             source_date = _source_date(evidence) or _source_date(opportunity)
             groups[group_key].append({
+                "_semantic_row_id": f"row:{opportunity_index}:evidence:{evidence_index}",
                 "text": text,
                 "source_id": source_id or "unknown",
                 "source_key": source_key,
@@ -766,7 +767,14 @@ def build_ticket_faq_markdown(
     # untouched.
     subclustered_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
     excluded_singleton_keys: set[str] = set()
+    semantic_merge_records: list[dict[str, Any]] = []
     non_repeat_question_count = 0
+
+    def record_semantic_merge(record: Mapping[str, Any]) -> None:
+        semantic_merge_records.append(dict(record))
+        if embedding_merge_recorder is not None:
+            embedding_merge_recorder(record)
+
     for (topic, scope), rows in groups.items():
         if not scope.startswith("topic:"):
             subclustered_groups[(topic, scope)] = rows
@@ -775,7 +783,7 @@ def build_ticket_faq_markdown(
             _question_subclusters(
                 rows,
                 embedding_port=embedding_port,
-                embedding_merge_recorder=embedding_merge_recorder,
+                embedding_merge_recorder=record_semantic_merge,
             )
         ):
             cluster_keys = _row_source_keys(cluster_rows)
@@ -834,6 +842,12 @@ def build_ticket_faq_markdown(
         )
         for topic, rows in selected_groups
     )
+    if semantic_merge_records:
+        items = _items_with_semantic_merge_provenance(
+            items,
+            selected_groups,
+            semantic_merge_records,
+        )
     return TicketFAQMarkdownResult(
         markdown=_render(title=title, items=items, source_count=len(opportunities), ticket_source_count=len(source_keys)),
         items=items,
@@ -849,6 +863,59 @@ def build_ticket_faq_markdown(
         ),
         warnings=tuple(warnings),
     )
+
+
+def _items_with_semantic_merge_provenance(
+    items: Sequence[dict[str, Any]],
+    selected_groups: Sequence[tuple[str, Sequence[Mapping[str, str]]]],
+    semantic_merge_records: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    out = [dict(item) for item in items]
+    for record in semantic_merge_records:
+        provenance = _semantic_merge_provenance(record)
+        if not provenance:
+            continue
+        left_row_id = _clean(record.get("left_row_id"))
+        right_row_id = _clean(record.get("right_row_id"))
+        if not left_row_id or not right_row_id:
+            continue
+        for item, (_topic, rows) in zip(out, selected_groups):
+            row_ids = {
+                _clean(row.get("_semantic_row_id"))
+                for row in rows
+                if _clean(row.get("_semantic_row_id"))
+            }
+            if left_row_id not in row_ids or right_row_id not in row_ids:
+                continue
+            existing = list(item.get("semantic_merge_provenance") or ())
+            existing.append(provenance)
+            item["semantic_merge_provenance"] = tuple(existing)
+            item["semantic_merge_count"] = len(existing)
+            break
+    return tuple(out)
+
+
+def _semantic_merge_provenance(record: Mapping[str, Any]) -> dict[str, Any]:
+    left = _clean(record.get("left_source_id"))
+    right = _clean(record.get("right_source_id"))
+    if not left or not right:
+        return {}
+    return {
+        "left_source_id": left,
+        "right_source_id": right,
+        "cosine": _rounded_float(record.get("cosine")),
+        "left_margin": _rounded_float(record.get("left_margin")),
+        "right_margin": _rounded_float(record.get("right_margin")),
+        "token_jaccard": _rounded_float(record.get("token_jaccard")),
+    }
+
+
+def _rounded_float(value: Any) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return 0.0
+    if not math.isfinite(float(value)):
+        return 0.0
+    return round(float(value), 4)
 
 
 def _normalize_max_items(max_items: int | None) -> int | None:
@@ -1082,6 +1149,8 @@ def _apply_embedding_booster(
                 embedding_merge_recorder({
                     "left_index": left,
                     "right_index": right,
+                    "left_row_id": _semantic_merge_row_id(rows[left], left),
+                    "right_row_id": _semantic_merge_row_id(rows[right], right),
                     "left_source_id": _embedding_merge_source_id(rows[left]),
                     "right_source_id": _embedding_merge_source_id(rows[right]),
                     "left_text": texts[left],
@@ -1101,6 +1170,10 @@ def _embedding_merge_source_id(row: Mapping[str, str]) -> str:
     if source_id and source_id.lower() != "unknown":
         return source_id
     return str(row.get("source_key") or "").strip()
+
+
+def _semantic_merge_row_id(row: Mapping[str, str], index: int) -> str:
+    return str(row.get("_semantic_row_id") or f"row-index:{index}").strip()
 
 
 def _topic(
