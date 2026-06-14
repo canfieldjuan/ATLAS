@@ -35,6 +35,7 @@ import {
   parseArgs as parseSubmitSmokeArgs,
   runRouteHandlerSmoke,
   runSubmitSmoke,
+  runZendeskApiRouteHandlerSmoke,
   validationErrors as submitSmokeValidationErrors,
 } from "./faq-deflection-submit-live-smoke.mjs";
 
@@ -491,7 +492,12 @@ await test("submit live smoke exercises the production private blob helper", asy
   assert.match(submitSmokeSource, /ATLAS_DEFLECTION_SUBMIT_JSON_FILE/);
   assert.match(submitSmokeSource, /zendesk_full_thread_seed_sample\.json/);
   assert.match(submitSmokeSource, /portfolio_submit_route/);
+  assert.match(submitSmokeSource, /portfolio_zendesk_api_route/);
+  assert.match(submitSmokeSource, /ATLAS_DEFLECTION_ZENDESK_API_SMOKE/);
+  assert.match(submitSmokeSource, /ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN/);
+  assert.match(submitSmokeSource, /zendeskExportSubmitHandler/);
   assert.doesNotMatch(submitSmokeSource, /ATLAS_B2B_JWT[^\\n]*console\\.log/);
+  assert.doesNotMatch(submitSmokeSource, /ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN[^\\n]*console\\.log/);
   assert.deepEqual(
     submitSmokeValidationErrors({
       baseUrl: "http://localhost:8000",
@@ -514,6 +520,78 @@ await test("submit live smoke exercises the production private blob helper", asy
       routeHandler: true,
     }).includes("--route-handler requires --blob-pathname"),
     true,
+  );
+  assert.deepEqual(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+      zendeskApi: true,
+    }),
+    [
+      "ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN or --zendesk-export-access-token is required with --zendesk-api",
+    ],
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobPathname: `${BLOB_UPLOAD_PATH_PREFIX}zendesk-thread.json`,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      zendeskExportAccessToken: ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      timeoutMs: 1000,
+      zendeskApi: true,
+    }).includes("--zendesk-api cannot use --blob-pathname"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      zendeskExportAccessToken: ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      startTime: "-1",
+      timeoutMs: 1000,
+      zendeskApi: true,
+    }).includes("--start-time must be a non-negative integer"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      blobToken: ENV.BLOB_READ_WRITE_TOKEN,
+      zendeskExportAccessToken: ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      startTime: "1710000000abc",
+      timeoutMs: 1000,
+      zendeskApi: true,
+    }).includes("--start-time must be a non-negative integer"),
+    true,
+  );
+  assert.equal(
+    submitSmokeValidationErrors({
+      baseUrl: ENV.ATLAS_API_BASE_URL,
+      token: ENV.ATLAS_B2B_JWT,
+      accountId: ACCOUNT_ID,
+      supportPlatform: "zendesk",
+      limit: "1000",
+      startTime: "not-used-outside-zendesk-api",
+      timeoutMs: 1000,
+    }).includes("--start-time must be a non-negative integer"),
+    false,
   );
   assert.equal(
     submitSmokeValidationErrors({
@@ -654,6 +732,20 @@ await test("submit live smoke exercises the production private blob helper", asy
     status: "preflight_ok",
     source_mode: "portfolio_submit_route",
   });
+
+  const zendeskApiOptions = parseSubmitSmokeArgs([
+    "--zendesk-api",
+    "--preflight-only",
+    "--start-time",
+    "1710000000",
+  ], {
+    ...ENV,
+  });
+  assert.deepEqual(await runSubmitSmoke(zendeskApiOptions), {
+    ok: true,
+    status: "preflight_ok",
+    source_mode: "portfolio_zendesk_api_route",
+  });
 });
 
 await test("submit live smoke route-handler mode omits buyer account header", async () => {
@@ -743,6 +835,113 @@ await test("submit live smoke route-handler mode carries full-thread importer mo
     result_path: "/services/faq-deflection/results/content-ops-json123",
     error: undefined,
     atlas_status: undefined,
+    base_host: "atlas.example.com",
+  });
+});
+
+await test("submit live smoke Zendesk API mode calls credential route with operator token", async () => {
+  const options = parseSubmitSmokeArgs([
+    "--zendesk-api",
+    "--limit",
+    "49",
+    "--start-time",
+    "1710000000",
+  ], {
+    ...ENV,
+  });
+  const result = await runZendeskApiRouteHandlerSmoke(options, async (req, res) => {
+    assert.equal(req.method, "POST");
+    assert.equal(req.headers["content-type"], "application/json");
+    assert.equal(
+      req.headers.authorization,
+      `Bearer ${ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN}`,
+    );
+    assert.equal("x-atlas-account-id" in req.headers, false);
+    assert.equal(process.env.ATLAS_API_BASE_URL, ENV.ATLAS_API_BASE_URL);
+    assert.equal(process.env.ATLAS_B2B_JWT, ENV.ATLAS_B2B_JWT);
+    assert.equal(process.env.ATLAS_ACCOUNT_ID, ACCOUNT_ID);
+    assert.equal(process.env.BLOB_READ_WRITE_TOKEN, ENV.BLOB_READ_WRITE_TOKEN);
+    assert.equal(
+      process.env.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+      ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+    );
+    assert.deepEqual(JSON.parse(req.body), {
+      company_name: "Atlas Smoke Co.",
+      contact_email: "smoke@example.com",
+      limit: "49",
+      start_time: "1710000000",
+    });
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({
+      request_id: "content-ops-zendeskapi456",
+      account_id: ACCOUNT_ID,
+      result_path: "/services/faq-deflection/results/content-ops-zendeskapi456",
+    }));
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    source_mode: "portfolio_zendesk_api_route",
+    statusCode: 200,
+    request_id: "content-ops-zendeskapi456",
+    account_id: ACCOUNT_ID,
+    result_path: "/services/faq-deflection/results/content-ops-zendeskapi456",
+    error: undefined,
+    atlas_status: undefined,
+    base_host: "atlas.example.com",
+  });
+});
+
+await test("submit live smoke Zendesk API mode sanitizes route failures", async () => {
+  const options = parseSubmitSmokeArgs(["--zendesk-api"], {
+    ...ENV,
+  });
+  const result = await runZendeskApiRouteHandlerSmoke(options, async (_req, res) => {
+    res.statusCode = 502;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify({
+      ok: false,
+      error: "zendesk_export_unavailable",
+      detail: {
+        token: ENV.ATLAS_B2B_JWT,
+        access_token: ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN,
+        blob_token: ENV.BLOB_READ_WRITE_TOKEN,
+        tickets: [{ id: 1, subject: "Private ticket" }],
+      },
+    }));
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    source_mode: "portfolio_zendesk_api_route",
+    statusCode: 502,
+    request_id: undefined,
+    account_id: undefined,
+    result_path: undefined,
+    error: "zendesk_export_unavailable",
+    atlas_status: undefined,
+    base_host: "atlas.example.com",
+  });
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes(ENV.ATLAS_B2B_JWT), false);
+  assert.equal(serialized.includes(ENV.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN), false);
+  assert.equal(serialized.includes(ENV.BLOB_READ_WRITE_TOKEN), false);
+  assert.equal(serialized.includes("Private ticket"), false);
+});
+
+await test("submit live smoke Zendesk API mode fails closed on invalid route JSON", async () => {
+  const options = parseSubmitSmokeArgs(["--zendesk-api"], {
+    ...ENV,
+  });
+  const result = await runZendeskApiRouteHandlerSmoke(options, async (_req, res) => {
+    res.statusCode = 502;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end("{not-json");
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    source_mode: "portfolio_zendesk_api_route",
+    statusCode: 502,
+    error: "portfolio_zendesk_api_route_invalid_json",
     base_host: "atlas.example.com",
   });
 });

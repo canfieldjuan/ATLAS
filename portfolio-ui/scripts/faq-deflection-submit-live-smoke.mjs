@@ -6,6 +6,7 @@ import submitHandler, {
   MAX_BLOB_CSV_BYTES,
   submitPrivateBlob,
 } from "../api/content-ops/deflection/submit.js";
+import zendeskExportSubmitHandler from "../api/content-ops/deflection/zendesk-export-submit.js";
 
 const SUPPORT_PLATFORMS = new Set(["zendesk", "intercom", "help_scout", "other"]);
 const IMPORTER_MODES = new Set(["csv", "full_thread"]);
@@ -41,6 +42,9 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
     jsonFile: clean(sourceEnv.ATLAS_DEFLECTION_SUBMIT_JSON_FILE),
     importerMode: clean(sourceEnv.ATLAS_DEFLECTION_IMPORTER_MODE) || "csv",
     supportPlatform: clean(sourceEnv.ATLAS_DEFLECTION_SUPPORT_PLATFORM) || "zendesk",
+    zendeskApi: clean(sourceEnv.ATLAS_DEFLECTION_ZENDESK_API_SMOKE) === "1",
+    zendeskExportAccessToken: clean(sourceEnv.ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN),
+    startTime: clean(sourceEnv.ATLAS_DEFLECTION_ZENDESK_EXPORT_START_TIME) || "0",
     companyName: clean(sourceEnv.ATLAS_DEFLECTION_COMPANY_NAME) || "Atlas Smoke Co.",
     contactEmail: clean(sourceEnv.ATLAS_DEFLECTION_CONTACT_EMAIL) || "smoke@example.com",
     limit: clean(sourceEnv.ATLAS_DEFLECTION_LIMIT) || "1000",
@@ -59,6 +63,8 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
       options.preflightOnly = true;
     } else if (arg === "--route-handler") {
       options.routeHandler = true;
+    } else if (arg === "--zendesk-api") {
+      options.zendeskApi = true;
     } else if (arg.startsWith("--")) {
       const key = arg.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
       const value = argv[index + 1];
@@ -72,6 +78,7 @@ function parseArgs(argv = process.argv.slice(2), sourceEnv = process.env) {
 
   options.timeoutMs = Number.parseInt(String(options.timeoutMs), 10);
   options.limit = String(options.limit);
+  options.startTime = String(options.startTime);
   options.importerMode = clean(options.importerMode) || "csv";
   return options;
 }
@@ -102,11 +109,32 @@ function validationErrors(options) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     errors.push("--limit must be between 1 and 1000");
   }
+  const startTimeText = clean(options.startTime) || "0";
+  if (options.zendeskApi && !/^\d+$/.test(startTimeText)) {
+    errors.push("--start-time must be a non-negative integer");
+  }
   if (!Number.isInteger(options.timeoutMs) || options.timeoutMs <= 0) {
     errors.push("--timeout-ms must be a positive integer");
   }
   if (clean(options.blobPathname) && !clean(options.blobToken)) {
     errors.push("BLOB_READ_WRITE_TOKEN or --blob-token is required with --blob-pathname");
+  }
+  if (options.zendeskApi && !clean(options.blobToken)) {
+    errors.push("BLOB_READ_WRITE_TOKEN or --blob-token is required with --zendesk-api");
+  }
+  if (options.zendeskApi && !clean(options.zendeskExportAccessToken)) {
+    errors.push(
+      "ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN or --zendesk-export-access-token is required with --zendesk-api",
+    );
+  }
+  if (options.zendeskApi && options.routeHandler) {
+    errors.push("use either --zendesk-api or --route-handler, not both");
+  }
+  if (options.zendeskApi && clean(options.blobPathname)) {
+    errors.push("--zendesk-api cannot use --blob-pathname");
+  }
+  if (options.zendeskApi && (clean(options.csvFile) || clean(options.jsonFile))) {
+    errors.push("--zendesk-api cannot use local fixture files");
   }
   if (options.routeHandler && !clean(options.blobPathname)) {
     errors.push("--route-handler requires --blob-pathname");
@@ -222,6 +250,7 @@ async function withRouteEnv(options, fn) {
     ATLAS_TOKEN: "",
     ATLAS_ACCOUNT_ID: clean(options.accountId),
     BLOB_READ_WRITE_TOKEN: clean(options.blobToken),
+    ATLAS_DEFLECTION_ZENDESK_EXPORT_ACCESS_TOKEN: clean(options.zendeskExportAccessToken),
     ATLAS_PROXY_TIMEOUT_MS: String(options.timeoutMs),
   };
   const previous = {};
@@ -292,6 +321,65 @@ async function runRouteHandlerSmoke(options, handlerImpl = submitHandler) {
   return projected;
 }
 
+function zendeskApiPayloadFromOptions(options) {
+  return {
+    company_name: clean(options.companyName),
+    contact_email: clean(options.contactEmail),
+    limit: clean(options.limit),
+    start_time: clean(options.startTime) || "0",
+  };
+}
+
+function zendeskApiResultPayload(statusCode, payload, options) {
+  const ok = statusCode >= 200 && statusCode < 300 && Boolean(payload?.request_id);
+  return {
+    ok,
+    source_mode: "portfolio_zendesk_api_route",
+    statusCode,
+    request_id: payload?.request_id,
+    account_id: payload?.account_id,
+    result_path: payload?.result_path,
+    error: ok ? undefined : clean(payload?.error) || "portfolio_zendesk_api_route_failed",
+    atlas_status: payload?.atlas_status,
+    base_host: URL.canParse(options.baseUrl) ? new URL(options.baseUrl).host : "",
+  };
+}
+
+async function runZendeskApiRouteHandlerSmoke(
+  options,
+  handlerImpl = zendeskExportSubmitHandler,
+) {
+  const res = mockRouteResponse();
+  const req = {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "authorization": `Bearer ${clean(options.zendeskExportAccessToken)}`,
+    },
+    body: JSON.stringify(zendeskApiPayloadFromOptions(options)),
+  };
+  await withRouteEnv(options, async () => {
+    await handlerImpl(req, res);
+  });
+  let payload = {};
+  try {
+    payload = res.body ? JSON.parse(res.body) : {};
+  } catch {
+    return {
+      ok: false,
+      source_mode: "portfolio_zendesk_api_route",
+      statusCode: res.statusCode,
+      error: "portfolio_zendesk_api_route_invalid_json",
+      base_host: URL.canParse(options.baseUrl) ? new URL(options.baseUrl).host : "",
+    };
+  }
+  const projected = zendeskApiResultPayload(res.statusCode, payload, options);
+  if (projected.ok && !REQUEST_ID_RE.test(clean(projected.request_id))) {
+    return { ...projected, ok: false, error: "invalid_request_id" };
+  }
+  return projected;
+}
+
 async function runSubmitSmoke(options) {
   const errors = validationErrors(options);
   if (errors.length > 0) {
@@ -301,6 +389,8 @@ async function runSubmitSmoke(options) {
   const isFullThread = clean(options.importerMode) === "full_thread";
   const sourceMode = options.routeHandler
     ? "portfolio_submit_route"
+    : options.zendeskApi
+      ? "portfolio_zendesk_api_route"
     : clean(options.blobPathname)
       ? "private_blob"
       : isFullThread
@@ -311,6 +401,9 @@ async function runSubmitSmoke(options) {
   }
   if (options.routeHandler) {
     return runRouteHandlerSmoke(options);
+  }
+  if (options.zendeskApi) {
+    return runZendeskApiRouteHandlerSmoke(options);
   }
 
   const payload = {
@@ -389,4 +482,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
     });
 }
 
-export { parseArgs, runRouteHandlerSmoke, runSubmitSmoke, validationErrors };
+export {
+  parseArgs,
+  runRouteHandlerSmoke,
+  runSubmitSmoke,
+  runZendeskApiRouteHandlerSmoke,
+  validationErrors,
+};
