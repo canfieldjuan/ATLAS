@@ -380,10 +380,48 @@ async def test_deflection_submit_accepts_zendesk_full_thread_blob(
     assert payload["input_provider"]["warnings"] == []
     assert "Internal note" not in json.dumps(payload)
     assert "A member of the support team will get back to you" not in json.dumps(payload)
-    assert payload["steps"][0]["result"]["full_report"] == {
+    gated_result = payload["steps"][0]["result"]
+    assert gated_result["full_report"] == {
         "status": "locked",
         "reason": "payment_required",
     }
+    assert "markdown" not in str(gated_result)
+
+    artifact = _route(router, "/ops/deflection-reports/{request_id}/artifact", "GET")
+    with pytest.raises(api_module.HTTPException) as locked:
+        await artifact.endpoint(request_id=payload["request_id"])
+    assert locked.value.status_code == 403
+
+    paid = _route(router, "/ops/deflection-reports/{request_id}/paid", "POST")
+    assert await paid.endpoint(
+        payload=api_module.DeflectionReportPaidModel(
+            payment_reference="checkout-session:zendesk-full-thread"
+        ),
+        request_id=payload["request_id"],
+    ) == {"request_id": payload["request_id"], "paid": True}
+
+    artifact_payload = await artifact.endpoint(request_id=payload["request_id"])
+    summary = artifact_payload["summary"]
+    assert summary["drafted_answer_count"] == 1
+    assert summary["support_ticket_resolution_evidence_present"] is True
+    assert summary["support_ticket_resolution_evidence_count"] == 1
+    assert summary["no_proven_answer_count"] == 0
+    assert artifact_payload["faq_result"]["items"][0]["answer_evidence_status"] == (
+        "resolution_evidence"
+    )
+    assert list(artifact_payload["faq_result"]["items"][0]["source_ids"]) == ["2"]
+    assert "duplicate billing event and refunded the extra charge" in (
+        artifact_payload["markdown"]
+    )
+    assert "Internal note" not in json.dumps(artifact_payload)
+    assert "A member of the support team will get back to you" not in json.dumps(
+        artifact_payload
+    )
+    assert "We sent the standard resolution steps" not in artifact_payload["markdown"]
+    assert "This is still broken after trying the steps" not in artifact_payload[
+        "markdown"
+    ]
+    assert "lead@acme.example" not in json.dumps(artifact_payload)
 
 
 @pytest.mark.asyncio
