@@ -330,11 +330,12 @@ def _support_tax_section(
         "## Support Tax Confirmation",
         "",
         (
-            f"This report found {_count(repeat_ticket_count)} repeat-ticket hits across "
-            f"{_count(_int(summary.get('generated')))} ranked questions. At the "
+            f"This report found {_count(repeat_ticket_count)} question-level "
+            f"repeat tickets across {_count(_int(summary.get('generated')))} "
+            "ranked questions. At the "
             f"Gartner {_ASSISTED_CONTACT_COST_LABEL} assisted-contact benchmark, "
-            f"that uploaded work sizes to about {_format_money(batch_cost)} of "
-            "assisted-contact handling."
+            "that repeated-question work sizes to about "
+            f"{_format_money(batch_cost)} of assisted-contact handling."
         ),
     ]
     if non_repeat_ticket_count:
@@ -378,7 +379,7 @@ def _support_tax_section(
         ),
         "",
         (
-            "The full unlocked report below gives you every ranked repeat question, "
+            "The full unlocked report below gives you every ranked question, "
             "the estimated support cost by question, publishable help-center copy "
             "where your uploaded resolutions prove the answer, the no-proven-answer "
             "roadmap, and the complete evidence appendix."

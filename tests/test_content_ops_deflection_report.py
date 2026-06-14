@@ -205,7 +205,10 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     appendix = markdown.split("## Evidence Appendix", 1)[1]
 
     assert markdown.startswith("# Support Ticket Deflection Report\n\n## Support Tax Confirmation")
-    assert "8 repeat-ticket hits across 2 ranked questions" in markdown
+    assert "8 question-level repeat tickets across 2 ranked questions" in markdown
+    assert "repeat-ticket hits" not in markdown
+    assert "ranked repeat questions" not in markdown
+    assert "every ranked repeat question" not in markdown
     assert "Gartner $13.50 assisted-contact benchmark" in markdown
     assert "about $108 of assisted-contact handling" in markdown
     assert "2026-05-01 to 2026-05-15 (15 days)" in markdown
@@ -258,7 +261,9 @@ def test_deflection_report_uses_unknown_window_cost_fallback_without_inference()
 
     markdown = build_deflection_report_artifact(result).markdown
 
-    assert "2 repeat-ticket hits across 1 ranked questions" in markdown
+    assert "2 question-level repeat tickets across 1 ranked questions" in markdown
+    assert "repeat-ticket hits" not in markdown
+    assert "ranked repeat questions" not in markdown
     assert "about $27 of assisted-contact handling" in markdown
     assert "did not receive a complete source-date window" in markdown
     assert "does not infer a monthly or annual reporting period" in markdown

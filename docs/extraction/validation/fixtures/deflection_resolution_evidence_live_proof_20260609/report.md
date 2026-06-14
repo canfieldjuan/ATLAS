@@ -2,13 +2,13 @@
 
 ## Support Tax Confirmation
 
-This report found 12 repeat-ticket hits across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that uploaded work sizes to about $162 of assisted-contact handling.
+This report found 12 question-level repeat tickets across 4 ranked questions. At the Gartner $13.50 assisted-contact benchmark, that repeated-question work sizes to about $162 of assisted-contact handling.
 
 The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured daily pace, that is about $8,447 over 12 months.
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
-The full unlocked report below gives you every ranked repeat question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and the complete evidence appendix.
+The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and the complete evidence appendix.
 
 - Publishable answers drafted from proven resolutions: 2
 - Questions still needing an approved resolution: 2

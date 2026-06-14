@@ -180,7 +180,7 @@ export default function FaqDeflectionResult() {
     const { summary } = snapshotState.snapshot;
     return [
       { label: "Questions found", value: summary.generated },
-      { label: "Repeat-ticket hits", value: summary.repeat_ticket_count },
+      { label: "Question-level repeat tickets", value: summary.repeat_ticket_count },
       { label: "Evidence-backed answers", value: summary.drafted_answer_count },
       { label: "Needs support proof", value: summary.no_proven_answer_count },
     ];
@@ -214,10 +214,10 @@ export default function FaqDeflectionResult() {
     const light = count < LIGHT_REPEAT_TICKET_THRESHOLD;
     return {
       light,
-      label: count > 0 ? `${formatCount(count)} repeat-ticket hits` : "No repeated clusters yet",
+      label: count > 0 ? `${formatCount(count)} question-level repeat tickets` : "No repeated questions yet",
       copy: light
-        ? "This export is light on repeat volume. Review the free snapshot before paying for the full report."
-        : "This export has enough repeated ticket volume for a substantial paid report preview.",
+        ? "This export is light on question-level repeat volume. Review the free snapshot before paying for the full report."
+        : "This export has enough question-level repeat volume for a substantial paid report preview.",
     };
   }, [snapshotState]);
 
@@ -331,7 +331,7 @@ export default function FaqDeflectionResult() {
                 data-repeat-volume-light={repeatVolume.light ? "true" : "false"}
               >
                 <div>
-                  <p className="text-sm text-surface-200/70">Repeat-ticket volume</p>
+                  <p className="text-sm text-surface-200/70">Question-level repeat volume</p>
                   <p
                     className={
                       repeatVolume.light
