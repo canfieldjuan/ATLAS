@@ -219,6 +219,12 @@ deflection metadata, and then confirms the artifact route returns the full paid
 report. The event id and Checkout session id are generated when omitted, so a
 fresh run does not reuse Stripe webhook idempotency keys.
 
+If the webhook result records status `400` with `error_detail` equal to
+`Invalid signature`, treat that as deployed Stripe signing-secret drift. Do not
+bypass verification or retry with guessed secrets. Align the deployed
+`ATLAS_SAAS_STRIPE_WEBHOOK_SECRET` with the secret used by the smoke, or rotate
+the deployed value to include the new secret, then rerun this smoke.
+
 To also prove the deployed duplicate-event guard, add `--replay-webhook`. That
 posts the same signed event a second time and requires the webhook response to
 return `{"status": "already_processed"}` before the final paid artifact fetch.
