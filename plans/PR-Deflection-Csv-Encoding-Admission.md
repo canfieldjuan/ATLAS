@@ -4,6 +4,8 @@
 
 Issue #1455 is a P0 launch-readiness parser gap: support-ticket CSV ingestion falls back from UTF-8 to CP1252 with `errors="replace"`, so common help-desk exports can silently become mojibake instead of producing trustworthy rows or a visible ingestion warning. The deflection paid funnel now routes CSV uploads through the shared `_load_csv_dict_rows` loader, so hardening that one boundary protects both standalone source loading and `/deflection-reports/submit`.
 
+Diff budget note: post-review boundary coverage pushed the plan estimate over the 400 LOC soft cap. The overage is the focused decoder/test surface for the same byte-admission boundary: BOM-less UTF-16 inference, clean legacy marker text, and warned UTF-8 recovery are coupled tightly enough that splitting them would leave #1455 partially fixed.
+
 ## Scope (this PR)
 
 Ownership lane: content-ops/deflection-launch-readiness
@@ -39,7 +41,7 @@ Slice phase: Vertical slice
 
 ## Mechanism
 
-`_read_csv_text` becomes a decoder boundary that returns `(text, warnings)`. It first honors explicit BOMs, then tries strict UTF-8, with a NUL-pattern check for UTF-16 files missing a BOM. If UTF-8 fails it compares strict CP1252/Latin-1 fallback with a warning-surfaced UTF-8 recovery; when the legacy fallback clearly looks like UTF-8 mojibake, it preserves the UTF-8 text and emits a replacement-character warning instead of silently mojibaking the whole file. After decoding, the helper counts Unicode replacement characters and emits a warning when the ratio is high. The existing `_load_csv_dict_rows` parser appends those decode warnings to the existing leading-row warnings before returning rows.
+`_read_csv_text` becomes a decoder boundary that returns `(text, warnings)`. It first honors explicit BOMs, then tries strict UTF-8, with a NUL-pattern check for UTF-16 files missing a BOM. If UTF-8 fails, the error path now runs the same raw-byte NUL inference before trying legacy encodings, so BOM-less UTF-16 with non-ASCII text is still admitted. It then compares strict CP1252/Latin-1 fallback with a warning-surfaced UTF-8 recovery; the recovery is selected only when mojibake evidence in the legacy decode outnumbers the replacements the recovery would insert, preserving clean legacy exports that contain legitimate U+00C3/U+00C2 text. Any selected UTF-8 recovery that inserts replacement characters emits a warning, even below the high-ratio threshold used for literal replacement characters already present in valid UTF-8 input. The existing `_load_csv_dict_rows` parser appends those decode warnings to the existing leading-row warnings before returning rows.
 
 ## Intentional
 
@@ -59,19 +61,19 @@ Parked hardening: none.
 ## Verification
 
 - `python -m py_compile` on `extracted_content_pipeline/campaign_customer_data.py`, `tests/test_extracted_campaign_source_adapters.py`, and `tests/test_extracted_content_deflection_submit.py` -- passed.
-- `pytest tests/test_extracted_campaign_source_adapters.py -q -k "utf16 or legacy or replacement or utf8 or semicolon or multiline"` -- 7 passed, 69 deselected.
+- `pytest tests/test_extracted_campaign_source_adapters.py -q -k "utf16 or legacy or marker or replacement or utf8 or semicolon or multiline"` -- 11 passed, 69 deselected.
 - `pytest tests/test_extracted_content_deflection_submit.py -q -k "utf16 or bom or embedded_quotes or metadata_header"` -- 4 passed, 50 deselected.
-- `pytest tests/test_extracted_campaign_source_adapters.py -q` -- 76 passed.
+- `pytest tests/test_extracted_campaign_source_adapters.py -q` -- 80 passed.
 - `pytest tests/test_extracted_content_deflection_submit.py -q` -- 54 passed.
 - `bash` + `scripts/check_ascii_python.sh` -- passed.
-- `bash` + `scripts/run_extracted_pipeline_checks.sh` -- 4121 passed, 10 skipped, 1 warning.
+- `bash` + `scripts/run_extracted_pipeline_checks.sh` -- 4125 passed, 10 skipped, 1 warning.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `extracted_content_pipeline/campaign_customer_data.py` | 157 |
-| `plans/PR-Deflection-Csv-Encoding-Admission.md` | 77 |
-| `tests/test_extracted_campaign_source_adapters.py` | 109 |
+| `extracted_content_pipeline/campaign_customer_data.py` | 174 |
+| `plans/PR-Deflection-Csv-Encoding-Admission.md` | 79 |
+| `tests/test_extracted_campaign_source_adapters.py` | 169 |
 | `tests/test_extracted_content_deflection_submit.py` | 21 |
-| **Total** | **364** |
+| **Total** | **443** |

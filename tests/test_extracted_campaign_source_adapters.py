@@ -292,6 +292,32 @@ def test_load_source_rows_from_utf16_bom_csv_decodes_support_ticket_export(
     }]
 
 
+@pytest.mark.parametrize("encoding", ("utf-16-le", "utf-16-be"))
+def test_load_source_rows_infers_bomless_utf16_after_utf8_failure(
+    tmp_path: Path,
+    encoding: str,
+) -> None:
+    path = tmp_path / f"support_tickets_{encoding}.csv"
+    message = "Le caf\u00e9 export failed."
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Export help,{message}\n"
+    ).encode(encoding))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
+    assert [warning.code for warning in warnings] == ["csv_encoding_inferred"]
+    assert encoding in warnings[0].message
+
+
 @pytest.mark.parametrize(
     ("encoding", "message"),
     (
@@ -323,6 +349,37 @@ def test_load_source_rows_from_legacy_csv_decodes_clean_text_without_warning(
     }]
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "\u00c3lvaro can\u2019t export reports.",
+        "\u00c2ngela can\u2019t export reports.",
+    ),
+)
+def test_load_source_rows_prefers_clean_cp1252_marker_text_over_utf8_recovery(
+    tmp_path: Path,
+    message: str,
+) -> None:
+    path = tmp_path / "support_tickets_cp1252_marker.csv"
+    path.write_bytes((
+        "ticket_id,subject,message\n"
+        f"ticket-1,Export help,{message}\n"
+    ).encode("cp1252"))
+
+    rows, warnings = load_source_rows_with_warnings_from_file(
+        path,
+        file_format="csv",
+    )
+
+    assert warnings == ()
+    assert rows == [{
+        "ticket_id": "ticket-1",
+        "subject": "Export help",
+        "message": message,
+    }]
+    assert "\ufffd" not in rows[0]["message"]
+
+
 def test_load_source_rows_warns_on_high_replacement_character_ratio(
     tmp_path: Path,
 ) -> None:
@@ -352,7 +409,10 @@ def test_load_source_rows_prefers_warned_utf8_recovery_over_cp1252_mojibake(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "support_tickets_truncated_utf8.csv"
-    message = "Café export failed — cannot save"
+    message = (
+        "Caf\u00e9 export failed \u2014 cannot save "
+        + "the monthly attribution report " * 20
+    )
     path.write_bytes(
         (
             "ticket_id,subject,message\n"
