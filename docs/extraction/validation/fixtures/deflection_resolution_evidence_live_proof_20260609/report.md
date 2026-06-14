@@ -36,6 +36,22 @@ Use these source-backed phrases as help-center headings, internal-search synonym
 | 3 | Where do I upload the new SSO certificate before it expires? | 3 | $41 | 3 | no proven answer yet | 3 source tickets |
 | 4 | Why did the CRM integration pause after the field mapping changed? | 2 | $27 | 2 | no proven answer yet | 2 source tickets |
 
+## Resolution Outcome Diagnostics
+
+These status and CSAT signals flag answers that may need review. They do not prove a publishable answer; only uploaded resolution evidence can do that.
+
+- Tickets with outcome diagnostics: 12
+- Tickets with reopened or negative-CSAT risk: 0
+- Reopened tickets: 0
+- Negative CSAT tickets: 0
+
+| Customer question | Status mix | Reopened | Negative CSAT | Guidance |
+|---|---|---:|---:|---|
+| How do I export attribution reports before our board meeting? | resolved: 4 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+| Where can I download invoices for last quarter? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+| Where do I upload the new SSO certificate before it expires? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+| Why did the CRM integration pause after the field mapping changed? | resolved: 2 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
+
 ## Publishable Help-Center Copy From Proven Resolutions
 
 ### 1. How do I export attribution reports before our board meeting?

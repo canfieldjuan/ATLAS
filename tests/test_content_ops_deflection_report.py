@@ -15,6 +15,9 @@ from extracted_content_pipeline.deflection_report_access import (
     InMemoryDeflectionReportArtifactStore,
     PostgresDeflectionReportArtifactStore,
 )
+from extracted_content_pipeline.support_ticket_input_package import (
+    build_support_ticket_input_package,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownResult,
     build_ticket_faq_markdown,
@@ -531,6 +534,239 @@ def test_deflection_snapshot_omits_date_window_when_source_dates_are_partial() -
     assert "source_date_start" not in snapshot["summary"]
     assert "source_date_end" not in snapshot["summary"]
     assert "source_window_days" not in snapshot["summary"]
+
+
+def test_deflection_report_surfaces_outcome_risk_diagnostics() -> None:
+    package = build_support_ticket_input_package(
+        [
+            {
+                "source_id": "zd-refund-1",
+                "source_type": "support_ticket",
+                "source_title": "Duplicate charge refund",
+                "description": "How do I get a duplicate charge refunded?",
+                "resolution_text": (
+                    "Open Billing > Payments, select the duplicate charge, "
+                    "choose Refund, enter the customer note, and confirm the refund."
+                ),
+                "ticket_status": "resolved",
+                "csat": "good",
+            },
+            {
+                "source_id": "zd-refund-2",
+                "source_type": "support_ticket",
+                "source_title": "Duplicate charge reopened",
+                "description": "How do I get a duplicate charge refunded?",
+                "resolution_text": (
+                    "Open Billing > Payments, select the duplicate charge, "
+                    "choose Refund, enter the customer note, and confirm the refund."
+                ),
+                "ticket_status": "reopened",
+                "csat": "bad",
+            },
+            {
+                "source_id": "zd-refund-3",
+                "source_type": "support_ticket",
+                "source_title": "Duplicate charge low CSAT",
+                "description": "How do I get a duplicate charge refunded?",
+                "resolution_text": (
+                    "Open Billing > Payments, select the duplicate charge, "
+                    "choose Refund, enter the customer note, and confirm the refund."
+                ),
+                "ticket_status": "resolved",
+                "csat": "2",
+            },
+        ],
+    )
+    result = build_ticket_faq_markdown(
+        package.inputs["source_material"],
+        max_items=1,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    item = artifact.faq_result.items[0]
+    diagnostics = item["outcome_diagnostics"]
+    snapshot = build_deflection_snapshot(artifact).as_dict()
+    encoded_snapshot = json.dumps(snapshot, sort_keys=True)
+
+    assert item["answer_evidence_status"] == "resolution_evidence"
+    assert diagnostics == {
+        "csat_present_count": 3,
+        "csat_score_average": 2.0,
+        "diagnostic_ticket_count": 3,
+        "negative_csat_ticket_count": 2,
+        "outcome_risk_ticket_count": 2,
+        "reopened_ticket_count": 1,
+        "ticket_status_summary": {"reopened": 1, "resolved": 2},
+    }
+    assert artifact.summary["outcome_diagnostics_present"] is True
+    assert artifact.summary["outcome_diagnostic_ticket_count"] == 3
+    assert artifact.summary["outcome_risk_ticket_count"] == 2
+    assert artifact.summary["reopened_ticket_count"] == 1
+    assert artifact.summary["negative_csat_ticket_count"] == 2
+    assert artifact.summary["csat_present_count"] == 3
+    assert artifact.summary["ticket_status_summary"] == {
+        "reopened": 1,
+        "resolved": 2,
+    }
+    assert "## Resolution Outcome Diagnostics" in artifact.markdown
+    assert "They do not prove a publishable answer" in artifact.markdown
+    assert "Tickets with reopened or negative-CSAT risk: 2" in artifact.markdown
+    assert "reopened: 1, resolved: 2" in artifact.markdown
+    assert "Review the answer before publishing because at least one ticket reopened." in (
+        artifact.markdown
+    )
+    assert "outcome" not in encoded_snapshot
+    assert "csat" not in encoded_snapshot.lower()
+
+
+def test_outcome_diagnostics_do_not_create_publishable_answers_without_resolution() -> None:
+    package = build_support_ticket_input_package(
+        [
+            {
+                "source_id": "zd-export-1",
+                "source_type": "support_ticket",
+                "source_title": "Export permission reopened",
+                "description": "What permission do I need for account exports?",
+                "ticket_status": "reopened",
+                "csat": "bad",
+            },
+            {
+                "source_id": "zd-export-2",
+                "source_type": "support_ticket",
+                "source_title": "Export permission low CSAT",
+                "description": "What permission do I need for account exports?",
+                "ticket_status": "resolved",
+                "csat": "1",
+            },
+        ],
+    )
+    result = build_ticket_faq_markdown(
+        package.inputs["source_material"],
+        max_items=1,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    item = artifact.faq_result.items[0]
+    drafted = artifact.markdown.split(
+        "## Publishable Help-Center Copy From Proven Resolutions",
+        1,
+    )[1].split("## No Proven Answer Yet", 1)[0]
+    no_proven = artifact.markdown.split("## No Proven Answer Yet", 1)[1].split(
+        "## Vocabulary Gaps",
+        1,
+    )[0]
+
+    assert item["answer_evidence_status"] == "draft_needs_review"
+    assert item["outcome_diagnostics"]["outcome_risk_ticket_count"] == 2
+    assert artifact.summary["drafted_answer_count"] == 0
+    assert artifact.summary["no_proven_answer_count"] == 1
+    assert "What permission do I need for account exports?" not in drafted
+    assert "What permission do I need for account exports?" in no_proven
+    assert "No verified support resolution was present" in no_proven
+    assert "## Resolution Outcome Diagnostics" in artifact.markdown
+    assert "They do not prove a publishable answer" in artifact.markdown
+
+
+def test_outcome_diagnostics_count_duplicate_evidence_by_source_ticket() -> None:
+    resolution_text = (
+        "Open Billing > Payments, select the duplicate charge, choose Refund, "
+        "enter the customer note, and confirm the refund."
+    )
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "zd-duplicate-1",
+                "source_type": "support_ticket",
+                "source_title": "Duplicate charge thread",
+                "support_ticket_cluster": "duplicate charge refund",
+                "evidence": [
+                    {
+                        "source_id": "zd-duplicate-1",
+                        "source_type": "support_ticket",
+                        "source_title": "Duplicate charge thread",
+                        "text": "How do I get the duplicate charge refunded?",
+                        "resolution_text": resolution_text,
+                        "ticket_status_state": "reopened",
+                        "csat": "bad",
+                        "csat_score": 1,
+                    },
+                    {
+                        "source_id": "zd-duplicate-1",
+                        "source_type": "support_ticket",
+                        "source_title": "Duplicate charge thread",
+                        "text": "The same duplicate charge still needs a refund.",
+                        "resolution_text": resolution_text,
+                        "ticket_status_state": "reopened",
+                        "csat": "bad",
+                        "csat_score": 1,
+                    },
+                ],
+            },
+        ],
+        max_items=1,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    diagnostics = artifact.faq_result.items[0]["outcome_diagnostics"]
+
+    assert diagnostics == {
+        "csat_present_count": 1,
+        "csat_score_average": 1.0,
+        "diagnostic_ticket_count": 1,
+        "negative_csat_ticket_count": 1,
+        "outcome_risk_ticket_count": 1,
+        "reopened_ticket_count": 1,
+        "ticket_status_summary": {"reopened": 1},
+    }
+    assert artifact.summary["outcome_diagnostic_ticket_count"] == 1
+    assert artifact.summary["reopened_ticket_count"] == 1
+    assert artifact.summary["negative_csat_ticket_count"] == 1
+    assert "Tickets with outcome diagnostics: 1" in artifact.markdown
+    assert "Reopened tickets: 1" in artifact.markdown
+
+
+def test_outcome_diagnostics_normalize_direct_raw_status_and_csat() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_id": "direct-1",
+                "source_type": "support_ticket",
+                "source_title": "Refund reopened",
+                "text": "How do I get a duplicate charge refunded?",
+                "support_ticket_cluster": "duplicate charge refund",
+                "ticket_status": "reopened",
+                "csat": "bad",
+            },
+            {
+                "source_id": "direct-2",
+                "source_type": "support_ticket",
+                "source_title": "Refund resolved",
+                "text": "How do I get a duplicate charge refunded?",
+                "support_ticket_cluster": "duplicate charge refund",
+                "status": "Closed",
+                "satisfaction_rating": "3",
+            },
+        ],
+        max_items=1,
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    diagnostics = artifact.faq_result.items[0]["outcome_diagnostics"]
+
+    assert artifact.faq_result.items[0]["answer_evidence_status"] == "draft_needs_review"
+    assert diagnostics == {
+        "csat_present_count": 2,
+        "csat_score_average": 3.0,
+        "diagnostic_ticket_count": 2,
+        "negative_csat_ticket_count": 1,
+        "outcome_risk_ticket_count": 1,
+        "reopened_ticket_count": 1,
+        "ticket_status_summary": {"reopened": 1, "resolved": 1},
+    }
+    assert artifact.summary["outcome_diagnostic_ticket_count"] == 2
+    assert artifact.summary["outcome_risk_ticket_count"] == 1
+    assert "Tickets with reopened or negative-CSAT risk: 1" in artifact.markdown
+    assert "reopened: 1, resolved: 1" in artifact.markdown
 
 
 def test_deflection_snapshot_omits_contradictory_summary_date_window() -> None:
