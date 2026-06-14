@@ -35,6 +35,10 @@ Slice phase: Functional validation
 4. Keep `tests/fixtures/zendesk_full_thread_seed_sample.json` (4 rows) as a tiny
    smoke only.
 5. Unit tests for the sanitizer (pure, no live credentials).
+6. Fix the live export client (`support_ticket_zendesk_export.py`): the
+   incremental cursor endpoint rejects `page[size]` (Zendesk 400), so drop it
+   from the tickets URL. Found running the live dry-run; the existing test had
+   encoded the buggy URL, so it is corrected and a regression guard added.
 
 ### Review Contract
 
@@ -55,11 +59,12 @@ Slice phase: Functional validation
   - [ ] The 4-row fixture stays a tiny smoke; this corpus does not replace it.
   - [ ] The new test is enrolled in `run_extracted_pipeline_checks.sh` and the
         extracted-pipeline workflow path filters (script + test paths).
-- Affected surfaces: validation scripts/fixtures/docs + CI enrollment only. No
-  runtime, generation, clustering, Stripe, or portfolio change; the importer is
-  reused unchanged (confirmed by round-trip, not edited).
+- Affected surfaces: validation scripts/fixtures/docs + CI enrollment + the
+  Zendesk export client URL builder. No runtime generation, clustering, Stripe,
+  or portfolio change; the importer is reused unchanged (confirmed by round-trip,
+  not edited).
 - Risk areas: PII/secret leakage into a committed artifact, importer role-split
-  breakage, source-role drift, collision with #1565.
+  breakage, live export request shape, source-role drift, collision with #1565.
 - Reviewer rules triggered: R1, R2, R3, R10, R14.
 
 ### Files touched
@@ -68,6 +73,8 @@ Slice phase: Functional validation
 - `tests/test_capture_zendesk_product_proof_corpus.py`
 - `scripts/run_extracted_pipeline_checks.sh` (enroll the new test)
 - `.github/workflows/extracted_pipeline_checks.yml` (path filters for the new script + test)
+- `extracted_content_pipeline/support_ticket_zendesk_export.py` (drop page[size])
+- `tests/test_extracted_support_ticket_zendesk_export.py` (correct URL + regression)
 - `docs/extraction/validation/deflection_zendesk_product_proof_corpus.md`
 - `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md`
 
@@ -137,10 +144,17 @@ Parked hardening: none.
   customer/agent split survives sanitization).
 - python -m py_compile scripts/capture_zendesk_product_proof_corpus.py
   tests/test_capture_zendesk_product_proof_corpus.py - passed.
+- pytest tests/test_extracted_support_ticket_zendesk_export.py - 4 passed
+  (existing cases corrected off the buggy URL + a regression that the
+  incremental URL carries no page[size]).
 - python scripts/audit_extracted_pipeline_ci_enrollment.py - OK.
-- ASCII check - passed (0 non-ASCII in script + test).
-- Post-export (operator + reviewer): `--dry-run` summary, sanitization spot-check
-  of the committed fixture, funnel run for qualitative output.
+- ASCII check - passed (0 non-ASCII in all touched files).
+- Live read-only `--dry-run` against `finetunelab` after the export fix:
+  50 tickets / 126 comments / 4 with private notes (hit the default limit;
+  nothing written). Confirms auth + fetch + sanitize end-to-end.
+- Post-export (operator + reviewer): `--out` run with a higher `--limit`,
+  sanitization spot-check of the committed fixture, funnel run for qualitative
+  output.
 
 ## Estimated diff size
 
@@ -150,9 +164,11 @@ Parked hardening: none.
 | `tests/test_capture_zendesk_product_proof_corpus.py` | 185 |
 | `scripts/run_extracted_pipeline_checks.sh` | 1 |
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
+| `extracted_content_pipeline/support_ticket_zendesk_export.py` | 6 |
+| `tests/test_extracted_support_ticket_zendesk_export.py` | 18 |
 | `docs/extraction/validation/deflection_zendesk_product_proof_corpus.md` | 45 |
-| `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md` | 145 |
-| **Total** | **590** |
+| `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md` | 160 |
+| **Total** | **630** |
 
 Over the 400 soft cap because the sanitizer needs a pure implementation, role
 preservation, and a real test matrix (PII classes, whitelist projection,

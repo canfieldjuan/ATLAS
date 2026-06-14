@@ -42,11 +42,28 @@ def _credentials(**overrides: str) -> ZendeskMacroCredentials:
 
 
 def _tickets_url(limit: int) -> str:
-    return f"{BASE_URL}/api/v2/incremental/tickets/cursor?start_time=0&page%5Bsize%5D={limit}"
+    # The incremental cursor endpoint carries no page[size] -- the previous
+    # value here masked a Zendesk 400. `limit` is accepted only so existing call
+    # sites stay unchanged; the URL no longer depends on it.
+    return f"{BASE_URL}/api/v2/incremental/tickets/cursor?start_time=0"
 
 
 def _comments_url(ticket_id: int | str) -> str:
     return f"{BASE_URL}/api/v2/tickets/{ticket_id}/comments"
+
+
+def test_tickets_url_omits_page_size_for_cursor_endpoint() -> None:
+    # Regression: the incremental cursor endpoint rejects page[size]
+    # (Zendesk 400 "page must be an integer"); the URL must carry only
+    # start_time. This guards the live-export bug found capturing the
+    # finetunelab product-proof corpus.
+    from extracted_content_pipeline.support_ticket_zendesk_export import (
+        _tickets_url as build_tickets_url,
+    )
+
+    url = build_tickets_url(BASE_URL, start_time=0)
+    assert url == f"{BASE_URL}/api/v2/incremental/tickets/cursor?start_time=0"
+    assert "page" not in url
 
 
 @pytest.mark.asyncio

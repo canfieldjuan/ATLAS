@@ -73,7 +73,7 @@ async def export_zendesk_full_thread_artifact(
     headers = _headers(credentials)
     client = transport or ZendeskHTTPTicketExportTransport()
     entries: list[JsonDict] = []
-    next_url = _tickets_url(base_url, start_time=start_time, limit=limit)
+    next_url = _tickets_url(base_url, start_time=start_time)
     seen_ticket_pages: set[str] = set()
     while next_url and len(entries) < limit:
         _check_page_cycle(next_url, seen_ticket_pages, "zendesk_ticket_pagination_cycle")
@@ -130,11 +130,12 @@ async def _comments_for_ticket(
     return comments
 
 
-def _tickets_url(base_url: str, *, start_time: int, limit: int) -> str:
-    query = urlencode({
-        "start_time": max(0, int(start_time)),
-        "page[size]": min(limit, MAX_ZENDESK_EXPORT_LIMIT),
-    })
+def _tickets_url(base_url: str, *, start_time: int) -> str:
+    # The incremental cursor endpoint paginates by cursor and rejects a
+    # page[size] parameter (Zendesk 400: "page must be an integer"). The export
+    # loop already caps the count via `len(entries) < limit`, so no page-size
+    # parameter belongs on this URL.
+    query = urlencode({"start_time": max(0, int(start_time))})
     return f"{base_url}/api/v2/incremental/tickets/cursor?{query}"
 
 
