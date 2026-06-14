@@ -10,6 +10,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     HARD,
     BenchmarkThresholds,
     ClaimEvidenceModelRun,
+    ClaimEvidencePromptPacket,
     ClaimEvidenceResponse,
     ClaimEvidenceResultFile,
     ClaimEvidenceRunRow,
@@ -29,6 +30,7 @@ from extracted_content_pipeline.claim_evidence_benchmark import (
     pairwise_agreements,
     render_claim_evidence_result_markdown,
     run_claim_evidence_provider,
+    run_claim_evidence_prompt_packets,
     score_model,
     validate_claim_evidence_fixture,
     write_claim_evidence_result_artifact_files,
@@ -54,6 +56,26 @@ def _response(supports: bool, confidence: int = 5) -> ClaimEvidenceResponse:
         confidence=confidence,
         reason="quote directly supports the claim",
     )
+
+
+def _packet(
+    model_id: str = "gpt",
+    triple_id: str = "easy",
+    *,
+    contract_version: str = "verify_claim_evidence.v1",
+    response_schema: object | None = None,
+) -> dict[str, object]:
+    return {
+        "model_id": model_id,
+        "triple_id": triple_id,
+        "contract_version": contract_version,
+        "prompt": f"Prompt for {triple_id}",
+        "response_schema": (
+            claim_evidence_response_json_schema()
+            if response_schema is None
+            else response_schema
+        ),
+    }
 
 
 def _passing_score(model_id: str) -> ModelScore:
@@ -690,6 +712,173 @@ def test_runner_fails_closed_on_invalid_harness_inputs() -> None:
     assert run.errors == ("row 1: triple must be ClaimEvidenceTriple",)
     assert [row.triple_id for row in run.rows] == ["valid"]
     assert run.responses_by_triple_id == {"valid": _response(True, 5)}
+
+
+def test_prompt_packet_runner_emits_importer_compatible_rows() -> None:
+    packets = (
+        _packet("claude", "easy"),
+        _packet("gpt", "hard"),
+    )
+    calls = []
+
+    def provider(packet, run_type, run_id):
+        calls.append((packet, run_type, run_id))
+        return {
+            "supports": packet.triple_id == "easy",
+            "confidence": 5,
+            "reason": "quote directly supports the judgment",
+        }
+
+    run = run_claim_evidence_prompt_packets(packets, provider)
+
+    assert run.ok is True
+    assert run.errors == ()
+    assert run.rows == (
+        {
+            "model_id": "claude",
+            "triple_id": "easy",
+            "contract_version": "verify_claim_evidence.v1",
+            "response": {
+                "supports": True,
+                "confidence": 5,
+                "reason": "quote directly supports the judgment",
+            },
+        },
+        {
+            "model_id": "gpt",
+            "triple_id": "hard",
+            "contract_version": "verify_claim_evidence.v1",
+            "response": {
+                "supports": False,
+                "confidence": 5,
+                "reason": "quote directly supports the judgment",
+            },
+        },
+    )
+    assert [(call[1], call[2]) for call in calls] == [("main", ""), ("main", "")]
+    assert isinstance(calls[0][0], ClaimEvidencePromptPacket)
+    assert calls[0][0].prompt == "Prompt for easy"
+
+
+def test_prompt_packet_runner_emits_deterministic_stability_rows() -> None:
+    packets = (_packet("gpt", "easy"),)
+
+    def provider(packet, run_type, run_id):
+        return {
+            "supports": True,
+            "confidence": 4,
+            "reason": f"{run_type} {run_id or 'main'}",
+        }
+
+    run = run_claim_evidence_prompt_packets(
+        packets,
+        provider,
+        stability_run_count=2,
+    )
+
+    assert run.ok is True
+    assert [row.get("run_type", "main") for row in run.rows] == [
+        "main",
+        "stability",
+        "stability",
+    ]
+    assert [row.get("run_id", "") for row in run.rows] == [
+        "",
+        "rerun-1",
+        "rerun-2",
+    ]
+    assert [row["response"]["reason"] for row in run.rows] == [
+        "main main",
+        "stability rerun-1",
+        "stability rerun-2",
+    ]
+
+
+def test_prompt_packet_runner_rejects_bad_packets_before_provider_calls() -> None:
+    calls = []
+
+    def provider(packet, run_type, run_id):
+        calls.append(packet)
+        return {"supports": True, "confidence": 5, "reason": "unused"}
+
+    run = run_claim_evidence_prompt_packets(
+        (
+            _packet("gpt", "easy"),
+            _packet("gpt", "easy"),
+            _packet("claude", "bad-version", contract_version="v0"),
+            _packet("claude", "empty-schema", response_schema={}),
+            _packet(
+                "sonnet",
+                "mutated-schema",
+                response_schema={
+                    **claim_evidence_response_json_schema(),
+                    "required": ["supports", "confidence"],
+                },
+            ),
+            {"model_id": "sonnet", "triple_id": "missing-schema", "prompt": "Prompt"},
+        ),
+        provider,
+    )
+
+    assert run.ok is False
+    assert run.rows == ()
+    assert run.errors == (
+        "packet row 2: duplicate packet key: gpt/easy/verify_claim_evidence.v1",
+        "packet row 3: unsupported contract_version: v0",
+        "packet row 4: response_schema does not match the canonical claim/evidence schema",
+        "packet row 5: response_schema does not match the canonical claim/evidence schema",
+        "packet row 6: contract_version missing",
+        "packet row 6: unsupported contract_version: ",
+        "packet row 6: response_schema must be an object",
+    )
+    assert calls == []
+
+
+def test_prompt_packet_runner_records_response_and_provider_failures() -> None:
+    packets = (
+        _packet("gpt", "missing-reason"),
+        _packet("gpt", "raises"),
+    )
+
+    def provider(packet, run_type, run_id):
+        if packet.triple_id == "raises":
+            raise RuntimeError("vendor timeout with sensitive details")
+        return {"supports": True, "confidence": 5, "reason": " "}
+
+    run = run_claim_evidence_prompt_packets(packets, provider)
+
+    assert run.ok is False
+    assert run.rows == ()
+    assert run.errors == (
+        "main gpt/missing-reason: response reason missing",
+        "main gpt/raises: provider error: RuntimeError",
+    )
+    assert "sensitive" not in " ".join(run.errors)
+
+
+def test_prompt_packet_runner_fails_closed_on_invalid_inputs() -> None:
+    def provider(packet, run_type, run_id):
+        return {"supports": True, "confidence": 5, "reason": "ok"}
+
+    assert run_claim_evidence_prompt_packets((), None).errors == (
+        "provider must be callable",
+    )
+    assert run_claim_evidence_prompt_packets(None, provider).errors == (
+        "packets must be a sequence",
+    )
+    assert run_claim_evidence_prompt_packets((), provider).errors == (
+        "packets missing",
+    )
+    assert run_claim_evidence_prompt_packets(
+        (_packet(),),
+        provider,
+        stability_run_count=True,
+    ).errors == ("stability_run_count must be a non-negative integer",)
+    assert run_claim_evidence_prompt_packets(
+        (_packet(),),
+        provider,
+        stability_run_count=-1,
+    ).errors == ("stability_run_count must be a non-negative integer",)
 
 
 def test_result_artifact_builds_go_payload_from_completed_runs() -> None:
