@@ -173,6 +173,78 @@ ClaimEvidenceProvider = Callable[
 ]
 
 
+@dataclass(frozen=True)
+class ClaimEvidencePromptPacket:
+    """One exported prompt/schema packet ready for provider execution."""
+
+    model_id: str
+    triple_id: str
+    contract_version: str
+    prompt: str
+    response_schema: Mapping[str, object]
+
+    @classmethod
+    def from_mapping(
+        cls, data: object
+    ) -> tuple["ClaimEvidencePromptPacket | None", tuple[str, ...]]:
+        if not isinstance(data, Mapping):
+            return None, ("packet must be an object",)
+
+        errors: list[str] = []
+        model_id = _required_text(data, "model_id")
+        triple_id = _required_text(data, "triple_id")
+        contract_version = _required_text(data, "contract_version")
+        prompt = _required_text(data, "prompt")
+        response_schema = data.get("response_schema")
+
+        for key, value in (
+            ("model_id", model_id),
+            ("triple_id", triple_id),
+            ("contract_version", contract_version),
+            ("prompt", prompt),
+        ):
+            if value is None:
+                errors.append(f"{key} missing")
+        if contract_version != VERIFY_CLAIM_EVIDENCE_CONTRACT_VERSION:
+            errors.append(f"unsupported contract_version: {contract_version or ''}")
+        if not isinstance(response_schema, Mapping):
+            errors.append("response_schema must be an object")
+        elif dict(response_schema) != claim_evidence_response_json_schema():
+            errors.append(
+                "response_schema does not match the canonical claim/evidence schema"
+            )
+        if errors:
+            return None, tuple(errors)
+
+        return (
+            cls(
+                model_id=model_id or "",
+                triple_id=triple_id or "",
+                contract_version=contract_version or "",
+                prompt=prompt or "",
+                response_schema=dict(response_schema or {}),
+            ),
+            (),
+        )
+
+
+ClaimEvidencePromptPacketProvider = Callable[
+    [ClaimEvidencePromptPacket, str, str], object
+]
+
+
+@dataclass(frozen=True)
+class ClaimEvidencePromptPacketRun:
+    """Returned response rows produced by a prompt-packet provider run."""
+
+    rows: tuple[Mapping[str, object], ...]
+    errors: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
 def claim_evidence_response_json_schema() -> dict[str, object]:
     """Return the strict JSON Schema for structured witness responses."""
 
@@ -343,6 +415,116 @@ def run_claim_evidence_provider(
         tuple(rows),
         tuple(run_errors),
     )
+
+
+def run_claim_evidence_prompt_packets(
+    packets: Sequence[object],
+    provider: object,
+    *,
+    stability_run_count: object = 0,
+) -> ClaimEvidencePromptPacketRun:
+    """Run exported prompt packets through an injected provider boundary."""
+
+    if not callable(provider):
+        return ClaimEvidencePromptPacketRun((), ("provider must be callable",))
+    if not isinstance(packets, RuntimeSequence) or isinstance(packets, (str, bytes)):
+        return ClaimEvidencePromptPacketRun((), ("packets must be a sequence",))
+    if not packets:
+        return ClaimEvidencePromptPacketRun((), ("packets missing",))
+    if (
+        not isinstance(stability_run_count, int)
+        or isinstance(stability_run_count, bool)
+        or stability_run_count < 0
+    ):
+        return ClaimEvidencePromptPacketRun(
+            (),
+            ("stability_run_count must be a non-negative integer",),
+        )
+
+    decoded_packets: list[ClaimEvidencePromptPacket] = []
+    errors: list[str] = []
+    seen: set[tuple[str, str, str]] = set()
+    for index, packet_data in enumerate(packets, start=1):
+        packet, packet_errors = ClaimEvidencePromptPacket.from_mapping(packet_data)
+        if packet_errors:
+            errors.extend(f"packet row {index}: {error}" for error in packet_errors)
+            continue
+        if packet is None:
+            errors.append(f"packet row {index}: packet missing")
+            continue
+        key = (packet.model_id, packet.triple_id, packet.contract_version)
+        if key in seen:
+            errors.append(
+                "packet row "
+                f"{index}: duplicate packet key: "
+                f"{packet.model_id}/{packet.triple_id}/{packet.contract_version}"
+            )
+            continue
+        seen.add(key)
+        decoded_packets.append(packet)
+    if errors:
+        return ClaimEvidencePromptPacketRun((), tuple(errors))
+
+    rows: list[Mapping[str, object]] = []
+    for packet in decoded_packets:
+        row, row_error = _run_claim_evidence_prompt_packet(
+            packet,
+            provider,
+            run_type="main",
+            run_id="",
+        )
+        if row_error:
+            errors.append(row_error)
+        elif row is not None:
+            rows.append(row)
+    for rerun_index in range(1, stability_run_count + 1):
+        run_id = f"rerun-{rerun_index}"
+        for packet in decoded_packets:
+            row, row_error = _run_claim_evidence_prompt_packet(
+                packet,
+                provider,
+                run_type="stability",
+                run_id=run_id,
+            )
+            if row_error:
+                errors.append(row_error)
+            elif row is not None:
+                rows.append(row)
+
+    if errors:
+        return ClaimEvidencePromptPacketRun((), tuple(errors))
+    return ClaimEvidencePromptPacketRun(tuple(rows), ())
+
+
+def _run_claim_evidence_prompt_packet(
+    packet: ClaimEvidencePromptPacket,
+    provider: ClaimEvidencePromptPacketProvider,
+    *,
+    run_type: str,
+    run_id: str,
+) -> tuple[dict[str, object] | None, str | None]:
+    label = f"{run_type} {packet.model_id}/{packet.triple_id}"
+    try:
+        raw_response = provider(packet, run_type, run_id)
+    except Exception as error:
+        return None, f"{label}: provider error: {error.__class__.__name__}"
+
+    response, response_errors = ClaimEvidenceResponse.from_mapping(raw_response)
+    if response_errors:
+        return None, f"{label}: response {'; '.join(response_errors)}"
+    if response is None:
+        return None, f"{label}: response missing"
+
+    row: dict[str, object] = {
+        "model_id": packet.model_id,
+        "triple_id": packet.triple_id,
+        "contract_version": packet.contract_version,
+        "response": asdict(response),
+    }
+    if run_type == "stability":
+        row["run_type"] = "stability"
+        row["run_id"] = run_id
+    return row, None
 
 
 @dataclass(frozen=True)
