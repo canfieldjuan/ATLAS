@@ -27,6 +27,7 @@ from extracted_content_pipeline.support_ticket_input_package import (
 )
 from extracted_content_pipeline.support_ticket_zendesk_thread import (
     load_zendesk_full_thread_rows_from_json_bytes,
+    load_zendesk_full_thread_rows_from_json_file,
     rows_from_zendesk_full_thread,
 )
 
@@ -1461,6 +1462,19 @@ def test_zendesk_full_thread_rows_preserve_public_roles_and_drop_private_notes()
     )
     assert "This is still broken after trying the steps" in by_id["41"]["description"]
     assert "A member of the support team will get back to you" not in str(by_id["41"])
+
+
+def test_zendesk_full_thread_rows_load_from_json_file() -> None:
+    result = load_zendesk_full_thread_rows_from_json_file(ZENDESK_THREAD_SAMPLE)
+
+    by_id = {row["ticket_id"]: row for row in result.rows}
+    assert set(by_id) == {"2", "28", "34", "41"}
+    assert by_id["2"]["resolution_text"].startswith(
+        "We confirmed the duplicate billing event"
+    )
+    assert by_id["2"]["satisfaction_rating"] == "good"
+    assert "Internal note" not in json.dumps(result.rows)
+    assert result.warnings == ()
 
 
 def test_zendesk_full_thread_rows_suppress_private_first_description() -> None:

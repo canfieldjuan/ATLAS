@@ -6,6 +6,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .support_ticket_clustering import support_ticket_plain_text
@@ -48,6 +49,18 @@ def load_zendesk_full_thread_rows_from_json_bytes(
     try:
         artifact = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Zendesk full-thread JSON could not be parsed.") from exc
+    return rows_from_zendesk_full_thread(artifact)
+
+
+def load_zendesk_full_thread_rows_from_json_file(
+    path: str | Path,
+) -> ZendeskThreadImportResult:
+    """Parse a staged Zendesk thread JSON file into support-ticket rows."""
+
+    try:
+        artifact = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Zendesk full-thread JSON could not be parsed.") from exc
     return rows_from_zendesk_full_thread(artifact)
 
@@ -243,5 +256,6 @@ def _clean(value: Any) -> str:
 __all__ = [
     "ZendeskThreadImportResult",
     "load_zendesk_full_thread_rows_from_json_bytes",
+    "load_zendesk_full_thread_rows_from_json_file",
     "rows_from_zendesk_full_thread",
 ]
