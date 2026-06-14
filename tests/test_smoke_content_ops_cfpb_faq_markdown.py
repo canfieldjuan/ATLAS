@@ -232,6 +232,20 @@ def test_cfpb_faq_smoke_compares_embedding_booster(
     assert comparison["delta"]["added_questions"] == [
         "How do I get my money back after an overdraft charge?"
     ]
+    assert comparison["semantic_merges"] == [
+        {
+            "left_source_id": "cfpb:1",
+            "right_source_id": "cfpb:2",
+            "left_text": "How do I get my money back after an overdraft charge?",
+            "right_text": "What is the process for a refund on an overdraft fee?",
+            "cosine": 0.999949,
+            "left_margin": 1.999949,
+            "right_margin": 1.999949,
+            "left_runner_up": -1.0,
+            "right_runner_up": -1.0,
+            "token_jaccard": 0.142857,
+        }
+    ]
     assert payload["errors"] == []
 
 

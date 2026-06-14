@@ -1,0 +1,37 @@
+{
+  "artifact": "deflection_mxbai_merge_spotcheck",
+  "run_timestamp_utc": "2026-06-14T04:23:00Z",
+  "issue": "#1504",
+  "source": "cfpb",
+  "ok": true,
+  "source_rows": 1000,
+  "probe": {"calls": 14, "valid_batches": 14},
+  "delta": {
+    "non_repeat_ticket_count": -18,
+    "non_repeat_question_count": -18,
+    "changed_top_question": false
+  },
+  "semantic_merge_count": 9,
+  "spot_check_summary": {
+    "plausible_same_issue": 9,
+    "unclear": 0,
+    "likely_false_merge": 0,
+    "production_enablement": "still requires operator decision; this artifact only checks the accepted semantic edges"
+  },
+  "raw_outputs_excluded_from_git": [
+    "tmp/cfpb_mxbai_merge_spotcheck/cfpb_sources_1000.jsonl",
+    "tmp/cfpb_mxbai_merge_spotcheck/cfpb_faq_1000_boosted.md",
+    "tmp/cfpb_mxbai_merge_spotcheck/summary_raw.json"
+  ],
+  "semantic_merges": [
+    {"left_source_id": "cfpb:6712260", "right_source_id": "cfpb:6747999", "cosine": 0.837934, "left_margin": 0.065296, "right_margin": 0.099356, "token_jaccard": 0.192308, "left_text": "I applied and was granted a forbearance with XXXX mortgage. During my forebearance period, XXXX sold my loan and the new serviced became LoanCare.", "right_text": "XXXX mortgage sold our loan to LoanCare ( XXXX ). We applied and were approved for HAF of {$16000.00}.", "spot_check": "plausible_same_issue", "reason": "mortgage servicing transfer and LoanCare hardship/payment handling"},
+    {"left_source_id": "cfpb:6731679", "right_source_id": "cfpb:6744117", "cosine": 0.782258, "left_margin": 0.080118, "right_margin": 0.078388, "token_jaccard": 0.0, "left_text": "I became very ill and fell behind my payments for my Discover card.", "right_text": "My health has taken a toll with my work. I have been trying to pay.", "spot_check": "plausible_same_issue", "reason": "illness-driven credit-card payment hardship"},
+    {"left_source_id": "cfpb:6683723", "right_source_id": "cfpb:6689662", "cosine": 0.840901, "left_margin": 0.110398, "right_margin": 0.121482, "token_jaccard": 0.190476, "left_text": "I used my Capital One credit card to purchase flights from the travel website.", "right_text": "I made a reservation through the credit card travel website for my vacation.", "spot_check": "plausible_same_issue", "reason": "credit-card travel booking/reservation dispute"},
+    {"left_source_id": "cfpb:6689331", "right_source_id": "cfpb:6743811", "cosine": 0.79392, "left_margin": 0.063752, "right_margin": 0.06021, "token_jaccard": 0.173913, "left_text": "What should I do if I was the victim of a rental scam and my bank is refusing to restore funds?", "right_text": "My financial institution is refusing to dispute, stop payment, or reclaim lost funds from this rental scam.", "spot_check": "plausible_same_issue", "reason": "rental scam funds recovery dispute"},
+    {"left_source_id": "cfpb:6697380", "right_source_id": "cfpb:6723781", "cosine": 0.825534, "left_margin": 0.086971, "right_margin": 0.12956, "token_jaccard": 0.222222, "left_text": "What should I do if I got a payday advance from this company?", "right_text": "What should I do if I received a pay day loan?", "spot_check": "plausible_same_issue", "reason": "payday advance/payday loan same wording variant"},
+    {"left_source_id": "cfpb:6694745", "right_source_id": "cfpb:6711208", "cosine": 0.835961, "left_margin": 0.073402, "right_margin": 0.074742, "token_jaccard": 0.105263, "left_text": "Excess charges to my account without disclosure or explanation; account balance reflects a negative balance.", "right_text": "Saying my checking account is negative through email and unknown charges to my account.", "spot_check": "plausible_same_issue", "reason": "unexpected account charges causing negative balance"},
+    {"left_source_id": "cfpb:6694318", "right_source_id": "cfpb:6728972", "cosine": 0.807645, "left_margin": 0.065503, "right_margin": 0.091091, "token_jaccard": 0.217391, "left_text": "A credit-card charge was disputed with the card company and fraud department.", "right_text": "Fraud charges on a Citi credit card were disputed with Citi Bank.", "spot_check": "plausible_same_issue", "reason": "credit-card fraud charge dispute"},
+    {"left_source_id": "cfpb:6714720", "right_source_id": "cfpb:6729093", "cosine": 0.822259, "left_margin": 0.064367, "right_margin": 0.066319, "token_jaccard": 0.24, "left_text": "Bank of America started charging a monthly fee after years without the fee.", "right_text": "Fifth Third bank started charging my checking account a monthly service fee after years with no fee.", "spot_check": "plausible_same_issue", "reason": "unexpected recurring checking-account service fee"},
+    {"left_source_id": "cfpb:6720397", "right_source_id": "cfpb:6751504", "cosine": 0.820663, "left_margin": 0.068151, "right_margin": 0.082779, "token_jaccard": 0.130435, "left_text": "I sent my rent to my landlord and later realized it was cashed unexpectedly.", "right_text": "I sent money via Cash App for rent and a service fee to the rental company.", "spot_check": "plausible_same_issue", "reason": "rent payment transfer/rental-company payment loss"}
+  ]
+}

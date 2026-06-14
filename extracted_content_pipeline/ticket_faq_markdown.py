@@ -654,6 +654,7 @@ def build_ticket_faq_markdown(
     representative_taxonomy_terms: Sequence[str] = (),
     vocabulary_gap_rules: Sequence[Sequence[str]] = (),
     embedding_port: EmbeddingPort | None = None,
+    embedding_merge_recorder: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> TicketFAQMarkdownResult:
     """Render an extractive FAQ from normalized source-row opportunities."""
 
@@ -771,7 +772,11 @@ def build_ticket_faq_markdown(
             subclustered_groups[(topic, scope)] = rows
             continue
         for cluster_index, cluster_rows in enumerate(
-            _question_subclusters(rows, embedding_port=embedding_port)
+            _question_subclusters(
+                rows,
+                embedding_port=embedding_port,
+                embedding_merge_recorder=embedding_merge_recorder,
+            )
         ):
             cluster_keys = _row_source_keys(cluster_rows)
             if len(cluster_keys) < 2:
@@ -934,6 +939,7 @@ def _question_subclusters(
     rows: Sequence[Mapping[str, str]],
     *,
     embedding_port: EmbeddingPort | None = None,
+    embedding_merge_recorder: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> list[list[Mapping[str, str]]]:
     """Split one degraded topic bucket into question-similarity clusters.
 
@@ -991,6 +997,7 @@ def _question_subclusters(
         find=find,
         union=union,
         embedding_port=embedding_port,
+        embedding_merge_recorder=embedding_merge_recorder,
     )
 
     clusters: dict[int, list[Mapping[str, str]]] = defaultdict(list)
@@ -1006,6 +1013,7 @@ def _apply_embedding_booster(
     find: Callable[[int], int],
     union: Callable[[int, int], None],
     embedding_port: EmbeddingPort | None,
+    embedding_merge_recorder: Callable[[Mapping[str, Any]], None] | None,
 ) -> None:
     if embedding_port is None or len(rows) < 2:
         return
@@ -1067,7 +1075,32 @@ def _apply_embedding_booster(
         pairs.add(tuple(sorted((index, candidate))))
     for left, right in sorted(pairs):
         if find(left) != find(right):
+            if embedding_merge_recorder is not None:
+                left_best, left_score, left_runner_up = best_by_index[left]
+                right_best, right_score, right_runner_up = best_by_index[right]
+                score = left_score if left_best == right else right_score
+                embedding_merge_recorder({
+                    "left_index": left,
+                    "right_index": right,
+                    "left_source_id": _embedding_merge_source_id(rows[left]),
+                    "right_source_id": _embedding_merge_source_id(rows[right]),
+                    "left_text": texts[left],
+                    "right_text": texts[right],
+                    "cosine": score,
+                    "left_runner_up": left_runner_up,
+                    "right_runner_up": right_runner_up,
+                    "left_margin": left_score - left_runner_up,
+                    "right_margin": right_score - right_runner_up,
+                    "token_jaccard": _jaccard(gists[left], gists[right]),
+                })
             union(left, right)
+
+
+def _embedding_merge_source_id(row: Mapping[str, str]) -> str:
+    source_id = str(row.get("source_id") or "").strip()
+    if source_id and source_id.lower() != "unknown":
+        return source_id
+    return str(row.get("source_key") or "").strip()
 
 
 def _topic(

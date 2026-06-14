@@ -2182,6 +2182,85 @@ def test_embedding_booster_merges_no_overlap_reworded_repeat_in_builder() -> Non
     assert with_port.items[0]["source_ids"] == ("refund-a", "refund-b")
 
 
+def test_embedding_booster_records_only_accepted_semantic_pairs() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "text": "How do I get my money back?",
+            "source_id": "refund-a",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "text": "What is the process for a refund?",
+            "source_id": "refund-b",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "text": "Where can I update my billing address?",
+            "source_id": "billing-address",
+        },
+    ]
+    semantic_merges = []
+
+    result = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "What is the process for a refund?": (0.99, 0.01),
+            "Where can I update my billing address?": (0.0, 1.0),
+        }),
+        embedding_merge_recorder=semantic_merges.append,
+    )
+
+    assert len(result.items) == 1
+    assert result.items[0]["source_ids"] == ("refund-a", "refund-b")
+    assert len(semantic_merges) == 1
+    merge = semantic_merges[0]
+    assert merge["left_source_id"] == "refund-a"
+    assert merge["right_source_id"] == "refund-b"
+    assert merge["left_text"] == "How do I get my money back?"
+    assert merge["right_text"] == "What is the process for a refund?"
+    assert merge["cosine"] > 0.99
+    assert merge["left_margin"] > 0.9
+    assert merge["right_margin"] > 0.9
+    assert merge["token_jaccard"] < (1 / 3)
+
+
+def test_embedding_booster_records_source_key_when_source_id_is_unknown() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "text": "How do I get my money back?",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "text": "What is the process for a refund?",
+        },
+    ]
+    semantic_merges = []
+
+    result = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "What is the process for a refund?": (0.99, 0.01),
+        }),
+        embedding_merge_recorder=semantic_merges.append,
+    )
+
+    assert len(result.items) == 1
+    assert len(semantic_merges) == 1
+    assert semantic_merges[0]["left_source_id"] == "row:1"
+    assert semantic_merges[0]["right_source_id"] == "row:2"
+
+
 def test_embedding_booster_skips_malformed_vectors_without_merging() -> None:
     rows = [
         {

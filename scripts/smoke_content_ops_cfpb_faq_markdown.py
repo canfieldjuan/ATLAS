@@ -142,6 +142,7 @@ def run_cfpb_faq_markdown_smoke(
                         f"embedding booster unavailable: {type(exc).__name__}: {exc}"
                     )
                 else:
+                    semantic_merges: list[Mapping[str, Any]] = []
                     boosted_result = build_ticket_faq_markdown(
                         loaded.opportunities,
                         title=str(args.title),
@@ -149,6 +150,7 @@ def run_cfpb_faq_markdown_smoke(
                         max_evidence_per_item=int(args.max_evidence_per_item),
                         support_contact=args.support_contact,
                         embedding_port=embedding_port,
+                        embedding_merge_recorder=semantic_merges.append,
                     )
                     embedding_comparison["probe"] = {
                         "calls": embedding_port.calls,
@@ -171,6 +173,9 @@ def run_cfpb_faq_markdown_smoke(
                                 baseline=baseline_result,
                                 boosted=boosted_result,
                             )
+                        )
+                        embedding_comparison["semantic_merges"] = (
+                            _semantic_merge_payload(semantic_merges)
                         )
             faq = result.as_dict()
             failed = _failed_output_checks(result.output_checks)
@@ -276,6 +281,36 @@ def _embedding_comparison_payload(*, baseline: Any, boosted: Any) -> dict[str, A
             ],
         },
     }
+
+
+def _semantic_merge_payload(merges: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "left_source_id": str(merge.get("left_source_id") or ""),
+            "right_source_id": str(merge.get("right_source_id") or ""),
+            "left_text": _short_text(merge.get("left_text")),
+            "right_text": _short_text(merge.get("right_text")),
+            "cosine": _round_score(merge.get("cosine")),
+            "left_margin": _round_score(merge.get("left_margin")),
+            "right_margin": _round_score(merge.get("right_margin")),
+            "left_runner_up": _round_score(merge.get("left_runner_up")),
+            "right_runner_up": _round_score(merge.get("right_runner_up")),
+            "token_jaccard": _round_score(merge.get("token_jaccard")),
+        }
+        for merge in merges
+    ]
+
+
+def _round_score(value: Any) -> float:
+    try:
+        return round(float(value), 6)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _short_text(value: Any, *, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else f"{text[: limit - 3].rstrip()}..."
 
 
 def _faq_summary(result: Any) -> dict[str, Any]:
