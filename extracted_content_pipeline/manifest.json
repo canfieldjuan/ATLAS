@@ -328,6 +328,9 @@
       "target": "extracted_content_pipeline/ticket_faq_markdown.py"
     },
     {
+      "target": "extracted_content_pipeline/embedding_port.py"
+    },
+    {
       "target": "extracted_content_pipeline/faq_deflection_report.py"
     },
     {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from html.parser import HTMLParser
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from extracted_content_pipeline.campaign_source_adapters import (
     load_source_campaign_opportunities_from_file,
 )
 from extracted_content_pipeline.campaign_ports import TenantScope
+from extracted_content_pipeline.embedding_port import cosine_similarity
 from extracted_content_pipeline.support_ticket_input_package import (
     build_support_ticket_input_package,
 )
@@ -41,6 +43,14 @@ FAQ_CUSTOM_RULES = ROOT / "extracted_content_pipeline/examples/faq_custom_rules.
 FAQ_DOCUMENTATION_TERMS = (
     ROOT / "extracted_content_pipeline/examples/faq_documentation_terms.txt"
 )
+
+
+class _StubEmbeddingPort:
+    def __init__(self, vectors: dict[str, tuple[float, ...]]) -> None:
+        self.vectors = vectors
+
+    def embed_texts(self, texts):
+        return [self.vectors.get(text, ()) for text in texts]
 
 
 class _RenderedFAQHTML(HTMLParser):
@@ -2135,6 +2145,181 @@ def test_question_subclusters_exact_join_keeps_empty_gists_separate() -> None:
     ]
 
 
+def test_embedding_booster_merges_no_overlap_reworded_repeat_in_builder() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "source_title": "Refund",
+            "text": "How do I get my money back?",
+            "source_id": "refund-a",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "billing help",
+            "source_title": "Refund",
+            "text": "What is the process for a refund?",
+            "source_id": "refund-b",
+        },
+    ]
+
+    without_port = build_ticket_faq_markdown(rows, max_items=0)
+    explicit_no_port = build_ticket_faq_markdown(rows, max_items=0, embedding_port=None)
+    with_port = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "What is the process for a refund?": (0.99, 0.01),
+        }),
+    )
+
+    assert explicit_no_port.as_dict() == without_port.as_dict()
+    assert without_port.items == ()
+    assert without_port.non_repeat_ticket_count == 2
+    assert len(with_port.items) == 1
+    assert with_port.items[0]["ticket_count"] == 2
+    assert with_port.items[0]["source_ids"] == ("refund-a", "refund-b")
+
+
+def test_embedding_booster_skips_malformed_vectors_without_merging() -> None:
+    rows = [
+        {
+            "text": "How do I get my money back?",
+            "source_key": "refund-a",
+        },
+        {
+            "text": "What is the process for a refund?",
+            "source_key": "refund-b",
+        },
+    ]
+
+    clusters = _question_subclusters(
+        rows,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "What is the process for a refund?": (),
+        }),
+    )
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("refund-a",),
+        ("refund-b",),
+    ]
+
+
+@pytest.mark.parametrize(
+    "bad_vector",
+    [
+        (math.nan, 1.0),
+        (math.inf, 1.0),
+        (-math.inf, 1.0),
+    ],
+)
+def test_embedding_booster_skips_non_finite_vectors_without_merging(
+    bad_vector: tuple[float, float],
+) -> None:
+    rows = [
+        {"text": "How can I reset my password?", "source_key": "password"},
+        {"text": "Where do I update my billing address?", "source_key": "billing"},
+    ]
+
+    clusters = _question_subclusters(
+        rows,
+        embedding_port=_StubEmbeddingPort({
+            "How can I reset my password?": bad_vector,
+            "Where do I update my billing address?": (1.0, 1.0),
+        }),
+    )
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("password",),
+        ("billing",),
+    ]
+
+
+def test_embedding_booster_requires_both_mutual_neighbor_margins() -> None:
+    rows = [
+        {"text": "How do I get my money back?", "source_key": "refund"},
+        {"text": "Where do I update my billing address?", "source_key": "billing"},
+        {"text": "How do I export account reports?", "source_key": "exports"},
+    ]
+
+    clusters = _question_subclusters(
+        rows,
+        embedding_port=_StubEmbeddingPort({
+            "How do I get my money back?": (1.0, 0.0),
+            "Where do I update my billing address?": (0.9, 0.4358898943540673),
+            "How do I export account reports?": (0.5680837372370346, 0.8229707573703964),
+        }),
+    )
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("refund",),
+        ("billing",),
+        ("exports",),
+    ]
+
+
+def test_embedding_booster_ignores_non_singleton_lexical_components() -> None:
+    rows = [
+        {
+            "text": "password reset email link expired login access one",
+            "source_key": "hub-a",
+        },
+        {
+            "text": "password reset email link expired login access two",
+            "source_key": "hub-b",
+        },
+        {
+            "text": "password reset email link expired login access three",
+            "source_key": "hub-c",
+        },
+        {
+            "text": "billing address update payment invoice",
+            "source_key": "spoke-billing",
+        },
+        {
+            "text": "dashboard chart loading analytics view",
+            "source_key": "spoke-dashboard",
+        },
+        {
+            "text": "export csv report download file",
+            "source_key": "spoke-export",
+        },
+    ]
+
+    clusters = _question_subclusters(
+        rows,
+        embedding_port=_StubEmbeddingPort({
+            rows[0]["text"]: (1.0, 0.0, 0.0),
+            rows[1]["text"]: (0.0, 1.0, 0.0),
+            rows[2]["text"]: (0.0, 0.0, 1.0),
+            rows[3]["text"]: (0.99, 0.01, 0.0),
+            rows[4]["text"]: (0.0, 0.99, 0.01),
+            rows[5]["text"]: (0.01, 0.0, 0.99),
+        }),
+    )
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("hub-a", "hub-b", "hub-c"),
+        ("spoke-billing",),
+        ("spoke-dashboard",),
+        ("spoke-export",),
+    ]
+
+
+def test_cosine_similarity_rejects_malformed_vectors() -> None:
+    assert cosine_similarity((1.0, 0.0), (0.5, 0.5)) == pytest.approx(0.70710678)
+    assert cosine_similarity((1.0,), (1.0, 0.0)) is None
+    assert cosine_similarity((0.0, 0.0), (1.0, 0.0)) is None
+    assert cosine_similarity("bad", (1.0, 0.0)) is None
+    assert cosine_similarity((object(),), (1.0,)) is None
+    assert cosine_similarity((math.nan, 1.0), (1.0, 1.0)) is None
+    assert cosine_similarity((math.inf, 1.0), (1.0, 1.0)) is None
+    assert cosine_similarity((-math.inf, 1.0), (1.0, 1.0)) is None
+
+
 def test_build_ticket_faq_markdown_subclusters_are_order_insensitive() -> None:
     rows = [
         {
@@ -3159,6 +3344,45 @@ async def test_ticket_faq_service_generates_from_inline_source_material() -> Non
     assert result.as_dict()["generated"] == 1
     assert "How do I change my email address?" in result.markdown
     assert "`ticket-1` - Login email change" in result.markdown
+
+
+@pytest.mark.asyncio
+async def test_ticket_faq_service_config_threads_embedding_port() -> None:
+    service = TicketFAQMarkdownService(
+        TicketFAQMarkdownConfig(
+            embedding_port=_StubEmbeddingPort({
+                "How do I get my money back?": (1.0, 0.0),
+                "What is the process for a refund?": (0.99, 0.01),
+            })
+        )
+    )
+
+    result = await service.generate(
+        scope=TenantScope(account_id="acct-1"),
+        target_mode="vendor_retention",
+        source_material={
+            "support_tickets": [
+                {
+                    "ticket_id": "refund-a",
+                    "subject": "Refund request",
+                    "source_type": "ticket",
+                    "message": "How do I get my money back?",
+                    "pain_category": "billing",
+                },
+                {
+                    "ticket_id": "refund-b",
+                    "subject": "Refund request",
+                    "source_type": "ticket",
+                    "message": "What is the process for a refund?",
+                    "pain_category": "billing",
+                },
+            ]
+        },
+        max_items=0,
+    )
+
+    assert len(result.items) == 1
+    assert result.items[0]["source_ids"] == ("refund-a", "refund-b")
 
 
 @pytest.mark.asyncio
