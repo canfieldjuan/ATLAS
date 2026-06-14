@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
-import hashlib
+import math
 import re
 from typing import Any
 
@@ -715,14 +715,11 @@ def build_ticket_faq_markdown(
     subclustered_groups: dict[tuple[str, str], list[dict[str, str]]] = {}
     excluded_singleton_keys: set[str] = set()
     non_repeat_question_count = 0
-    token_hashes: dict[str, int] = {}
     for (topic, scope), rows in groups.items():
         if not scope.startswith("topic:"):
             subclustered_groups[(topic, scope)] = rows
             continue
-        for cluster_index, cluster_rows in enumerate(
-            _question_subclusters(rows, token_hashes=token_hashes)
-        ):
+        for cluster_index, cluster_rows in enumerate(_question_subclusters(rows)):
             cluster_keys = _row_source_keys(cluster_rows)
             if len(cluster_keys) < 2:
                 excluded_singleton_keys.update(cluster_keys)
@@ -828,33 +825,11 @@ def _evidence_rows(opportunity: Mapping[str, Any]) -> tuple[Mapping[str, Any], .
 # ticket in the bucket would render as ONE FAQ whose ticket_count measures
 # bucket membership, not question repetition. These helpers split each
 # degraded bucket into question-similarity sub-clusters with deterministic
-# MinHash-LSH banding plus exact-Jaccard verification, so only questions
-# customers actually asked more than once count as repeats.
+# prefix-filtered exact-Jaccard verification, so only questions customers
+# actually asked more than once count as repeats.
 
 _SUBCLUSTER_JACCARD_THRESHOLD = 1 / 3
 _SUBCLUSTER_GIST_TOKEN_LIMIT = 30
-_MINHASH_PRIME = (1 << 61) - 1
-# Fixed (a, b) permutation constants: 16 hashes = 4 bands x 4 rows. Literal
-# constants keep the clustering deterministic across runs and processes.
-_MINHASH_PERMUTATIONS = (
-    (1099511628211, 40503185483),
-    (216613626151, 92821459571),
-    (805306457117, 18352446323),
-    (655360001281, 73692873701),
-    (377778524351, 28419182549),
-    (982451653069, 61231040987),
-    (472882049891, 35742392227),
-    (715827883159, 50321736709),
-    (293339129747, 87178291199),
-    (846835986133, 22801763489),
-    (538216442407, 67867967773),
-    (159218691971, 44560482149),
-    (920419823369, 15485863757),
-    (368345293463, 79302361813),
-    (614741108437, 31556891543),
-    (257885161353, 96846628681),
-)
-_MINHASH_BAND_ROWS = 4
 
 
 def _question_gist_tokens(text: str) -> frozenset[str]:
@@ -868,30 +843,25 @@ def _question_gist_tokens(text: str) -> frozenset[str]:
     )
 
 
-def _minhash_signature(
-    tokens: frozenset[str],
-    token_hashes: dict[str, int],
-) -> tuple[int, ...]:
-    hashes = []
-    for token in tokens:
-        value = token_hashes.get(token)
-        if value is None:
-            value = int.from_bytes(
-                hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest(),
-                "big",
-            )
-            token_hashes[token] = value
-        hashes.append(value)
-    return tuple(
-        min(((a * value + b) % _MINHASH_PRIME) for value in hashes)
-        for a, b in _MINHASH_PERMUTATIONS
-    )
-
-
 def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _jaccard_prefix_tokens(
+    tokens: frozenset[str],
+    token_counts: Mapping[str, int],
+) -> tuple[str, ...]:
+    ordered = sorted(tokens, key=lambda token: (token_counts[token], token))
+    prefix_size = len(ordered) - math.ceil(_SUBCLUSTER_JACCARD_THRESHOLD * len(ordered)) + 1
+    return tuple(ordered[:max(0, prefix_size)])
+
+
+def _jaccard_lengths_can_match(left_size: int, right_size: int) -> bool:
+    if left_size <= 0 or right_size <= 0:
+        return False
+    return min(left_size, right_size) / max(left_size, right_size) >= _SUBCLUSTER_JACCARD_THRESHOLD
 
 
 def _row_source_keys(rows: Sequence[Mapping[str, str]]) -> set[str]:
@@ -904,18 +874,20 @@ def _row_source_keys(rows: Sequence[Mapping[str, str]]) -> set[str]:
 
 def _question_subclusters(
     rows: Sequence[Mapping[str, str]],
-    *,
-    token_hashes: dict[str, int],
 ) -> list[list[Mapping[str, str]]]:
     """Split one degraded topic bucket into question-similarity clusters.
 
-    Deterministic: fixed MinHash permutations, insertion-ordered band
-    buckets, and candidate verification against each band bucket's first
-    member only (bounded work; LSH recall is approximate by design, #1460).
-    Rows with an empty gist never merge.
+    Deterministic: exact duplicate matching plus prefix-filtered candidate
+    nomination, followed by exact-Jaccard verification. Rows with an empty
+    gist never merge.
     """
 
     gists = [_question_gist_tokens(str(row.get("text") or "")) for row in rows]
+    token_counts: dict[str, int] = defaultdict(int)
+    for gist in gists:
+        for token in gist:
+            token_counts[token] += 1
+
     parent = list(range(len(rows)))
 
     def find(index: int) -> int:
@@ -930,7 +902,7 @@ def _question_subclusters(
             parent[max(root_left, root_right)] = min(root_left, root_right)
 
     exact: dict[frozenset[str], int] = {}
-    band_buckets: dict[tuple[int, tuple[int, ...]], int] = {}
+    prefix_index: dict[str, list[int]] = defaultdict(list)
     for index, gist in enumerate(gists):
         if not gist:
             continue
@@ -938,13 +910,20 @@ def _question_subclusters(
         if first_exact != index:
             union(first_exact, index)
             continue
-        signature = _minhash_signature(gist, token_hashes)
-        for band_index in range(0, len(signature), _MINHASH_BAND_ROWS):
-            band = (band_index, signature[band_index:band_index + _MINHASH_BAND_ROWS])
-            representative = band_buckets.setdefault(band, index)
-            if representative != index and find(representative) != find(index):
-                if _jaccard(gists[representative], gist) >= _SUBCLUSTER_JACCARD_THRESHOLD:
-                    union(representative, index)
+        candidates: set[int] = set()
+        prefix = _jaccard_prefix_tokens(gist, token_counts)
+        for token in prefix:
+            candidates.update(prefix_index[token])
+        for candidate in sorted(candidates):
+            if find(candidate) == find(index):
+                continue
+            candidate_gist = gists[candidate]
+            if not _jaccard_lengths_can_match(len(candidate_gist), len(gist)):
+                continue
+            if _jaccard(candidate_gist, gist) >= _SUBCLUSTER_JACCARD_THRESHOLD:
+                union(candidate, index)
+        for token in prefix:
+            prefix_index[token].append(index)
 
     clusters: dict[int, list[Mapping[str, str]]] = defaultdict(list)
     for index, row in enumerate(rows):
