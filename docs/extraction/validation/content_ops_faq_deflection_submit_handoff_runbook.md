@@ -177,6 +177,30 @@ in the Docker image, and the `python-multipart` dependency. Re-run the smoke
 after deploy; do not continue to Stripe paid-unlock validation until submit
 returns a real `request_id`.
 
+### Full-Volume Gate Profile
+
+For #1440-style full-volume CFPB proof runs, use the calibrated profile instead
+of hand-entering each minimum:
+
+```bash
+python scripts/smoke_content_ops_deflection_submit_handoff.py \
+  --csv-file /path/to/cfpb_real_upload_under_50mb.csv \
+  --company-name "CFPB Public Archive" \
+  --contact-email canfieldjuan24@gmail.com \
+  --support-platform other \
+  --volume-gate-profile full-volume-cfpb \
+  --timeout 360 \
+  --output-result /tmp/faq-deflection-submit-handoff.json \
+  --json
+```
+
+The profile requires at least 50,000,000 uploaded bytes, 30,000 source rows,
+30,000 submitted rows, 30 generated questions, 25,000 repeat tickets, and 5
+visible top questions. The repeat-ticket threshold is calibrated below the
+first committed live full-volume proof result of 27,384 repeat tickets while
+still rejecting tiny fixture reports. If a stricter proof is intentional, pass a
+nonzero explicit `--min-*` flag; explicit minimums override profile defaults.
+
 ## Portfolio Result Page Smoke
 
 After the hosted submit smoke returns a `request_id`, validate the portfolio

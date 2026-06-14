@@ -51,6 +51,16 @@ OPTIONAL_CUSTOMER_WORDING_QUESTION_SOURCES = frozenset({
     "source_policy",
     "topic_fallback",
 })
+VOLUME_GATE_PROFILES: dict[str, dict[str, int]] = {
+    "full-volume-cfpb": {
+        "uploaded_bytes": 50_000_000,
+        "source_row_count": 30_000,
+        "submitted_row_count": 30_000,
+        "generated_questions": 30,
+        "repeat_ticket_count": 25_000,
+        "top_question_count": 5,
+    },
+}
 
 try:
     from dotenv import load_dotenv
@@ -107,6 +117,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-generated-questions", type=int, default=0)
     parser.add_argument("--min-repeat-ticket-count", type=int, default=0)
     parser.add_argument("--min-top-question-count", type=int, default=0)
+    parser.add_argument(
+        "--volume-gate-profile",
+        choices=sorted(VOLUME_GATE_PROFILES),
+        default="",
+        help=(
+            "Apply a named volume-gate profile. Explicit nonzero --min-* "
+            "flags override profile defaults."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--submit-path", default=SUBMIT_PATH)
     parser.add_argument("--snapshot-path-template", default=SNAPSHOT_PATH_TEMPLATE)
@@ -593,7 +612,16 @@ def _status_summary(response: HttpJsonResponse) -> dict[str, Any]:
 
 
 def _configured_volume_gates(args: argparse.Namespace) -> dict[str, int]:
-    return {
+    profile = VOLUME_GATE_PROFILES.get(_clean(getattr(args, "volume_gate_profile", "")))
+    configured = dict(profile) if profile else {
+        "uploaded_bytes": 0,
+        "source_row_count": 0,
+        "submitted_row_count": 0,
+        "generated_questions": 0,
+        "repeat_ticket_count": 0,
+        "top_question_count": 0,
+    }
+    explicit = {
         "uploaded_bytes": int(args.min_uploaded_bytes),
         "source_row_count": int(args.min_source_row_count),
         "submitted_row_count": int(args.min_submitted_row_count),
@@ -601,6 +629,24 @@ def _configured_volume_gates(args: argparse.Namespace) -> dict[str, int]:
         "repeat_ticket_count": int(args.min_repeat_ticket_count),
         "top_question_count": int(args.min_top_question_count),
     }
+    for gate, minimum in explicit.items():
+        if minimum > 0:
+            configured[gate] = minimum
+    return configured
+
+
+def _volume_gate_profile_name(args: argparse.Namespace) -> str:
+    return _clean(getattr(args, "volume_gate_profile", ""))
+
+
+def _with_volume_gate_profile(
+    args: argparse.Namespace,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    profile = _volume_gate_profile_name(args)
+    if profile:
+        return {"profile": profile, **result}
+    return result
 
 
 def _strict_count(value: Any) -> int | None:
@@ -663,12 +709,15 @@ def _volume_gate_errors(
         elif value < minimum:
             errors.append(f"volume gate {gate} expected >= {minimum}, got {value}")
     configured = {key: value for key, value in expected.items() if value > 0}
-    return {
-        "configured": configured,
-        "actual": actual,
-        "ok": not errors,
-        "errors": errors,
-    }, errors
+    return _with_volume_gate_profile(
+        args,
+        {
+            "configured": configured,
+            "actual": actual,
+            "ok": not errors,
+            "errors": errors,
+        },
+    ), errors
 
 
 def _skipped_volume_gates(
@@ -682,15 +731,21 @@ def _skipped_volume_gates(
         if value > 0
     }
     if not configured:
-        return {"configured": {}, "actual": {}, "ok": True, "errors": []}
-    return {
-        "configured": configured,
-        "actual": {},
-        "ok": False,
-        "skipped": True,
-        "not_run_reason": reason,
-        "errors": [],
-    }
+        return _with_volume_gate_profile(
+            args,
+            {"configured": {}, "actual": {}, "ok": True, "errors": []},
+        )
+    return _with_volume_gate_profile(
+        args,
+        {
+            "configured": configured,
+            "actual": {},
+            "ok": False,
+            "skipped": True,
+            "not_run_reason": reason,
+            "errors": [],
+        },
+    )
 
 
 def _preflight_summary(

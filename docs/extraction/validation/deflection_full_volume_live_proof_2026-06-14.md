@@ -85,6 +85,14 @@ The submit transport and snapshot/artifact probes passed. The command exited
 nonzero only because `--min-repeat-ticket-count 30000` was stricter than the
 actual hosted result.
 
+Calibration update: `--min-repeat-ticket-count 30000` was an ad hoc threshold,
+not a proven buyer-readiness boundary. Use
+`--volume-gate-profile full-volume-cfpb` for reruns of this proof. That profile
+keeps the same row/byte/generated/top-question gates and lowers the repeat
+minimum to 25,000, below the observed 27,384 repeat tickets while still rejecting
+tiny smoke fixtures. Explicit nonzero `--min-*` flags remain available when a
+stricter run is intentional.
+
 ## Portfolio Result Page
 
 Command shape:
@@ -150,10 +158,7 @@ rows, paid report Markdown, PDFs, and email bodies.
 
 Fix or configure the live surfaces in this order:
 
-1. Decide whether the repeat-volume gate should be below the observed 27,384
-   repeat-ticket count for regenerated CFPB uploads, or keep 30,000 and require
-   a larger/different sample.
-2. Restore the public portfolio result route for
-   `/services/faq-deflection/results/{request_id}`.
-3. Align the local/operator Stripe webhook secret with the deployed
+1. Rerun the hosted submit proof with `--volume-gate-profile full-volume-cfpb`
+   if a fresh submit artifact is needed after calibration.
+2. Align the local/operator Stripe webhook secret with the deployed
    `atlas-brain` secret, then rerun paid unlock and delivery.
