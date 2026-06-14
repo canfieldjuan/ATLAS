@@ -55,6 +55,7 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 > 6. **Context discipline (keeps the session from compacting mid-work):**
 >    - After opening or updating a PR, **stop** — do not poll CI or wait for review (AGENTS.md §3c). Report the PR URL + the local checks you already ran, then hand back to the operator; resume only on the operator's signal.
 >    - During iteration, read **targeted ranges** of large files (e.g. `control_surfaces.py` is ~1.4k lines), not whole files; and run the **single relevant test file**, not the full suite. Run the full `run_extracted_pipeline_checks.sh` gauntlet **once**, right before pushing — not on every change.
+>    - For bounded read-only scouting/checking, prefer a lightweight Spark subagent when available; keep judgment, edit-target reads, Git/GitHub mutations, and final synthesis in main.
 >    - Before pushing, use `scripts/push_pr.sh` as the single local-review entry
 >      point. Do **not** run `local_pr_review.sh` manually and then immediately
 >      run `push_pr.sh`; the wrapper/hook path is responsible for exactly one
