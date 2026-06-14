@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -56,6 +56,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-evidence-per-item", type=int, default=3)
     parser.add_argument("--max-text-chars", type=int, default=1200)
     parser.add_argument("--support-contact", default=None)
+    parser.add_argument(
+        "--compare-embedding-booster",
+        action="store_true",
+        help=(
+            "Run the baseline FAQ path and the host mxbai embedding-boosted "
+            "path from the same fetched CFPB rows."
+        ),
+    )
     parser.add_argument("--output-source-rows", type=Path, default=None)
     parser.add_argument("--output-markdown", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
@@ -76,11 +84,13 @@ def run_cfpb_faq_markdown_smoke(
     args: argparse.Namespace,
     *,
     source_rows_path: Path,
+    embedding_port_factory: Callable[[], Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     errors: list[str] = []
     rows: list[dict[str, Any]] = []
     source_profile: dict[str, Any] = {"status": "not_started"}
     faq: dict[str, Any] | None = None
+    embedding_comparison: dict[str, Any] | None = None
     try:
         rows, source_profile = fetch_cfpb_source_rows_with_profile(
             api_url=str(args.api_url),
@@ -106,13 +116,58 @@ def run_cfpb_faq_markdown_smoke(
                 file_format="jsonl",
                 max_text_chars=int(args.max_text_chars),
             )
-            result = build_ticket_faq_markdown(
+            baseline_result = build_ticket_faq_markdown(
                 loaded.opportunities,
                 title=str(args.title),
                 max_items=int(args.max_items),
                 max_evidence_per_item=int(args.max_evidence_per_item),
                 support_contact=args.support_contact,
             )
+            result = baseline_result
+            if bool(getattr(args, "compare_embedding_booster", False)):
+                embedding_comparison = {
+                    "enabled": True,
+                    "primary": "boosted",
+                }
+                try:
+                    factory = embedding_port_factory or _build_default_embedding_port
+                    embedding_port = _EmbeddingPortProbe(factory())
+                except Exception as exc:
+                    result = baseline_result
+                    embedding_comparison.update({
+                        "primary": "baseline",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+                    errors.append(
+                        f"embedding booster unavailable: {type(exc).__name__}: {exc}"
+                    )
+                else:
+                    boosted_result = build_ticket_faq_markdown(
+                        loaded.opportunities,
+                        title=str(args.title),
+                        max_items=int(args.max_items),
+                        max_evidence_per_item=int(args.max_evidence_per_item),
+                        support_contact=args.support_contact,
+                        embedding_port=embedding_port,
+                    )
+                    embedding_error = embedding_port.error
+                    if embedding_error is None and embedding_port.valid_batches < 1:
+                        embedding_error = "embedding booster applied no valid embedding batches"
+                    if embedding_error is not None:
+                        result = baseline_result
+                        embedding_comparison.update({
+                            "primary": "baseline",
+                            "error": embedding_error,
+                        })
+                        errors.append(f"embedding booster unavailable: {embedding_error}")
+                    else:
+                        result = boosted_result
+                        embedding_comparison.update(
+                            _embedding_comparison_payload(
+                                baseline=baseline_result,
+                                boosted=boosted_result,
+                            )
+                        )
             faq = result.as_dict()
             failed = _failed_output_checks(result.output_checks)
             if not result.items:
@@ -134,6 +189,7 @@ def run_cfpb_faq_markdown_smoke(
         "source_rows_path": str(source_rows_path),
         "markdown_path": str(args.output_markdown) if args.output_markdown else None,
         "faq": faq,
+        "embedding_comparison": embedding_comparison,
         "errors": errors,
     }
 
@@ -146,6 +202,93 @@ def _write_jsonl(rows: Sequence[Mapping[str, Any]], path: Path) -> None:
 
 def _failed_output_checks(output_checks: Mapping[str, bool]) -> list[str]:
     return [name for name, passed in sorted(output_checks.items()) if passed is not True]
+
+
+def _build_default_embedding_port() -> Any:
+    from atlas_brain._content_ops_infrastructure import (
+        build_content_ops_faq_embedding_port,
+    )
+
+    return build_content_ops_faq_embedding_port()
+
+
+class _EmbeddingPortProbe:
+    def __init__(self, port: Any) -> None:
+        self._port = port
+        self.calls = 0
+        self.valid_batches = 0
+        self.error: str | None = None
+
+    def embed_texts(self, texts: Sequence[str]) -> Sequence[Sequence[float]]:
+        self.calls += 1
+        try:
+            embedded = self._port.embed_texts(texts)
+        except Exception as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            raise
+        if (
+            isinstance(embedded, Sequence)
+            and not isinstance(embedded, (str, bytes, bytearray))
+            and len(embedded) == len(texts)
+        ):
+            self.valid_batches += 1
+        else:
+            self.error = "embedding port returned an invalid batch"
+        return embedded
+
+
+def _embedding_comparison_payload(*, baseline: Any, boosted: Any) -> dict[str, Any]:
+    baseline_summary = _faq_summary(baseline)
+    boosted_summary = _faq_summary(boosted)
+    return {
+        "baseline": baseline_summary,
+        "boosted": boosted_summary,
+        "delta": {
+            "generated": boosted_summary["generated"] - baseline_summary["generated"],
+            "ticket_source_count": (
+                boosted_summary["ticket_source_count"]
+                - baseline_summary["ticket_source_count"]
+            ),
+            "non_repeat_ticket_count": (
+                boosted_summary["non_repeat_ticket_count"]
+                - baseline_summary["non_repeat_ticket_count"]
+            ),
+            "non_repeat_question_count": (
+                boosted_summary["non_repeat_question_count"]
+                - baseline_summary["non_repeat_question_count"]
+            ),
+            "changed_top_question": (
+                boosted_summary["top_question"] != baseline_summary["top_question"]
+            ),
+            "added_questions": [
+                question
+                for question in boosted_summary["questions"]
+                if question not in baseline_summary["questions"]
+            ],
+            "removed_questions": [
+                question
+                for question in baseline_summary["questions"]
+                if question not in boosted_summary["questions"]
+            ],
+        },
+    }
+
+
+def _faq_summary(result: Any) -> dict[str, Any]:
+    questions = [
+        str(item.get("question") or "")
+        for item in getattr(result, "items", ())
+        if str(item.get("question") or "")
+    ]
+    return {
+        "generated": len(getattr(result, "items", ())),
+        "ticket_source_count": int(getattr(result, "ticket_source_count", 0)),
+        "non_repeat_ticket_count": int(getattr(result, "non_repeat_ticket_count", 0)),
+        "non_repeat_question_count": int(getattr(result, "non_repeat_question_count", 0)),
+        "top_question": questions[0] if questions else None,
+        "questions": questions,
+        "output_checks": dict(getattr(result, "output_checks", {})),
+    }
 
 
 def _print_payload(payload: Mapping[str, Any], *, as_json: bool) -> None:

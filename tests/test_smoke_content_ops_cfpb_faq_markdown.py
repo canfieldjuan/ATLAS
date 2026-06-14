@@ -67,6 +67,7 @@ def _args(**overrides):
         "max_evidence_per_item": 3,
         "max_text_chars": 1200,
         "support_contact": "https://example.com/support",
+        "compare_embedding_booster": False,
         "output_source_rows": None,
         "output_markdown": None,
         "json": False,
@@ -176,3 +177,138 @@ def test_json_output_and_invalid_args(capsys) -> None:
         smoke._validate_args(_args(limit=0))
     with pytest.raises(SystemExit, match="--max-rows-scanned must be >= --limit"):
         smoke._validate_args(_args(limit=2, max_rows_scanned=1))
+
+
+def test_cfpb_faq_smoke_compares_embedding_booster(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    fetch_calls = []
+    factory_calls = []
+    embedded_batches = []
+
+    class FakeEmbeddingPort:
+        def embed_texts(self, texts):
+            embedded_batches.append(tuple(texts))
+            return ((1.0, 0.0), (0.99, 0.01))
+
+    monkeypatch.setattr(
+        smoke,
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **kwargs: fetch_calls.append(kwargs)
+        or (
+            [
+                _row("1", "How do I get my money back after an overdraft charge?"),
+                _row("2", "What is the process for a refund on an overdraft fee?"),
+            ],
+            _profile(source_count=2),
+        ),
+    )
+
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(compare_embedding_booster=True),
+        source_rows_path=tmp_path / "rows.jsonl",
+        embedding_port_factory=lambda: factory_calls.append(True) or FakeEmbeddingPort(),
+    )
+
+    assert code == 0
+    assert len(fetch_calls) == 1
+    assert factory_calls == [True]
+    assert embedded_batches == [(
+        "How do I get my money back after an overdraft charge?",
+        "What is the process for a refund on an overdraft fee?",
+    )]
+    assert payload["faq"]["generated"] == 1
+    comparison = payload["embedding_comparison"]
+    assert comparison["enabled"] is True
+    assert comparison["primary"] == "boosted"
+    assert comparison["baseline"]["generated"] == 0
+    assert comparison["baseline"]["non_repeat_ticket_count"] == 2
+    assert comparison["boosted"]["generated"] == 1
+    assert comparison["boosted"]["non_repeat_ticket_count"] == 0
+    assert comparison["delta"]["generated"] == 1
+    assert comparison["delta"]["non_repeat_ticket_count"] == -2
+    assert comparison["delta"]["added_questions"] == [
+        "How do I get my money back after an overdraft charge?"
+    ]
+    assert payload["errors"] == []
+
+
+def test_cfpb_faq_smoke_compare_mode_fails_closed_when_port_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        smoke,
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **_kwargs: (
+            [
+                _row("1", "I was charged overdraft fees after I closed the account."),
+                _row("2", "I was charged overdraft fees after closing my account."),
+            ],
+            _profile(source_count=2),
+        ),
+    )
+
+    def unavailable_port():
+        raise RuntimeError("model files missing")
+
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(
+            compare_embedding_booster=True,
+            output_markdown=tmp_path / "should_not_write.md",
+        ),
+        source_rows_path=tmp_path / "rows.jsonl",
+        embedding_port_factory=unavailable_port,
+    )
+
+    assert code == 1
+    assert payload["embedding_comparison"] == {
+        "enabled": True,
+        "primary": "baseline",
+        "error": "RuntimeError: model files missing",
+    }
+    assert payload["errors"] == [
+        "embedding booster unavailable: RuntimeError: model files missing"
+    ]
+    assert not (tmp_path / "should_not_write.md").exists()
+
+
+def test_cfpb_faq_smoke_compare_mode_fails_when_embedding_call_is_swallowed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class BrokenEmbeddingPort:
+        def embed_texts(self, _texts):
+            raise RuntimeError("inference crashed")
+
+    monkeypatch.setattr(
+        smoke,
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **_kwargs: (
+            [
+                _row("1", "How do I get my money back after an overdraft charge?"),
+                _row("2", "What is the process for a refund on an overdraft fee?"),
+            ],
+            _profile(source_count=2),
+        ),
+    )
+
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(compare_embedding_booster=True),
+        source_rows_path=tmp_path / "rows.jsonl",
+        embedding_port_factory=BrokenEmbeddingPort,
+    )
+
+    assert code == 1
+    assert payload["faq"]["generated"] == 0
+    assert payload["embedding_comparison"] == {
+        "enabled": True,
+        "primary": "baseline",
+        "error": "RuntimeError: inference crashed",
+    }
+    assert payload["errors"] == [
+        "embedding booster unavailable: RuntimeError: inference crashed",
+        "FAQ Markdown generated no items",
+        "FAQ output checks failed: condensed, has_action_items, resolution_evidence_scoped, uses_user_vocabulary",
+    ]
