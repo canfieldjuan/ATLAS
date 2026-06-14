@@ -14,6 +14,7 @@ Last updated: YYYY-MM-DD HH:MM TZ
 Session role: builder
 Operator-assigned lane: <one sentence>
 Current task: <one sentence>
+Spark/subagent routing: used <what/why> | considered <why main/direct was better> | not applicable
 
 ## Owned Active PR
 
