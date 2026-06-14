@@ -1,0 +1,78 @@
+{
+  "artifact_version": 1,
+  "blocked_steps": [
+    {
+      "detail": "Configured repeat-ticket gate was 30000; hosted snapshot reported 27384.",
+      "step": "hosted_submit_volume_gate"
+    },
+    {
+      "detail": "https://juancanfield.com/services/faq-deflection/results/{request_id} returned 404 for the generated request.",
+      "step": "portfolio_result_page"
+    },
+    {
+      "detail": "The hosted /webhooks/stripe endpoint returned Invalid signature when signed with the local ATLAS_SAAS_STRIPE_WEBHOOK_SECRET.",
+      "step": "paid_unlock"
+    }
+  ],
+  "csv_input": {
+    "bytes": 52428276,
+    "committed": false,
+    "records_written": 40383,
+    "sha256": "43130a9a43c2bd821a16c2025694a14a45fc2a914f79cfe5278c88736b749193",
+    "source_jsonl": "/home/juan-canfield/Desktop/Atlas/tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl"
+  },
+  "hosted_submit": {
+    "artifact_status": 403,
+    "elapsed_seconds": 64.46874859603122,
+    "ok": false,
+    "request_id": "content-ops-45c06a6950ec4677a214368d6e4dc44f",
+    "snapshot_status": 200,
+    "submit_status": 200,
+    "volume_gates": {
+      "actual": {
+        "generated_questions": 1659,
+        "repeat_ticket_count": 27384,
+        "source_row_count": 40383,
+        "submitted_row_count": 40383,
+        "top_question_count": 5,
+        "uploaded_bytes": 52428276
+      },
+      "configured": {
+        "generated_questions": 30,
+        "repeat_ticket_count": 30000,
+        "source_row_count": 30000,
+        "submitted_row_count": 30000,
+        "top_question_count": 5,
+        "uploaded_bytes": 50000000
+      },
+      "errors": [
+        "volume gate repeat_ticket_count expected >= 30000, got 27384"
+      ],
+      "ok": false
+    }
+  },
+  "paid_unlock": {
+    "after_artifact_status": null,
+    "before_artifact_status": 403,
+    "error_detail_probe": "Invalid signature",
+    "ok": false,
+    "webhook_status": 400
+  },
+  "portfolio_result_page": {
+    "artifact_status": 403,
+    "ok": false,
+    "page_status": 404,
+    "snapshot_status": 200,
+    "url": "https://juancanfield.com/services/faq-deflection/results/content-ops-45c06a6950ec4677a214368d6e4dc44f"
+  },
+  "preflight": {
+    "csv_file_size": 52428276,
+    "ok": true,
+    "submit_mode": "multipart"
+  },
+  "redaction": {
+    "raw_csv_committed": false,
+    "raw_report_committed": false,
+    "secrets_committed": false
+  }
+}
