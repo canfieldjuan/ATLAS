@@ -172,6 +172,38 @@ async def test_deflection_submit_upload_copy_rejects_oversize_mid_stream() -> No
     ]
 
 
+@pytest.mark.asyncio
+async def test_deflection_submit_full_thread_upload_copy_streams_chunks_not_whole_limit() -> None:
+    data = (
+        b'{"tickets":[{"ticket":{"id":"zd-large","subject":"'
+        + (b"Billing refund " * 6000)
+        + b'","description":"How do I get a refund?"},"comments":[]}]}'
+    )
+    upload = _Upload(data, filename="zendesk-thread.json")
+
+    with tempfile.NamedTemporaryFile() as handle:
+        byte_count = await api_module._copy_deflection_submit_upload_to_tempfile(
+            upload,
+            handle,
+            max_bytes=len(data) + 1024,
+            too_large_reason="deflection_submit_full_thread_too_large",
+            read_error_detail="Uploaded Zendesk full-thread JSON could not be read.",
+            stage_error_detail="Uploaded Zendesk full-thread JSON could not be staged.",
+        )
+        handle.flush()
+        handle.seek(0)
+        staged = handle.read()
+
+    assert byte_count == len(data)
+    assert staged == data
+    assert upload.read_sizes
+    assert all(
+        size == api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+        for size in upload.read_sizes
+    )
+    assert len(data) + 1025 not in upload.read_sizes
+
+
 def _install_blob(
     monkeypatch: pytest.MonkeyPatch,
     data: bytes,
@@ -225,6 +257,64 @@ def test_deflection_submit_blob_csv_streams_response_to_tempfile(
     assert byte_count == len(data)
     assert load_warnings == ()
     assert rows[0]["ticket_id"] == "ticket-0"
+    assert response.closed
+    assert response.read_sizes
+    assert all(
+        size == api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+        for size in response.read_sizes
+    )
+    assert len(data) + 1025 not in response.read_sizes
+
+
+def test_deflection_submit_blob_full_thread_streams_response_to_tempfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_public_dns(monkeypatch)
+    data = json.dumps({
+        "tickets": [{
+            "ticket": {
+                "id": "zd-large-thread",
+                "subject": "Large refund thread",
+                "description": "How do I get a refund for duplicate billing?",
+                "requester_id": "requester-1",
+                "status": "solved",
+                "satisfaction_rating": {"score": "good"},
+            },
+            "comments": [
+                {
+                    "author_id": "requester-1",
+                    "public": True,
+                    "plain_body": "The duplicate invoice still appears on my account.",
+                },
+                {
+                    "author_id": "agent-1",
+                    "public": True,
+                    "plain_body": "We refunded the duplicate invoice. "
+                    + ("The refund appears in 5-10 business days. " * 4000),
+                },
+            ],
+        }],
+    }).encode("utf-8")
+    response = _BlobResponse(data)
+
+    monkeypatch.setattr(
+        api_module,
+        "_open_https_blob_request",
+        lambda _target, *, timeout: response,
+    )
+
+    rows, byte_count, load_warnings = api_module._load_deflection_submit_blob_rows_sync(
+        "https://portfolio.example/blob/zendesk-thread.json",
+        max_bytes=len(data) + 1024,
+        importer_mode="full_thread",
+    )
+
+    assert byte_count == len(data)
+    assert load_warnings == ()
+    assert rows[0]["ticket_id"] == "zd-large-thread"
+    assert rows[0]["ticket_status"] == "solved"
+    assert rows[0]["satisfaction_rating"] == "good"
+    assert "refunded the duplicate invoice" in rows[0]["resolution_text"]
     assert response.closed
     assert response.read_sizes
     assert all(
@@ -1052,8 +1142,9 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
     router = _router(InMemoryDeflectionReportArtifactStore())
     submit = _route(router, "/ops/deflection-reports/submit", "POST")
     artifact_data = ZENDESK_THREAD_SAMPLE.read_bytes()
+    upload = _Upload(artifact_data, filename="zendesk-thread.json")
     request = _FormRequest({
-        "json_file": _Upload(artifact_data, filename="zendesk-thread.json"),
+        "json_file": upload,
         "support_platform": "zendesk",
         "company_name": "Acme Co.",
         "contact_email": "lead@acme.example",
@@ -1063,6 +1154,12 @@ async def test_deflection_submit_accepts_full_thread_multipart_json_upload() -> 
     payload = await submit.endpoint(request)
 
     assert request.form_kwargs == {"max_part_size": api_module._MAX_DEFLECTION_SUBMIT_BLOB_BYTES}
+    assert upload.read_sizes
+    assert all(
+        size == api_module._DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES
+        for size in upload.read_sizes
+    )
+    assert api_module._MAX_DEFLECTION_SUBMIT_BLOB_BYTES + 1 not in upload.read_sizes
     assert payload["status"] == "completed"
     metadata = payload["input_provider"]["metadata"]
     assert metadata["source_row_count"] == 4

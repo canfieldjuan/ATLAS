@@ -90,6 +90,7 @@ from ..ticket_faq_input_contract import ticket_faq_input_contracts
 from ..support_ticket_input_package import build_support_ticket_input_package
 from ..support_ticket_zendesk_thread import (
     load_zendesk_full_thread_rows_from_json_bytes,
+    load_zendesk_full_thread_rows_from_json_file,
 )
 
 ExecutionServicesProvider = Callable[
@@ -1584,19 +1585,22 @@ async def _load_deflection_submit_upload_rows(
 
 
 async def _copy_deflection_submit_upload_to_tempfile(
-    csv_file: Any,
+    upload_file: Any,
     handle: Any,
     *,
     max_bytes: int,
+    too_large_reason: str = "deflection_submit_csv_too_large",
+    read_error_detail: str = "Uploaded CSV could not be read.",
+    stage_error_detail: str = "Uploaded CSV could not be staged.",
 ) -> int:
     byte_count = 0
     while True:
         try:
-            chunk = await csv_file.read(_DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES)
+            chunk = await upload_file.read(_DEFLECTION_SUBMIT_UPLOAD_CHUNK_BYTES)
         except OSError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="Uploaded CSV could not be read.",
+                detail=read_error_detail,
             ) from exc
         if not chunk:
             return byte_count
@@ -1605,7 +1609,7 @@ async def _copy_deflection_submit_upload_to_tempfile(
             raise HTTPException(
                 status_code=413,
                 detail={
-                    "reason": "deflection_submit_csv_too_large",
+                    "reason": too_large_reason,
                     "max_file_bytes": max_bytes,
                 },
             )
@@ -1614,7 +1618,7 @@ async def _copy_deflection_submit_upload_to_tempfile(
         except OSError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="Uploaded CSV could not be staged.",
+                detail=stage_error_detail,
             ) from exc
         byte_count = next_byte_count
 
@@ -1624,27 +1628,41 @@ async def _load_deflection_submit_json_upload_rows(
     *,
     max_bytes: int,
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    temp_path: Path | None = None
     try:
-        data = await json_file.read(max_bytes + 1)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded Zendesk full-thread JSON could not be read.",
-        ) from exc
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "reason": "deflection_submit_full_thread_too_large",
-                "max_file_bytes": max_bytes,
-            },
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-deflection-submit-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            byte_count = await _copy_deflection_submit_upload_to_tempfile(
+                json_file,
+                handle,
+                max_bytes=max_bytes,
+                too_large_reason="deflection_submit_full_thread_too_large",
+                read_error_detail=(
+                    "Uploaded Zendesk full-thread JSON could not be read."
+                ),
+                stage_error_detail=(
+                    "Uploaded Zendesk full-thread JSON could not be staged."
+                ),
+            )
+        if byte_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded Zendesk full-thread JSON is empty.",
+            )
+        return _parse_deflection_submit_zendesk_thread_file(
+            temp_path,
+            byte_count=byte_count,
         )
-    if not data:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded Zendesk full-thread JSON is empty.",
-        )
-    return _parse_deflection_submit_zendesk_thread_bytes(data)
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Content Ops deflection submit temp cleanup failed")
 
 
 def _load_deflection_submit_blob_rows_sync(
@@ -1653,14 +1671,50 @@ def _load_deflection_submit_blob_rows_sync(
     importer_mode: str = "csv",
 ) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
     if importer_mode == "full_thread":
-        data = _read_bounded_https_blob(blob_url, max_bytes=max_bytes)
-        if not data:
+        return _load_deflection_submit_json_blob_rows_sync(
+            blob_url,
+            max_bytes=max_bytes,
+        )
+    return _load_deflection_submit_csv_blob_rows_sync(blob_url, max_bytes=max_bytes)
+
+
+def _load_deflection_submit_json_blob_rows_sync(
+    blob_url: str,
+    *,
+    max_bytes: int,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="content-ops-deflection-submit-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            byte_count = _copy_bounded_https_blob_to_tempfile(
+                blob_url,
+                handle,
+                max_bytes=max_bytes,
+                stage_error_detail="Zendesk full-thread JSON could not be staged.",
+                stage_log_message=(
+                    "Content Ops deflection blob full-thread JSON staging failed"
+                ),
+            )
+        if byte_count == 0:
             raise HTTPException(
                 status_code=400,
                 detail="Zendesk full-thread JSON is empty.",
             )
-        return _parse_deflection_submit_zendesk_thread_bytes(data)
-    return _load_deflection_submit_csv_blob_rows_sync(blob_url, max_bytes=max_bytes)
+        return _parse_deflection_submit_zendesk_thread_file(
+            temp_path,
+            byte_count=byte_count,
+        )
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Content Ops deflection submit temp cleanup failed")
 
 
 def _load_deflection_submit_csv_blob_rows_sync(
@@ -1704,6 +1758,10 @@ def _copy_bounded_https_blob_to_tempfile(
     handle: Any,
     *,
     max_bytes: int,
+    too_large_reason: str = "deflection_submit_blob_too_large",
+    stage_error_detail: str = "Blob CSV could not be staged.",
+    stage_log_message: str = "Content Ops deflection blob CSV staging failed",
+    fetch_log_message: str = "Content Ops deflection blob fetch failed",
 ) -> int:
     response: Any | None = None
     byte_count = 0
@@ -1718,7 +1776,7 @@ def _copy_bounded_https_blob_to_tempfile(
                 raise HTTPException(
                     status_code=413,
                     detail={
-                        "reason": "deflection_submit_blob_too_large",
+                        "reason": too_large_reason,
                         "max_file_bytes": max_bytes,
                     },
                 )
@@ -1727,11 +1785,11 @@ def _copy_bounded_https_blob_to_tempfile(
             except OSError as exc:
                 _log_deflection_blob_fetch_failure(
                     blob_url,
-                    "Content Ops deflection blob CSV staging failed",
+                    stage_log_message,
                 )
                 raise HTTPException(
                     status_code=400,
-                    detail="Blob CSV could not be staged.",
+                    detail=stage_error_detail,
                 ) from exc
             byte_count = next_byte_count
     except HTTPException:
@@ -1739,7 +1797,7 @@ def _copy_bounded_https_blob_to_tempfile(
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
         _log_deflection_blob_fetch_failure(
             blob_url,
-            "Content Ops deflection blob fetch failed",
+            fetch_log_message,
         )
         raise HTTPException(
             status_code=400,
@@ -1761,6 +1819,21 @@ def _parse_deflection_submit_zendesk_thread_bytes(
             detail="Zendesk full-thread JSON could not be parsed.",
         ) from exc
     return result.rows, len(data), result.warnings
+
+
+def _parse_deflection_submit_zendesk_thread_file(
+    temp_path: Path,
+    *,
+    byte_count: int,
+) -> tuple[list[Any], int, tuple[dict[str, Any], ...]]:
+    try:
+        result = load_zendesk_full_thread_rows_from_json_file(temp_path)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Zendesk full-thread JSON could not be parsed.",
+        ) from exc
+    return result.rows, byte_count, result.warnings
 
 
 def _parse_deflection_submit_csv_file(
