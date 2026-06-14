@@ -25,6 +25,7 @@ from extracted_content_pipeline.ticket_faq_markdown import (
     _resolution_signal_tokens,
     _resolution_text_is_publishable,
     _safe_vocabulary_representative_label,
+    _question_subclusters,
     _source_date_span,
     build_ticket_faq_markdown,
     normalize_intent_rules,
@@ -2091,6 +2092,104 @@ def test_build_ticket_faq_markdown_keeps_identical_topic_degraded_content_togeth
     assert result.items[0]["question"] == "What should I do about device reboot loop?"
     assert result.items[0]["source_ids"] == ("ticket-1", "ticket-2", "ticket-3", "ticket-4")
     assert result.items[0]["ticket_count"] == 4
+
+
+def test_question_subclusters_exact_join_merges_threshold_pairs_without_lsh_nomination() -> None:
+    shared = tuple(f"shared{index}" for index in range(6))
+    cases = [
+        shared + tuple(f"lefta{index}" for index in range(6)),
+        shared + tuple(f"righta{index}" for index in range(6)),
+        shared + tuple(f"leftb{index}" for index in range(5)),
+        shared + tuple(f"rightb{index}" for index in range(7)),
+        tuple(f"lowshared{index}" for index in range(5))
+        + tuple(f"leftc{index}" for index in range(7)),
+        tuple(f"lowshared{index}" for index in range(5))
+        + tuple(f"rightc{index}" for index in range(7)),
+    ]
+    rows = [
+        {
+            "text": " ".join(tokens),
+            "source_key": f"ticket-{index}",
+        }
+        for index, tokens in enumerate(cases)
+    ]
+
+    clusters = _question_subclusters(rows)
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("ticket-0", "ticket-1", "ticket-2", "ticket-3"),
+        ("ticket-4",),
+        ("ticket-5",),
+    ]
+
+
+def test_question_subclusters_exact_join_keeps_empty_gists_separate() -> None:
+    clusters = _question_subclusters([
+        {"text": "", "source_key": "ticket-empty-1"},
+        {"text": "", "source_key": "ticket-empty-2"},
+    ])
+
+    assert [tuple(row["source_key"] for row in cluster) for cluster in clusters] == [
+        ("ticket-empty-1",),
+        ("ticket-empty-2",),
+    ]
+
+
+def test_build_ticket_faq_markdown_subclusters_are_order_insensitive() -> None:
+    rows = [
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": "Password reset",
+            "text": "password reset email link expired account login access issue",
+            "source_id": "ticket-a",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": "Password reset",
+            "text": "password reset email link invalid account login problem",
+            "source_id": "ticket-b",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": "Invoice refund",
+            "text": "invoice refund credit card charge duplicate billing issue",
+            "source_id": "ticket-c",
+        },
+        {
+            "source_type": "support_ticket",
+            "support_ticket_cluster": "technical support",
+            "source_title": "Invoice refund",
+            "text": "invoice refund credit card charge duplicate payment problem",
+            "source_id": "ticket-d",
+        },
+    ]
+
+    first = build_ticket_faq_markdown(
+        rows,
+        max_items=0,
+        documentation_terms=("Password reset", "Invoice refund"),
+    )
+    second = build_ticket_faq_markdown(
+        tuple(reversed(rows)),
+        max_items=0,
+        documentation_terms=("Password reset", "Invoice refund"),
+    )
+
+    first_clusters = sorted(
+        (tuple(sorted(item["source_ids"])), item["ticket_count"])
+        for item in first.items
+    )
+    second_clusters = sorted(
+        (tuple(sorted(item["source_ids"])), item["ticket_count"])
+        for item in second.items
+    )
+    assert first_clusters == second_clusters == [
+        (("ticket-a", "ticket-b"), 2),
+        (("ticket-c", "ticket-d"), 2),
+    ]
 
 
 def test_build_ticket_faq_markdown_preserves_topic_degraded_creation_order_under_cap() -> None:
