@@ -1,6 +1,6 @@
 # Plan archive index
 
-1035 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1036 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -678,6 +678,7 @@
 - [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Exact-Repeat-Join](archive/PR-Deflection-Exact-Repeat-Join.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Full-Thread-Export-Guidance](archive/PR-Deflection-Full-Thread-Export-Guidance.md) - lane: deflection/clustering-raw-data | phase: Product polish
+- [PR-Deflection-Full-Volume-Live-Proof](archive/PR-Deflection-Full-Volume-Live-Proof.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Smoke-Gates](archive/PR-Deflection-Full-Volume-Smoke-Gates.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Full-Volume-Submit-Limit](archive/PR-Deflection-Full-Volume-Submit-Limit.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
 - [PR-Deflection-Help-Center-Prose](archive/PR-Deflection-Help-Center-Prose.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
