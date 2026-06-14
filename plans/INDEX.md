@@ -1,6 +1,6 @@
 # Plan archive index
 
-1015 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1016 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -687,6 +687,7 @@
 - [PR-Deflection-Raw-CSV-Cluster-Preview](archive/PR-Deflection-Raw-CSV-Cluster-Preview.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Real-Data-Proof](archive/PR-Deflection-Real-Data-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Refund-Dispute-Revocation](archive/PR-Deflection-Refund-Dispute-Revocation.md) - lane: go-live-deflection-cleanup | phase: Production hardening
+- [PR-Deflection-Repeat-Metric-Alignment](archive/PR-Deflection-Repeat-Metric-Alignment.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Repeat-Volume-Preview](archive/PR-Deflection-Repeat-Volume-Preview.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Report-Brand-Neutral](archive/PR-Deflection-Report-Brand-Neutral.md) - lane: go-live-deflection-cleanup | phase: Product polish
 - [PR-Deflection-Representative-Taxonomy-Source](archive/PR-Deflection-Representative-Taxonomy-Source.md) - lane: deflection/clustering | phase: Production hardening
