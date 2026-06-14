@@ -1439,13 +1439,7 @@ async def test_deflection_submit_rejects_blob_redirects(
 
     def _open(target: Any, *, timeout: int) -> _BlobResponse:
         calls.append(target.url)
-        raise urllib.error.HTTPError(
-            target.url,
-            302,
-            "Found",
-            {"Location": "http://169.254.169.254/latest/meta-data"},
-            None,
-        )
+        return _BlobResponse(b"", status=302)
 
     monkeypatch.setattr(api_module, "_open_https_blob_request", _open)
     router = _router(InMemoryDeflectionReportArtifactStore())
@@ -1462,6 +1456,75 @@ async def test_deflection_submit_rejects_blob_redirects(
     assert calls == ["https://portfolio.example/blob/tickets.csv"]
     assert exc.value.status_code == 400
     assert exc.value.detail == "Blob URL redirects are not allowed."
+
+
+def test_pinned_blob_response_closes_connection_if_response_close_fails() -> None:
+    class _Response:
+        status = 200
+
+        def read(self, _size: int) -> bytes:
+            return b""
+
+        def close(self) -> None:
+            raise OSError("response close failed")
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = _Connection()
+    response = api_module._PinnedBlobResponse(_Response(), connection)  # type: ignore[arg-type]
+
+    with pytest.raises(OSError, match="response close failed"):
+        response.close()
+
+    assert connection.closed
+
+
+def test_open_validated_https_blob_response_closes_and_logs_setup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _install_public_dns(monkeypatch)
+
+    class _StatusRaisesResponse:
+        closed = False
+
+        @property
+        def status(self) -> int:
+            raise OSError("status failed")
+
+        def close(self) -> None:
+            self.closed = True
+
+    response = _StatusRaisesResponse()
+    caplog.set_level("WARNING", logger=api_module.logger.name)
+    monkeypatch.setattr(
+        api_module,
+        "_open_https_blob_request",
+        lambda _target, *, timeout: response,
+    )
+
+    with pytest.raises(api_module.HTTPException) as exc:
+        api_module._open_validated_https_blob_response(
+            "https://portfolio.example/blob/tickets.csv?sig=secret",
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Blob URL could not be fetched."
+    assert response.closed
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "Content Ops deflection blob fetch failed"
+    ]
+    assert len(records) == 1
+    assert getattr(records[0], "blob_host") == "portfolio.example"
+    assert getattr(records[0], "blob_path") == "/blob/tickets.csv"
+    assert "secret" not in caplog.text
 
 
 def test_read_bounded_https_blob_rejects_redirect_status_without_following() -> None:

@@ -1725,6 +1725,10 @@ def _copy_bounded_https_blob_to_tempfile(
             try:
                 handle.write(chunk)
             except OSError as exc:
+                _log_deflection_blob_fetch_failure(
+                    blob_url,
+                    "Content Ops deflection blob CSV staging failed",
+                )
                 raise HTTPException(
                     status_code=400,
                     detail="Blob CSV could not be staged.",
@@ -1733,6 +1737,10 @@ def _copy_bounded_https_blob_to_tempfile(
     except HTTPException:
         raise
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        _log_deflection_blob_fetch_failure(
+            blob_url,
+            "Content Ops deflection blob fetch failed",
+        )
         raise HTTPException(
             status_code=400,
             detail="Blob URL could not be fetched.",
@@ -1782,6 +1790,10 @@ def _read_bounded_https_blob(blob_url: str, *, max_bytes: int) -> bytes:
     except HTTPException:
         raise
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        _log_deflection_blob_fetch_failure(
+            blob_url,
+            "Content Ops deflection blob fetch failed",
+        )
         raise HTTPException(
             status_code=400,
             detail="Blob URL could not be fetched.",
@@ -1820,21 +1832,17 @@ def _open_validated_https_blob_response(blob_url: str) -> Any:
                 detail="Blob URL could not be fetched.",
             )
         return response
-    except urllib.error.HTTPError as exc:
-        if 300 <= int(getattr(exc, "code", 0) or 0) < 400:
-            raise HTTPException(
-                status_code=400,
-                detail="Blob URL redirects are not allowed.",
-            ) from exc
-        raise HTTPException(
-            status_code=400,
-            detail="Blob URL could not be fetched.",
-        ) from exc
     except HTTPException:
         if response is not None:
             _close_https_blob_response(response)
         raise
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        if response is not None:
+            _close_https_blob_response(response)
+        _log_deflection_blob_fetch_failure(
+            blob_url,
+            "Content Ops deflection blob fetch failed",
+        )
         raise HTTPException(
             status_code=400,
             detail="Blob URL could not be fetched.",
@@ -1896,8 +1904,10 @@ class _PinnedBlobResponse:
         return self._response.read(size)
 
     def close(self) -> None:
-        self._response.close()
-        self._connection.close()
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
 
 
 def _open_https_blob_request(
@@ -1931,6 +1941,18 @@ def _close_https_blob_response(response: Any) -> None:
     close = getattr(response, "close", None)
     if callable(close):
         close()
+
+
+def _log_deflection_blob_fetch_failure(blob_url: str, message: str) -> None:
+    parsed = urllib.parse.urlparse(blob_url)
+    logger.warning(
+        message,
+        extra={
+            "blob_host": parsed.hostname or "",
+            "blob_path": parsed.path or "/",
+        },
+        exc_info=True,
+    )
 
 
 def _validate_https_blob_url(value: Any) -> str:
