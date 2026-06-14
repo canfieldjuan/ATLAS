@@ -1,6 +1,6 @@
 # Plan archive index
 
-1039 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1040 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -660,6 +660,7 @@
 - [PR-Deflection-Answer-Copy-Polish](archive/PR-Deflection-Answer-Copy-Polish.md) - lane: content-ops/faq-deflection-backend | phase: Product polish
 - [PR-Deflection-Async-Payment-Fulfillment](archive/PR-Deflection-Async-Payment-Fulfillment.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-Badge-Deterministic-Clustering](archive/PR-Deflection-Badge-Deterministic-Clustering.md) - lane: ai-content-ops/faq-support-ticket-deflection | phase: Product polish
+- [PR-Deflection-Blob-Upload-Tempfile](archive/PR-Deflection-Blob-Upload-Tempfile.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-CFPB-Embedding-Baseline](archive/PR-Deflection-CFPB-Embedding-Baseline.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-CFPB-Mxbai-Live-Artifact](archive/PR-Deflection-CFPB-Mxbai-Live-Artifact.md) - lane: deflection/clustering | phase: Functional validation
 - [PR-Deflection-CSV-Ingestion-Hardening](archive/PR-Deflection-CSV-Ingestion-Hardening.md) - lane: deflection/go-live | phase: Production hardening
