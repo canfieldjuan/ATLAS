@@ -101,6 +101,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--company-name", default=_env("ATLAS_DEFLECTION_COMPANY_NAME"))
     parser.add_argument("--contact-email", default=_env("ATLAS_DEFLECTION_CONTACT_EMAIL"))
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--min-uploaded-bytes", type=int, default=0)
+    parser.add_argument("--min-source-row-count", type=int, default=0)
+    parser.add_argument("--min-submitted-row-count", type=int, default=0)
+    parser.add_argument("--min-generated-questions", type=int, default=0)
+    parser.add_argument("--min-repeat-ticket-count", type=int, default=0)
+    parser.add_argument("--min-top-question-count", type=int, default=0)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--submit-path", default=SUBMIT_PATH)
     parser.add_argument("--snapshot-path-template", default=SNAPSHOT_PATH_TEMPLATE)
@@ -152,6 +158,16 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         int(args.limit) <= 0 or int(args.limit) > SUBMIT_ROW_LIMIT_MAX
     ):
         errors.append(f"--limit must be between 1 and {SUBMIT_ROW_LIMIT_MAX}")
+    for attr, label in (
+        ("min_uploaded_bytes", "--min-uploaded-bytes"),
+        ("min_source_row_count", "--min-source-row-count"),
+        ("min_submitted_row_count", "--min-submitted-row-count"),
+        ("min_generated_questions", "--min-generated-questions"),
+        ("min_repeat_ticket_count", "--min-repeat-ticket-count"),
+        ("min_top_question_count", "--min-top-question-count"),
+    ):
+        if int(getattr(args, attr)) < 0:
+            errors.append(f"{label} must be zero or greater")
     if not math.isfinite(float(args.timeout)) or float(args.timeout) <= 0:
         errors.append("--timeout must be a positive finite number")
     for attr, label in (
@@ -576,6 +592,107 @@ def _status_summary(response: HttpJsonResponse) -> dict[str, Any]:
     }
 
 
+def _configured_volume_gates(args: argparse.Namespace) -> dict[str, int]:
+    return {
+        "uploaded_bytes": int(args.min_uploaded_bytes),
+        "source_row_count": int(args.min_source_row_count),
+        "submitted_row_count": int(args.min_submitted_row_count),
+        "generated_questions": int(args.min_generated_questions),
+        "repeat_ticket_count": int(args.min_repeat_ticket_count),
+        "top_question_count": int(args.min_top_question_count),
+    }
+
+
+def _strict_count(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _volume_gate_actuals(
+    *,
+    submit_mode: str,
+    diagnostics: Mapping[str, Any],
+    snapshot: Mapping[str, Any] | None,
+) -> dict[str, int | None]:
+    metadata = diagnostics.get("metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    summary = snapshot.get("summary") if isinstance(snapshot, Mapping) else None
+    if not isinstance(summary, Mapping):
+        summary = {}
+    top_questions = snapshot.get("top_questions") if isinstance(snapshot, Mapping) else None
+    byte_key = "uploaded_bytes" if submit_mode == "multipart" else "blob_bytes"
+    return {
+        "uploaded_bytes": _strict_count(metadata.get(byte_key)),
+        "source_row_count": _strict_count(metadata.get("source_row_count")),
+        "submitted_row_count": _strict_count(metadata.get("submitted_row_count")),
+        "generated_questions": _strict_count(summary.get("generated")),
+        "repeat_ticket_count": _strict_count(summary.get("repeat_ticket_count")),
+        "top_question_count": (
+            len(top_questions)
+            if isinstance(top_questions, Sequence)
+            and not isinstance(top_questions, (str, bytes, bytearray))
+            else None
+        ),
+    }
+
+
+def _volume_gate_errors(
+    args: argparse.Namespace,
+    *,
+    submit_mode: str,
+    diagnostics: Mapping[str, Any],
+    snapshot: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[str]]:
+    expected = _configured_volume_gates(args)
+    actual = _volume_gate_actuals(
+        submit_mode=submit_mode,
+        diagnostics=diagnostics,
+        snapshot=snapshot,
+    )
+    errors: list[str] = []
+    for gate, minimum in expected.items():
+        if minimum <= 0:
+            continue
+        value = actual.get(gate)
+        if value is None:
+            errors.append(f"volume gate {gate} expected >= {minimum}, got missing")
+        elif value < minimum:
+            errors.append(f"volume gate {gate} expected >= {minimum}, got {value}")
+    configured = {key: value for key, value in expected.items() if value > 0}
+    return {
+        "configured": configured,
+        "actual": actual,
+        "ok": not errors,
+        "errors": errors,
+    }, errors
+
+
+def _skipped_volume_gates(
+    args: argparse.Namespace,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    configured = {
+        key: value
+        for key, value in _configured_volume_gates(args).items()
+        if value > 0
+    }
+    if not configured:
+        return {"configured": {}, "actual": {}, "ok": True, "errors": []}
+    return {
+        "configured": configured,
+        "actual": {},
+        "ok": False,
+        "skipped": True,
+        "not_run_reason": reason,
+        "errors": [],
+    }
+
+
 def _preflight_summary(
     args: argparse.Namespace,
     errors: Sequence[str],
@@ -591,6 +708,7 @@ def _preflight_summary(
         "submit_mode": _submit_mode(args),
         "csv_file_size": _csv_file_size(args),
         "blob_host": _redacted_blob_host(_clean(args.blob_url)),
+        "volume_gates": _skipped_volume_gates(args, reason=reason),
         "submit": {"ok": False, "skipped": True, "not_run_reason": reason},
         "snapshot": {"ok": False, "skipped": True, "not_run_reason": reason},
         "artifact": {"ok": False, "skipped": True, "not_run_reason": reason},
@@ -641,6 +759,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     request_id = ""
     submit_snapshot: Mapping[str, Any] | None = None
     diagnostics: dict[str, Any] = {}
+    volume_gates = _skipped_volume_gates(args, reason="submit_failed")
     submit_errors.extend(
         _stale_multipart_submit_route_errors(submit_response, submit_mode=submit_mode)
     )
@@ -652,6 +771,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             submit_mode=submit_mode,
         )
         submit_errors.extend(envelope_errors)
+        if not envelope_errors:
+            volume_gates, volume_gate_errors = _volume_gate_errors(
+                args,
+                submit_mode=submit_mode,
+                diagnostics=diagnostics,
+                snapshot=submit_snapshot,
+            )
+            errors.extend(volume_gate_errors)
     errors.extend(submit_errors)
     snapshot_summary: dict[str, Any] = {
         "ok": False,
@@ -712,6 +839,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "submit_mode": submit_mode,
         "csv_file_size": _csv_file_size(args),
         "blob_host": _redacted_blob_host(_clean(args.blob_url)),
+        "volume_gates": volume_gates,
         "submit": {
             **_status_summary(submit_response),
             "ok": not submit_errors,
