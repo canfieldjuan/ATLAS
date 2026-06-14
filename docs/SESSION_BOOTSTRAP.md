@@ -15,7 +15,7 @@ Both deliberately point at the live state docs for anything volatile and hardcod
 >
 > 1. **Read first, in order:** `AGENTS.md` (the multi-session PR contract), `CLAUDE.md`, `CANONICAL.md`, `INTEGRATION_MAP.md`, `BUILD_SPEC.md`, `CONTEXT.md`. Then run `git log --oneline -20` and `gh pr list --state open` to see where things actually stand. Do not infer state from this prompt — those sources are truth.
 >
-> 2. **Session ownership map:** read `SESSION_STATE.local.md` if it exists. If it does not exist, create it from `docs/SESSION_STATE_TEMPLATE.md` before any PR action. Fill in your assigned lane, current task, owned active PR (or `none`), open PRs that are explicitly **not yours**, current worktree, and last safe action. A PR that is not listed as owned in this file is not yours.
+> 2. **Session ownership map:** read `SESSION_STATE.local.md` if it exists. If it does not exist, create it from `docs/SESSION_STATE_TEMPLATE.md` before any PR action. Fill in your assigned lane, current task, Spark/subagent routing used or considered, owned active PR (or `none`), open PRs that are explicitly **not yours**, current worktree, and last safe action. A PR that is not listed as owned in this file is not yours.
 >
 > 3. **Your current lane:** [ONE line — e.g. "Content-Ops macro-writeback" or "deflection/Stripe monetization". If unsure, read CONTEXT.md + open PRs to find the active slice.] Stay in this lane. **Do not close, merge, or modify PRs outside your current task** — if a PR looks abandoned, ask the operator; don't close it. If an open PR is in the same lane but is not marked owned in `SESSION_STATE.local.md`, treat it as someone else's PR.
 >

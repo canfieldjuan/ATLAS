@@ -232,9 +232,10 @@ Update the map:
 - after merging a PR;
 - before handing back to the operator.
 
-The map must name the current lane, current task, owned active PR
-number/title/branch/plan/head SHA when one exists, PRs this session may
-touch, PRs this session must not touch, and the last safe action.
+The map must name the current lane, current task, Spark/subagent routing used
+or considered, owned active PR number/title/branch/plan/head SHA when one
+exists, PRs this session may touch, PRs this session must not touch, and the
+last safe action.
 
 Before inspecting comments, pushing updates, closing, or merging any
 PR, the builder must verify all of the following:
