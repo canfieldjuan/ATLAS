@@ -190,6 +190,9 @@ try:
     from .content_ops_zendesk_credentials import (
         create_content_ops_zendesk_credentials_router,
     )
+    from .content_ops_zendesk_export import (
+        create_content_ops_zendesk_export_router,
+    )
     from .content_ops_brand_voice_profiles import (
         create_content_ops_brand_voice_profiles_router,
     )
@@ -312,6 +315,11 @@ try:
         auth_dependency=_capture_content_ops_auth_user,
     )
     router.include_router(zendesk_credentials_router)
+    zendesk_export_router = create_content_ops_zendesk_export_router(
+        pool_provider=get_db_pool,
+        auth_dependency=_capture_content_ops_auth_user,
+    )
+    router.include_router(zendesk_export_router)
     brand_voice_profiles_router = create_content_ops_brand_voice_profiles_router(
         pool_provider=get_db_pool,
         auth_dependency=_capture_content_ops_auth_user,

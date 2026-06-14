@@ -154,19 +154,40 @@ async def test_lookup_zendesk_credentials_decrypts_tenant_row(
 
 
 @pytest.mark.asyncio
-async def test_lookup_zendesk_credentials_returns_none_on_decrypt_failure(
+async def test_lookup_zendesk_credentials_raises_on_decrypt_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pool = _Pool(fetchrow_result=_row())
     monkeypatch.setattr(service, "decrypt_secret", lambda ciphertext, kid: None)
 
-    credentials = await service.lookup_zendesk_credentials(
-        pool,
-        account_id=str(uuid.uuid4()),
-    )
+    with pytest.raises(
+        service.ZendeskCredentialLookupError,
+        match="zendesk_credentials_unavailable",
+    ):
+        await service.lookup_zendesk_credentials(
+            pool,
+            account_id=str(uuid.uuid4()),
+        )
 
-    assert credentials is None
     assert pool.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_lookup_zendesk_credentials_raises_on_fetch_failure() -> None:
+    class _FailingPool(_Pool):
+        async def fetchrow(self, query, *args):
+            raise RuntimeError("db down secret-token")
+
+    with pytest.raises(
+        service.ZendeskCredentialLookupError,
+        match="zendesk_credentials_unavailable",
+    ) as exc:
+        await service.lookup_zendesk_credentials(
+            _FailingPool(),
+            account_id=str(uuid.uuid4()),
+        )
+
+    assert "secret-token" not in str(exc.value)
 
 
 @pytest.mark.asyncio
