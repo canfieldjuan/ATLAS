@@ -1,6 +1,6 @@
 # Plan archive index
 
-1026 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1027 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -968,6 +968,7 @@
 - [PR-SEO-Foundation-Fixes](archive/PR-SEO-Foundation-Fixes.md)
 - [PR-SEO-Prerender](archive/PR-SEO-Prerender.md)
 - [PR-Semantic-Diff-Advisor-CI](archive/PR-Semantic-Diff-Advisor-CI.md) - lane: review-workflow | phase: workflow/process
+- [PR-Spark-Routing-Light-Enforcement](archive/PR-Spark-Routing-Light-Enforcement.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Spark-Subagent-Routing-Docs](archive/PR-Spark-Subagent-Routing-Docs.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stale-Base-Push-Guard](archive/PR-Stale-Base-Push-Guard.md) - lane: workflow/process | phase: Workflow/process
 - [PR-Stripe-Billing-Hardening](archive/PR-Stripe-Billing-Hardening.md) - lane: atlas-billing/stripe | phase: Production hardening
