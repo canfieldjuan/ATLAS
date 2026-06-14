@@ -246,6 +246,124 @@ def test_load_source_rows_from_semicolon_csv_detects_support_ticket_export(
     }]
 
 
+def test_load_source_rows_keeps_comma_delimiter_when_body_has_tabs_semicolons(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            (
+                'ticket-1,Export help,"Clicked reports; exports; analytics\t'
+                'but the download still fails"'
+            ),
+            (
+                'ticket-2,Billing help,"Invoice tab\tshows paid; portal says due"'
+            ),
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Export help",
+            "message": (
+                "Clicked reports; exports; analytics\t"
+                "but the download still fails"
+            ),
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Billing help",
+            "message": "Invoice tab\tshows paid; portal says due",
+        },
+    ]
+
+
+def test_load_source_rows_rejects_inconsistent_mixed_delimiters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_mixed_delimiters.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,How do I export reports?",
+            "ticket-2;Billing help;Invoice portal is wrong",
+        ]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="inconsistent column counts"):
+        load_source_rows_from_file(path, file_format="csv")
+
+
+def test_load_source_rows_rejects_collapsed_mixed_delimiter_at_threshold(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_mixed_delimiters.csv"
+    lines = ["ticket_id,subject,message"]
+    lines.extend(
+        f"ticket-{index},Export help,How do I export report {index}?"
+        for index in range(1, 10)
+    )
+    lines.append("ticket-bad;Billing help;Invoice portal is wrong")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="first collapsed mixed-delimiter row 11"):
+        load_source_rows_from_file(path, file_format="csv")
+
+
+def test_load_source_rows_allows_single_column_message_with_delimiters(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_ticket_messages.csv"
+    path.write_text(
+        "\n".join([
+            "message",
+            "I tried A; then B failed, and setup still loops",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [{
+        "message": "I tried A; then B failed, and setup still loops",
+    }]
+
+
+def test_load_source_rows_preserves_single_quote_quoted_commas(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support_tickets_single_quote.csv"
+    path.write_text(
+        "\n".join([
+            "ticket_id,subject,message",
+            "ticket-1,Export help,'How do I export, then download?'",
+            "ticket-2,Billing help,'Invoice portal says paid, then due'",
+        ]),
+        encoding="utf-8",
+    )
+
+    rows = load_source_rows_from_file(path, file_format="csv")
+
+    assert rows == [
+        {
+            "ticket_id": "ticket-1",
+            "subject": "Export help",
+            "message": "How do I export, then download?",
+        },
+        {
+            "ticket_id": "ticket-2",
+            "subject": "Billing help",
+            "message": "Invoice portal says paid, then due",
+        },
+    ]
+
+
 def test_load_source_rows_preserves_quoted_commas_and_multiline_text(
     tmp_path: Path,
 ) -> None:

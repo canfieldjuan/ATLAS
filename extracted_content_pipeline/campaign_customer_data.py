@@ -19,7 +19,10 @@ from .campaign_ports import TenantScope
 
 CustomerDataFormat = Literal["auto", "json", "csv"]
 _CSV_DETECT_DELIMITERS = ",;\t|"
+_CSV_DETECT_QUOTECHARS = ('"', "'")
 _CSV_SNIFFER_SAMPLE_CHARS = 65_536
+_CSV_DELIMITER_SAMPLE_LINES = 100
+_CSV_DELIMITER_MIN_CONSISTENCY = 0.90
 _CSV_NUL_REDECODE_RATIO = 0.10
 _CSV_UTF16_NUL_SIDE_RATIO = 0.30
 _CSV_REPLACEMENT_WARNING_RATIO = 0.01
@@ -92,6 +95,41 @@ class CampaignOpportunityWarning:
         if self.field:
             data["field"] = self.field
         return data
+
+
+@dataclass(frozen=True)
+class _CsvDelimiterCandidate:
+    delimiter: str
+    quotechar: str
+    header_index: int | None
+    header_width: int
+    data_rows: int
+    consistent_rows: int
+    exact_width_rows: int
+    first_offending_row: int | None
+    first_collapsed_row: int | None
+
+    @property
+    def consistency(self) -> float:
+        if not self.data_rows:
+            return 1.0
+        return self.consistent_rows / self.data_rows
+
+    @property
+    def exactness(self) -> float:
+        if not self.data_rows:
+            return 1.0
+        return self.exact_width_rows / self.data_rows
+
+    @property
+    def valid(self) -> bool:
+        return (
+            self.header_index is not None
+            and self.header_width >= 1
+            and (self.data_rows > 0 or self.header_index == 0)
+            and self.first_collapsed_row is None
+            and self.consistency >= _CSV_DELIMITER_MIN_CONSISTENCY
+        )
 
 
 @dataclass(frozen=True)
@@ -283,11 +321,24 @@ def _load_csv_dict_rows(
     text, decode_warnings = _read_csv_text(path)
     if not text.strip():
         raise ValueError("CSV customer data must include a header row.")
-    reader = csv.reader(StringIO(text), dialect=_detect_csv_dialect(text))
+    candidate = _select_csv_delimiter(text)
+    reader = csv.reader(
+        StringIO(text),
+        dialect=_csv_delimiter_dialect(
+            candidate.delimiter,
+            quotechar=candidate.quotechar,
+        ),
+    )
     raw_rows = list(reader)
     header_index = _csv_header_index(raw_rows)
     if header_index is None:
         raise ValueError("CSV customer data must include a header row.")
+    _validate_csv_column_consistency(
+        raw_rows,
+        header_index,
+        delimiter=candidate.delimiter,
+        quotechar=candidate.quotechar,
+    )
     load_warnings = decode_warnings + _leading_rows_skipped_warnings(
         raw_rows,
         header_index,
@@ -562,29 +613,189 @@ def _csv_decode_warnings(
     )
 
 
-def _detect_csv_dialect(text: str) -> csv.Dialect:
-    sample = text[:_CSV_SNIFFER_SAMPLE_CHARS]
-    try:
-        return _harden_csv_dialect(csv.Sniffer().sniff(
-            sample,
-            delimiters=_CSV_DETECT_DELIMITERS,
-        ))
-    except csv.Error:
-        return csv.excel
+def _select_csv_delimiter(text: str) -> _CsvDelimiterCandidate:
+    candidates = tuple(
+        _score_csv_delimiter(text, delimiter=delimiter, quotechar=quotechar)
+        for delimiter in _CSV_DETECT_DELIMITERS
+        for quotechar in _CSV_DETECT_QUOTECHARS
+    )
+    valid = [candidate for candidate in candidates if candidate.valid]
+    if valid:
+        return max(valid, key=_csv_delimiter_candidate_key)
+    _raise_csv_delimiter_error(max(candidates, key=_csv_delimiter_candidate_key))
 
 
-def _harden_csv_dialect(dialect: csv.Dialect) -> type[csv.Dialect]:
-    class HardenedDialect(csv.Dialect):
-        delimiter = dialect.delimiter
-        quotechar = dialect.quotechar or '"'
-        escapechar = dialect.escapechar
-        doublequote = True
-        skipinitialspace = dialect.skipinitialspace
-        lineterminator = dialect.lineterminator
-        quoting = dialect.quoting
-        strict = False
+def _score_csv_delimiter(
+    text: str,
+    *,
+    delimiter: str,
+    quotechar: str,
+) -> _CsvDelimiterCandidate:
+    reader = csv.reader(
+        StringIO(_csv_delimiter_sample_text(text)),
+        dialect=_csv_delimiter_dialect(delimiter, quotechar=quotechar),
+    )
+    rows = list(reader)
+    header_index = _csv_header_index(rows)
+    return _csv_delimiter_candidate(
+        rows,
+        header_index,
+        delimiter=delimiter,
+        quotechar=quotechar,
+    )
 
-    return HardenedDialect
+
+def _csv_delimiter_candidate(
+    rows: Sequence[Sequence[Any]],
+    header_index: int | None,
+    *,
+    delimiter: str,
+    quotechar: str,
+) -> _CsvDelimiterCandidate:
+    header_width = len(rows[header_index]) if header_index is not None else 0
+    data_rows = 0
+    consistent_rows = 0
+    exact_width_rows = 0
+    first_offending_row: int | None = None
+    first_collapsed_row: int | None = None
+    if header_index is not None and header_width:
+        for row_number, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+            if not any(str(value or "").strip() for value in row):
+                continue
+            data_rows += 1
+            collapsed = (
+                header_width >= 2
+                and _csv_short_row_uses_competing_delimiter(row, delimiter=delimiter)
+            )
+            if collapsed and first_collapsed_row is None:
+                first_collapsed_row = row_number
+            if len(row) == header_width:
+                exact_width_rows += 1
+            if _csv_row_matches_delimiter(row, header_width, delimiter=delimiter):
+                consistent_rows += 1
+            elif first_offending_row is None:
+                first_offending_row = row_number
+    return _CsvDelimiterCandidate(
+        delimiter=delimiter,
+        quotechar=quotechar,
+        header_index=header_index,
+        header_width=header_width,
+        data_rows=data_rows,
+        consistent_rows=consistent_rows,
+        exact_width_rows=exact_width_rows,
+        first_offending_row=first_offending_row,
+        first_collapsed_row=first_collapsed_row,
+    )
+
+
+def _csv_delimiter_candidate_key(
+    candidate: _CsvDelimiterCandidate,
+) -> tuple[bool, bool, bool, float, float, int, int, int, int]:
+    return (
+        candidate.header_index is not None,
+        candidate.data_rows > 0,
+        candidate.first_collapsed_row is None,
+        candidate.consistency,
+        candidate.exactness,
+        candidate.exact_width_rows,
+        candidate.header_width,
+        candidate.consistent_rows,
+        -_CSV_DETECT_DELIMITERS.index(candidate.delimiter),
+        -_CSV_DETECT_QUOTECHARS.index(candidate.quotechar),
+    )
+
+
+def _csv_row_matches_delimiter(
+    row: Sequence[Any],
+    header_width: int,
+    *,
+    delimiter: str,
+) -> bool:
+    if len(row) == header_width:
+        return True
+    if len(row) > header_width:
+        return True
+    return not _csv_short_row_uses_competing_delimiter(row, delimiter=delimiter)
+
+
+def _csv_short_row_uses_competing_delimiter(
+    row: Sequence[Any],
+    *,
+    delimiter: str,
+) -> bool:
+    if len(row) != 1:
+        return False
+    text = str(row[0] or "")
+    return any(
+        candidate != delimiter and candidate in text
+        for candidate in _CSV_DETECT_DELIMITERS
+    )
+
+
+def _csv_delimiter_sample_text(text: str) -> str:
+    return "\n".join(text.splitlines()[:_CSV_DELIMITER_SAMPLE_LINES])
+
+
+def _csv_delimiter_dialect(
+    delimiter: str,
+    *,
+    quotechar: str,
+) -> type[csv.Dialect]:
+    return type(
+        "CandidateDialect",
+        (csv.Dialect,),
+        {
+            "delimiter": delimiter,
+            "quotechar": quotechar,
+            "escapechar": None,
+            "doublequote": True,
+            "skipinitialspace": False,
+            "lineterminator": "\n",
+            "quoting": csv.QUOTE_MINIMAL,
+            "strict": False,
+        },
+    )
+
+
+def _validate_csv_column_consistency(
+    rows: Sequence[Sequence[Any]],
+    header_index: int,
+    *,
+    delimiter: str,
+    quotechar: str,
+) -> None:
+    candidate = _csv_delimiter_candidate(
+        rows,
+        header_index,
+        delimiter=delimiter,
+        quotechar=quotechar,
+    )
+    if candidate.valid:
+        return
+    _raise_csv_delimiter_error(candidate)
+
+
+def _raise_csv_delimiter_error(candidate: _CsvDelimiterCandidate) -> None:
+    delimiter_name = {
+        ",": "comma",
+        ";": "semicolon",
+        "\t": "tab",
+        "|": "pipe",
+    }.get(candidate.delimiter, repr(candidate.delimiter))
+    row_hint = (
+        f"; first collapsed mixed-delimiter row {candidate.first_collapsed_row}"
+        if candidate.first_collapsed_row is not None
+        else f"; first inconsistent row {candidate.first_offending_row}"
+        if candidate.first_offending_row is not None
+        else ""
+    )
+    raise ValueError(
+        "CSV customer data has inconsistent column counts under the best "
+        f"delimiter candidate ({delimiter_name}); "
+        f"{candidate.consistent_rows}/{candidate.data_rows} data row(s) "
+        f"matched the {candidate.header_width}-column header{row_hint}. "
+        "Check the delimiter and header row."
+    )
 
 
 def _coerce_csv_value(value: Any) -> Any:
