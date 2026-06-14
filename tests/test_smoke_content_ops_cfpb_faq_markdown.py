@@ -222,6 +222,7 @@ def test_cfpb_faq_smoke_compares_embedding_booster(
     comparison = payload["embedding_comparison"]
     assert comparison["enabled"] is True
     assert comparison["primary"] == "boosted"
+    assert comparison["probe"] == {"calls": 1, "valid_batches": 1}
     assert comparison["baseline"]["generated"] == 0
     assert comparison["baseline"]["non_repeat_ticket_count"] == 2
     assert comparison["boosted"]["generated"] == 1
@@ -306,9 +307,56 @@ def test_cfpb_faq_smoke_compare_mode_fails_when_embedding_call_is_swallowed(
         "enabled": True,
         "primary": "baseline",
         "error": "RuntimeError: inference crashed",
+        "probe": {
+            "calls": 1,
+            "valid_batches": 0,
+        },
     }
     assert payload["errors"] == [
         "embedding booster unavailable: RuntimeError: inference crashed",
+        "FAQ Markdown generated no items",
+        "FAQ output checks failed: condensed, has_action_items, resolution_evidence_scoped, uses_user_vocabulary",
+    ]
+
+
+def test_cfpb_faq_smoke_compare_mode_fails_closed_on_invalid_embedding_batch(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class InvalidBatchEmbeddingPort:
+        def embed_texts(self, _texts):
+            return ()
+
+    monkeypatch.setattr(
+        smoke,
+        "fetch_cfpb_source_rows_with_profile",
+        lambda **_kwargs: (
+            [
+                _row("1", "How do I get my money back after an overdraft charge?"),
+                _row("2", "What is the process for a refund on an overdraft fee?"),
+            ],
+            _profile(source_count=2),
+        ),
+    )
+
+    code, payload = smoke.run_cfpb_faq_markdown_smoke(
+        _args(compare_embedding_booster=True),
+        source_rows_path=tmp_path / "rows.jsonl",
+        embedding_port_factory=InvalidBatchEmbeddingPort,
+    )
+
+    assert code == 1
+    assert payload["embedding_comparison"] == {
+        "enabled": True,
+        "primary": "baseline",
+        "error": "embedding port returned an invalid batch",
+        "probe": {
+            "calls": 1,
+            "valid_batches": 0,
+        },
+    }
+    assert payload["errors"] == [
+        "embedding booster unavailable: embedding port returned an invalid batch",
         "FAQ Markdown generated no items",
         "FAQ output checks failed: condensed, has_action_items, resolution_evidence_scoped, uses_user_vocabulary",
     ]
