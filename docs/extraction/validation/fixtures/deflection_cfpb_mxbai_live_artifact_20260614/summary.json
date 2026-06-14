@@ -1,0 +1,156 @@
+{
+  "artifact": "deflection_cfpb_mxbai_live_artifact",
+  "run_timestamp_utc": "2026-06-14T03:57:00Z",
+  "source": "cfpb",
+  "ok": true,
+  "errors": [],
+  "command": [
+    "python",
+    "scripts/smoke_content_ops_cfpb_faq_markdown.py",
+    "--search-term",
+    "fees",
+    "--limit",
+    "1000",
+    "--max-rows-scanned",
+    "5000",
+    "--max-items",
+    "20",
+    "--support-contact",
+    "https://support.example.com",
+    "--compare-embedding-booster",
+    "--output-source-rows",
+    "tmp/cfpb_mxbai_live_artifact/cfpb_sources_1000.jsonl",
+    "--output-markdown",
+    "tmp/cfpb_mxbai_live_artifact/cfpb_faq_1000_boosted.md",
+    "--json"
+  ],
+  "raw_outputs_excluded_from_git": [
+    "tmp/cfpb_mxbai_live_artifact/cfpb_sources_1000.jsonl",
+    "tmp/cfpb_mxbai_live_artifact/cfpb_faq_1000_boosted.md",
+    "tmp/cfpb_mxbai_live_artifact/summary_raw.json"
+  ],
+  "source_profile": {
+    "status": "ok",
+    "requested_source_count": 1000,
+    "raw_row_count": 1000,
+    "raw_row_count_source": "cfpb_csv_rows_scanned",
+    "usable_source_count": 1000,
+    "usable_source_ratio": 1.0,
+    "missing_complaint_id_count": 0,
+    "missing_narrative_count": 0,
+    "skipped_row_count": 0,
+    "skipped_other_count": 0,
+    "max_rows_scanned": 5000,
+    "stop_reason": "limit",
+    "require_narrative": true
+  },
+  "embedding_model_contract": {
+    "factory": "atlas_brain._content_ops_infrastructure.build_content_ops_faq_embedding_port",
+    "model": "mixedbread-ai/mxbai-embed-large-v1",
+    "revision": "b33106f585b9ce46904ad7443a3b52b7a63e231c",
+    "device": "cpu",
+    "local_files_only": true
+  },
+  "embedding_comparison": {
+    "enabled": true,
+    "primary": "boosted",
+    "probe": {
+      "calls": 14,
+      "valid_batches": 14
+    },
+    "baseline": {
+      "generated": 20,
+      "ticket_source_count": 1000,
+      "non_repeat_ticket_count": 843,
+      "non_repeat_question_count": 843,
+      "top_question": "What should I do if my account was closed and I was unaware?",
+      "output_checks": {
+        "condensed": true,
+        "has_action_items": true,
+        "resolution_evidence_scoped": true,
+        "uses_user_vocabulary": true
+      },
+      "questions": [
+        "What should I do if my account was closed and I was unaware?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if I was also told they would send?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "Guess what?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do about other support issues?"
+      ]
+    },
+    "boosted": {
+      "generated": 20,
+      "ticket_source_count": 1000,
+      "non_repeat_ticket_count": 825,
+      "non_repeat_question_count": 825,
+      "top_question": "What should I do if my account was closed and I was unaware?",
+      "output_checks": {
+        "condensed": true,
+        "has_action_items": true,
+        "resolution_evidence_scoped": true,
+        "uses_user_vocabulary": true
+      },
+      "questions": [
+        "What should I do if my account was closed and I was unaware?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if I was also told they would send?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do about billing and payments?",
+        "What should I do if I got a payday advance from this company?",
+        "Guess what?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do if information on my credit report is wrong?",
+        "What should I do about other support issues?"
+      ]
+    },
+    "delta": {
+      "generated": 0,
+      "ticket_source_count": 0,
+      "non_repeat_ticket_count": -18,
+      "non_repeat_question_count": -18,
+      "changed_top_question": false,
+      "added_questions": [
+        "What should I do about billing and payments?",
+        "What should I do if I got a payday advance from this company?"
+      ],
+      "removed_questions": []
+    }
+  },
+  "interpretation": {
+    "embedding_path_proven": true,
+    "output_checks_all_passed": true,
+    "booster_lift_non_repeat_ticket_delta": -18,
+    "booster_lift_share_of_source_rows": 0.018,
+    "threshold_action": "no threshold change in this validation slice",
+    "production_enablement": "not approved by this artifact",
+    "presentation_debt_observed": [
+      "duplicate-looking safe labels remain in the ranked questions",
+      "customer-wording labels can still surface weak raw phrases"
+    ]
+  }
+}

@@ -150,6 +150,10 @@ def run_cfpb_faq_markdown_smoke(
                         support_contact=args.support_contact,
                         embedding_port=embedding_port,
                     )
+                    embedding_comparison["probe"] = {
+                        "calls": embedding_port.calls,
+                        "valid_batches": embedding_port.valid_batches,
+                    }
                     embedding_error = embedding_port.error
                     if embedding_error is None and embedding_port.valid_batches < 1:
                         embedding_error = "embedding booster applied no valid embedding batches"
