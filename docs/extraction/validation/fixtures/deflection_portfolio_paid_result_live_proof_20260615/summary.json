@@ -1,0 +1,89 @@
+{
+  "artifact_version": 1,
+  "csv_input": {
+    "bytes": 52426203,
+    "committed": false,
+    "records_written": 41608,
+    "sha256": "a00517fec9c029ff9fb1fa4fb84cd2b6885941688673af8c1dc2c5d38b7ac77b",
+    "source_jsonl": "tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl"
+  },
+  "hosted_submit": {
+    "elapsed_seconds": 110.19061646214686,
+    "ok": true,
+    "snapshot_status": 200,
+    "submit_mode": "multipart",
+    "submit_status": 200,
+    "unpaid_artifact_status": 403,
+    "volume_gates": {
+      "actual": {
+        "generated_questions": 1720,
+        "repeat_ticket_count": 26989,
+        "source_row_count": 41608,
+        "submitted_row_count": 41608,
+        "top_question_count": 5,
+        "uploaded_bytes": 52426203
+      },
+      "configured": {
+        "generated_questions": 30,
+        "repeat_ticket_count": 25000,
+        "source_row_count": 30000,
+        "submitted_row_count": 30000,
+        "top_question_count": 5,
+        "uploaded_bytes": 50000000
+      },
+      "errors": [],
+      "ok": true,
+      "profile": "full-volume-cfpb"
+    }
+  },
+  "issue": 1440,
+  "paid_unlock": {
+    "after_artifact_status": 200,
+    "before_artifact_status": 403,
+    "ok": true,
+    "replay_payload_status": "already_processed",
+    "replay_webhook_status": 200,
+    "webhook_status": 200
+  },
+  "portfolio_fix": {
+    "merge_commit": "10b66f1315573c56415e2dd20cc75dedaa1648b2",
+    "pr": 309,
+    "production_url": "https://juancanfield.com",
+    "repository": "canfieldjuan/atlas-portfolio"
+  },
+  "portfolio_result_page": {
+    "artifact_state": "unlocked",
+    "artifact_status": 200,
+    "markers": {
+      "account_id_marker_present": false,
+      "account_id_value_present": false,
+      "locked_markers_present": false,
+      "locked_snapshot_present": false,
+      "paid_markers_present": true,
+      "request_id_present": true,
+      "unavailable_state_present": false,
+      "unlock_cta_present": false
+    },
+    "ok": true,
+    "page_status": 200,
+    "snapshot_status": 200
+  },
+  "redaction": {
+    "account_id_committed": false,
+    "bearer_tokens_committed": false,
+    "email_body_committed": false,
+    "operator_email_committed": false,
+    "portfolio_html_committed": false,
+    "raw_csv_committed": false,
+    "raw_report_committed": false,
+    "request_id_committed": false,
+    "request_id_sha256": "89123dfd757b4cd1d713058edd69cb2971123ccfcf4e35c419eb47109eaa3baf",
+    "result_url_committed": false,
+    "webhook_secret_committed": false
+  },
+  "remaining_blockers": [
+    "Snapshot email/PDF delivery remains undefined: #1572 found no snapshot-email sender surface in Atlas, while paid report email delivery is already proven.",
+    "Smoke scripts still require an explicit --token override when the current credential is stored as ATLAS_B2B_SERVICE_TOKEN instead of ATLAS_B2B_JWT/ATLAS_TOKEN."
+  ],
+  "result": "full_funnel_paid_result_page_live_proof_pass"
+}

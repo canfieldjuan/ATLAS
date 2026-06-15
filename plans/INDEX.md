@@ -681,6 +681,7 @@
 - [PR-Deflection-Embedding-Host-Adapter](archive/PR-Deflection-Embedding-Host-Adapter.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Exact-Repeat-Join](archive/PR-Deflection-Exact-Repeat-Join.md) - lane: deflection/clustering | phase: Vertical slice
+- [PR-Deflection-Full-Funnel-Paid-Delivery-Proof](archive/PR-Deflection-Full-Funnel-Paid-Delivery-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
 - [PR-Deflection-Full-Thread-Export-Guidance](archive/PR-Deflection-Full-Thread-Export-Guidance.md) - lane: deflection/clustering-raw-data | phase: Product polish
 - [PR-Deflection-Full-Thread-JSON-Tempfile](archive/PR-Deflection-Full-Thread-JSON-Tempfile.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Full-Volume-Live-Proof](archive/PR-Deflection-Full-Volume-Live-Proof.md) - lane: deflection-full-50k-e2e-proof | phase: Functional validation
