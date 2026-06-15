@@ -4,6 +4,11 @@ import { CHECKOUT_SOURCE, resultPath } from "./checkout.js";
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{5,160}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LIGHT_REPEAT_TICKET_THRESHOLD = 10;
+const ASSISTED_CONTACT_COST = 13.5;
+const PAID_QUESTION_LIMIT = 8;
+const PAID_DETAIL_LIMIT = 5;
+const PAID_PHRASE_LIMIT = 10;
+const RESOLUTION_EVIDENCE_STATUS = "resolution_evidence";
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -45,6 +50,32 @@ function formatNumber(value) {
 
 function finiteCount(value) {
   return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function parsedCount(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function firstParsedCount(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+    return parsedCount(value);
+  }
+  return 0;
+}
+
+function formatMoney(value) {
+  const numeric = Number.isFinite(value) && value >= 0 ? value : 0;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(numeric);
+}
+
+function isObjectRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
 }
 
 function customerWordingExamples(questions) {
@@ -149,22 +180,200 @@ function renderSnapshot(report) {
         </section>`;
 }
 
-function renderPaidArtifact(report) {
-  const markdown =
-    report &&
-    report.ok &&
-    report.artifact_status === "unlocked" &&
-    report.artifact &&
-    typeof report.artifact.markdown === "string"
-      ? report.artifact.markdown.trim()
-      : "";
+function paidArtifactItems(report) {
+  if (
+    !report ||
+    !report.ok ||
+    report.artifact_status !== "unlocked" ||
+    !isObjectRecord(report.artifact) ||
+    !isObjectRecord(report.artifact.faq_result) ||
+    !Array.isArray(report.artifact.faq_result.items)
+  ) {
+    return [];
+  }
+  return report.artifact.faq_result.items.filter(isObjectRecord);
+}
 
-  if (!markdown) return "";
+function itemTicketCount(item) {
+  return firstParsedCount(item.ticket_count, item.frequency, item.weighted_frequency);
+}
+
+function itemOpportunityScore(item) {
+  return firstParsedCount(item.opportunity_score, item.weighted_frequency, item.frequency);
+}
+
+function hasResolutionEvidence(item) {
+  return clean(item.answer_evidence_status) === RESOLUTION_EVIDENCE_STATUS;
+}
+
+function paidSummary(report, items) {
+  const summary = isObjectRecord(report.artifact.summary) ? report.artifact.summary : {};
+  const repeatTickets = finiteCount(summary.repeat_ticket_count);
+  const publishableCount = items.filter(hasResolutionEvidence).length;
+  const generated = parsedCount(summary.generated) || items.length;
+  const needsProof = Math.max(0, generated - publishableCount);
+  return {
+    generated,
+    repeatTickets,
+    publishableCount,
+    needsProof,
+    supportCost: repeatTickets * ASSISTED_CONTACT_COST,
+  };
+}
+
+function uniqueTexts(values, limit) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const text = clean(value);
+    if (!text) continue;
+    const key = text.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function paidCustomerPhrases(items) {
+  const values = [];
+  for (const item of items) {
+    values.push(clean(item.customer_wording) || clean(item.question));
+    if (Array.isArray(item.term_mappings)) {
+      for (const mapping of item.term_mappings) {
+        if (isObjectRecord(mapping)) values.push(mapping.customer_term);
+      }
+    }
+  }
+  return uniqueTexts(values, PAID_PHRASE_LIMIT);
+}
+
+function textPreview(value, limit = 180) {
+  const text = clean(value).replace(/\s+/g, " ");
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1)).trim()}...`;
+}
+
+function renderPaidMetricCards(summary) {
+  return `<div class="paid-metrics" data-atlas-deflection-paid-summary>
+            <div><span>Support tax estimate</span><strong>${escapeHtml(formatMoney(summary.supportCost))}</strong></div>
+            <div><span>Repeat-ticket workload</span><strong>${escapeHtml(formatNumber(summary.repeatTickets))}</strong></div>
+            <div><span>Ranked questions</span><strong>${escapeHtml(formatNumber(summary.generated))}</strong></div>
+            <div><span>Publishable answers</span><strong>${escapeHtml(formatNumber(summary.publishableCount))}</strong></div>
+          </div>`;
+}
+
+function renderPaidReadiness(summary) {
+  const hasAnswers = summary.publishableCount > 0;
+  return `<div class="paid-readiness" data-atlas-deflection-paid-readiness>
+            <div class="${hasAnswers ? "ready" : "needs-proof"}">
+              <span>Publishable-answer readiness</span>
+              <strong>${hasAnswers ? "Evidence-backed answers present" : "Gap list only"}</strong>
+              <p>${hasAnswers
+                ? escapeHtml(`${formatNumber(summary.publishableCount)} questions have uploaded resolution evidence behind draftable answers.`)
+                : "No uploaded resolution evidence was present; use this as a prioritized content roadmap."}</p>
+            </div>
+            <div>
+              <span>Full-detail delivery</span>
+              <strong>Email/PDF artifact remains unchanged</strong>
+              <p>The browser view is consolidated for review. The detailed artifact still travels through the existing paid delivery path.</p>
+            </div>
+          </div>`;
+}
+
+function renderPaidQuestionTable(items) {
+  const rows = items.slice(0, PAID_QUESTION_LIMIT);
+  if (!rows.length) return "";
+  return `<section id="paid-ranked-questions" class="paid-report-block">
+            <h3>Top ranked questions</h3>
+            <div class="paid-table-wrap">
+              <table class="paid-table">
+                <thead>
+                  <tr><th>Rank</th><th>Question</th><th>Tickets</th><th>Opportunity</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  ${rows.map((item, index) => `<tr>
+                    <td>${index + 1}</td>
+                    <td>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</td>
+                    <td>${escapeHtml(formatNumber(itemTicketCount(item)))}</td>
+                    <td>${escapeHtml(formatNumber(itemOpportunityScore(item)))}</td>
+                    <td>${hasResolutionEvidence(item) ? "Evidence-backed" : "Needs proof"}</td>
+                  </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          </section>`;
+}
+
+function renderPaidAnswerCards(items) {
+  const rows = items.filter(hasResolutionEvidence).slice(0, PAID_DETAIL_LIMIT);
+  return `<section id="paid-publishable-answers" class="paid-report-block">
+            <h3>Publishable answers</h3>
+            ${rows.length > 0
+              ? `<div class="paid-card-grid">
+                  ${rows.map((item) => `<article class="paid-card">
+                    <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
+                    <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
+                    <p>${escapeHtml(textPreview(item.answer || "Draft answer is backed by uploaded resolution evidence."))}</p>
+                  </article>`).join("")}
+                </div>`
+              : `<p class="muted">No uploaded resolution evidence was present, so this report is a gap list rather than publishable-answer copy.</p>`}
+          </section>`;
+}
+
+function renderPaidGapCards(items) {
+  const rows = items.filter((item) => !hasResolutionEvidence(item)).slice(0, PAID_DETAIL_LIMIT);
+  return `<section id="paid-gap-list" class="paid-report-block">
+            <h3>No-proven-answer gaps</h3>
+            ${rows.length > 0
+              ? `<div class="paid-card-grid">
+                  ${rows.map((item) => `<article class="paid-card">
+                    <p class="rank">${escapeHtml(formatNumber(itemTicketCount(item)))} tickets</p>
+                    <h4>${escapeHtml(item.question || item.customer_wording || "Untitled question")}</h4>
+                    <p>Needs uploaded resolution evidence before ATLAS can mark this as publishable help-center copy.</p>
+                  </article>`).join("")}
+                </div>`
+              : `<p class="muted">No unresolved answer gaps were present in this unlocked report.</p>`}
+          </section>`;
+}
+
+function renderPaidPhrases(items) {
+  const phrases = paidCustomerPhrases(items);
+  return `<section id="paid-customer-phrases" class="paid-report-block">
+            <h3>Top customer wording and SEO phrases</h3>
+            ${phrases.length > 0
+              ? `<ul class="paid-phrase-list">
+                  ${phrases.map((phrase) => `<li>${escapeHtml(phrase)}</li>`).join("")}
+                </ul>`
+              : `<p class="muted">No customer wording phrases were available in the structured paid artifact.</p>`}
+          </section>`;
+}
+
+function renderPaidArtifact(report) {
+  const items = paidArtifactItems(report);
+  if (!items.length) return "";
+  const summary = paidSummary(report, items);
 
   return `<section class="paid-report" aria-labelledby="paid-report-title" data-atlas-deflection-paid-report>
-          <h2 id="paid-report-title">Full report</h2>
-          <p class="muted">Unlocked from the ATLAS paid artifact after Stripe webhook verification.</p>
-          <pre class="report-markdown">${escapeHtml(markdown)}</pre>
+          <div class="paid-report-header">
+            <div>
+              <h2 id="paid-report-title">Paid report dashboard</h2>
+              <p class="muted">Unlocked from the ATLAS paid artifact after Stripe webhook verification. This browser view is consolidated for decision-making; the detailed delivery artifact remains separate.</p>
+            </div>
+            <nav class="paid-report-nav" aria-label="Paid report sections">
+              <a href="#paid-ranked-questions">Questions</a>
+              <a href="#paid-publishable-answers">Answers</a>
+              <a href="#paid-gap-list">Gaps</a>
+              <a href="#paid-customer-phrases">Phrases</a>
+            </nav>
+          </div>
+          ${renderPaidMetricCards(summary)}
+          ${renderPaidReadiness(summary)}
+          ${renderPaidQuestionTable(items)}
+          ${renderPaidAnswerCards(items)}
+          ${renderPaidGapCards(items)}
+          ${renderPaidPhrases(items)}
         </section>`;
 }
 
@@ -286,12 +495,37 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .questions h3 { margin: 6px 0; font-size: 17px; }
     .rank { color: #86efac; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
     .paid-report { margin-top: 24px; border: 1px solid rgba(134, 239, 172, .28); border-radius: 8px; background: rgba(20, 83, 45, .16); padding: 24px; }
-    .report-markdown { margin: 18px 0 0; max-height: 720px; overflow: auto; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .55); padding: 18px; color: #e2e8f0; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .paid-report-header { display: flex; gap: 20px; align-items: flex-start; justify-content: space-between; }
+    .paid-report-header h2 { margin-top: 0; }
+    .paid-report-nav { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; min-width: 240px; }
+    .paid-report-nav a { border: 1px solid rgba(134, 239, 172, .28); border-radius: 999px; padding: 7px 10px; background: rgba(2, 6, 23, .32); color: #bbf7d0; font-size: 12px; font-weight: 800; text-decoration: none; }
+    .paid-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }
+    .paid-metrics div, .paid-readiness > div, .paid-card, .paid-phrase-list li { border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; background: rgba(2, 6, 23, .35); }
+    .paid-metrics div { padding: 14px; }
+    .paid-metrics span, .paid-readiness span { display: block; color: rgba(226, 232, 240, .66); font-size: 13px; }
+    .paid-metrics strong { display: block; margin-top: 8px; font-size: 26px; }
+    .paid-readiness { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 22px; }
+    .paid-readiness > div { padding: 16px; }
+    .paid-readiness strong { display: block; margin-top: 6px; color: #86efac; font-size: 18px; }
+    .paid-readiness .needs-proof strong { color: #fde68a; }
+    .paid-readiness p { margin: 10px 0 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .paid-report-block { margin-top: 24px; }
+    .paid-report-block h3 { margin: 0 0 12px; font-size: 18px; }
+    .paid-table-wrap { overflow-x: auto; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; }
+    .paid-table { width: 100%; border-collapse: collapse; min-width: 680px; }
+    .paid-table th, .paid-table td { border-bottom: 1px solid rgba(30, 41, 59, .9); padding: 10px 12px; text-align: left; vertical-align: top; }
+    .paid-table th { color: rgba(226, 232, 240, .66); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .paid-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .paid-card { padding: 14px; }
+    .paid-card h4 { margin: 6px 0 8px; font-size: 16px; }
+    .paid-card p:not(.rank) { margin: 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .paid-phrase-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .paid-phrase-list li { padding: 9px 11px; line-height: 1.45; }
     .notice { margin-top: 20px; border-radius: 8px; padding: 14px 16px; color: #fde68a; background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
     .success { color: #bbf7d0; background: rgba(34, 197, 94, .1); border-color: rgba(34, 197, 94, .28); }
     .muted { color: rgba(226, 232, 240, .68); line-height: 1.65; }
-    @media (max-width: 920px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header, .resolution-evidence, .repeat-volume { align-items: flex-start; flex-direction: column; } }
+    @media (max-width: 920px) { .metrics, .paid-metrics, .paid-readiness { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 820px) { .grid, .metrics, .customer-wording-list, .paid-metrics, .paid-readiness, .paid-card-grid, .paid-phrase-list { grid-template-columns: 1fr; } .shell { padding-top: 32px; } .customer-wording-header, .resolution-evidence, .repeat-volume, .paid-report-header { align-items: flex-start; flex-direction: column; } .paid-report-nav { justify-content: flex-start; min-width: 0; } }
   </style>
 </head>
 <body>

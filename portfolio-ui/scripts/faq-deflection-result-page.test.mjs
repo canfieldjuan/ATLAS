@@ -115,6 +115,82 @@ await test("result page exposes validation markers and checkout metadata", () =>
   assert.match(pageSource, /data-checkout-request_id=/);
 });
 
+await test("paid result page source renders dashboard sections instead of raw markdown pre", () => {
+  for (const marker of [
+    "data-atlas-deflection-paid-report",
+    "data-atlas-deflection-paid-summary",
+    "data-atlas-deflection-paid-readiness",
+    "paid-report-nav",
+    "Top ranked questions",
+    "Publishable answers",
+    "No-proven-answer gaps",
+    "Top customer wording and SEO phrases",
+  ]) {
+    assert.match(resultPageSource, new RegExp(marker));
+  }
+  assert.doesNotMatch(resultPageSource, /report-markdown/);
+  assert.doesNotMatch(resultPageSource, /<pre class=/);
+});
+
+await test("paid dashboard uses canonical repeat-ticket count for support tax", () => {
+  const html = renderResultPage({
+    requestId: "content-ops-paid123",
+    accountId: "2b2b950d-f64b-4852-bc30-f92a34cdf169",
+    report: {
+      ok: true,
+      snapshot: {
+        summary: {
+          generated: 3,
+          repeat_ticket_count: 4,
+          drafted_answer_count: 1,
+          no_proven_answer_count: 2,
+          support_ticket_resolution_evidence_present: true,
+          support_ticket_resolution_evidence_count: 1,
+        },
+        top_questions: [],
+      },
+      artifact_status: "unlocked",
+      artifact: {
+        summary: {
+          generated: 3,
+          repeat_ticket_count: 4,
+        },
+        faq_result: {
+          items: [
+            {
+              question: "How do I reset my account?",
+              ticket_count: 4,
+              opportunity_score: 9,
+              answer_evidence_status: "resolution_evidence",
+              answer: "Use the verified reset workflow.",
+            },
+            {
+              question: "How do I change billing contacts?",
+              ticket_count: 1,
+              opportunity_score: 2,
+              answer_evidence_status: "needs_review",
+            },
+            {
+              question: "Can I rename a workspace?",
+              frequency: 1,
+              opportunity_score: 1,
+              answer_evidence_status: "needs_review",
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.match(html, /data-atlas-deflection-paid-summary/);
+  assert.match(html, /<span>Support tax estimate<\/span><strong>\$54<\/strong>/);
+  assert.match(html, /<span>Repeat-ticket workload<\/span><strong>4<\/strong>/);
+  assert.doesNotMatch(html, /<span>Support tax estimate<\/span><strong>\$81<\/strong>/);
+  assert.doesNotMatch(html, /<span>Repeat-ticket workload<\/span><strong>6<\/strong>/);
+  assert.match(html, /<td>1<\/td>/);
+  assert.match(html, /Can I rename a workspace\?/);
+});
+
 await test("result pages never embed ATLAS service credentials or paid-route calls", () => {
   for (const source of [pageSource, resultPageSource]) {
     assert.doesNotMatch(source, /ATLAS_B2B_JWT|ATLAS_API_BASE_URL|ATLAS_TOKEN/);
