@@ -76,6 +76,11 @@ The report Markdown always contains these customer-facing sections:
 - `Ranked Question Opportunities`
 - `Question Details and Evidence`
 
+`Your Help-Desk SEO Targeting List` is a readability index, not the complete
+evidence surface. Large reports render a deterministic top-N phrase list and an
+omitted-count note; every ranked question and complete source evidence remains
+in `Question Details and Evidence`.
+
 `Question Details and Evidence` is the canonical per-question detail pass. It
 contains the answer status, publishable copy or no-proven-answer guidance,
 vocabulary mappings, and complete source evidence for each ranked question.
