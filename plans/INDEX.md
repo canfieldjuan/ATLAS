@@ -1,6 +1,6 @@
 # Plan archive index
 
-1064 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1065 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -685,6 +685,7 @@
 - [PR-Deflection-Dispute-Restore-Hardening](archive/PR-Deflection-Dispute-Restore-Hardening.md) - lane: go-live-deflection-cleanup | phase: Production hardening
 - [PR-Deflection-Embedding-Booster-Core](archive/PR-Deflection-Embedding-Booster-Core.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Embedding-Host-Adapter](archive/PR-Deflection-Embedding-Host-Adapter.md) - lane: deflection/clustering | phase: Vertical slice
+- [PR-Deflection-Evidence-Export-Download](archive/PR-Deflection-Evidence-Export-Download.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Evidence-Scope-Gate](archive/PR-Deflection-Evidence-Scope-Gate.md) - lane: content-ops/faq-deflection-backend | phase: Production hardening
 - [PR-Deflection-Exact-Repeat-Join](archive/PR-Deflection-Exact-Repeat-Join.md) - lane: deflection/clustering | phase: Vertical slice
 - [PR-Deflection-Full-Funnel-Paid-Delivery-Proof](archive/PR-Deflection-Full-Funnel-Paid-Delivery-Proof.md) - lane: content-ops/deflection-launch-readiness | phase: Functional validation
