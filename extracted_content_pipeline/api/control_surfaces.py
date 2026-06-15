@@ -709,6 +709,7 @@ def create_content_ops_control_surface_router(
     opportunity_import_pool_provider: PoolProvider | None = None,
     usage_pool_provider: PoolProvider | None = None,
     usage_dependencies: Sequence[Any] | None = None,
+    deflection_report_public_dependencies: Sequence[Any] | None = None,
     deflection_report_paid_dependencies: Sequence[Any] | None = None,
     ingestion_import_admission_provider: ImportAdmissionProvider | None = None,
     cache_policy_default_provider: CachePolicyDefaultProvider | None = None,
@@ -798,7 +799,12 @@ def create_content_ops_control_surface_router(
             request_id=request_id,
         )
 
-    @router.get("/deflection-reports/{request_id}/snapshot")
+    public_deflection_dependencies = list(deflection_report_public_dependencies or ())
+
+    @router.get(
+        "/deflection-reports/{request_id}/snapshot",
+        dependencies=public_deflection_dependencies,
+    )
     async def deflection_report_snapshot(
         request_id: str = PathParam(..., min_length=1, max_length=200),
     ) -> dict[str, Any]:
@@ -812,7 +818,10 @@ def create_content_ops_control_surface_router(
             raise HTTPException(status_code=404, detail="Deflection report not found.")
         return snapshot
 
-    @router.get("/deflection-reports/{request_id}/artifact")
+    @router.get(
+        "/deflection-reports/{request_id}/artifact",
+        dependencies=public_deflection_dependencies,
+    )
     async def deflection_report_artifact(
         request_id: str = PathParam(..., min_length=1, max_length=200),
     ) -> dict[str, Any]:
@@ -828,7 +837,10 @@ def create_content_ops_control_surface_router(
             raise HTTPException(status_code=403, detail="Deflection report is locked.")
         return dict(record.artifact or {})
 
-    @router.post("/deflection-reports/{request_id}/checkout-authorization")
+    @router.post(
+        "/deflection-reports/{request_id}/checkout-authorization",
+        dependencies=public_deflection_dependencies,
+    )
     async def deflection_report_checkout_authorization(
         request_id: str = PathParam(..., min_length=1, max_length=200),
     ) -> dict[str, Any]:
@@ -1234,7 +1246,10 @@ def create_content_ops_control_surface_router(
         finally:
             await execute_gate.release()
 
-    @router.post("/deflection-reports/submit")
+    @router.post(
+        "/deflection-reports/submit",
+        dependencies=public_deflection_dependencies,
+    )
     async def submit_deflection_report(
         request: Request,
     ) -> dict[str, Any]:

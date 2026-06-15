@@ -10,12 +10,14 @@ from __future__ import annotations
 from dataclasses import replace
 import importlib
 import inspect
+from types import SimpleNamespace
 import sys
 from typing import Any
 
 import pytest
 
 from atlas_brain.auth.dependencies import AuthUser
+from atlas_brain.auth.rate_limit import PLAN_RATE_LIMITS
 from extracted_content_pipeline.campaign_ports import TenantScope
 from extracted_content_pipeline.landing_page_ports import (
     LandingPageDraft,
@@ -23,6 +25,12 @@ from extracted_content_pipeline.landing_page_ports import (
 )
 
 pytest.importorskip("asyncpg")
+fastapi = pytest.importorskip("fastapi")
+testclient_mod = pytest.importorskip("fastapi.testclient")
+Depends = fastapi.Depends
+FastAPI = fastapi.FastAPI
+Request = fastapi.Request
+TestClient = testclient_mod.TestClient
 
 
 def _fresh_api_package():
@@ -51,6 +59,23 @@ def _router_route(router, path: str, method: str):
     )
     assert route is not None, f"Route {method.upper()} {path!r} not mounted"
     return route
+
+
+def _content_ops_user(
+    account_id: str = "account-1",
+    *,
+    plan: str = "b2b_growth",
+) -> AuthUser:
+    return AuthUser(
+        user_id=f"user-{account_id}",
+        account_id=account_id,
+        plan=plan,
+        plan_status="active",
+        role="owner",
+        product="b2b_retention",
+        auth_method="api_key",
+        api_key_scopes=("content_ops:deflection:*",),
+    )
 
 
 def _public_ready_landing_page(landing_page_id: str) -> LandingPageDraft:
@@ -457,6 +482,114 @@ def test_content_ops_deflection_paid_route_uses_operator_gate() -> None:
 
     assert "_capture_content_ops_auth_user" in dependency_names
     assert "_require_content_ops_usage_operator" in dependency_names
+
+
+def test_content_ops_public_deflection_routes_use_rate_limit_gate() -> None:
+    api_pkg = _fresh_api_package()
+    public_routes = [
+        ("/content-ops/deflection-reports/submit", "POST"),
+        ("/content-ops/deflection-reports/{request_id}/snapshot", "GET"),
+        ("/content-ops/deflection-reports/{request_id}/artifact", "GET"),
+        (
+            "/content-ops/deflection-reports/{request_id}/checkout-authorization",
+            "POST",
+        ),
+    ]
+
+    for path, method in public_routes:
+        route = _router_route(api_pkg.router, path, method)
+        dependency_names = [
+            getattr(dependency.call, "__name__", "")
+            for dependency in route.dependant.dependencies
+        ]
+        assert "_capture_content_ops_auth_user" in dependency_names
+        assert "_rate_limit_public_deflection_report" in dependency_names
+        assert "_require_content_ops_usage_operator" not in dependency_names
+
+    paid_route = _router_route(
+        api_pkg.router,
+        "/content-ops/deflection-reports/{request_id}/paid",
+        "POST",
+    )
+    paid_dependency_names = [
+        getattr(dependency.call, "__name__", "")
+        for dependency in paid_route.dependant.dependencies
+    ]
+    assert "_rate_limit_public_deflection_report" not in paid_dependency_names
+    assert "_require_content_ops_usage_operator" in paid_dependency_names
+
+
+@pytest.mark.asyncio
+async def test_content_ops_auth_bridge_sets_rate_limit_identity() -> None:
+    api_pkg = _fresh_api_package()
+    request = SimpleNamespace(state=SimpleNamespace())
+    user = _content_ops_user("account-rl", plan="b2b_growth")
+
+    assert (
+        await api_pkg._capture_content_ops_auth_user(request=request, user=user)
+    ) is user
+
+    assert request.state.rate_limit_key == "account-rl"
+    assert request.state.rate_limit_plan == "b2b_growth"
+
+
+def test_public_deflection_rate_limit_shares_scope_and_keys_by_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+
+    api_pkg = _fresh_api_package()
+    app = FastAPI()
+    app.state.limiter = api_pkg.limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    async def _fake_content_ops_auth_user(request: Request) -> AuthUser:
+        account_id = request.headers.get("x-test-account", "account-a")
+        plan = request.headers.get("x-test-plan", "b2b_growth")
+        user = _content_ops_user(account_id, plan=plan)
+        request.state.rate_limit_key = user.account_id
+        request.state.rate_limit_plan = user.plan
+        return user
+
+    app.dependency_overrides[api_pkg._capture_content_ops_auth_user] = (
+        _fake_content_ops_auth_user
+    )
+
+    @app.get(
+        "/snapshot/{request_id}",
+        dependencies=[Depends(api_pkg._rate_limit_public_deflection_report)],
+    )
+    async def _snapshot(request_id: str) -> dict[str, str]:
+        return {"request_id": request_id}
+
+    @app.get(
+        "/artifact/{request_id}",
+        dependencies=[Depends(api_pkg._rate_limit_public_deflection_report)],
+    )
+    async def _artifact(request_id: str) -> dict[str, str]:
+        return {"request_id": request_id}
+
+    limit_name = (
+        f"{api_pkg._rate_limit_public_deflection_report.__module__}."
+        f"{api_pkg._rate_limit_public_deflection_report.__name__}"
+    )
+    api_pkg.limiter._dynamic_route_limits[limit_name] = (
+        api_pkg.limiter._dynamic_route_limits[limit_name][-1:]
+    )
+    monkeypatch.setitem(PLAN_RATE_LIMITS, "b2b_growth", "2/hour")
+    api_pkg.limiter._limiter.storage.reset()
+    try:
+        client = TestClient(app)
+        headers_a = {"x-test-account": "account-a"}
+        headers_b = {"x-test-account": "account-b"}
+
+        assert client.get("/snapshot/aaa", headers=headers_a).status_code == 200
+        assert client.get("/artifact/bbb", headers=headers_a).status_code == 200
+        assert client.get("/snapshot/ccc", headers=headers_a).status_code == 429
+        assert client.get("/snapshot/ccc", headers=headers_b).status_code == 200
+    finally:
+        api_pkg.limiter._limiter.storage.reset()
 
 
 def test_content_ops_preview_route_uses_host_cache_policy_default(
