@@ -52,7 +52,8 @@ class CsvAdmissionCase:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     corpus = _load_corpus(args.corpus)
-    summary = evaluate_zendesk_corpus(corpus)
+    observed_csvs = _parse_observed_csvs(args.observed_csv)
+    summary = evaluate_zendesk_corpus(corpus, observed_csvs=observed_csvs)
 
     if args.out_dir:
         args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -75,11 +76,19 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def evaluate_zendesk_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
+def evaluate_zendesk_corpus(
+    corpus: Mapping[str, Any],
+    *,
+    observed_csvs: Sequence[tuple[str, Path]] = (),
+) -> dict[str, Any]:
     """Inspect product-shaped Zendesk CSV projections and summarize evidence."""
 
     cases = _zendesk_cases(corpus)
     case_results = [evaluate_csv_case(case) for case in cases]
+    case_results.extend(
+        evaluate_observed_csv(name=name, path=path)
+        for name, path in observed_csvs
+    )
     blocking = _blocking_codes(case_results)
     ratios = [
         float(result["usable_source_ratio"])
@@ -91,12 +100,23 @@ def evaluate_zendesk_corpus(corpus: Mapping[str, Any]) -> dict[str, Any]:
         "blocking_violation_codes": blocking,
         "corpus": _corpus_summary(corpus),
         "case_count": len(case_results),
+        "strict_case_count": sum(
+            1 for result in case_results if result.get("expected_full_coverage") is True
+        ),
+        "observed_case_count": sum(
+            1 for result in case_results if result.get("case_status") == "observed"
+        ),
+        "blocking_case_count": sum(
+            1 for result in case_results if result.get("case_status") == "failed"
+        ),
         "observed_min_usable_source_ratio": min(ratios) if ratios else None,
         "observed_max_usable_source_ratio": max(ratios) if ratios else None,
         "threshold_conclusion": (
             "The committed product-shaped Zendesk CSV projections are accepted "
             "at full coverage. This supports the clean ACCEPT path, but does "
-            "not justify a hard low-coverage reject threshold by itself."
+            "not justify a hard low-coverage reject threshold by itself. "
+            "Operator-supplied observed CSVs are evidence only until a later "
+            "policy slice promotes a threshold."
         ),
         "cases": case_results,
     }
@@ -108,21 +128,47 @@ def evaluate_csv_case(case: CsvAdmissionCase) -> dict[str, Any]:
     with TemporaryDirectory(prefix="atlas-csv-admission-") as tmp_dir:
         path = Path(tmp_dir) / f"{case.name}.csv"
         _write_csv(path, fieldnames=case.fieldnames, rows=case.rows)
-        payload = inspect_ingestion_file(
-            path,
-            source_rows=True,
-            source_format="csv",
-            sample_limit=0,
-        ).as_dict()
+        return _evaluate_csv_path(
+            name=case.name,
+            description=case.description,
+            path=path,
+            expected_full_coverage=case.expected_full_coverage,
+        )
+
+
+def evaluate_observed_csv(*, name: str, path: Path) -> dict[str, Any]:
+    """Inspect an operator-supplied CSV as non-gating threshold evidence."""
+
+    return _evaluate_csv_path(
+        name=name,
+        description=f"Observed source-row CSV evidence from {path.name}.",
+        path=path,
+        expected_full_coverage=False,
+    )
+
+
+def _evaluate_csv_path(
+    *,
+    name: str,
+    description: str,
+    path: Path,
+    expected_full_coverage: bool,
+) -> dict[str, Any]:
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=0,
+    ).as_dict()
 
     admission = dict(payload.get("source_row_admission") or {})
     decision = dict(admission.get("admission_decision") or {})
     warnings = list(admission.get("coverage_warnings") or [])
     usable_ratio = admission.get("usable_source_ratio")
     result = {
-        "name": case.name,
-        "description": case.description,
-        "expected_full_coverage": case.expected_full_coverage,
+        "name": name,
+        "description": description,
+        "expected_full_coverage": expected_full_coverage,
         "ok": payload.get("ok") is True,
         "warning_counts": dict(payload.get("warning_counts") or {}),
         "admission_status": decision.get("status"),
@@ -155,7 +201,7 @@ def _case_status(result: Mapping[str, Any]) -> str:
 def _blocking_codes(case_results: Sequence[Mapping[str, Any]]) -> list[str]:
     codes: list[str] = []
     for result in case_results:
-        if result.get("case_status") != "ok":
+        if result.get("case_status") == "failed":
             codes.append(f"{result.get('name')}:unexpected_admission_result")
     return codes
 
@@ -270,8 +316,9 @@ def _write_csv(
 
 def _proof_doc(summary: Mapping[str, Any]) -> str:
     rows = "\n".join(
-        "| {name} | {raw} | {usable} | {ratio} | {status} | {warnings} |".format(
+        "| {name} | {case_status} | {raw} | {usable} | {ratio} | {status} | {warnings} |".format(
             name=case["name"],
+            case_status=case["case_status"],
             raw=case["raw_source_row_count"],
             usable=case["usable_source_row_count"],
             ratio=case["usable_source_ratio"],
@@ -294,13 +341,15 @@ diagnostics path with source-row mode enabled.
 
 ## Result
 
-| Case | Raw rows | Usable rows | Usable ratio | Admission | Coverage warnings |
-|---|---:|---:|---:|---|---:|
+| Case | Case status | Raw rows | Usable rows | Usable ratio | Admission | Coverage warnings |
+|---|---|---:|---:|---:|---|---:|
 {rows}
 
 Status: `{summary["status"]}`
 
 Observed minimum usable source ratio: `{summary["observed_min_usable_source_ratio"]}`
+
+Observed evidence cases: `{summary["observed_case_count"]}`
 
 ## Interpretation
 
@@ -309,7 +358,9 @@ Observed minimum usable source ratio: `{summary["observed_min_usable_source_rati
 This artifact therefore supports keeping clean Zendesk-shaped CSV uploads on
 the ACCEPT path. It does not choose a low non-zero reject threshold. That
 threshold still needs observed partial-coverage exports, not a synthetic ratio
-derived from a clean corpus.
+derived from a clean corpus. Operator-supplied observed CSVs are recorded as
+evidence and do not block this runner until a later policy slice promotes a
+threshold.
 
 ## Artifact Links
 
@@ -328,8 +379,34 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--doc", type=Path, default=DEFAULT_DOC)
+    parser.add_argument(
+        "--observed-csv",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "Optional observed source-row CSV evidence to summarize without "
+            "failing the run. May be supplied more than once."
+        ),
+    )
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
+
+
+def _parse_observed_csvs(values: Sequence[str]) -> tuple[tuple[str, Path], ...]:
+    observed: list[tuple[str, Path]] = []
+    for raw in values:
+        if "=" not in raw:
+            raise SystemExit("--observed-csv values must use NAME=PATH")
+        name, path_text = raw.split("=", 1)
+        name = name.strip()
+        path = Path(path_text.strip())
+        if not name:
+            raise SystemExit("--observed-csv name must be non-empty")
+        if not path.exists():
+            raise SystemExit(f"--observed-csv path does not exist: {path}")
+        observed.append((name, path))
+    return tuple(observed)
 
 
 def _text(value: Any) -> str:

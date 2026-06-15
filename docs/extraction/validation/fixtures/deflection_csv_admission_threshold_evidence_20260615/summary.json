@@ -1,4 +1,5 @@
 {
+  "blocking_case_count": 0,
   "blocking_violation_codes": [],
   "case_count": 2,
   "cases": [
@@ -73,8 +74,10 @@
     "ticket_count": 50,
     "tickets_with_private_notes": 4
   },
+  "observed_case_count": 0,
   "observed_max_usable_source_ratio": 1.0,
   "observed_min_usable_source_ratio": 1.0,
   "status": "ok",
-  "threshold_conclusion": "The committed product-shaped Zendesk CSV projections are accepted at full coverage. This supports the clean ACCEPT path, but does not justify a hard low-coverage reject threshold by itself."
+  "strict_case_count": 2,
+  "threshold_conclusion": "The committed product-shaped Zendesk CSV projections are accepted at full coverage. This supports the clean ACCEPT path, but does not justify a hard low-coverage reject threshold by itself. Operator-supplied observed CSVs are evidence only until a later policy slice promotes a threshold."
 }
