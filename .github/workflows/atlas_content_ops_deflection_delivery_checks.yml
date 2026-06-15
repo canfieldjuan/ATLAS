@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/alerts/**"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
@@ -24,6 +25,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/alerts/**"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"

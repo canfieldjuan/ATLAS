@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"
@@ -17,6 +19,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_macro_writeback_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/autonomous/runner.py"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/faq_macro_writeback_scheduled_publish.py"

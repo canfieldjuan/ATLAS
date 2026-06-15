@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/extracted_competitive_intelligence_checks.yml"
+      - "requirements.txt"
       # Scaffold + script paths
       - "extracted_competitive_intelligence/**"
       - "scripts/sync_extracted_competitive_intelligence.sh"
@@ -56,6 +57,7 @@ on:
   push:
     paths:
       - ".github/workflows/extracted_competitive_intelligence_checks.yml"
+      - "requirements.txt"
       - "extracted_competitive_intelligence/**"
       - "scripts/sync_extracted_competitive_intelligence.sh"
       - "scripts/validate_extracted_competitive_intelligence.sh"

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "extracted_content_pipeline/faq_deflection_report.py"
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"
@@ -15,6 +17,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_report_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "extracted_content_pipeline/faq_deflection_report.py"
       - "extracted_content_pipeline/ticket_faq_markdown.py"
       - "scripts/build_content_ops_deflection_report.py"

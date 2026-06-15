@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_main_voice_startup_checks.yml"
+      - "requirements.txt"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/main.py"
       - "tests/test_atlas_main_voice_startup.py"
   push:
@@ -11,6 +14,9 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_main_voice_startup_checks.yml"
+      - "requirements.txt"
+      - "atlas_brain/api/__init__.py"
+      - "atlas_brain/config.py"
       - "atlas_brain/main.py"
       - "tests/test_atlas_main_voice_startup.py"
 

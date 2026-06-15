@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/config.py"
       - "atlas_brain/_content_ops_infrastructure.py"
@@ -20,6 +22,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_input_provider_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/config.py"
       - "atlas_brain/_content_ops_infrastructure.py"
