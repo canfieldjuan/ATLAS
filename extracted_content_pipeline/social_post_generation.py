@@ -24,6 +24,7 @@ from .services._parse_retry_helpers import (
     retry_prompt_with_invalid_response,
 )
 from .social_post_ports import SocialPostDraft, SocialPostRepository
+from .text_truncate import truncate_with_ellipsis
 
 _ROW_LIST_KEYS = ("sources", "opportunities", "reviews", "documents", "rows", "data")
 DEFAULT_SOCIAL_POST_CHANNELS = ("linkedin",)
@@ -346,7 +347,7 @@ class SocialPostGenerationService:
                     limit=parse_retry_response_excerpt_chars,
                 )
                 continue
-            text = _truncate(parsed["text"], channel_max_post_chars)
+            text = truncate_with_ellipsis(parsed["text"], channel_max_post_chars)
             if not text:
                 prior_invalid_response = clip_invalid_response(
                     response.content,
@@ -560,7 +561,10 @@ def _post_from_opportunity(
     return {
         "id": f"{base_id}:{channel}" if include_channel_in_id else base_id,
         "channel": channel,
-        "text": _truncate(body, _max_post_chars_for_channel(channel, max_post_chars)),
+        "text": truncate_with_ellipsis(
+            body,
+            _max_post_chars_for_channel(channel, max_post_chars),
+        ),
         "source_id": source_id,
         "source_type": _clean(opportunity.get("source_type")),
         "target_id": _clean(opportunity.get("target_id")),
@@ -689,13 +693,6 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
     if isinstance(source_material, Sequence) and not isinstance(source_material, (bytes, bytearray)):
         return list(source_material)
     return []
-
-
-def _truncate(value: str, max_chars: int) -> str:
-    text = " ".join(value.split())
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, max_chars - 3)].rstrip() + "..."
 
 
 def _max_post_chars_for_channel(channel: str, max_post_chars: int) -> int:

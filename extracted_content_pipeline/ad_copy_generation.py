@@ -10,6 +10,7 @@ from .ad_copy_ports import AdCopyDraft, AdCopyRepository
 from .campaign_customer_data import CampaignOpportunityWarning
 from .campaign_ports import TenantScope
 from .campaign_source_adapters import source_row_to_campaign_opportunity
+from .text_truncate import truncate_with_ellipsis
 
 _ROW_LIST_KEYS = ("sources", "opportunities", "reviews", "documents", "rows", "data")
 
@@ -184,8 +185,11 @@ def _ad_from_opportunity(
         "id": source_id or f"ad-copy-{index}",
         "channel": "paid_social",
         "format": "single_image",
-        "headline": _truncate(headline, max_headline_chars),
-        "primary_text": _truncate(" ".join(primary_parts), max_primary_text_chars),
+        "headline": truncate_with_ellipsis(headline, max_headline_chars),
+        "primary_text": truncate_with_ellipsis(
+            " ".join(primary_parts),
+            max_primary_text_chars,
+        ),
         "cta": "See the proof",
         "source_id": source_id,
         "source_type": _clean(opportunity.get("source_type")),
@@ -275,13 +279,6 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
     if isinstance(source_material, Sequence) and not isinstance(source_material, (bytes, bytearray)):
         return list(source_material)
     return []
-
-
-def _truncate(value: str, max_chars: int) -> str:
-    text = " ".join(value.split())
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, max_chars - 3)].rstrip() + "..."
 
 
 def _clean(value: Any) -> str:

@@ -196,6 +196,9 @@
       "target": "extracted_content_pipeline/content_image_provider.py"
     },
     {
+      "target": "extracted_content_pipeline/text_truncate.py"
+    },
+    {
       "target": "extracted_content_pipeline/brand_voice.py"
     },
     {
