@@ -49,11 +49,30 @@ expected-outcome labels (`cluster_theme`, `should_publish_answer`, `reopened`,
 
 ## Result
 
-> Pending the operator export run. After capture + labeling + funnel run, this
-> section records: ticket/comment counts, cluster count, publishable-answer
-> precision against `should_publish_answer`, private-note leak check, and
-> reopened/unresolved handling. Until then this corpus is captured-and-labeled
-> but not yet a qualitative product pass.
+Captured + labeled from the `finetunelab` trial via the live export
+(`--limit 200`); verified PII-clean (0 emails / phones / identifier numbers /
+raw IDs / secrets).
+
+| Metric | Value |
+|---|---:|
+| Tickets | 50 |
+| Comments | 126 |
+| Distinct cluster themes | 14 |
+| `should_publish_answer = true` | 36 |
+| `unresolved = true` | 7 |
+| `reopened = true` | 4 |
+| `has_private_note = true` | 4 |
+
+The themes include deliberate negative cases: "Unanswered product question" (6),
+"Answered but reopened risk signal" (4), and "Private note must not become
+answer" (3), alongside repeat-question clusters (duplicate charge x8, login/MFA
+x7, API/webhook x6, shipping x5). Labels are reviewer-drafted from the theme +
+structure and are **pending operator correction**.
+
+Still deferred: the funnel run itself -- feeding this corpus through deflection
+and scoring publishable-answer precision against `should_publish_answer`,
+private-note exclusion, and reopened/unresolved handling. Until then this corpus
+is captured-and-labeled but not yet a qualitative product pass.
 
 ## Pairing
 

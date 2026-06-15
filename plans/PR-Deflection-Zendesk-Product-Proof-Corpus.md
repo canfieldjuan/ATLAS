@@ -75,11 +75,13 @@ Slice phase: Functional validation
 - `.github/workflows/extracted_pipeline_checks.yml` (path filters for the new script + test)
 - `extracted_content_pipeline/support_ticket_zendesk_export.py` (drop page[size])
 - `tests/test_extracted_support_ticket_zendesk_export.py` (correct URL + regression)
+- `docs/extraction/validation/fixtures/zendesk_product_proof_corpus.json` (captured + labeled corpus)
 - `docs/extraction/validation/deflection_zendesk_product_proof_corpus.md`
 - `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md`
 
-The committed corpus fixture lands in a follow-up commit after the operator
-export; it is not part of this PR.
+The corpus (50 tickets) is captured and labeled in this PR. The
+expected-outcome labels are reviewer-drafted from the real tickets and remain
+pending operator correction.
 
 ## Mechanism
 
@@ -127,13 +129,13 @@ is given, and `--dry-run` forces preview even with `--out`.
 
 ## Deferred
 
-- The committed fixture content, the drafted expected-outcome labels, and the
-  funnel-run proof metrics: gated on the operator running the capture against
-  `finetunelab` (live credentials). Reviewer drafts labels from the real
-  tickets after the export; operator corrects before freeze.
-- The Zendesk pusher (dry-run/idempotent), and any missing-case generation,
-  deferred unless the 29 leave gaps.
-- Live funnel run / qualitative output review.
+- Operator correction of the reviewer-drafted expected-outcome labels (the
+  corpus is captured + labeled here; the labels are a draft for review).
+- The funnel-run proof metrics: running this corpus through deflection and
+  recording publishable-answer precision against `should_publish_answer`,
+  private-note exclusion, and reopened/unresolved handling.
+- The Zendesk pusher (dry-run/idempotent) and any missing-case generation,
+  deferred unless the 50 leave gaps.
 
 Parked hardening: none.
 
@@ -166,11 +168,12 @@ Parked hardening: none.
 | `.github/workflows/extracted_pipeline_checks.yml` | 4 |
 | `extracted_content_pipeline/support_ticket_zendesk_export.py` | 6 |
 | `tests/test_extracted_support_ticket_zendesk_export.py` | 18 |
+| `docs/extraction/validation/fixtures/zendesk_product_proof_corpus.json` | 1488 |
 | `docs/extraction/validation/deflection_zendesk_product_proof_corpus.md` | 45 |
-| `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md` | 160 |
-| **Total** | **630** |
+| `plans/PR-Deflection-Zendesk-Product-Proof-Corpus.md` | 165 |
+| **Total** | **2122** |
 
-Over the 400 soft cap because the sanitizer needs a pure implementation, role
-preservation, and a real test matrix (PII classes, whitelist projection,
-role-split round-trip, private-note derivation); the committed fixture data
-lands in a follow-up commit after the operator export.
+Over the 400 soft cap: ~1488 of those lines are the committed corpus **data**
+(the 50-ticket sanitized fixture), not logic. The executable surface (sanitizer
++ role preservation + export fix + test matrix) is ~630 lines and is what
+carries review risk.
