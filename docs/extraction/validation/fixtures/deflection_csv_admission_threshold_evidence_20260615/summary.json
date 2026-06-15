@@ -1,0 +1,80 @@
+{
+  "blocking_violation_codes": [],
+  "case_count": 2,
+  "cases": [
+    {
+      "admission_status": "ACCEPT",
+      "case_status": "ok",
+      "coverage_warnings": [],
+      "description": "Zendesk-shaped CSV with ticket id, subject, public comments, and internal notes.",
+      "expected_full_coverage": true,
+      "ignored_private_fields": [
+        "Internal Notes"
+      ],
+      "mapped_fields": {
+        "source_id": [
+          "Ticket ID"
+        ],
+        "source_title": [
+          "Subject"
+        ],
+        "thread_text": [
+          "Public Comments"
+        ]
+      },
+      "name": "zendesk_public_comments_csv",
+      "ok": true,
+      "populated_unmapped_fields": [],
+      "raw_source_row_count": 50,
+      "usable_source_ratio": 1.0,
+      "usable_source_row_count": 50,
+      "warning_counts": {
+        "missing_company_name": 50,
+        "missing_contact_email": 50,
+        "missing_vendor_name": 50
+      }
+    },
+    {
+      "admission_status": "ACCEPT",
+      "case_status": "ok",
+      "coverage_warnings": [],
+      "description": "Zendesk-shaped CSV with ticket id, subject, requester description, and internal notes.",
+      "expected_full_coverage": true,
+      "ignored_private_fields": [
+        "Internal Notes"
+      ],
+      "mapped_fields": {
+        "source_id": [
+          "Ticket ID"
+        ],
+        "source_text": [
+          "Description"
+        ],
+        "source_title": [
+          "Subject"
+        ]
+      },
+      "name": "zendesk_description_csv",
+      "ok": true,
+      "populated_unmapped_fields": [],
+      "raw_source_row_count": 50,
+      "usable_source_ratio": 1.0,
+      "usable_source_row_count": 50,
+      "warning_counts": {
+        "missing_company_name": 50,
+        "missing_contact_email": 50,
+        "missing_vendor_name": 50
+      }
+    }
+  ],
+  "corpus": {
+    "run_tag": "atlas_product_proof_20260614",
+    "source": "zendesk_trial_api",
+    "ticket_count": 50,
+    "tickets_with_private_notes": 4
+  },
+  "observed_max_usable_source_ratio": 1.0,
+  "observed_min_usable_source_ratio": 1.0,
+  "status": "ok",
+  "threshold_conclusion": "The committed product-shaped Zendesk CSV projections are accepted at full coverage. This supports the clean ACCEPT path, but does not justify a hard low-coverage reject threshold by itself."
+}
