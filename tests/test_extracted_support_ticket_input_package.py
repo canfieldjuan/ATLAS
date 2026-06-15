@@ -673,6 +673,26 @@ def test_support_ticket_inline_provider_html_strips_link_attribute_tokens() -> N
         "Why did <email>user@example.test</email> fail when "
         "<config>retries=3</config> was set?"
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "rejected"),
+    (
+        ("Atlas seed", {"atlas", "seed"}, {"atla"}),
+        ("ticket status", {"status"}, {"statu"}),
+        ("analysis report", {"analysis", "report"}, {"analysi"}),
+        ("damaged devices", {"damaged", "device"}, {"devices"}),
+    ),
+)
+def test_support_ticket_tokens_do_not_depluralize_non_plural_final_s_words(
+    text: str,
+    expected: set[str],
+    rejected: set[str],
+) -> None:
+    tokens = support_ticket_tokens(text)
+
+    assert expected.issubset(tokens)
+    assert tokens.isdisjoint(rejected)
     assert support_ticket_plain_text("If a<b and c>d then fail") == (
         "If a<b and c>d then fail"
     )

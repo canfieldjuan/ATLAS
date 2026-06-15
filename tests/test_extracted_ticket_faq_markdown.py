@@ -19,6 +19,9 @@ from extracted_content_pipeline.embedding_port import cosine_similarity
 from extracted_content_pipeline.support_ticket_input_package import (
     build_support_ticket_input_package,
 )
+from extracted_content_pipeline.support_ticket_zendesk_thread import (
+    rows_from_zendesk_full_thread,
+)
 from extracted_content_pipeline.ticket_faq_markdown import (
     TicketFAQMarkdownConfig,
     TicketFAQMarkdownService,
@@ -42,6 +45,9 @@ SUPPORT_TICKET_BUNDLE = ROOT / "extracted_content_pipeline/examples/support_tick
 FAQ_CUSTOM_RULES = ROOT / "extracted_content_pipeline/examples/faq_custom_rules.json"
 FAQ_DOCUMENTATION_TERMS = (
     ROOT / "extracted_content_pipeline/examples/faq_documentation_terms.txt"
+)
+ZENDESK_PRODUCT_PROOF_CORPUS = (
+    ROOT / "docs/extraction/validation/fixtures/zendesk_product_proof_corpus.json"
 )
 
 
@@ -1744,6 +1750,121 @@ def test_build_ticket_faq_markdown_uses_representative_label_when_customer_wordi
     assert result.output_checks["uses_user_vocabulary"] is True
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_question"),
+    (
+        (
+            "[Atlas seed 10] Login and MFA access issue "
+            "How do I reset two factor authentication for a teammate who lost their phone?",
+            "How do I reset two factor authentication for a teammate who lost their phone?",
+        ),
+        (
+            "[Atlas seed 22] Shipping or replacement question "
+            "Where is my replacement device?",
+            "Where is my replacement device?",
+        ),
+        (
+            "[Zendesk trial 17] API or webhook integration issue "
+            "Why is webhook delivery delayed?",
+            "Why is webhook delivery delayed?",
+        ),
+        (
+            "[QA import 04] Billing question duplicate charge "
+            "What should I do if I was charged twice?",
+            "What should I do if I was charged twice?",
+        ),
+        (
+            "[Seeded ticket 31] Export permission issue "
+            "Can admins export the audit log?",
+            "Can admins export the audit log?",
+        ),
+    ),
+)
+def test_build_ticket_faq_markdown_strips_seed_subject_prefix_from_customer_question(
+    text: str,
+    expected_question: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": text.split("]", 1)[0] + "]",
+                "text": text,
+                "source_id": "ticket-1",
+                "resolution_text": "Open Admin Settings, update the saved setting, and retry.",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "technical support",
+                "source_title": text.split("]", 1)[0] + "]",
+                "text": text,
+                "source_id": "ticket-2",
+                "resolution_text": "Open Admin Settings, update the saved setting, and retry.",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == expected_question
+    assert result.items[0]["question_source"] == "customer_wording"
+    assert "[" not in result.items[0]["question"]
+    assert expected_question in result.markdown
+    assert f"## 1. {expected_question}" in result.markdown
+    assert "## 1. [Atlas seed" not in result.markdown
+
+
+def test_build_ticket_faq_markdown_cleans_committed_zendesk_product_corpus_labels() -> None:
+    corpus = json.loads(ZENDESK_PRODUCT_PROOF_CORPUS.read_text(encoding="utf-8"))
+    rows = rows_from_zendesk_full_thread(corpus).rows
+    package = build_support_ticket_input_package(rows)
+    result = build_ticket_faq_markdown(package.inputs["source_material"], max_items=0)
+    questions = [item["question"] for item in result.items]
+    cluster_labels = {
+        item["label"] for item in package.inputs["top_ticket_clusters"]
+    }
+
+    assert "How do I reset two factor authentication for a teammate who lost their phone?" in questions
+    assert "Where is my replacement device?" in questions
+    assert not any("[Atlas seed" in question for question in questions)
+    assert "What should I do about atla?" not in questions
+    assert cluster_labels.isdisjoint({"atla", "atlas"})
+
+
+@pytest.mark.parametrize(
+    "question_text",
+    (
+        "My refund of $49 for order 99 - how do I track it?",
+        "I was billed $199 instead of $49 how do I dispute this charge?",
+        "The invoice from March is wrong what should I do?",
+        "Login issue is still happening?",
+    ),
+)
+def test_build_ticket_faq_markdown_preserves_real_context_before_question_words(
+    question_text: str,
+) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "source_title": "Customer ticket",
+                "text": question_text,
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "source_title": "Customer ticket",
+                "text": question_text,
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == question_text
+    assert result.items[0]["question_source"] == "customer_wording"
+
+
 def test_build_ticket_faq_markdown_uses_safe_terms_instead_of_pii_source_title() -> None:
     result = build_ticket_faq_markdown(
         [
@@ -2109,6 +2230,74 @@ def test_build_ticket_faq_markdown_uses_repeated_gist_tokens_for_representative_
     )
 
     assert result.items[0]["question"] == "What should I do about export timeout?"
+
+
+@pytest.mark.parametrize("topic", ("api", "sso", "mfa", "billing", "ssl", "vpn", "crm", "gdpr"))
+def test_build_ticket_faq_markdown_keeps_specific_source_policy_topic_labels(topic: str) -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": topic,
+                "source_title": f"{topic} issue",
+                "text": f"{topic} access remains blocked.",
+                "source_id": "ticket-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": topic,
+                "source_title": f"{topic} issue",
+                "text": f"{topic} setup is still blocked.",
+                "source_id": "ticket-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert result.items[0]["question"] == f"What should I do about {topic}?"
+    assert result.items[0]["question_source"] == "source_policy"
+
+
+def test_build_ticket_faq_markdown_keeps_distinct_short_acronym_policy_labels() -> None:
+    result = build_ticket_faq_markdown(
+        [
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "gdpr",
+                "source_title": "gdpr export",
+                "text": "gdpr export remains blocked for the legal team.",
+                "source_id": "gdpr-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "gdpr",
+                "source_title": "gdpr export",
+                "text": "gdpr export remains blocked for the legal team.",
+                "source_id": "gdpr-2",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "vpn",
+                "source_title": "vpn access",
+                "text": "vpn access remains blocked for remote users.",
+                "source_id": "vpn-1",
+            },
+            {
+                "source_type": "support_ticket",
+                "support_ticket_cluster": "vpn",
+                "source_title": "vpn access",
+                "text": "vpn access remains blocked for remote users.",
+                "source_id": "vpn-2",
+            },
+        ],
+        max_items=0,
+    )
+
+    assert [item["question"] for item in result.items] == [
+        "What should I do about gdpr?",
+        "What should I do about vpn?",
+    ]
+    assert result.warnings == ()
 
 
 def test_build_ticket_faq_markdown_disambiguates_colliding_safe_source_policy_labels() -> None:
