@@ -15,6 +15,12 @@ The production portfolio URL returned `404`, so this run does not prove the
 production customer-facing result page. No bearer token, Stripe secret, or CSV
 contents are recorded here.
 
+Security update (2026-06-15): this historical request ID and result URL are now
+redacted. The history sweep found the historical artifact unlocked under
+service-token auth (`200`), relocked it through the signed Stripe revocation
+path, and verified the artifact endpoint returned `403` afterward. Hash label:
+`3a0db3e41b8f`.
+
 ## Inputs
 
 | Input | Value |
@@ -23,8 +29,8 @@ contents are recorded here.
 | Portfolio production host | `https://juancanfield.com` |
 | Submit CSV fixture | `extracted_content_pipeline/examples/support_ticket_saas_demo_sources.csv` |
 | Submit mode | multipart |
-| Request id | `content-ops-cb59b80f08cf4c2b9ceef769501e2fb7` |
-| Account id | `2b2b950d-f64b-4852-bc30-f92a34cdf169` |
+| Request id | `content-ops-[redacted:3a0db3e41b8f]` |
+| Account id | `<redacted-account-id>` |
 
 ## Commands
 
@@ -53,8 +59,8 @@ python scripts/smoke_content_ops_deflection_portfolio_result_page.py \
 with:
 
 ```text
-ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL=https://juancanfield.com/services/faq-deflection/results/content-ops-cb59b80f08cf4c2b9ceef769501e2fb7?account_id=2b2b950d-f64b-4852-bc30-f92a34cdf169
-ATLAS_DEFLECTION_REQUEST_ID=content-ops-cb59b80f08cf4c2b9ceef769501e2fb7
+ATLAS_DEFLECTION_PORTFOLIO_RESULT_URL=<redacted-result-url:3a0db3e41b8f>
+ATLAS_DEFLECTION_REQUEST_ID=content-ops-[redacted:3a0db3e41b8f]
 ```
 
 ## Result

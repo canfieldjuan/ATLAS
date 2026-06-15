@@ -31,7 +31,7 @@ buyer-readiness standard for product-quality support output.
 The raw CSV is not committed. It was regenerated locally from:
 
 ```text
-/home/juan-canfield/Desktop/Atlas/tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl
+tmp/faq_scale_stress_20260523/cfpb_50000_source_rows.jsonl
 ```
 
 Generated upload CSV:
@@ -53,7 +53,7 @@ Command shape:
 python scripts/smoke_content_ops_deflection_submit_handoff.py \
   --csv-file tmp/deflection_full_volume_live_proof_20260614/cfpb_real_upload_under_50mb.csv \
   --company-name "CFPB Public Archive" \
-  --contact-email canfieldjuan24@gmail.com \
+  --contact-email ops@example.com \
   --support-platform other \
   --min-uploaded-bytes 50000000 \
   --min-source-row-count 30000 \
@@ -85,7 +85,7 @@ Observed scalar result:
 Request id:
 
 ```text
-content-ops-45c06a6950ec4677a214368d6e4dc44f
+content-ops-[redacted:a83f5c797c38]
 ```
 
 The submit transport and snapshot/artifact probes passed. The command exited
@@ -110,8 +110,8 @@ Command shape:
 
 ```bash
 python scripts/smoke_content_ops_deflection_portfolio_result_page.py \
-  --result-url https://juancanfield.com/services/faq-deflection/results/content-ops-45c06a6950ec4677a214368d6e4dc44f \
-  --request-id content-ops-45c06a6950ec4677a214368d6e4dc44f \
+  --result-url <redacted-result-url:a83f5c797c38> \
+  --request-id content-ops-[redacted:a83f5c797c38] \
   --timeout 120 \
   --output-result tmp/deflection_full_volume_live_proof_20260614/result-page.json \
   --json
@@ -145,7 +145,7 @@ Command shape:
 
 ```bash
 python scripts/smoke_content_ops_deflection_stripe_paid_unlock.py \
-  --request-id content-ops-45c06a6950ec4677a214368d6e4dc44f \
+  --request-id content-ops-[redacted:a83f5c797c38] \
   --timeout 180 \
   --replay-webhook \
   --output-result tmp/deflection_full_volume_live_proof_20260614/paid-unlock.json \
@@ -165,6 +165,13 @@ The local `ATLAS_SAAS_STRIPE_WEBHOOK_SECRET` does not match the deployed
 `atlas-brain.tailc7bd29.ts.net` Stripe webhook secret, or the deployed host is
 using a different secret source. Paid unlock and email delivery remain unproven.
 
+Security update (2026-06-15): this historical request ID and result URL are now
+redacted. A later history sweep found the historical artifact unlocked under
+service-token auth (`200`), relocked it through the signed Stripe revocation
+path, and verified the artifact endpoint returned `403` afterward. Hash label:
+`a83f5c797c38`. This does not change the original proof result above: the
+2026-06-14 paid-unlock smoke itself failed on signature mismatch.
+
 ## Committed Evidence
 
 The committed fixture summary is:
@@ -173,8 +180,8 @@ The committed fixture summary is:
 docs/extraction/validation/fixtures/deflection_full_volume_live_proof_20260614/summary.json
 ```
 
-The summary intentionally excludes bearer tokens, webhook secrets, raw CFPB
-rows, paid report Markdown, PDFs, and email bodies.
+The summary intentionally excludes bearer tokens, webhook secrets, raw request
+IDs, raw CFPB rows, paid report Markdown, PDFs, and email bodies.
 
 ## Next Action
 
