@@ -9,6 +9,7 @@ const PAID_QUESTION_LIMIT = 8;
 const PAID_DETAIL_LIMIT = 5;
 const PAID_PHRASE_LIMIT = 10;
 const RESOLUTION_EVIDENCE_STATUS = "resolution_evidence";
+const EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1";
 
 function clean(value) {
   if (Array.isArray(value)) return clean(value[0]);
@@ -194,6 +195,23 @@ function paidArtifactItems(report) {
   return report.artifact.faq_result.items.filter(isObjectRecord);
 }
 
+function paidEvidenceExportHref(report, requestId) {
+  if (
+    !report ||
+    !report.ok ||
+    report.artifact_status !== "unlocked" ||
+    !isObjectRecord(report.artifact) ||
+    !isObjectRecord(report.artifact.evidence_export) ||
+    clean(report.artifact.evidence_export.schema_version) !== EVIDENCE_EXPORT_SCHEMA_VERSION
+  ) {
+    return "";
+  }
+  const exportRequestId = clean(requestId) || clean(report.request_id);
+  return exportRequestId
+    ? `/api/content-ops/deflection/evidence-export?request_id=${encodeURIComponent(exportRequestId)}`
+    : "";
+}
+
 function itemTicketCount(item) {
   return firstParsedCount(item.ticket_count, item.frequency, item.weighted_frequency);
 }
@@ -264,7 +282,7 @@ function renderPaidMetricCards(summary) {
           </div>`;
 }
 
-function renderPaidReadiness(summary) {
+function renderPaidReadiness(summary, evidenceExportHref) {
   const hasAnswers = summary.publishableCount > 0;
   return `<div class="paid-readiness" data-atlas-deflection-paid-readiness>
             <div class="${hasAnswers ? "ready" : "needs-proof"}">
@@ -275,9 +293,11 @@ function renderPaidReadiness(summary) {
                 : "No uploaded resolution evidence was present; use this as a prioritized content roadmap."}</p>
             </div>
             <div>
-              <span>Full-detail delivery</span>
-              <strong>Email/PDF artifact remains unchanged</strong>
-              <p>The browser view is consolidated for review. The detailed artifact still travels through the existing paid delivery path.</p>
+              <span>Complete evidence export</span>
+              <strong>${evidenceExportHref ? "Available as JSON" : "Awaiting export artifact"}</strong>
+              <p>${evidenceExportHref
+                ? `Use the browser dashboard for the summary, and download the uncapped evidence archive for audit/detail review. <a class="paid-download-link" data-atlas-deflection-evidence-export-download href="${escapeHtml(evidenceExportHref)}" download>Download complete evidence JSON</a>.`
+                : "The browser dashboard is available, but this artifact does not expose the complete evidence export yet."}</p>
             </div>
           </div>`;
 }
@@ -350,26 +370,30 @@ function renderPaidPhrases(items) {
           </section>`;
 }
 
-function renderPaidArtifact(report) {
+function renderPaidArtifact(report, requestId = "") {
   const items = paidArtifactItems(report);
   if (!items.length) return "";
   const summary = paidSummary(report, items);
+  const evidenceExportHref = paidEvidenceExportHref(report, requestId);
 
   return `<section class="paid-report" aria-labelledby="paid-report-title" data-atlas-deflection-paid-report>
           <div class="paid-report-header">
             <div>
               <h2 id="paid-report-title">Paid report dashboard</h2>
-              <p class="muted">Unlocked from the ATLAS paid artifact after Stripe webhook verification. This browser view is consolidated for decision-making; the detailed delivery artifact remains separate.</p>
+              <p class="muted">Unlocked from the ATLAS paid artifact after Stripe webhook verification. This browser view is consolidated for decision-making; the complete evidence export carries the uncapped audit trail.</p>
             </div>
             <nav class="paid-report-nav" aria-label="Paid report sections">
               <a href="#paid-ranked-questions">Questions</a>
               <a href="#paid-publishable-answers">Answers</a>
               <a href="#paid-gap-list">Gaps</a>
               <a href="#paid-customer-phrases">Phrases</a>
+              ${evidenceExportHref
+                ? `<a data-atlas-deflection-evidence-export-download href="${escapeHtml(evidenceExportHref)}" download>Evidence JSON</a>`
+                : ""}
             </nav>
           </div>
           ${renderPaidMetricCards(summary)}
-          ${renderPaidReadiness(summary)}
+          ${renderPaidReadiness(summary, evidenceExportHref)}
           ${renderPaidQuestionTable(items)}
           ${renderPaidAnswerCards(items)}
           ${renderPaidGapCards(items)}
@@ -509,6 +533,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
     .paid-readiness strong { display: block; margin-top: 6px; color: #86efac; font-size: 18px; }
     .paid-readiness .needs-proof strong { color: #fde68a; }
     .paid-readiness p { margin: 10px 0 0; color: rgba(226, 232, 240, .75); line-height: 1.55; }
+    .paid-download-link { display: inline-block; margin-top: 8px; font-weight: 800; }
     .paid-report-block { margin-top: 24px; }
     .paid-report-block h3 { margin: 0 0 12px; font-size: 18px; }
     .paid-table-wrap { overflow-x: auto; border: 1px solid rgba(30, 41, 59, .9); border-radius: 8px; }
@@ -544,7 +569,7 @@ function renderResultPage({ requestId, accountId, checkoutStatus = "", report = 
         <p class="lede">The free snapshot and paid artifact stay separated. The full report unlocks only after Stripe confirms payment and ATLAS releases the artifact from its signed webhook path.</p>
         ${statusBanner}
         ${renderSnapshot(report)}
-        ${renderPaidArtifact(report)}
+        ${renderPaidArtifact(report, requestId)}
       </section>
       <aside class="panel">
         <h2>${unlockHeading}</h2>

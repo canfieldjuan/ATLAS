@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import evidenceExportHandler from "../api/content-ops/deflection/evidence-export.js";
 import reportHandler from "../api/content-ops/deflection/report.js";
 import {
   atlasPath,
@@ -36,6 +37,42 @@ const SNAPSHOT = {
   ],
 };
 
+const EVIDENCE_EXPORT = {
+  schema_version: "deflection_evidence.v1",
+  summary: {
+    question_count: 2,
+    evidence_row_count: 2,
+    source_id_count: 2,
+    drafted_answer_count: 1,
+    no_proven_answer_count: 1,
+  },
+  report_summary: {
+    generated: 2,
+    repeat_ticket_count: 12,
+  },
+  questions: [
+    {
+      question_id: "q-1",
+      rank: 1,
+      question: "How do I reset billing access?",
+      source_ids: ["ticket-1"],
+      answer_linkage: "publishable_answer",
+    },
+  ],
+  evidence_rows: [
+    {
+      row_id: "q-1:ticket-1:evidence_quote:1",
+      question_id: "q-1",
+      rank: 1,
+      question: "How do I reset billing access?",
+      source_id: "ticket-1",
+      source_field: "evidence_quote",
+      evidence_quote: "Open Billing > Users.",
+      answer_evidence_status: "resolution_evidence",
+    },
+  ],
+};
+
 const PAID_ARTIFACT = {
   markdown: '# Paid report\n\n<script>alert("xss")</script>',
   summary: { generated: 2, repeat_ticket_count: 12 },
@@ -59,6 +96,7 @@ const PAID_ARTIFACT = {
       },
     ],
   },
+  evidence_export: EVIDENCE_EXPORT,
 };
 
 async function test(name, fn) {
@@ -356,6 +394,130 @@ await test("public report API returns sanitized locked envelope and never the to
   });
 });
 
+await test("evidence export API downloads only unlocked v1 export", async () => {
+  const previousFetch = globalThis.fetch;
+  const { calls, fetchImpl } = mockFetch([response(SNAPSHOT, 200), response(PAID_ARTIFACT, 200)]);
+  globalThis.fetch = fetchImpl;
+  await withEnv(ENV, async () => {
+    const req = {
+      method: "GET",
+      headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/evidence-export?request_id=${REQUEST_ID}`,
+    };
+    const res = mockResponse();
+    try {
+      await evidenceExportHandler(req, res);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.headers["Content-Type"], "application/json; charset=utf-8");
+    assert.equal(res.headers["Cache-Control"], "no-store");
+    assert.match(
+      res.headers["Content-Disposition"],
+      /^attachment; filename="deflection-evidence-content-ops-abc123\.json"$/,
+    );
+    assert.deepEqual(JSON.parse(res.body), EVIDENCE_EXPORT);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, `${ENV.ATLAS_API_BASE_URL}${atlasPath(REQUEST_ID, "snapshot")}`);
+    assert.equal(calls[1].url, `${ENV.ATLAS_API_BASE_URL}${atlasPath(REQUEST_ID, "artifact")}`);
+    assert.equal(JSON.stringify(JSON.parse(res.body)).includes(ENV.ATLAS_B2B_JWT), false);
+    assert.equal(JSON.stringify(JSON.parse(res.body)).includes(ACCOUNT_ID), false);
+  });
+});
+
+await test("evidence export API fails closed while artifact is locked", async () => {
+  const previousFetch = globalThis.fetch;
+  const { fetchImpl } = mockFetch([response(SNAPSHOT, 200), response({ detail: "locked" }, 403)]);
+  globalThis.fetch = fetchImpl;
+  await withEnv(ENV, async () => {
+    const req = {
+      method: "GET",
+      headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/evidence-export?request_id=${REQUEST_ID}`,
+    };
+    const res = mockResponse();
+    try {
+      await evidenceExportHandler(req, res);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    assert.equal(res.statusCode, 403);
+    const payload = JSON.parse(res.body);
+    assert.deepEqual(payload, {
+      ok: false,
+      statusCode: 403,
+      error: "evidence_export_locked",
+    });
+    assert.equal(res.body.includes("evidence_rows"), false);
+    assert.equal(res.body.includes(ENV.ATLAS_B2B_JWT), false);
+  });
+});
+
+await test("evidence export API fails closed when artifact is missing", async () => {
+  const previousFetch = globalThis.fetch;
+  const { fetchImpl } = mockFetch([response(SNAPSHOT, 200), response({ detail: "missing" }, 404)]);
+  globalThis.fetch = fetchImpl;
+  await withEnv(ENV, async () => {
+    const req = {
+      method: "GET",
+      headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/evidence-export?request_id=${REQUEST_ID}`,
+    };
+    const res = mockResponse();
+    try {
+      await evidenceExportHandler(req, res);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    assert.equal(res.statusCode, 404);
+    assert.deepEqual(JSON.parse(res.body), {
+      ok: false,
+      statusCode: 404,
+      error: "evidence_export_unavailable",
+    });
+    assert.equal(res.body.includes("evidence_rows"), false);
+  });
+});
+
+await test("evidence export API rejects malformed unlocked export envelopes", async () => {
+  const previousFetch = globalThis.fetch;
+  const malformedArtifact = {
+    ...PAID_ARTIFACT,
+    evidence_export: { schema_version: "deflection_evidence.v0", evidence_rows: [] },
+  };
+  const { fetchImpl } = mockFetch([response(SNAPSHOT, 200), response(malformedArtifact, 200)]);
+  globalThis.fetch = fetchImpl;
+  await withEnv(ENV, async () => {
+    const req = {
+      method: "GET",
+      headers: { host: "portfolio.example.com", "x-forwarded-proto": "https" },
+      query: { request_id: REQUEST_ID },
+      url: `/api/content-ops/deflection/evidence-export?request_id=${REQUEST_ID}`,
+    };
+    const res = mockResponse();
+    try {
+      await evidenceExportHandler(req, res);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+
+    assert.equal(res.statusCode, 502);
+    assert.deepEqual(JSON.parse(res.body), {
+      ok: false,
+      statusCode: 502,
+      error: "evidence_export_contract_violation",
+    });
+    assert.equal(res.body.includes("evidence_rows"), false);
+  });
+});
+
 await test("hosted result page renders real snapshot metrics from the proxy envelope", () => {
   const html = renderResultPage({
     requestId: REQUEST_ID,
@@ -380,6 +542,7 @@ await test("hosted result page renders real snapshot metrics from the proxy enve
   assert.match(html, /Unlock full report/);
   assert.match(html, /Continue to Checkout/);
   assertUnlockCta(html, { disabled: false });
+  assert.doesNotMatch(html, /data-atlas-deflection-evidence-export-download/);
   assert.doesNotMatch(html, /# Paid report/);
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
 });
@@ -485,6 +648,14 @@ await test("hosted result page renders structured paid dashboard only after unlo
     },
   });
   assert.match(html, /data-atlas-deflection-paid-report/);
+  assert.match(html, /data-atlas-deflection-evidence-export-download/);
+  assert.match(html, /Complete evidence export/);
+  assert.match(html, /Download complete evidence JSON/);
+  assert.match(
+    html,
+    /\/api\/content-ops\/deflection\/evidence-export\?request_id=content-ops-abc123/,
+  );
+  assert.doesNotMatch(html, /evidence-export\?request_id=[^"]*account_id=/);
   assert.match(html, /data-atlas-deflection-paid-summary/);
   assert.match(html, /data-atlas-deflection-paid-readiness/);
   assert.match(html, /Paid report dashboard/);
@@ -521,6 +692,24 @@ await test("hosted result page with malformed unlocked artifact does not invent 
     },
   });
   assert.doesNotMatch(html, /data-atlas-deflection-paid-report/);
+  assert.doesNotMatch(html, /data-atlas-deflection-evidence-export-download/);
   assert.doesNotMatch(html, /# Paid report/);
   assert.match(html, /Full report unlocked/);
+});
+
+await test("hosted result page with paid items but missing export omits download link", () => {
+  const { evidence_export: _evidenceExport, ...artifactWithoutExport } = PAID_ARTIFACT;
+  const html = renderResultPage({
+    requestId: REQUEST_ID,
+    accountId: ACCOUNT_ID,
+    report: {
+      ok: true,
+      snapshot: SNAPSHOT,
+      artifact_status: "unlocked",
+      artifact: artifactWithoutExport,
+    },
+  });
+  assert.match(html, /data-atlas-deflection-paid-report/);
+  assert.match(html, /Awaiting export artifact/);
+  assert.doesNotMatch(html, /data-atlas-deflection-evidence-export-download/);
 });
