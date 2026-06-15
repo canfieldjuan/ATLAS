@@ -8,6 +8,8 @@ import pytest
 
 from extracted_content_pipeline.faq_deflection_report import (
     DEFAULT_DEFLECTION_SEO_TARGET_LIMIT,
+    DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+    build_deflection_evidence_export,
     build_deflection_snapshot,
     build_deflection_report_artifact,
     deflection_snapshot_content_opportunities,
@@ -138,6 +140,128 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
     assert "No verified support resolution was present" not in artifact.markdown
     assert "export" in artifact.markdown
     assert "Download report" in artifact.markdown
+
+
+def test_deflection_report_artifact_includes_complete_evidence_export() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=4,
+        ticket_source_count=4,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "customer_wording": "export attribution reports",
+                "topic": "exports",
+                "weighted_frequency": 8,
+                "ticket_count": 2,
+                "opportunity_score": 14,
+                "answer": "Open Analytics, choose Attribution, then select Download report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "steps": ["Open Analytics and select Download report."],
+                "source_ids": ("ticket-1", "ticket-2"),
+                "evidence_quotes": (
+                    "`ticket-1` - Export question: How do I export reports?",
+                ),
+                "term_mappings": (
+                    {
+                        "customer_term": "export",
+                        "documentation_term": "Download report",
+                    },
+                ),
+                "outcome_diagnostics": {
+                    "ticket_status_summary": {"resolved": 2},
+                    "diagnostic_ticket_count": 2,
+                },
+            },
+            {
+                "question": "Why is the dashboard stale?",
+                "weighted_frequency": 3,
+                "ticket_count": 2,
+                "opportunity_score": 6,
+                "answer_evidence_status": "draft_needs_review",
+                "source_ids": ("ticket-3", "ticket-4"),
+                "evidence_quotes": (
+                    "`ticket-3` - Stale dashboard: why is the dashboard stale?",
+                ),
+            },
+        ),
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    export = build_deflection_evidence_export(artifact)
+
+    assert artifact.as_dict()["evidence_export"] == export
+    assert export["schema_version"] == DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION
+    assert export["summary"] == {
+        "question_count": 2,
+        "evidence_row_count": 4,
+        "source_id_count": 4,
+        "drafted_answer_count": 1,
+        "no_proven_answer_count": 1,
+    }
+    assert export["questions"][0]["question_id"] == "q001"
+    assert export["questions"][0]["answer_linkage"] == "publishable_answer"
+    assert export["questions"][0]["term_mappings"] == [
+        {"customer_term": "export", "documentation_term": "Download report"}
+    ]
+    assert export["questions"][0]["outcome_diagnostics"] == {
+        "ticket_status_summary": {"resolved": 2},
+        "diagnostic_ticket_count": 2,
+    }
+    assert export["questions"][1]["answer_linkage"] == "needs_review"
+    assert export["evidence_rows"][0] == {
+        "row_id": "q001-e001",
+        "question_id": "q001",
+        "rank": 1,
+        "question": "How do I export attribution reports?",
+        "source_id": "ticket-1",
+        "source_field": "evidence_quote",
+        "evidence_quote": "`ticket-1` - Export question: How do I export reports?",
+        "answer_evidence_status": "resolution_evidence",
+        "resolution_evidence_scope": "scoped",
+        "answer_linkage": "publishable_answer",
+    }
+    assert export["evidence_rows"][1]["source_id"] == "ticket-2"
+    assert export["evidence_rows"][1]["source_field"] == "source_id"
+    assert export["evidence_rows"][1]["evidence_quote"] == ""
+    assert export["evidence_rows"][2]["answer_linkage"] == "needs_review"
+
+
+def test_deflection_snapshot_excludes_complete_evidence_export() -> None:
+    result = TicketFAQMarkdownResult(
+        markdown="# FAQ",
+        source_count=2,
+        ticket_source_count=2,
+        output_checks={"condensed": True},
+        items=(
+            {
+                "question": "How do I export attribution reports?",
+                "weighted_frequency": 4,
+                "ticket_count": 2,
+                "answer": "Open Analytics, choose Attribution, then select Download report.",
+                "answer_evidence_status": "resolution_evidence",
+                "resolution_evidence_scope": "scoped",
+                "steps": ["Open Analytics and select Download report."],
+                "source_ids": ("ticket-export-1", "ticket-export-2"),
+                "evidence_quotes": (
+                    "`ticket-export-1` - Export question: How do I export reports?",
+                ),
+            },
+        ),
+    )
+
+    artifact = build_deflection_report_artifact(result)
+    snapshot = build_deflection_snapshot(artifact).as_dict()
+    encoded = json.dumps(snapshot, sort_keys=True)
+
+    assert "evidence_export" in artifact.as_dict()
+    assert "evidence_export" not in snapshot
+    assert "evidence_export" not in encoded
+    assert "evidence_quotes" not in encoded
+    assert "source_ids" not in encoded
+    assert "ticket-export-1" not in encoded
 
 
 def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -> None:
@@ -1424,6 +1548,58 @@ def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None
     assert "tell users exactly what to try next" not in markdown
 
 
+def test_deflection_report_cli_writes_complete_evidence_export(tmp_path: Path) -> None:
+    source = tmp_path / "mixed-support-tickets.json"
+    evidence_output = tmp_path / "deflection-evidence.json"
+    source.write_text(
+        json.dumps([
+            {
+                "ticket_id": "ticket-export-1",
+                "source_type": "support_ticket",
+                "subject": "Export attribution report",
+                "message": "How do I export attribution reports?",
+                "pain_category": "exports",
+                "resolution_text": (
+                    "Open Analytics then Attribution then click Download report."
+                ),
+            },
+            {
+                "ticket_id": "ticket-export-2",
+                "source_type": "support_ticket",
+                "subject": "Export attribution report",
+                "message": "How do I export attribution reports?",
+                "pain_category": "exports",
+                "resolution_text": (
+                    "Open Analytics then Attribution then click Download report."
+                ),
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    exit_code = MODULE.main([
+        str(source),
+        "--source-format",
+        "json",
+        "--evidence-output",
+        str(evidence_output),
+    ])
+
+    assert exit_code == 0
+    export = json.loads(evidence_output.read_text(encoding="utf-8"))
+    assert export["schema_version"] == DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION
+    assert export["summary"]["question_count"] == 1
+    assert export["summary"]["source_id_count"] == 2
+    assert export["questions"][0]["answer_linkage"] == "publishable_answer"
+    assert export["questions"][0]["source_ids"] == [
+        "ticket-export-1",
+        "ticket-export-2",
+    ]
+    assert {
+        row["source_id"] for row in export["evidence_rows"]
+    } == {"ticket-export-1", "ticket-export-2"}
+
+
 def test_deflection_report_cli_ignores_legacy_max_items_cap(tmp_path: Path) -> None:
     source = tmp_path / "uncapped-support-tickets.json"
     result_output = tmp_path / "deflection-report-result.json"
@@ -1618,6 +1794,7 @@ def test_deflection_report_cli_fails_required_output_checks_for_weak_rows(
     assert result["output"]["markdown_path"] == str(output)
     assert result["output"]["summary_path"] == str(summary_output)
     assert result["output"]["result_path"] == str(result_output)
+    assert result["output"]["evidence_path"] is None
     assert result["diagnostics"]["item_count"] == 0
     assert result["diagnostics"]["items"] == []
     assert "markdown" not in result

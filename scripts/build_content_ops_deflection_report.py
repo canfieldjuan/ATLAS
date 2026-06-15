@@ -24,6 +24,7 @@ from extracted_content_pipeline.campaign_source_adapters import (  # noqa: E402
     parse_default_fields_or_exit,
 )
 from extracted_content_pipeline.faq_deflection_report import (  # noqa: E402
+    build_deflection_evidence_export,
     build_deflection_report_artifact,
 )
 from extracted_content_pipeline.ticket_faq_markdown import (  # noqa: E402
@@ -67,6 +68,16 @@ def main(argv: list[str] | None = None) -> int:
         args.result_output.write_text(
             json.dumps(
                 _result_payload(args, artifact, failed_checks),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if args.evidence_output:
+        args.evidence_output.write_text(
+            json.dumps(
+                build_deflection_evidence_export(artifact),
                 indent=2,
                 sort_keys=True,
             )
@@ -164,6 +175,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--summary-output", type=Path)
     parser.add_argument("--result-output", type=Path)
+    parser.add_argument("--evidence-output", type=Path)
     parser.add_argument(
         "--require-output-checks",
         action="store_true",
@@ -238,6 +250,7 @@ def _result_payload(
             "markdown_path": str(args.output) if args.output else None,
             "summary_path": str(args.summary_output) if args.summary_output else None,
             "result_path": str(args.result_output) if args.result_output else None,
+            "evidence_path": str(args.evidence_output) if args.evidence_output else None,
         },
         "config": {
             "title": args.title,

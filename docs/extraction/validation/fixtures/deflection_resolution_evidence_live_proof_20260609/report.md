@@ -8,7 +8,7 @@ The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured dai
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
-The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and complete evidence inside each question detail block.
+The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and a complete evidence export for audit/detail review.
 
 - Publishable answers drafted from proven resolutions: 2
 - Questions still needing an approved resolution: 2

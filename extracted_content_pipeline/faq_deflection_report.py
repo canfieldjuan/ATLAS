@@ -17,6 +17,7 @@ _DRAFT_NEEDS_REVIEW_STATUS = "draft_needs_review"
 DEFAULT_DEFLECTION_SNAPSHOT_TOP_N = 5
 DEFAULT_DEFLECTION_TEASER_PREVIEW_COUNT = 3
 DEFAULT_DEFLECTION_SEO_TARGET_LIMIT = 50
+DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION = "deflection_evidence.v1"
 _UNCAPPED_REPORT_MAX_ITEMS = 0
 _ASSISTED_CONTACT_COST = 13.50
 _ASSISTED_CONTACT_COST_LABEL = "$13.50"
@@ -67,6 +68,7 @@ class DeflectionReportArtifact:
             "markdown": self.markdown,
             "summary": dict(self.summary),
             "faq_result": self.faq_result.as_dict(),
+            "evidence_export": build_deflection_evidence_export(self),
         }
 
     def snapshot(self, *, top_n: int = DEFAULT_DEFLECTION_SNAPSHOT_TOP_N) -> DeflectionSnapshot:
@@ -144,6 +146,42 @@ def build_deflection_report_artifact(
         summary=summary,
         faq_result=faq_result,
     )
+
+
+def build_deflection_evidence_export(
+    artifact: DeflectionReportArtifact | Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the uncapped structured evidence export for a paid report."""
+
+    summary = dict(_artifact_summary(artifact))
+    items = _artifact_items(artifact)
+    questions = tuple(
+        _evidence_export_question(rank, item)
+        for rank, item in enumerate(items, start=1)
+    )
+    evidence_rows = tuple(
+        row
+        for rank, item in enumerate(items, start=1)
+        for row in _evidence_export_rows(rank, item)
+    )
+    source_ids = sorted({
+        source_id
+        for item in items
+        for source_id in _texts(item.get("source_ids"))
+    })
+    return {
+        "schema_version": DEFLECTION_EVIDENCE_EXPORT_SCHEMA_VERSION,
+        "summary": {
+            "question_count": len(questions),
+            "evidence_row_count": len(evidence_rows),
+            "source_id_count": len(source_ids),
+            "drafted_answer_count": _int(summary.get("drafted_answer_count")),
+            "no_proven_answer_count": _int(summary.get("no_proven_answer_count")),
+        },
+        "report_summary": summary,
+        "questions": [dict(question) for question in questions],
+        "evidence_rows": [dict(row) for row in evidence_rows],
+    }
 
 
 def build_deflection_snapshot(
@@ -373,7 +411,7 @@ def _support_tax_section(
             "The full unlocked report below gives you every ranked question, "
             "the estimated support cost by question, publishable help-center copy "
             "where your uploaded resolutions prove the answer, the no-proven-answer "
-            "roadmap, and complete evidence inside each question detail block."
+            "roadmap, and a complete evidence export for audit/detail review."
         ),
         "",
         f"- Publishable answers drafted from proven resolutions: {_count(_int(summary.get('drafted_answer_count')))}",
@@ -650,6 +688,121 @@ def _complete_evidence_detail(item: Mapping[str, Any]) -> list[str]:
         lines.append(f"- {_md(quote)}")
     lines.append("")
     return lines
+
+
+def _evidence_export_question(rank: int, item: Mapping[str, Any]) -> dict[str, Any]:
+    source_ids = _texts(item.get("source_ids"))
+    return {
+        "question_id": _evidence_question_id(rank),
+        "rank": rank,
+        "question": _text(item.get("question")),
+        "customer_wording": _text(item.get("customer_wording")),
+        "topic": _text(item.get("topic")),
+        "ticket_count": _ticket_count(item),
+        "weighted_frequency": _int(item.get("weighted_frequency") or item.get("frequency")),
+        "opportunity_score": _int(item.get("opportunity_score")),
+        "answer_evidence_status": _text(item.get("answer_evidence_status")),
+        "resolution_evidence_scope": _text(item.get("resolution_evidence_scope")),
+        "answer_linkage": _evidence_answer_linkage(item),
+        "answer": _text(item.get("answer")),
+        "steps": _texts(item.get("steps")),
+        "source_ids": source_ids,
+        "evidence_quote_count": len(_texts(item.get("evidence_quotes"))),
+        "term_mappings": [
+            dict(mapping)
+            for mapping in item.get("term_mappings") or ()
+            if isinstance(mapping, Mapping)
+        ],
+        "outcome_diagnostics": dict(_item_outcome_diagnostics(item)),
+    }
+
+
+def _evidence_export_rows(rank: int, item: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
+    question_id = _evidence_question_id(rank)
+    source_ids = _texts(item.get("source_ids"))
+    quotes = _texts(item.get("evidence_quotes"))
+    rows: list[dict[str, Any]] = []
+    used_quotes: set[int] = set()
+
+    for source_index, source_id in enumerate(source_ids, start=1):
+        quote_index, quote = _evidence_quote_for_source(source_id, quotes, used_quotes)
+        if quote_index is not None:
+            used_quotes.add(quote_index)
+        rows.append(
+            _evidence_row(
+                question_id=question_id,
+                rank=rank,
+                item=item,
+                row_index=source_index,
+                source_id=source_id,
+                quote=quote,
+                source_field="evidence_quote" if quote else "source_id",
+            )
+        )
+
+    for quote_index, quote in enumerate(quotes):
+        if quote_index in used_quotes:
+            continue
+        rows.append(
+            _evidence_row(
+                question_id=question_id,
+                rank=rank,
+                item=item,
+                row_index=len(rows) + 1,
+                source_id="",
+                quote=quote,
+                source_field="evidence_quote",
+            )
+        )
+    return tuple(rows)
+
+
+def _evidence_row(
+    *,
+    question_id: str,
+    rank: int,
+    item: Mapping[str, Any],
+    row_index: int,
+    source_id: str,
+    quote: str,
+    source_field: str,
+) -> dict[str, Any]:
+    return {
+        "row_id": f"{question_id}-e{row_index:03d}",
+        "question_id": question_id,
+        "rank": rank,
+        "question": _text(item.get("question")),
+        "source_id": source_id,
+        "source_field": source_field,
+        "evidence_quote": quote,
+        "answer_evidence_status": _text(item.get("answer_evidence_status")),
+        "resolution_evidence_scope": _text(item.get("resolution_evidence_scope")),
+        "answer_linkage": _evidence_answer_linkage(item),
+    }
+
+
+def _evidence_question_id(rank: int) -> str:
+    return f"q{rank:03d}"
+
+
+def _evidence_answer_linkage(item: Mapping[str, Any]) -> str:
+    if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
+        return "publishable_answer"
+    return "needs_review"
+
+
+def _evidence_quote_for_source(
+    source_id: str,
+    quotes: Sequence[str],
+    used_quotes: set[int],
+) -> tuple[int | None, str]:
+    normalized_source = source_id.casefold()
+    for index, quote in enumerate(quotes):
+        if index in used_quotes:
+            continue
+        if normalized_source and normalized_source in quote.casefold():
+            return index, quote
+    return None, ""
 
 
 def _status_label(item: Mapping[str, Any]) -> str:
