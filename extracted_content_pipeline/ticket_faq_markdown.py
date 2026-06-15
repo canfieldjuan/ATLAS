@@ -105,7 +105,7 @@ _TRAILING_TITLE_RE = re.compile(r"\b(?:mr|mrs|ms|dr)\.?$", re.IGNORECASE)
 _QUOTE_ARTIFACT_RE = re.compile(r"(?:''|``)")
 _LEADING_BRACKETED_METADATA_RE = re.compile(r"^(?:\[[^\]\n]{1,80}\]\s*)+")
 _METADATA_QUESTION_START_RE = re.compile(
-    r"\b(?:how|what|where|when|why|can|could|do|does)\s+",
+    r"\b(?:how|what|where|when|why|can|could|do|does|como)\s+",
     re.IGNORECASE,
 )
 _MORTGAGE_INTENT_TERMS = (
@@ -1308,20 +1308,23 @@ def _item(
         else _resolution_rows_for_question(rows, question_row)
     )
     resolution_texts = _resolution_texts(resolution_rows)
-    answer_evidence_status = (
-        "resolution_evidence" if resolution_texts else "draft_needs_review"
-    )
     resolution_evidence_scope = _resolution_evidence_scope_status(
         has_mixed_evidence_scopes=has_mixed_evidence_scopes,
         question_row=question_row,
         resolution_rows=resolution_rows,
         resolution_texts=resolution_texts,
     )
+    scoped_resolution_texts = (
+        resolution_texts if resolution_evidence_scope == "scoped" else ()
+    )
+    answer_evidence_status = (
+        "resolution_evidence" if scoped_resolution_texts else "draft_needs_review"
+    )
     steps = _article_steps(
         topic,
         action_context,
         support_contact=support_contact,
-        resolution_texts=resolution_texts,
+        resolution_texts=scoped_resolution_texts,
     )
     escalation = _escalation_guidance(topic, action_context, support_contact=support_contact)
     evidence_quotes = tuple(_evidence_quote(row) for row in display_rows)
@@ -1340,7 +1343,7 @@ def _item(
             question=question,
             source_count=len(source_ids),
             answer_evidence_status=answer_evidence_status,
-            resolution_texts=resolution_texts,
+            resolution_texts=scoped_resolution_texts,
         ),
         "action_items": steps,
         "summary": summary,
@@ -2361,12 +2364,35 @@ def _disambiguate_source_policy_question_collisions(
             warnings.append(_duplicate_source_policy_question_warning(question, items, indexes))
             continue
         for index, disambiguated in zip(indexes, disambiguated_questions):
+            rows = item_records[index][0]
             items[index]["question"] = disambiguated
+            _promote_disambiguated_resolution_evidence(items[index], rows, disambiguated)
             items[index]["answer"] = _answer_for_disambiguated_question(
                 items[index],
                 disambiguated,
             )
     return (tuple(items), tuple(warnings))
+
+
+def _promote_disambiguated_resolution_evidence(
+    item: dict[str, Any],
+    rows: Sequence[Mapping[str, str]],
+    question: str,
+) -> None:
+    if item.get("resolution_evidence_scope") != "missing_question_scope":
+        return
+    resolution_texts = _resolution_texts(rows)
+    if not resolution_texts:
+        return
+    item["answer_evidence_status"] = "resolution_evidence"
+    item["resolution_evidence_scope"] = "scoped"
+    item["steps"] = _article_steps(
+        _clean(item.get("topic")),
+        question,
+        support_contact=None,
+        resolution_texts=resolution_texts,
+    )
+    item["action_items"] = item["steps"]
 
 
 def _answer_for_disambiguated_question(
@@ -2606,7 +2632,19 @@ def _question_start_text(
     predicate: Callable[[str], bool] | None = None,
 ) -> str:
     resolved_predicate = predicate or _usable_question
-    question_starts = ("how ", "what ", "where ", "when ", "why ", "can ", "could ", "do ", "does ", "is ")
+    question_starts = (
+        "how ",
+        "what ",
+        "where ",
+        "when ",
+        "why ",
+        "can ",
+        "could ",
+        "do ",
+        "does ",
+        "is ",
+        "como ",
+    )
     lowered = text.lower()
     if lowered.startswith(question_starts):
         normalized = _normalize_question_text(text)
