@@ -351,6 +351,26 @@ class SourceRowAdmissionDiagnostics:
             }
         return {"status": "ACCEPT"}
 
+    @property
+    def coverage_warnings(self) -> tuple[dict[str, Any], ...]:
+        if (
+            self.input_format != "csv"
+            or self.raw_source_row_count < 1
+            or self.usable_source_row_count < 1
+            or self.usable_source_row_count >= self.raw_source_row_count
+        ):
+            return ()
+        return ({
+            "code": "partial_source_row_coverage",
+            "location": "source_row_csv",
+            "raw_source_row_count": self.raw_source_row_count,
+            "usable_source_row_count": self.usable_source_row_count,
+            "skipped_source_row_count": (
+                self.raw_source_row_count - self.usable_source_row_count
+            ),
+            "usable_source_ratio": self.usable_source_ratio,
+        },)
+
     def as_dict(self) -> dict[str, Any]:
         payload = {
             "input_format": self.input_format,
@@ -369,6 +389,9 @@ class SourceRowAdmissionDiagnostics:
         decision = self.admission_decision
         if decision:
             payload["admission_decision"] = decision
+        warnings = self.coverage_warnings
+        if warnings:
+            payload["coverage_warnings"] = [dict(warning) for warning in warnings]
         return payload
 
 
