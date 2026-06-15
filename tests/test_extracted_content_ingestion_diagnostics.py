@@ -33,6 +33,7 @@ def test_inspect_opportunity_json_reports_ready_rows(tmp_path: Path) -> None:
     assert payload["warning_count"] == 0
     assert payload["missing_field_counts"] == {}
     assert payload["samples"][0]["target_id"] == "opp-1"
+    assert "source_row_admission" not in payload
 
 
 def test_inspect_source_rows_counts_source_types_and_warnings(tmp_path: Path) -> None:
@@ -93,6 +94,130 @@ def test_inspect_source_rows_applies_default_fields(tmp_path: Path) -> None:
     assert report.ok is True
     assert report.opportunities[0]["company_name"] == "Acme Logistics"
     assert report.opportunities[0]["contact_email"] == "ops@example.com"
+
+
+def test_inspect_source_csv_reports_unmapped_populated_text_column(tmp_path: Path) -> None:
+    path = tmp_path / "tickets.csv"
+    path.write_text(
+        "Ticket ID,Conversation Text\n"
+        "T-1,Customer cannot export the weekly report.\n"
+    )
+
+    report = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+    )
+    payload = report.as_dict()
+
+    assert payload["ok"] is False
+    assert payload["warning_counts"] == {"missing_source_text": 1}
+    admission = payload["source_row_admission"]
+    assert admission["input_format"] == "csv"
+    assert admission["raw_source_row_count"] == 1
+    assert admission["usable_source_row_count"] == 0
+    assert admission["usable_source_ratio"] == 0.0
+    assert admission["mapped_fields"] == {"source_id": ["Ticket ID"]}
+    assert admission["populated_unmapped_fields"] == ["Conversation Text"]
+
+
+def test_inspect_source_csv_classifies_zendesk_public_and_private_columns(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "zendesk.csv"
+    path.write_text(
+        "Ticket ID,Subject,Public Comments,Internal Notes\n"
+        "T-1,Export failed,Customer cannot export the weekly report.,"
+        "Use the private workaround.\n"
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+    ).as_dict()
+
+    assert payload["ok"] is True
+    admission = payload["source_row_admission"]
+    assert admission["mapped_fields"] == {
+        "source_id": ["Ticket ID"],
+        "source_title": ["Subject"],
+        "thread_text": ["Public Comments"],
+    }
+    assert admission["ignored_private_fields"] == ["Internal Notes"]
+    assert admission["populated_unmapped_fields"] == []
+
+
+def test_inspect_source_csv_sample_limit_does_not_make_known_aliases_unmapped(
+    tmp_path: Path,
+) -> None:
+    id_fields = [
+        "Source ID",
+        "ID",
+        "Chat ID",
+        "Sales Objection ID",
+        "Objection ID",
+        "Review ID",
+        "Transcript ID",
+        "Call ID",
+        "Meeting ID",
+        "Recording ID",
+        "Deal ID",
+        "Opportunity ID",
+        "Note ID",
+        "Activity ID",
+        "Renewal ID",
+        "Contract ID",
+        "Subscription ID",
+        "Document ID",
+        "Search ID",
+        "Search Log ID",
+        "Search Query ID",
+        "Query ID",
+        "Zero Result Query ID",
+        "Complaint ID",
+        "Ticket ID",
+        "Ticket Number",
+    ]
+    path = tmp_path / "wide.csv"
+    path.write_text(
+        ",".join([*id_fields, "Message"]) + "\n"
+        + ",".join([f"src-{index}" for index in range(len(id_fields))])
+        + ",Customer cannot export the weekly report.\n"
+    )
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="csv",
+        sample_limit=1,
+    ).as_dict()
+
+    admission = payload["source_row_admission"]
+    assert len(admission["mapped_fields"]["source_id"]) == 25
+    assert "Ticket Number" not in admission["mapped_fields"]["source_id"]
+    assert admission["populated_unmapped_fields"] == []
+
+
+def test_inspect_source_jsonl_does_not_emit_csv_admission_diagnostics(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sources.jsonl"
+    path.write_text(json.dumps({
+        "ticket_id": "ticket-1",
+        "message": "Customer cannot export the weekly report.",
+    }))
+
+    payload = inspect_ingestion_file(
+        path,
+        source_rows=True,
+        source_format="jsonl",
+    ).as_dict()
+
+    assert payload["ok"] is True
+    assert "source_row_admission" not in payload
 
 
 def test_inspect_reports_missing_generation_fields(tmp_path: Path) -> None:
@@ -162,6 +287,38 @@ def test_inspection_cli_emits_valid_json_for_source_rows(tmp_path: Path) -> None
     assert payload["ok"] is True
     assert payload["source_type_counts"] == {"review": 1}
     assert len(payload["samples"]) == 1
+
+
+def test_inspection_cli_emits_csv_source_row_admission(tmp_path: Path) -> None:
+    path = tmp_path / "tickets.csv"
+    path.write_text(
+        "Ticket ID,Conversation Text\n"
+        "T-1,Customer cannot export the weekly report.\n"
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            str(path),
+            "--source-rows",
+            "--source-format",
+            "csv",
+            "--json",
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(proc.stdout)
+
+    assert proc.returncode == 1
+    assert payload["source_row_admission"]["raw_source_row_count"] == 1
+    assert payload["source_row_admission"]["usable_source_row_count"] == 0
+    assert payload["source_row_admission"]["populated_unmapped_fields"] == [
+        "Conversation Text"
+    ]
 
 
 def test_inspection_cli_rejects_negative_sample_limit(tmp_path: Path) -> None:

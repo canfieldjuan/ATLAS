@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -22,6 +23,7 @@ from .faq_output_ingestion import (
 
 
 SourceDataFormat = Literal["auto", "json", "jsonl", "csv"]
+_SOURCE_ADMISSION_FIELD_LIMIT = 25
 
 _ROW_LIST_KEYS = (
     "sources",
@@ -319,6 +321,41 @@ _MAX_BUNDLE_DEPTH = 8
 _MISSING = object()
 
 
+@dataclass(frozen=True)
+class SourceRowAdmissionDiagnostics:
+    """Source-row admission evidence for operator-facing diagnostics."""
+
+    input_format: str
+    raw_source_row_count: int
+    usable_source_row_count: int
+    mapped_fields: Mapping[str, tuple[str, ...]]
+    ignored_private_fields: tuple[str, ...]
+    populated_unmapped_fields: tuple[str, ...]
+    field_sample_limit: int = _SOURCE_ADMISSION_FIELD_LIMIT
+
+    @property
+    def usable_source_ratio(self) -> float | None:
+        if self.raw_source_row_count < 1:
+            return None
+        return round(self.usable_source_row_count / self.raw_source_row_count, 6)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "input_format": self.input_format,
+            "raw_source_row_count": self.raw_source_row_count,
+            "usable_source_row_count": self.usable_source_row_count,
+            "usable_source_ratio": self.usable_source_ratio,
+            "mapped_fields": {
+                key: list(values)
+                for key, values in sorted(self.mapped_fields.items())
+                if values
+            },
+            "ignored_private_fields": list(self.ignored_private_fields),
+            "populated_unmapped_fields": list(self.populated_unmapped_fields),
+            "field_sample_limit": self.field_sample_limit,
+        }
+
+
 class _SourceFieldLookup(Mapping[str, Any]):
     """Mapping wrapper that caches string-key alias lookups for one source row."""
 
@@ -528,6 +565,54 @@ def parse_default_fields_with_booking_url_or_exit(
     return defaults
 
 
+def build_source_row_admission_diagnostics(
+    rows: Sequence[Any],
+    *,
+    input_format: str,
+    usable_source_row_count: int,
+    field_sample_limit: int = _SOURCE_ADMISSION_FIELD_LIMIT,
+) -> SourceRowAdmissionDiagnostics:
+    """Classify source-row fields using the same aliases as extraction."""
+
+    populated_fields = _populated_source_fields(rows)
+    mapped: dict[str, tuple[str, ...]] = {}
+    private_fields = _matching_fields(populated_fields, _PRIVATE_TEXT_KEYS)
+    categories = (
+        ("source_id", _SOURCE_ID_KEYS),
+        ("source_text", _TEXT_KEYS),
+        ("thread_text", _THREAD_KEYS),
+        ("source_title", _SOURCE_TITLE_KEYS),
+        ("source_type", _SOURCE_TYPE_KEYS),
+        ("company", _COMPANY_KEYS),
+        ("vendor", _VENDOR_KEYS),
+        ("contact_name", _CONTACT_NAME_KEYS),
+        ("contact_email", _CONTACT_EMAIL_KEYS),
+        ("contact_title", _CONTACT_TITLE_KEYS),
+        ("nps_score", _NPS_SCORE_KEYS),
+        ("csat_score", _CSAT_SCORE_KEYS),
+        ("pain_points", _PAIN_KEYS),
+    )
+    matched_fields_by_category: dict[str, tuple[str, ...]] = {}
+    for category, aliases in categories:
+        fields = _matching_fields(populated_fields, aliases)
+        if fields:
+            matched_fields_by_category[category] = fields
+            mapped[category] = fields[:field_sample_limit]
+    known = set(private_fields)
+    for fields in matched_fields_by_category.values():
+        known.update(fields)
+    unmapped = tuple(field for field in populated_fields if field not in known)
+    return SourceRowAdmissionDiagnostics(
+        input_format=input_format,
+        raw_source_row_count=len(rows),
+        usable_source_row_count=max(0, int(usable_source_row_count)),
+        mapped_fields={key: value for key, value in mapped.items()},
+        ignored_private_fields=private_fields[:field_sample_limit],
+        populated_unmapped_fields=unmapped[:field_sample_limit],
+        field_sample_limit=field_sample_limit,
+    )
+
+
 def _clean_default_fields(default_fields: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         str(key): value
@@ -554,6 +639,37 @@ def _merge_default_fields(
         },
         **row_values,
     }
+
+
+def _populated_source_fields(rows: Sequence[Any]) -> tuple[str, ...]:
+    fields: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        for key, value in row.items():
+            field = str(key).strip()
+            if not field or field in seen or value in (None, "", [], {}):
+                continue
+            seen.add(field)
+            fields.append(field)
+    return tuple(fields)
+
+
+def _matching_fields(fields: Sequence[str], aliases: Sequence[str]) -> tuple[str, ...]:
+    return tuple(field for field in fields if _field_matches_aliases(field, aliases))
+
+
+def _field_matches_aliases(field: str, aliases: Sequence[str]) -> bool:
+    normalized = _normalized_field_key(field)
+    compact = _compact_field_key(field)
+    for alias in aliases:
+        if (
+            _normalized_field_key(alias) == normalized
+            or _compact_field_key(alias) == compact
+        ):
+            return True
+    return False
 
 
 def _canonical_alias_key(key: str) -> str | None:
@@ -992,6 +1108,8 @@ def _compact_field_key(key: str) -> str:
 
 __all__ = [
     "SourceDataFormat",
+    "SourceRowAdmissionDiagnostics",
+    "build_source_row_admission_diagnostics",
     "load_source_campaign_opportunities_from_file",
     "load_source_rows_from_file",
     "load_source_rows_with_warnings_from_file",
