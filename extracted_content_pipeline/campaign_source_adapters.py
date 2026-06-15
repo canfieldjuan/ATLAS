@@ -150,9 +150,17 @@ _TEXT_KEYS = (
 )
 _THREAD_KEYS = (
     "messages",
+    "comment",
     "comments",
+    "comment_body",
+    "public_comment",
+    "public_comments",
+    "ticket_comments",
+    "ticket_history",
+    "history",
     "thread",
     "conversation",
+    "conversation_history",
     "entries",
     "turns",
     "segments",
@@ -172,6 +180,16 @@ _THREAD_TEXT_KEYS = (
     "notes",
 )
 _THREAD_SPEAKER_KEYS = ("speaker", "author", "role", "name")
+_PRIVATE_TEXT_KEYS = (
+    "internal_note",
+    "internal_notes",
+    "private_note",
+    "private_notes",
+    "internal_comment",
+    "internal_comments",
+    "private_comment",
+    "private_comments",
+)
 _SOURCE_TYPE_KEYS = ("source_type", "type", "kind")
 _SOURCE_TITLE_KEYS = (
     "source_title",
@@ -592,12 +610,18 @@ def source_row_to_campaign_opportunity(
     source_id = _first_text(lookup, _SOURCE_ID_KEYS)
     source_type = _first_text(lookup, _SOURCE_TYPE_KEYS) or _infer_source_type(lookup)
     source_title = _first_text(lookup, _SOURCE_TITLE_KEYS)
-    opportunity = {
-        str(key): value
-        for key, value in row.items()
-        if value not in (None, "", [], {})
-        and not _is_source_title_collision_key(str(key))
-    }
+    opportunity: dict[str, Any] = {}
+    for key, value in row.items():
+        key_text = str(key)
+        if (
+            value in (None, "", [], {})
+            or _is_source_title_collision_key(key_text)
+            or _is_private_source_text_key(key_text)
+        ):
+            continue
+        preserved_value = _preserved_source_value(key_text, value)
+        if preserved_value not in (None, "", [], {}):
+            opportunity[key_text] = preserved_value
     _copy_alias_text(opportunity, lookup, "company_name", _COMPANY_KEYS)
     _copy_alias_text(opportunity, lookup, "vendor_name", _VENDOR_KEYS)
     _copy_alias_text(opportunity, lookup, "contact_name", _CONTACT_NAME_KEYS)
@@ -805,6 +829,8 @@ def _thread_line(item: Any) -> str:
         return item.strip()
     if not isinstance(item, Mapping):
         return ""
+    if item.get("public") is False:
+        return ""
     text = _first_text(item, _THREAD_TEXT_KEYS)
     if not text:
         return ""
@@ -883,6 +909,52 @@ def _is_source_title_collision_key(key: str) -> bool:
         ):
             return True
     return False
+
+
+def _is_private_source_text_key(key: str) -> bool:
+    normalized_key = _normalized_field_key(key)
+    compact_key = _compact_field_key(key)
+    for alias in _PRIVATE_TEXT_KEYS:
+        if (
+            _normalized_field_key(alias) == normalized_key
+            or _compact_field_key(alias) == compact_key
+        ):
+            return True
+    return False
+
+
+def _preserved_source_value(key: str, value: Any) -> Any:
+    if not _is_thread_source_text_key(key):
+        return value
+    return _public_thread_value(value)
+
+
+def _is_thread_source_text_key(key: str) -> bool:
+    normalized_key = _normalized_field_key(key)
+    compact_key = _compact_field_key(key)
+    for alias in _THREAD_KEYS:
+        if (
+            _normalized_field_key(alias) == normalized_key
+            or _compact_field_key(alias) == compact_key
+        ):
+            return True
+    return False
+
+
+def _public_thread_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return None if value.get("public") is False else dict(value)
+    if isinstance(value, str) or not isinstance(value, Sequence) or isinstance(
+        value,
+        (bytes, bytearray),
+    ):
+        return value
+    out: list[Any] = []
+    for item in value:
+        public_item = _public_thread_value(item)
+        if public_item not in (None, "", [], {}):
+            out.append(public_item)
+    return out
 
 
 def _field_value(row: Mapping[str, Any], key: str) -> Any:
