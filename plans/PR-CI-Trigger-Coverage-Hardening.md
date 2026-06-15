@@ -44,8 +44,12 @@ Slice phase: Production hardening
    atlas_content_ops_input_provider, atlas_content_ops_macro_writeback,
    atlas_content_ops_review_workflow, atlas_content_ops_deflection_report,
    atlas_content_ops_deflection_stripe_paid, atlas_content_ops_claim_registry,
-   atlas_content_ops_generated_assets. Use the `**` glob (not a hand-list of
-   modules) so the trigger does not drift as imports change.
+   atlas_content_ops_generated_assets, atlas_content_ops_deflection_delivery,
+   admin_costs (the last two added in review: their tests import
+   `extracted_content_pipeline` -- delivery imports `campaign_ports` /
+   `campaign_sender`; admin_costs imports `content_ops_usage_summary`). Use the
+   `**` glob (not a hand-list of modules) so the trigger does not drift as
+   imports change.
 3. Add `atlas_brain/api/__init__.py` + `atlas_brain/config.py` to
    atlas_main_voice_startup (the broad-import surface `main.py` loads).
 
@@ -124,7 +128,7 @@ Parked hardening: none.
 - `python -c "import yaml,glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]"`
   -- all workflows parse.
 - Per-workflow grep: `requirements.txt` present in pull_request + push paths for
-  all 15; `extracted_content_pipeline/**` present for the 7 content-ops gates.
+  all 15; `extracted_content_pipeline/**` present for the 9 content-ops gates.
 - Confirm `git diff` touches only `on:`/`paths:` lines -- no `jobs:`/`steps:`.
 
 ## Estimated diff size
@@ -132,7 +136,7 @@ Parked hardening: none.
 | File group | LOC |
 |---|---:|
 | 15 workflows x `requirements.txt` (pull_request + push) | ~30 |
-| 7 content-ops workflows x `extracted_content_pipeline/**` (x2) | ~15 |
+| 9 content-ops workflows x `extracted_content_pipeline/**` (x2) | ~19 |
 | atlas_main_voice_startup api/config triggers | ~4 |
 | `plans/PR-CI-Trigger-Coverage-Hardening.md` | ~115 |
 | **Total** | **~164** |

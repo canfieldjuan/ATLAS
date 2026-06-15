@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
       - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/alerts/**"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
@@ -26,6 +27,7 @@ on:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_delivery_checks.yml"
       - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/alerts/**"
       - "atlas_brain/autonomous/scheduler.py"
       - "atlas_brain/autonomous/tasks/__init__.py"
