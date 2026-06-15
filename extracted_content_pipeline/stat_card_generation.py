@@ -14,6 +14,7 @@ from .campaign_source_adapters import (
     source_row_to_campaign_opportunity,
 )
 from .stat_card_ports import StatCardDraft, StatCardRepository
+from .text_truncate import truncate_with_ellipsis
 
 
 _NUMBER_RE = re.compile(r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?%?")
@@ -287,11 +288,23 @@ def _supported_card(
         "metric_label": label,
         "metric_value": numeric_value,
         "metric_display": metric_display,
-        "claim": _truncate(claim, max_claim_chars),
-        "headline": _truncate(headline, max_headline_chars),
-        "supporting_text": _truncate(
+        "claim": truncate_with_ellipsis(
+            claim,
+            max_claim_chars,
+            compact_whitespace=False,
+            small_limit="text",
+        ),
+        "headline": truncate_with_ellipsis(
+            headline,
+            max_headline_chars,
+            compact_whitespace=False,
+            small_limit="text",
+        ),
+        "supporting_text": truncate_with_ellipsis(
             " ".join(supporting_parts) + ".",
             max_supporting_text_chars,
+            compact_whitespace=False,
+            small_limit="text",
         ),
         "evidence": evidence,
         "source_id": source_id,
@@ -418,7 +431,12 @@ def _bounded_evidence_snippet(
         return evidence[match_start:match_end][:max_chars]
     body_chars = max_chars - 3
     if match_end <= body_chars:
-        return _truncate(evidence, max_chars)
+        return truncate_with_ellipsis(
+            evidence,
+            max_chars,
+            compact_whitespace=False,
+            small_limit="text",
+        )
     start = max(0, match_end - body_chars)
     if start > match_start:
         start = match_start
@@ -428,7 +446,12 @@ def _bounded_evidence_snippet(
         start = max(0, end - body_chars)
     snippet = evidence[start:end].strip()
     if start <= 0:
-        return _truncate(evidence, max_chars)
+        return truncate_with_ellipsis(
+            evidence,
+            max_chars,
+            compact_whitespace=False,
+            small_limit="text",
+        )
     return "..." + snippet
 
 
@@ -473,15 +496,6 @@ def _format_number(value: int | float) -> str:
 
 def _compact_field_name(value: str) -> str:
     return _FIELD_SEPARATOR_RE.sub("", value.lower())
-
-
-def _truncate(value: str, limit: int) -> str:
-    text = _clean(value)
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return text[: limit - 3].rstrip() + "..."
 
 
 def _clean(value: Any) -> str:

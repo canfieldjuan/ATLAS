@@ -13,6 +13,7 @@ from .campaign_source_adapters import (
     source_row_to_campaign_opportunity,
 )
 from .quote_card_ports import QuoteCardDraft, QuoteCardRepository
+from .text_truncate import truncate_with_ellipsis
 
 
 @dataclass(frozen=True)
@@ -186,10 +187,10 @@ def _card_from_opportunity(
     return {
         "id": source_id or f"quote-card-{index}",
         "theme": "customer_proof",
-        "quote": _truncate(evidence, max_quote_chars),
+        "quote": truncate_with_ellipsis(evidence, max_quote_chars),
         "attribution": company or "Customer evidence",
-        "headline": _truncate(headline, max_headline_chars),
-        "supporting_text": _truncate(
+        "headline": truncate_with_ellipsis(headline, max_headline_chars),
+        "supporting_text": truncate_with_ellipsis(
             supporting_text,
             max_supporting_text_chars,
         ),
@@ -273,13 +274,6 @@ def _rows_from_source_material(source_material: Any) -> list[Any]:
         text = source_material.strip()
         return [{"text": text}] if text else []
     return source_material_to_source_rows(source_material)
-
-
-def _truncate(value: str, max_chars: int) -> str:
-    text = " ".join(value.split())
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, max_chars - 3)].rstrip() + "..."
 
 
 def _clean(value: Any) -> str:
