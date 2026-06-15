@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_blog_public_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/api/blog_public.py"
       - "tests/test_blog_public.py"
   push:
@@ -11,6 +12,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_blog_public_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/api/blog_public.py"
       - "tests/test_blog_public.py"
 

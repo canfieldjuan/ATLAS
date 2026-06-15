@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/alerts/**"
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"
@@ -26,6 +28,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_deflection_stripe_paid_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/alerts/**"
       - "atlas_brain/api/auth.py"
       - "atlas_brain/api/b2b_vendor_briefing.py"

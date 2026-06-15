@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/admin_costs_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/api/admin_costs.py"
       - "tests/test_admin_costs.py"
   push:
@@ -11,6 +13,8 @@ on:
       - main
     paths:
       - ".github/workflows/admin_costs_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/api/admin_costs.py"
       - "tests/test_admin_costs.py"
 

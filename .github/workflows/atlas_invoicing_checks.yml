@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_invoicing_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/mcp/invoicing_server.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/storage/repositories/invoice.py"
@@ -14,6 +15,7 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_invoicing_checks.yml"
+      - "requirements.txt"
       - "atlas_brain/mcp/invoicing_server.py"
       - "atlas_brain/services/__init__.py"
       - "atlas_brain/storage/repositories/invoice.py"

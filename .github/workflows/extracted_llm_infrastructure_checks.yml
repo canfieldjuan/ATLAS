@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/extracted_llm_infrastructure_checks.yml"
+      - "requirements.txt"
       - "extracted_llm_infrastructure/**"
       - "scripts/sync_extracted_llm_infrastructure.sh"
       - "scripts/validate_extracted_llm_infrastructure.sh"
@@ -19,6 +20,7 @@ on:
   push:
     paths:
       - ".github/workflows/extracted_llm_infrastructure_checks.yml"
+      - "requirements.txt"
       - "extracted_llm_infrastructure/**"
       - "scripts/sync_extracted_llm_infrastructure.sh"
       - "scripts/validate_extracted_llm_infrastructure.sh"

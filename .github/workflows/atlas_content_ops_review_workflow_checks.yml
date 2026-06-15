@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/_content_ops_review_workflow.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
@@ -38,6 +40,8 @@ on:
       - main
     paths:
       - ".github/workflows/atlas_content_ops_review_workflow_checks.yml"
+      - "requirements.txt"
+      - "extracted_content_pipeline/**"
       - "atlas_brain/_content_ops_review_workflow.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_chatgpt_adapter_server.py"
       - "atlas_brain/mcp/content_ops_marketer_verify_server.py"
