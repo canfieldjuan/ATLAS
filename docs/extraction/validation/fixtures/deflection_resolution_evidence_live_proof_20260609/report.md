@@ -8,7 +8,7 @@ The source window is 2026-05-02 to 2026-05-08 (7 days). At the same measured dai
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
-The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and the complete evidence appendix.
+The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and complete evidence inside each question detail block.
 
 - Publishable answers drafted from proven resolutions: 2
 - Questions still needing an approved resolution: 2
@@ -52,9 +52,19 @@ These status and CSAT signals flag answers that may need review. They do not pro
 | Where do I upload the new SSO certificate before it expires? | resolved: 3 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 | Why did the CRM integration pause after the field mapping changed? | resolved: 2 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 
-## Publishable Help-Center Copy From Proven Resolutions
+## Question Details and Evidence
+
+Each ranked question appears once below with its answer status, publishable copy or review guidance, vocabulary gaps, and complete source evidence.
+
+Questions without uploaded resolution evidence stay in review: outcome/status signals can prioritize them, but only resolution evidence can make an answer publishable.
 
 ### 1. How do I export attribution reports before our board meeting?
+
+**Answer status:** drafted from resolution evidence
+
+**Ticket/support-cost context:** 4 tickets, estimated at $54 of assisted-contact handling.
+
+**Publishable answer draft:**
 
 To resolve this, open Analytics then Attribution then click Download report. Then choose CSV when the export modal asks for file type.
 
@@ -64,46 +74,9 @@ To resolve this, open Analytics then Attribution then click Download report. The
 2. Choose CSV when the export modal asks for file type.
 3. If it still does not work, contact support and include the cited ticket details.
 
-**Evidence backing:** Backed by 4 resolved tickets (zd-4101, zd-4102, fd-4103, +1 more). Full source IDs are in the Evidence Appendix.
+**Evidence backing:** Backed by 4 resolved tickets (zd-4101, zd-4102, fd-4103, +1 more). Complete source IDs are in this question detail block.
 
-### 2. Where can I download invoices for last quarter?
-
-To resolve this, open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.
-
-**Draft answer steps:**
-
-1. Open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.
-2. If it still does not work, contact support and include the cited ticket details.
-
-**Evidence backing:** Backed by 3 resolved tickets (zd-4201, fd-4202, hs-4203). Full source IDs are in the Evidence Appendix.
-
-## No Proven Answer Yet
-
-### 1. Where do I upload the new SSO certificate before it expires?
-
-Customers repeatedly asked this question, but the uploaded data did not include verified resolution evidence for a publishable answer.
-
-No verified support resolution was present in the uploaded data. Support should add the approved answer before this FAQ is published.
-
-**Ticket backing:** Seen in 3 repeated tickets (zd-4301, fd-4302, hs-4303). Full source IDs are in the Evidence Appendix.
-
-### 2. Why did the CRM integration pause after the field mapping changed?
-
-Customers repeatedly asked this question, but the uploaded data did not include verified resolution evidence for a publishable answer.
-
-No verified support resolution was present in the uploaded data. Support should add the approved answer before this FAQ is published.
-
-**Ticket backing:** Seen in 2 repeated tickets (zd-4401, fd-4402). Full source IDs are in the Evidence Appendix.
-
-## Vocabulary Gaps
-
-| Customer wording | Documentation term | Suggested update | Source count |
-|---|---|---|---:|
-| - | - | No vocabulary-gap mappings were generated. | 0 |
-
-## Evidence Appendix
-
-### 1. How do I export attribution reports before our board meeting?
+**Complete evidence:**
 
 **Source IDs (full list):** zd-4101, zd-4102, fd-4103, hs-4104
 
@@ -113,6 +86,23 @@ No verified support resolution was present in the uploaded data. Support should 
 
 ### 2. Where can I download invoices for last quarter?
 
+**Answer status:** drafted from resolution evidence
+
+**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+
+**Publishable answer draft:**
+
+To resolve this, open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.
+
+**Draft answer steps:**
+
+1. Open Billing then Invoices, filter by the quarter, and download the PDF from the invoice row.
+2. If it still does not work, contact support and include the cited ticket details.
+
+**Evidence backing:** Backed by 3 resolved tickets (zd-4201, fd-4202, hs-4203). Complete source IDs are in this question detail block.
+
+**Complete evidence:**
+
 **Source IDs (full list):** zd-4201, fd-4202, hs-4203
 
 - `zd-4201` - Invoice download: "Where can I download invoices for last quarter?"
@@ -121,6 +111,18 @@ No verified support resolution was present in the uploaded data. Support should 
 
 ### 3. Where do I upload the new SSO certificate before it expires?
 
+**Answer status:** no proven answer yet
+
+**Ticket/support-cost context:** 3 tickets, estimated at $41 of assisted-contact handling.
+
+**No proven answer yet:**
+
+No uploaded resolution evidence was present for this question.
+
+**Ticket backing:** Seen in 3 repeated tickets (zd-4301, fd-4302, hs-4303). Complete source IDs are in this question detail block.
+
+**Complete evidence:**
+
 **Source IDs (full list):** zd-4301, fd-4302, hs-4303
 
 - `zd-4301` - SSO certificate rotation: "Where do I upload the new SSO certificate before it expires?"
@@ -128,6 +130,18 @@ No verified support resolution was present in the uploaded data. Support should 
 - `hs-4303` - SSO certificate upload: "Where do we upload the new SSO certificate before it expires?"
 
 ### 4. Why did the CRM integration pause after the field mapping changed?
+
+**Answer status:** no proven answer yet
+
+**Ticket/support-cost context:** 2 tickets, estimated at $27 of assisted-contact handling.
+
+**No proven answer yet:**
+
+No uploaded resolution evidence was present for this question.
+
+**Ticket backing:** Seen in 2 repeated tickets (zd-4401, fd-4402). Complete source IDs are in this question detail block.
+
+**Complete evidence:**
 
 **Source IDs (full list):** zd-4401, fd-4402
 

@@ -1214,9 +1214,10 @@ async def test_execute_applies_hosted_faq_intent_rules_to_deflection_report_with
     assert item["ticket_count"] == 2
     assert item["answer_evidence_status"] == "draft_needs_review"
     assert "## Support Tax Confirmation" in step["result"]["markdown"]
-    assert "## Publishable Help-Center Copy From Proven Resolutions" in step["result"]["markdown"]
-    assert "## No Proven Answer Yet" in step["result"]["markdown"]
-    assert "No verified support resolution was present" in step["result"]["markdown"]
+    assert "## Question Details and Evidence" in step["result"]["markdown"]
+    assert "**Publishable answer draft:**" not in step["result"]["markdown"]
+    assert "No uploaded resolution evidence was present for this question." in step["result"]["markdown"]
+    assert "No verified support resolution was present" not in step["result"]["markdown"]
 
 
 @pytest.mark.asyncio
@@ -1272,9 +1273,11 @@ async def test_execute_runs_faq_deflection_report_from_source_material() -> None
     assert step["result"]["markdown"].startswith("# Acme Support Deflection Report")
     assert "## Support Tax Confirmation" in step["result"]["markdown"]
     assert "## Ranked Question Opportunities" in step["result"]["markdown"]
-    assert "## Publishable Help-Center Copy From Proven Resolutions" in step["result"]["markdown"]
+    assert "## Question Details and Evidence" in step["result"]["markdown"]
+    assert "**Publishable answer draft:**" in step["result"]["markdown"]
     assert "Open Analytics, choose Attribution" in step["result"]["markdown"]
-    assert "## No Proven Answer Yet" in step["result"]["markdown"]
+    assert "No uploaded resolution evidence was present for this question." in step["result"]["markdown"]
+    assert "## No Proven Answer Yet" not in step["result"]["markdown"]
     assert step["result"]["summary"]["source_count"] == 3
     assert step["result"]["summary"]["drafted_answer_count"] == 1
     assert step["result"]["summary"]["no_proven_answer_count"] == 1

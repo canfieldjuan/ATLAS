@@ -121,17 +121,20 @@ def test_deflection_report_partitions_proven_and_unproven_answers() -> None:
     assert "Gartner $13.50 assisted-contact benchmark" in artifact.markdown
     assert "## Your Help-Desk SEO Targeting List" in artifact.markdown
     assert "## Ranked Question Opportunities" in artifact.markdown
-    assert "## Publishable Help-Center Copy From Proven Resolutions" in artifact.markdown
+    assert "## Question Details and Evidence" in artifact.markdown
+    assert "## Publishable Help-Center Copy From Proven Resolutions" not in artifact.markdown
     assert "How do I export attribution reports?" in artifact.markdown
     assert "To resolve this, open Analytics" in artifact.markdown
     assert "Uploaded resolution evidence supports this draft answer" not in artifact.markdown
     assert "Open Analytics, choose Attribution" in artifact.markdown
     assert "Use the uploaded resolution evidence" not in artifact.markdown
     assert "**Sources:**" not in artifact.markdown
-    assert "## No Proven Answer Yet" in artifact.markdown
+    assert "## No Proven Answer Yet" not in artifact.markdown
     assert "Why is the dashboard stale?" in artifact.markdown
-    assert "Customers repeatedly asked this question" in artifact.markdown
-    assert "No verified support resolution was present" in artifact.markdown
+    assert "No uploaded resolution evidence was present for this question." in artifact.markdown
+    assert artifact.markdown.count("only resolution evidence can make an answer publishable") == 1
+    assert "Customers repeatedly asked this question" not in artifact.markdown
+    assert "No verified support resolution was present" not in artifact.markdown
     assert "export" in artifact.markdown
     assert "Download report" in artifact.markdown
 
@@ -197,15 +200,12 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     )
 
     markdown = build_deflection_report_artifact(result).markdown
-    drafted = markdown.split("## Publishable Help-Center Copy From Proven Resolutions", 1)[1].split(
-        "## No Proven Answer Yet",
+    details = markdown.split("## Question Details and Evidence", 1)[1]
+    export_block = details.split("### 1. How do I export attribution reports?", 1)[1].split(
+        "### 2. Can I turn on SSO for all users?",
         1,
     )[0]
-    no_proven = markdown.split("## No Proven Answer Yet", 1)[1].split(
-        "## Vocabulary Gaps",
-        1,
-    )[0]
-    appendix = markdown.split("## Evidence Appendix", 1)[1]
+    sso_block = details.split("### 2. Can I turn on SSO for all users?", 1)[1]
 
     assert markdown.startswith("# Support Ticket Deflection Report\n\n## Support Tax Confirmation")
     assert "8 question-level repeat tickets across 2 ranked questions" in markdown
@@ -231,16 +231,20 @@ def test_deflection_report_reframes_paid_artifact_with_cost_and_seo_sections() -
     assert (
         "Backed by 5 resolved tickets (ticket-export-1, ticket-export-2, "
         "ticket-export-3, +2 more)."
-    ) in drafted
-    assert "Seen in 3 repeated tickets (ticket-sso-1, ticket-sso-2, ticket-sso-3)." in no_proven
+    ) in export_block
+    assert "Seen in 3 repeated tickets (ticket-sso-1, ticket-sso-2, ticket-sso-3)." in sso_block
     assert "**Sources:**" not in markdown
-    assert "ticket-export-4" not in drafted
-    assert "ticket-export-5" not in drafted
+    assert "## Publishable Help-Center Copy From Proven Resolutions" not in markdown
+    assert "## No Proven Answer Yet" not in markdown
+    assert "## Vocabulary Gaps" not in markdown
+    assert "## Evidence Appendix" not in markdown
     assert (
         "**Source IDs (full list):** ticket-export-1, ticket-export-2, "
         "ticket-export-3, ticket-export-4, ticket-export-5"
-    ) in appendix
-    assert "**Source IDs (full list):** ticket-sso-1, ticket-sso-2, ticket-sso-3" in appendix
+    ) in export_block
+    assert "**Source IDs (full list):** ticket-sso-1, ticket-sso-2, ticket-sso-3" in sso_block
+    assert "`ticket-export-1` - Export attribution" in export_block
+    assert "`ticket-sso-1` - SSO setup" in sso_block
     assert "will rank" not in markdown
     assert "search volume" not in markdown
     assert "guaranteed traffic" not in markdown
@@ -301,11 +305,11 @@ def test_deflection_report_does_not_put_review_needed_steps_in_drafted_section()
     )
 
     markdown = build_deflection_report_artifact(result).markdown
-    drafted_section = markdown.split("## No Proven Answer Yet", 1)[0]
+    details = markdown.split("## Question Details and Evidence", 1)[1]
 
-    assert "No FAQ gap in this run included uploaded resolution evidence." in drafted_section
-    assert "Review the cited ticket evidence" not in drafted_section
-    assert "Can I update permissions?" in markdown.split("## No Proven Answer Yet", 1)[1]
+    assert "No uploaded resolution evidence was present for this question." in details
+    assert "Review the cited ticket evidence" not in markdown
+    assert "Can I update permissions?" in details
 
 
 def test_deflection_snapshot_strips_answers_evidence_and_sources() -> None:
@@ -647,22 +651,16 @@ def test_outcome_diagnostics_do_not_create_publishable_answers_without_resolutio
 
     artifact = build_deflection_report_artifact(result)
     item = artifact.faq_result.items[0]
-    drafted = artifact.markdown.split(
-        "## Publishable Help-Center Copy From Proven Resolutions",
-        1,
-    )[1].split("## No Proven Answer Yet", 1)[0]
-    no_proven = artifact.markdown.split("## No Proven Answer Yet", 1)[1].split(
-        "## Vocabulary Gaps",
-        1,
-    )[0]
+    details = artifact.markdown.split("## Question Details and Evidence", 1)[1]
 
     assert item["answer_evidence_status"] == "draft_needs_review"
     assert item["outcome_diagnostics"]["outcome_risk_ticket_count"] == 2
     assert artifact.summary["drafted_answer_count"] == 0
     assert artifact.summary["no_proven_answer_count"] == 1
-    assert "What permission do I need for account exports?" not in drafted
-    assert "What permission do I need for account exports?" in no_proven
-    assert "No verified support resolution was present" in no_proven
+    assert "**Publishable answer draft:**" not in details
+    assert "What permission do I need for account exports?" in details
+    assert "No uploaded resolution evidence was present for this question." in details
+    assert "No verified support resolution was present" not in details
     assert "## Resolution Outcome Diagnostics" in artifact.markdown
     assert "They do not prove a publishable answer" in artifact.markdown
 
@@ -1325,7 +1323,8 @@ def test_deflection_report_cli_builds_saas_demo_artifact(tmp_path: Path) -> None
     assert result["config"]["require_output_checks"] is True
     assert result["diagnostics"]["item_count"] == result["generated"]
     assert "## Ranked Question Opportunities" in markdown
-    assert "## No Proven Answer Yet" in markdown
+    assert "## Question Details and Evidence" in markdown
+    assert "## No Proven Answer Yet" not in markdown
     assert "support_ticket_saas_demo_sources.csv" in markdown
     assert "tell users exactly what to try next" not in markdown
 
@@ -1442,23 +1441,21 @@ def test_deflection_report_cli_splits_backed_and_unproven_answers(tmp_path: Path
     assert exit_code == 0
     markdown = output.read_text()
     summary = json.loads(summary_output.read_text())
-    drafted = markdown.split("## Publishable Help-Center Copy From Proven Resolutions", 1)[1].split(
-        "## No Proven Answer Yet",
+    details = markdown.split("## Question Details and Evidence", 1)[1]
+    export_block = details.split("### 1. How do I export attribution reports?", 1)[1].split(
+        "### 2. How do I enable SSO for my team?",
         1,
     )[0]
-    no_proven = markdown.split("## No Proven Answer Yet", 1)[1].split(
-        "## Vocabulary Gaps",
-        1,
-    )[0]
+    sso_block = details.split("### 2. How do I enable SSO for my team?", 1)[1]
 
     assert summary["generated"] == 2
     assert summary["source_count"] == 7
     assert summary["drafted_answer_count"] == 1
     assert summary["no_proven_answer_count"] == 1
-    assert "Open Analytics then Attribution then click Download report" in drafted
-    assert "How do I enable SSO for my team?" in no_proven
-    assert "Open Analytics then Attribution then click Download report" not in no_proven
-    assert "tell users exactly what to try next" not in drafted
+    assert "Open Analytics then Attribution then click Download report" in export_block
+    assert "How do I enable SSO for my team?" in sso_block
+    assert "Open Analytics then Attribution then click Download report" not in sso_block
+    assert "tell users exactly what to try next" not in export_block
 
 
 def test_deflection_report_cli_fails_required_output_checks_for_weak_rows(

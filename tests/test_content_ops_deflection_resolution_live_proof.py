@@ -120,20 +120,21 @@ def test_resolution_live_proof_artifacts_show_publishable_and_gap_lanes() -> Non
         if item["answer_evidence_status"] == "draft_needs_review"
     } == {"zd-4301", "zd-4401"}
 
-    drafted = report.split(
-        "## Publishable Help-Center Copy From Proven Resolutions",
-        1,
-    )[1].split("## No Proven Answer Yet", 1)[0]
-    no_proven = report.split("## No Proven Answer Yet", 1)[1].split(
-        "## Vocabulary Gaps",
+    details = report.split("## Question Details and Evidence", 1)[1]
+    proven_details = details.split(
+        "### 3. Where do I upload the new SSO certificate before it expires?",
         1,
     )[0]
-    assert "Open Analytics then Attribution then click Download report" in drafted
-    assert "Open Billing then Invoices" in drafted
-    assert "Where do I upload the new SSO certificate before it expires?" in no_proven
-    assert "Why did the CRM integration pause after the field mapping changed?" in no_proven
-    assert "Open Analytics then Attribution then click Download report" not in no_proven
-    assert "Open Billing then Invoices" not in no_proven
+    no_proven_details = details.split(
+        "### 3. Where do I upload the new SSO certificate before it expires?",
+        1,
+    )[1]
+    assert "Open Analytics then Attribution then click Download report" in proven_details
+    assert "Open Billing then Invoices" in proven_details
+    assert "Where do I upload the new SSO certificate before it expires?" in no_proven_details
+    assert "Why did the CRM integration pause after the field mapping changed?" in no_proven_details
+    assert "Open Analytics then Attribution then click Download report" not in no_proven_details
+    assert "Open Billing then Invoices" not in no_proven_details
 
 
 def test_resolution_live_proof_regenerates_from_committed_csv(tmp_path: Path) -> None:

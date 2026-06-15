@@ -397,8 +397,22 @@ def _corpus_summary(corpus: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _report_excerpt(markdown: str, *, max_lines: int = 120) -> str:
-    lines = markdown.splitlines()
-    excerpt = "\n".join(lines[:max_lines]).rstrip()
+    excerpt_lines: list[str] = []
+    skipping_complete_evidence = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped == "**Complete evidence:**":
+            skipping_complete_evidence = True
+            continue
+        if skipping_complete_evidence:
+            if stripped.startswith("### "):
+                skipping_complete_evidence = False
+            else:
+                continue
+        excerpt_lines.append(line)
+        if len(excerpt_lines) >= max_lines:
+            break
+    excerpt = "\n".join(excerpt_lines).rstrip()
     return excerpt + "\n"
 
 

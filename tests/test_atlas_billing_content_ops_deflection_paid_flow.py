@@ -261,6 +261,8 @@ async def test_deflection_paid_flow_locks_snapshot_until_stripe_webhook_unlocks(
     assert unlocked["summary"]["drafted_answer_count"] == 1
     assert unlocked["summary"]["no_proven_answer_count"] == 0
     assert "## Support Tax Confirmation" in unlocked["markdown"]
-    assert "## Publishable Help-Center Copy From Proven Resolutions" in unlocked["markdown"]
-    assert "## No Proven Answer Yet" in unlocked["markdown"]
+    assert "## Question Details and Evidence" in unlocked["markdown"]
+    assert "**Publishable answer draft:**" in unlocked["markdown"]
+    assert "## Publishable Help-Center Copy From Proven Resolutions" not in unlocked["markdown"]
+    assert "## No Proven Answer Yet" not in unlocked["markdown"]
     assert unlocked["faq_result"]["items"][0]["source_ids"]

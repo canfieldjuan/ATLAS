@@ -10,7 +10,7 @@ This report did not receive a complete source-date window for every contributing
 
 Estimate only. This is not a savings guarantee; adjust the $13.50 benchmark to your own loaded support cost.
 
-The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and the complete evidence appendix.
+The full unlocked report below gives you every ranked question, the estimated support cost by question, publishable help-center copy where your uploaded resolutions prove the answer, the no-proven-answer roadmap, and complete evidence inside each question detail block.
 
 - Publishable answers drafted from proven resolutions: 6
 - Questions still needing an approved resolution: 3
@@ -68,9 +68,19 @@ These status and CSAT signals flag answers that may need review. They do not pro
 | What should I do about duplicate? | resolved: 1 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 | Como faço para recuperar uma conta bloqueada por MFA? | resolved: 1 | 0 | 0 | Outcome context only; use resolution evidence to decide publishability. |
 
-## Publishable Help-Center Copy From Proven Resolutions
+## Question Details and Evidence
+
+Each ranked question appears once below with its answer status, publishable copy or review guidance, vocabulary gaps, and complete source evidence.
+
+Questions without uploaded resolution evidence stay in review: outcome/status signals can prioritize them, but only resolution evidence can make an answer publishable.
 
 ### 1. How do I get the duplicate charge refunded?
+
+**Answer status:** drafted from resolution evidence
+
+**Ticket/support-cost context:** 8 tickets, estimated at $108 of assisted-contact handling.
+
+**Publishable answer draft:**
 
 To resolve this, we confirmed the duplicate billing event and refunded the extra charge. Then refunds normally appear on the original payment method in 5-10 business days.
 
@@ -80,9 +90,15 @@ To resolve this, we confirmed the duplicate billing event and refunded the extra
 2. Refunds normally appear on the original payment method in 5-10 business days.
 3. If it still does not work, contact support and include the cited ticket details.
 
-**Evidence backing:** Backed by 8 resolved tickets (zd-proof-020, zd-proof-021, zd-proof-022, +5 more). Full source IDs are in the Evidence Appendix.
+**Evidence backing:** Backed by 8 resolved tickets (zd-proof-020, zd-proof-021, zd-proof-022, +5 more). Complete source IDs are in this question detail block.
 
 ### 2. How do I reset two factor authentication for a teammate who lost their phone?
+
+**Answer status:** drafted from resolution evidence
+
+**Ticket/support-cost context:** 7 tickets, estimated at $95 of assisted-contact handling.
+
+**Publishable answer draft:**
 
 To resolve this, reset MFA from Admin Settings > Security > Two-factor authentication, then send the user a new invite. Then if SSO is enforced, confirm the user is assigned to the app in the identity provider.
 
@@ -92,28 +108,12 @@ To resolve this, reset MFA from Admin Settings > Security > Two-factor authentic
 2. If SSO is enforced, confirm the user is assigned to the app in the identity provider.
 3. If it still does not work, contact support and include the cited ticket details.
 
-**Evidence backing:** Backed by 7 resolved tickets (zd-proof-028, zd-proof-029, zd-proof-030, +4 more). Full source IDs are in the Evidence Appendix.
+**Evidence backing:** Backed by 7 resolved tickets (zd-proof-028, zd-proof-029, zd-proof-030, +4 more). Complete source IDs are in this question detail block.
 
 ### 3. Where is my replacement device?
 
-To resolve this, open the order details page, confirm the destination address, and use the replacement shipment workflow. Then if tracking is stale for more than 72 hours, support can issue a replacement or return label.
+**Answer status:** drafted from resolution evidence
 
-**Draft answer steps:**
+**Ticket/support-cost context:** 5 tickets, estimated at $68 of assisted-contact handling.
 
-1. Open the order details page, confirm the destination address, and use the replacement shipment workflow.
-2. If tracking is stale for more than 72 hours, support can issue a replacement or return label.
-3. If it still does not work, contact support and include the cited ticket details.
-
-**Evidence backing:** Backed by 5 resolved tickets (zd-proof-001, zd-proof-002, zd-proof-003, +2 more). Full source IDs are in the Evidence Appendix.
-
-### 4. ¿Dónde está el botón correcto?
-
-To resolve this, update the account setting from the admin profile, then retry the verification or billing workflow. Then if the localized page is missing the control, switch to English temporarily and contact support.
-
-**Draft answer steps:**
-
-1. Update the account setting from the admin profile, then retry the verification or billing workflow.
-2. If the localized page is missing the control, switch to English temporarily and contact support.
-3. If it still does not work, contact support and include the cited ticket details.
-
-**Evidence backing:** Backed by 3 resolved tickets (zd-proof-041, zd-proof-042, zd-proof-043). Full source IDs are in the Evidence Appendix.
+**Publishable answer draft:**

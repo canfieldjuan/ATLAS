@@ -294,15 +294,6 @@ def render_deflection_report(
 
     resolved_summary = dict(summary or deflection_report_summary(faq_result))
     items = tuple(_item(item) for item in faq_result.items)
-    proven = tuple(
-        item for item in items
-        if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS
-    )
-    needs_review = tuple(
-        item for item in items
-        if _text(item.get("answer_evidence_status")) != _RESOLUTION_EVIDENCE_STATUS
-    )
-
     lines: list[str] = [
         f"# {_md(title)}",
         "",
@@ -313,10 +304,7 @@ def render_deflection_report(
     lines.extend(_help_desk_seo_targeting_section(items))
     lines.extend(_ranked_opportunity_section(items))
     lines.extend(_outcome_diagnostics_section(items, resolved_summary))
-    lines.extend(_drafted_answer_section(proven))
-    lines.extend(_no_proven_answer_section(needs_review))
-    lines.extend(_vocabulary_gap_section(items))
-    lines.extend(_evidence_appendix_section(items))
+    lines.extend(_question_detail_section(items))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -384,7 +372,7 @@ def _support_tax_section(
             "The full unlocked report below gives you every ranked question, "
             "the estimated support cost by question, publishable help-center copy "
             "where your uploaded resolutions prove the answer, the no-proven-answer "
-            "roadmap, and the complete evidence appendix."
+            "roadmap, and complete evidence inside each question detail block."
         ),
         "",
         f"- Publishable answers drafted from proven resolutions: {_count(_int(summary.get('drafted_answer_count')))}",
@@ -499,24 +487,64 @@ def _outcome_diagnostics_section(
     return [*lines, ""]
 
 
-def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    lines = ["## Publishable Help-Center Copy From Proven Resolutions", ""]
+def _question_detail_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines = [
+        "## Question Details and Evidence",
+        "",
+        (
+            "Each ranked question appears once below with its answer status, "
+            "publishable copy or review guidance, vocabulary gaps, and complete "
+            "source evidence."
+        ),
+        "",
+        (
+            "Questions without uploaded resolution evidence stay in review: "
+            "outcome/status signals can prioritize them, but only resolution "
+            "evidence can make an answer publishable."
+        ),
+        "",
+    ]
     if not items:
         return [
             *lines,
-            "No FAQ gap in this run included uploaded resolution evidence. Keep every answer in review until support supplies a verified solution.",
+            "No ranked FAQ opportunities were generated.",
             "",
         ]
     for index, item in enumerate(items, start=1):
-        steps = _texts(item.get("steps"))
-        answer = _text(item.get("answer")) or (
-            "This draft answer is backed by uploaded resolution evidence."
-        )
         lines.extend([
             f"### {index}. {_md(item.get('question'))}",
             "",
-            _md(answer),
+            f"**Answer status:** {_md(_status_label(item))}",
             "",
+            (
+                f"**Ticket/support-cost context:** {_count(_ticket_count(item))} "
+                f"tickets, estimated at {_format_money(_support_cost(_ticket_count(item)))} "
+                "of assisted-contact handling."
+            ),
+            "",
+        ])
+        if _text(item.get("answer_evidence_status")) == _RESOLUTION_EVIDENCE_STATUS:
+            lines.extend(_publishable_answer_detail(item))
+        else:
+            lines.extend(_no_proven_answer_detail(item))
+        lines.extend(_vocabulary_gap_detail(item))
+        lines.extend(_complete_evidence_detail(item))
+    return lines
+
+
+def _publishable_answer_detail(item: Mapping[str, Any]) -> list[str]:
+    steps = _texts(item.get("steps"))
+    answer = _text(item.get("answer")) or (
+        "This draft answer is backed by uploaded resolution evidence."
+    )
+    lines = [
+        "**Publishable answer draft:**",
+        "",
+        _md(answer),
+        "",
+    ]
+    if steps:
+        lines.extend([
             "**Draft answer steps:**",
             "",
             *[
@@ -524,89 +552,76 @@ def _drafted_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
                 for step_index, step in enumerate(steps, start=1)
             ],
             "",
-            f"**Evidence backing:** {_source_backing_summary(item, resolved=True)}",
-            "",
         ])
-    return lines
-
-
-def _no_proven_answer_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    lines = ["## No Proven Answer Yet", ""]
-    if not items:
-        return [*lines, "Every generated FAQ opportunity included uploaded resolution evidence.", ""]
-    for index, item in enumerate(items, start=1):
+    else:
         lines.extend([
-            f"### {index}. {_md(item.get('question'))}",
+            "**Draft answer steps:**",
             "",
-            (
-                "Customers repeatedly asked this question, but the uploaded data "
-                "did not include verified resolution evidence for a publishable answer."
-            ),
-            "",
-            (
-                "No verified support resolution was present in the uploaded data. "
-                "Support should add the approved answer before this FAQ is published."
-            ),
-            "",
-            f"**Ticket backing:** {_source_backing_summary(item, resolved=False)}",
+            "No step list was generated for this answer.",
             "",
         ])
+    lines.extend([
+        f"**Evidence backing:** {_source_backing_summary(item, resolved=True)}",
+        "",
+    ])
     return lines
 
 
-def _vocabulary_gap_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    mappings: list[Mapping[str, Any]] = []
-    for item in items:
-        for mapping in item.get("term_mappings") or ():
-            if isinstance(mapping, Mapping):
-                mappings.append(mapping)
-    lines = [
-        "## Vocabulary Gaps",
+def _no_proven_answer_detail(item: Mapping[str, Any]) -> list[str]:
+    return [
+        "**No proven answer yet:**",
         "",
-        "| Customer wording | Documentation term | Suggested update | Source count |",
-        "|---|---|---|---:|",
+        "No uploaded resolution evidence was present for this question.",
+        "",
+        f"**Ticket backing:** {_source_backing_summary(item, resolved=False)}",
+        "",
+    ]
+
+
+def _vocabulary_gap_detail(item: Mapping[str, Any]) -> list[str]:
+    mappings = [
+        mapping
+        for mapping in item.get("term_mappings") or ()
+        if isinstance(mapping, Mapping)
     ]
     if not mappings:
-        return [*lines, "| - | - | No vocabulary-gap mappings were generated. | 0 |", ""]
+        return []
+    lines = ["**Vocabulary gaps:**", ""]
     for mapping in mappings:
         lines.append(
-            "| "
-            f"{_cell(mapping.get('customer_term'))} | "
-            f"{_cell(mapping.get('documentation_term'))} | "
-            f"{_cell(mapping.get('suggestion'))} | "
-            f"{_int(mapping.get('source_id_count'))} |"
+            "- "
+            f"{_md(mapping.get('customer_term'))} -> "
+            f"{_md(mapping.get('documentation_term'))}: "
+            f"{_md(mapping.get('suggestion'))} "
+            f"({_count(_int(mapping.get('source_id_count')))} sources)"
         )
-    return [*lines, ""]
+    lines.append("")
+    return lines
 
 
-def _evidence_appendix_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
-    lines = ["## Evidence Appendix", ""]
-    for index, item in enumerate(items, start=1):
-        quotes = _texts(item.get("evidence_quotes"))
-        lines.extend([f"### {index}. {_md(item.get('question'))}", ""])
-        source_ids = _texts(item.get("source_ids"))
-        if source_ids:
-            lines.extend([
-                f"**Source IDs (full list):** {_md(', '.join(source_ids))}",
-                "",
-            ])
-        elif _source_count(item) > 0:
-            lines.extend([
-                (
-                    "**Source IDs (full list):** Not available in this export; "
-                    f"source count is {_source_count(item)}."
-                ),
-                "",
-            ])
-        if not quotes:
-            lines.extend(["No source excerpts were rendered for this item.", ""])
-            continue
-        for quote in quotes:
-            lines.append(f"- {_md(quote)}")
-        lines.append("")
-    if len(lines) == 2:
-        lines.append("No evidence excerpts were rendered.")
-        lines.append("")
+def _complete_evidence_detail(item: Mapping[str, Any]) -> list[str]:
+    quotes = _texts(item.get("evidence_quotes"))
+    source_ids = _texts(item.get("source_ids"))
+    lines = ["**Complete evidence:**", ""]
+    if source_ids:
+        lines.extend([
+            f"**Source IDs (full list):** {_md(', '.join(source_ids))}",
+            "",
+        ])
+    elif _source_count(item) > 0:
+        lines.extend([
+            (
+                "**Source IDs (full list):** Not available in this export; "
+                f"source count is {_source_count(item)}."
+            ),
+            "",
+        ])
+    if not quotes:
+        lines.extend(["No source excerpts were rendered for this item.", ""])
+        return lines
+    for quote in quotes:
+        lines.append(f"- {_md(quote)}")
+    lines.append("")
     return lines
 
 
@@ -949,14 +964,14 @@ def _source_backing_summary(item: Mapping[str, Any], *, resolved: bool) -> str:
             f"{'' if count == 1 else 's'}"
         )
     if not examples:
-        return f"{prefix}. Full source details are in the Evidence Appendix."
+        return f"{prefix}. Complete source details are in this question detail block."
     more_count = max(len(source_ids) - len(examples), 0)
     if more_count > 0:
         example_text = f"{', '.join(examples)}, +{_count(more_count)} more"
     else:
         example_text = ", ".join(examples)
     return (
-        f"{prefix} ({_md(example_text)}). Full source IDs are in the Evidence Appendix."
+        f"{prefix} ({_md(example_text)}). Complete source IDs are in this question detail block."
     )
 
 
