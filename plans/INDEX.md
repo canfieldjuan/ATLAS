@@ -1,6 +1,6 @@
 # Plan archive index
 
-1060 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1061 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-Admin-Costs-CI-Enrollment](archive/PR-Admin-Costs-CI-Enrollment.md) - lane: content-ops/cost-surfacing | phase: Workflow/process
 - [PR-Admin-Costs-Scraping-Saved-Calls-Default](archive/PR-Admin-Costs-Scraping-Saved-Calls-Default.md) - lane: content-ops/cost-surfacing | phase: Production hardening
@@ -672,6 +672,7 @@
 - [PR-Deflection-CSV-Ingestion-Hardening](archive/PR-Deflection-CSV-Ingestion-Hardening.md) - lane: deflection/go-live | phase: Production hardening
 - [PR-Deflection-CSV-Partial-Coverage-Warning](archive/PR-Deflection-CSV-Partial-Coverage-Warning.md) - lane: content-ops/deflection-parser-admission | phase: Production hardening
 - [PR-Deflection-Checkout-Authorization](archive/PR-Deflection-Checkout-Authorization.md) - lane: deflection/go-live | phase: Production hardening
+- [PR-Deflection-Checkout-Concurrency-Guard](archive/PR-Deflection-Checkout-Concurrency-Guard.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Csv-Encoding-Admission](archive/PR-Deflection-Csv-Encoding-Admission.md) - lane: content-ops/deflection-launch-readiness | phase: Vertical slice
 - [PR-Deflection-Csv-Legacy-Fallback-Warning](archive/PR-Deflection-Csv-Legacy-Fallback-Warning.md) - lane: content-ops/deflection-launch-readiness | phase: Production hardening
 - [PR-Deflection-Customer-Wording-PII-Headings](archive/PR-Deflection-Customer-Wording-PII-Headings.md) - lane: deflection/clustering | phase: Production hardening
