@@ -25,8 +25,12 @@ Slice phase: Product polish
 3. Preserve every ranked question, every per-question vocabulary mapping, and
    every complete evidence/source-ID block in `## Question Details and
    Evidence`.
-4. Add regression coverage for capped and uncapped SEO-list behavior, including
-   boundary cases where the list length equals the cap.
+4. Preserve explicit `customer_wording` in the question detail block when it
+   differs from the canonical question, so capped SEO phrases remain visible
+   below the index.
+5. Add regression coverage for capped and uncapped SEO-list behavior, including
+   boundary cases where the list length equals the cap and a past-cap customer
+   phrase differs from the canonical question.
 
 ### Files touched
 
@@ -47,6 +51,9 @@ Acceptance criteria:
 - Ranked questions remain uncapped.
 - Complete source IDs and evidence quotes remain uncapped inside
   `Question Details and Evidence`.
+- Customer wording that differs from the canonical question remains visible in
+  `Question Details and Evidence`, including for phrases omitted from the SEO
+  index.
 - The cap is deterministic and based on the existing `_customer_phrase_list`
   order, not random sampling or LLM ranking.
 
@@ -74,8 +81,9 @@ question/term-mapping order, then renders only the first N phrases.
 
 If the full phrase list is longer than N, the section appends a short note:
 the list is capped for readability and the remaining count is still represented
-in the per-question detail blocks. This avoids claiming the SEO index is
-complete while keeping the full paid report data intact.
+in the per-question detail blocks. To make that guarantee true for every phrase
+source, the detail section now renders `customer_wording` when it differs from
+the canonical `question` heading.
 
 No evidence rendering code is changed in this slice.
 
@@ -103,7 +111,7 @@ Parked hardening: none.
 ## Verification
 
 - Command: python -m pytest tests/test_content_ops_deflection_report.py -q
-  -- 43 passed.
+  -- 43 passed before review fix; 43 passed after review fix.
 - Command: python -m pytest tests/test_content_ops_deflection_report.py tests/test_content_ops_faq_report_contract_docs.py -q
   -- 48 passed.
 - Command: python -m pytest tests/test_atlas_billing_content_ops_deflection_paid_flow.py tests/test_extracted_content_ops_execution.py tests/test_content_ops_deflection_resolution_live_proof.py tests/test_atlas_content_ops_deflection_delivery.py tests/test_deflection_pdf_renderer.py -q
@@ -116,7 +124,7 @@ Parked hardening: none.
   -- passed.
 - Command: python scripts/audit_extracted_standalone.py --fail-on-debt -- passed.
 - Command: bash scripts/check_ascii_python.sh -- passed.
-- Command: bash scripts/run_extracted_pipeline_checks.sh -- 4300 passed, 10 skipped,
+- Command: bash scripts/run_extracted_pipeline_checks.sh -- 4303 passed, 10 skipped,
   1 warning.
 
 ## Estimated diff size
@@ -124,7 +132,7 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `docs/frontend/content_ops_faq_report_contract.md` | 5 |
-| `extracted_content_pipeline/faq_deflection_report.py` | 18 |
-| `plans/PR-Deflection-Report-SEO-Target-Cap.md` | 130 |
-| `tests/test_content_ops_deflection_report.py` | 90 |
-| **Total** | **243** |
+| `extracted_content_pipeline/faq_deflection_report.py` | 30 |
+| `plans/PR-Deflection-Report-SEO-Target-Cap.md` | 138 |
+| `tests/test_content_ops_deflection_report.py` | 95 |
+| **Total** | **268** |

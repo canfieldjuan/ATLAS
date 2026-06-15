@@ -259,7 +259,7 @@ def test_deflection_report_caps_seo_index_without_capping_details_or_evidence() 
     )
     items = tuple(
         {
-            "question": f"Customer phrase {index}",
+            "question": f"Canonical question {index}",
             "customer_wording": f"Customer phrase {index}",
             "ticket_count": 1,
             "answer_evidence_status": "resolution_evidence",
@@ -300,6 +300,10 @@ def test_deflection_report_caps_seo_index_without_capping_details_or_evidence() 
     assert "2 additional source-backed phrases remain represented" in seo_section
     assert (
         f"### {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}. "
+        f"Canonical question {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}"
+    ) in detail_section
+    assert (
+        f"**Customer wording:** "
         f"Customer phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT + 1}"
     ) in detail_section
     assert "ticket-overflow-60" in detail_section
@@ -338,6 +342,7 @@ def test_deflection_report_does_not_show_seo_cap_note_at_exact_limit() -> None:
         f"Exact phrase {DEFAULT_DEFLECTION_SEO_TARGET_LIMIT}"
     ) in seo_section
     assert "SEO phrase index capped" not in seo_section
+    assert "**Customer wording:** Exact phrase 1" not in markdown
 
 
 def test_deflection_report_uses_unknown_window_cost_fallback_without_inference() -> None:

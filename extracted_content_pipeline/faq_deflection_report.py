@@ -529,6 +529,7 @@ def _question_detail_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
         lines.extend([
             f"### {index}. {_md(item.get('question'))}",
             "",
+            *_customer_wording_detail(item),
             f"**Answer status:** {_md(_status_label(item))}",
             "",
             (
@@ -545,6 +546,17 @@ def _question_detail_section(items: Sequence[Mapping[str, Any]]) -> list[str]:
         lines.extend(_vocabulary_gap_detail(item))
         lines.extend(_complete_evidence_detail(item))
     return lines
+
+
+def _customer_wording_detail(item: Mapping[str, Any]) -> list[str]:
+    question = _text(item.get("question"))
+    customer_wording = _text(item.get("customer_wording"))
+    if not customer_wording or customer_wording == question:
+        return []
+    return [
+        f"**Customer wording:** {_md(customer_wording)}",
+        "",
+    ]
 
 
 def _publishable_answer_detail(item: Mapping[str, Any]) -> list[str]:
