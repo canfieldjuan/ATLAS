@@ -38,7 +38,27 @@ const SNAPSHOT = {
 
 const PAID_ARTIFACT = {
   markdown: '# Paid report\n\n<script>alert("xss")</script>',
-  summary: { generated: 3 },
+  summary: { generated: 2, repeat_ticket_count: 12 },
+  faq_result: {
+    items: [
+      {
+        question: 'How do I reset <script>billing</script> access?',
+        customer_wording: "billing reset access",
+        ticket_count: 12,
+        opportunity_score: 21,
+        answer_evidence_status: "resolution_evidence",
+        answer: "Open Billing > Users <script>bad</script>",
+        term_mappings: [{ customer_term: "billing login reset" }],
+      },
+      {
+        question: "Can I change invoice contacts?",
+        customer_wording: "invoice contact change",
+        ticket_count: 3,
+        opportunity_score: 8,
+        answer_evidence_status: "draft_needs_review",
+      },
+    ],
+  },
 };
 
 async function test(name, fn) {
@@ -453,7 +473,7 @@ await test("hosted result page does not retry once artifact is unlocked", () => 
   assert.match(html, /data-atlas-deflection-paid-report/);
 });
 
-await test("hosted result page renders escaped paid artifact only after unlock", () => {
+await test("hosted result page renders structured paid dashboard only after unlock", () => {
   const html = renderResultPage({
     requestId: REQUEST_ID,
     accountId: ACCOUNT_ID,
@@ -465,8 +485,25 @@ await test("hosted result page renders escaped paid artifact only after unlock",
     },
   });
   assert.match(html, /data-atlas-deflection-paid-report/);
-  assert.match(html, /# Paid report/);
-  assert.match(html, /&lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt;/);
+  assert.match(html, /data-atlas-deflection-paid-summary/);
+  assert.match(html, /data-atlas-deflection-paid-readiness/);
+  assert.match(html, /Paid report dashboard/);
+  assert.match(html, /Support tax estimate/);
+  assert.match(html, /Repeat-ticket workload/);
+  assert.match(html, /Top ranked questions/);
+  assert.match(html, /Publishable answers/);
+  assert.match(html, /No-proven-answer gaps/);
+  assert.match(html, /Top customer wording and SEO phrases/);
+  assert.match(html, /<strong>12<\/strong>/);
+  assert.doesNotMatch(html, /<strong>15<\/strong>/);
+  assert.match(html, /billing reset access/);
+  assert.match(html, /billing login reset/);
+  assert.match(html, /invoice contact change/);
+  assert.match(html, /How do I reset &lt;script&gt;billing&lt;\/script&gt; access\?/);
+  assert.match(html, /Open Billing &gt; Users &lt;script&gt;bad&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<pre class="report-markdown">/);
+  assert.doesNotMatch(html, /# Paid report/);
+  assert.doesNotMatch(html, /&lt;script&gt;alert\(&quot;xss&quot;\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert\("xss"\)<\/script>/);
   assert.match(html, /Full report unlocked/);
   assert.match(html, /Report unlocked/);
